@@ -513,13 +513,17 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     await saveConfig({ throwOnError: true });
   };
 
-  const handleRemoveConnection = async (connectionId: string) => {
+  const handleRemoveConnection = async (connectionId: string, removeAllCccGroups = false) => {
     try {
       const providerConfig = useAppStore.getState().config.providers[connectionId];
       const definition = getProviderDefinition(connectionId, providerConfig);
       if (connectionId === 'dreamina') await handleDreaminaLogout();
       const shouldClearVolcengineAssetLibrary = definition?.id === 'volcengine';
-      const connectionIds = definition?.kind === 'web-search'
+      const connectionIds = removeAllCccGroups && definition?.id === 'cccapi'
+        ? Object.entries(useAppStore.getState().config.providers)
+          .filter(([id, connection]) => getProviderDefinition(id, connection)?.id === 'cccapi')
+          .map(([id]) => id)
+        : definition?.kind === 'web-search'
         ? getWebSearchProviderDefinitions().map((provider) => provider.id)
         : [connectionId];
       if (connectionId === 'runninghub-model') connectionIds.push('runninghub');
@@ -701,7 +705,9 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
                   {pendingDeleteId === item.id ? (
                     <div className="provider-delete-confirm">
-                      <span>{t('移除此连接？')}</span>
+                      <span>{isCcc
+                        ? t('移除全部 {count} 个 CCC 分组及其模型配置？', { count: cccConnections.length })
+                        : t('移除此连接？')}</span>
                       <AnimatedButton
                         type="button"
                         className="provider-icon-btn"
@@ -714,7 +720,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                         type="button"
                         className="provider-icon-btn is-danger"
                         aria-label={t('确认删除')}
-                        onClick={() => void handleRemoveConnection(item.id)}
+                        onClick={() => void handleRemoveConnection(item.id, isCcc)}
                       >
                         <Icon icon="mdi:check" width="15" />
                       </AnimatedButton>
@@ -746,15 +752,15 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                       >
                         <Icon icon="mdi:pencil-outline" width="16" />
                       </AnimatedButton>
-                      {!isCcc && <AnimatedButton
+                      <AnimatedButton
                         type="button"
                         className="provider-icon-btn"
-                        aria-label={t('删除 {name}', { name: definition.name })}
-                        data-tooltip={t('删除连接')}
+                        aria-label={isCcc ? t('删除 CCC API 全部分组') : t('删除 {name}', { name: definition.name })}
+                        data-tooltip={isCcc ? t('删除全部 CCC 分组') : t('删除连接')}
                         onClick={() => setPendingDeleteId(item.id)}
                       >
                         <Icon icon="mdi:trash-can-outline" width="16" />
-                      </AnimatedButton>}
+                      </AnimatedButton>
                     </div>
                   )}
                 </div>

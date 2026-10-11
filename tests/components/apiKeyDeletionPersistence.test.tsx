@@ -203,7 +203,7 @@ describe('CCC 统一管理入口', () => {
     expect(find(ccc[0], (element) => element.props.children === '1/2 组已配置')).toBeDefined();
     expect(find(ccc[0], (element) => element.props.children === '2 个模型')).toBeDefined();
     expect(find(ccc[0], (element) => element.props.children === '2 个分组')).toBeDefined();
-    expect(find(ccc[0], (element) => element.props['data-tooltip'] === '删除连接')).toBeUndefined();
+    expect(find(ccc[0], (element) => element.props['aria-label'] === '删除 CCC API 全部分组')).toBeDefined();
     expect(find(ccc[0], (element) => element.props['data-tooltip'] === '复制配置（不含 API Key）')).toBeUndefined();
     (find(ccc[0], (element) => element.props['aria-label'] === '管理 CCC 分组')!.props.onClick as () => void)();
     const dialog = find(render(), (element) => 'onSaveCccGroups' in element.props)!;
@@ -212,6 +212,32 @@ describe('CCC 统一管理入口', () => {
     expect(driver.state().config.providers['cccapi-pro'].apiKey).toBe('pro-fixture');
     expect(dialog.props.onCopyCccGroup).toBeTypeOf('function');
     expect(dialog.props.onRemoveCccGroup).toBeTypeOf('function');
+  });
+
+  it('外层删除需确认全部分组，取消不修改配置，确认后清理全部 CCC 配置、凭据与模型', async () => {
+    addCccGroups();
+    driver.native = true;
+    await driver.state().saveConfig();
+    expect([...driver.secrets.values()]).toContain('pro-fixture');
+    const requestRemoval = () => {
+      const remove = find(render(), (element) => element.props['aria-label'] === '删除 CCC API 全部分组');
+      expect(remove).toBeDefined();
+      (remove!.props.onClick as () => void)();
+    };
+    requestRemoval();
+    expect(find(render(), (element) => element.props.children === '移除全部 2 个 CCC 分组及其模型配置？')).toBeDefined();
+    expect(driver.state().config.providers).toHaveProperty('cccapi-free');
+    expect(driver.state().config.providers).toHaveProperty('cccapi-pro');
+    (find(render(), (element) => element.props['aria-label'] === '取消删除')!.props.onClick as () => void)();
+    expect(find(render(), (element) => element.props['aria-label'] === '确认删除')).toBeUndefined();
+    requestRemoval();
+    (find(render(), (element) => element.props['aria-label'] === '确认删除')!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(driver.toast).toHaveBeenCalledWith('连接已删除', 'success'));
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(Object.keys(fresh.getState().config.providers).sort()).toEqual(['custom-1', 'custom-2']);
+    expect(fresh.getState().config.generalModels?.map((model) => model.id)).toEqual(['removed-model', 'kept-model']);
+    expect([...driver.secrets.values()]).not.toContain('pro-fixture');
   });
 
   it('从管理页删除指定组并持久化，其他组的连接、Key 和模型保持独立', async () => {

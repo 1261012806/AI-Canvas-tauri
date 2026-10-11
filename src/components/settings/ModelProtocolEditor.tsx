@@ -1543,7 +1543,7 @@ export default function ModelProtocolEditor({
 
       {preset === 'custom' && (simpleEditor || view === 'json') ? (
         <div className="min-w-0 space-y-3">
-          <div className="grid min-w-0 grid-cols-[minmax(200px,0.75fr)_minmax(0,1.5fr)] items-start gap-3 max-[700px]:grid-cols-1">
+          <div className="grid min-w-0 grid-cols-[minmax(200px,0.75fr)_minmax(0,1.5fr)] items-stretch gap-3 max-[700px]:grid-cols-1">
             <aside className="provider-protocol-json-variables" aria-label={t('当前模型可用变量')}>
               <div className="provider-protocol-json-guide-title">
                 <Icon icon="mdi:code-braces" width="13" />
@@ -1594,8 +1594,9 @@ export default function ModelProtocolEditor({
               <textarea
                 ref={protocolTextareaRef}
                 id={protocolJsonId}
+                className="flex-auto"
                 value={protocolJson}
-                rows={24}
+                rows={26}
                 spellCheck={false}
                 aria-invalid={!!error}
                 aria-describedby={protocolJsonHelpId}
