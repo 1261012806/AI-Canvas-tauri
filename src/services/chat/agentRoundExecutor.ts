@@ -2,6 +2,7 @@
  * 执行 Agent 的单个模型轮次，串联上下文、流式响应、工具提案与执行结果。
  * 任务预算、审批等待和步骤快照在此轮次边界内统一更新。
  */
+import { isMcpSettingsToolContext } from '../mcp/mcpSettingsScope';
 import { useAppStore } from '../../store/useAppStore';
 import { getPreparedProviderCatalogApproval, MAX_PROVIDER_MODEL_SELECTION, validateProviderModelSelection } from './providerModelCatalogService';
 import {
@@ -347,7 +348,10 @@ export async function executePreparedToolCall(
     const executionContext = { ...context, mode: resolveAgentExecutionMode(currentTask, policyMode) };
     const policy = evaluateAgentToolPolicy(prepared.definition, prepared.input, executionContext);
     const currentStep = currentTask.steps.find((item) => item.id === step.id);
-    const reverifyReason = useAppStore.getState().currentProjectId !== context.projectId
+    const settingsScopeActive = isMcpSettingsToolContext(executionContext, prepared.definition.id)
+      && isMcpSettingsToolContext(currentTask, prepared.definition.id);
+    const reverifyReason = !settingsScopeActive
+      && useAppStore.getState().currentProjectId !== context.projectId
       ? '目标项目已切换，已取消该工具执行'
       : policy.outcome === 'deny'
         ? policy.reason

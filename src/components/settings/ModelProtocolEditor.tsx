@@ -1673,6 +1673,7 @@ export default function ModelProtocolEditor({
                 </label>
                 <textarea
                   id={previewVariablesId}
+                  className="flex-1"
                   value={previewVariablesJson}
                   rows={10}
                   spellCheck={false}

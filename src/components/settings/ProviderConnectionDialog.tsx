@@ -24,7 +24,7 @@ import {
   applyH3TemplateDefaults,
   inferH3ModelVariant,
 } from '../../services/ai/h3ModelCapabilities';
-import type { VideoModelCapability } from '../../types/aiTypes';
+import type { ImageModelCapability, VideoModelCapability } from '../../types/aiTypes';
 import {
   capCatalogModels,
   createConnectionId,
@@ -138,6 +138,7 @@ export default function ProviderConnectionDialog({
   const [manualModelId, setManualModelId] = useState('');
   const [manualModelName, setManualModelName] = useState('');
   const [manualCategory, setManualCategory] = useState<GeneralModelCategory>('text');
+  const [imageCapabilityModelId, setImageCapabilityModelId] = useState<string | null>(null);
   const [videoCapabilityModelId, setVideoCapabilityModelId] = useState<string | null>(null);
   const [protocolModelId, setProtocolModelId] = useState<string | null>(null);
   const [protocolValid, setProtocolValid] = useState(true);
@@ -186,6 +187,9 @@ export default function ProviderConnectionDialog({
   const protocolModel = useMemo(
     () => models.find((model) => model.id === protocolModelId),
     [models, protocolModelId],
+  );
+  const imageCapabilityModel = useMemo(
+    () => models.find((model) => model.id === imageCapabilityModelId), [models, imageCapabilityModelId],
   );
   const videoCapabilityModel = useMemo(
     () => models.find((model) => model.id === videoCapabilityModelId),
@@ -452,6 +456,9 @@ export default function ProviderConnectionDialog({
     setSelectedIds((current) => new Set(current).add(id));
     setManualModelId('');
     setManualModelName('');
+    if (definition.id === 'custom-openai' && model.category === 'image') {
+      setImageCapabilityModelId(id); setVideoCapabilityModelId(null); setProtocolModelId(null);
+    }
     if (definition.id === 'custom-openai' && model.category === 'video') {
       setProtocolModelId(id);
       setVideoCapabilityModelId(null);
@@ -466,6 +473,7 @@ export default function ProviderConnectionDialog({
         category: nextCategory,
         categoryManual: true,
         ...(nextCategory === 'video' ? {} : { videoCapability: undefined }),
+        ...(nextCategory === 'image' ? {} : { imageCapability: undefined }),
       } : model,
     ));
     if (nextCategory !== 'video' && videoCapabilityModelId === modelId) {
@@ -520,6 +528,10 @@ export default function ProviderConnectionDialog({
     )));
   };
 
+  const updateImageCapability = (modelId: string, imageCapability: ImageModelCapability) => {
+    setModels((current) => current.map((model) => model.id === modelId ? { ...model, imageCapability } : model));
+  };
+
   const updateImageReferenceRequestMode = (
     modelId: string,
     imageReferenceRequestMode: ImageReferenceRequestMode | undefined,
@@ -570,10 +582,12 @@ export default function ProviderConnectionDialog({
     setSelectedIds((current) => new Set(current).add(modelId));
     setVisibleModelCategories((current) => new Set(current).add(importedModel.category));
     setCategory('all');
+    setImageCapabilityModelId(null);
+    setVideoCapabilityModelId(null);
     setProtocolModelId(modelId);
     setProtocolValid(true);
     setCatalogStatus('ready');
-    setCatalogMessage(t('已从接口文档导入模型 {id}，保存前可继续检查调用协议', { id: modelId }));
+    setCatalogMessage(t('已从接口文档导入模型 {id}，保存前请检查调用协议并逐模型补齐参数能力', { id: modelId }));
     setProtocolImportOpen(false);
   };
 
@@ -791,6 +805,9 @@ export default function ProviderConnectionDialog({
                 setProtocolImportOpen={setProtocolImportOpen}
                 protocolImportSnapshot={protocolImportSnapshot}
                 protocolModel={protocolModel}
+                imageCapabilityModel={imageCapabilityModel}
+                setImageCapabilityModelId={setImageCapabilityModelId}
+                onUpdateImageCapability={updateImageCapability}
                 videoCapabilityModel={videoCapabilityModel}
                 setProtocolModelId={setProtocolModelId}
                 setVideoCapabilityModelId={setVideoCapabilityModelId}

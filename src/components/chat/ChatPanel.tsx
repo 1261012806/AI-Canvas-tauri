@@ -33,6 +33,7 @@ import ConversationList from './ConversationList';
 import ChatHeader from './ChatHeader';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import { MCP_SETTINGS_CONVERSATION_ID, MCP_SETTINGS_SCOPE_ID } from '../../services/mcp/mcpSettingsScope';
 import ProjectMemoryPanel from './ProjectMemoryPanel';
 import SubAgentPanel from './SubAgentPanel';
 import AgentCenterPanel from './AgentCenterPanel';
@@ -204,6 +205,7 @@ export default function ChatPanel({
   const effectiveActiveConversation = effectiveConversations.find(
     (conversation) => conversation.id === effectiveActiveConversationId,
   );
+  const settingsConversation = effectiveActiveConversationId === MCP_SETTINGS_CONVERSATION_ID;
   const effectiveAgentMode = effectiveActiveConversation?.agentMode ?? 'collaborative';
   const hasActiveConversationTask = effectiveAgentTasks.some(
     (task) => task.conversationId === effectiveActiveConversationId
@@ -700,7 +702,7 @@ export default function ChatPanel({
   // ── 发送消息 ──
   const sendMessageText = useCallback((content: string, dispatchMode: 'queue' | 'interject' = 'queue') => {
     const text = content.trim();
-    if (!text || !effectiveActiveConversationId) return;
+    if (!text || !effectiveActiveConversationId || settingsConversation) return;
 
     if (detached) {
       void emitAction({
@@ -728,6 +730,7 @@ export default function ChatPanel({
     effectiveActiveConversationId,
     effectiveAgentMode,
     effectiveProjectId,
+    settingsConversation,
     scrollToBottom,
     updateInputDraft,
   ]);
@@ -855,7 +858,7 @@ export default function ChatPanel({
               projectName={effectiveProjectName}
               agentMode={effectiveAgentMode}
               onAgentModeChange={handleAgentModeChange}
-              agentModeDisabled={!effectiveActiveConversationId}
+              agentModeDisabled={!effectiveActiveConversationId || settingsConversation}
               onOpenMemory={!detached && effectiveProjectId
                 ? () => {
                     setShowAgentCenter(false);
@@ -893,7 +896,7 @@ export default function ChatPanel({
             <div className="chat-panel-body flex flex-1 min-h-0">
               {showTaskCenter ? (
                 <AgentTaskCenter
-                  tasks={effectiveAgentTasks.filter((task) => task.projectId === effectiveProjectId)}
+                  tasks={effectiveAgentTasks.filter((task) => task.projectId === effectiveProjectId || task.projectId === MCP_SETTINGS_SCOPE_ID)}
                   conversations={effectiveConversations}
                   onClose={() => setShowTaskCenter(false)}
                   {...agentControls}
@@ -966,7 +969,7 @@ export default function ChatPanel({
                   />
 
                   {/* Input area */}
-                  {!showEmptyState && (
+                  {!showEmptyState && !settingsConversation && (
                     <ChatInput
                       assistantModelId={effectiveAssistantModelId}
                       onAssistantModelChange={handleTextModelChange}

@@ -1,7 +1,7 @@
 /**
  * types 全局类型定义 — 定义 NodeType、BaseNodeData、CanvasProject、AppConfig、ModelOption、WorkflowDefinition 等核心类型
  */
-import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice, ModelExecutionProfile, VideoModelCapability, VideoReferenceItem } from './aiTypes';
+import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice, ModelExecutionProfile, ImageModelCapability, VideoModelCapability, VideoReferenceItem } from './aiTypes';
 import type { AudioGenerationPurpose } from './media';
 import type { ImageAnnotationLayer } from '@tenney95/xiaoluo-image-editor';
 import type { CanvasNoteData } from './canvasNote';
@@ -510,6 +510,8 @@ export interface ProviderModelSelection {
   imageReferenceRequestMode?: ImageReferenceRequestMode;
   /** 视频模型的参数能力声明（时长/分辨率/比例/参考素材等），缺省走通用兜底。 */
   videoCapability?: VideoModelCapability;
+  /** 图片模型的参数能力；未声明字段不代表已确认支持。 */
+  imageCapability?: ImageModelCapability;
 }
 
 export interface ApiProviderConfig {
@@ -790,6 +792,8 @@ export interface GeneralModelConfig {
   imageReferenceRequestMode?: ImageReferenceRequestMode;
   /** 视频模型的参数能力声明（时长/分辨率/比例/参考素材等），缺省走通用兜底。 */
   videoCapability?: VideoModelCapability;
+  /** 图片模型的参数能力；未声明字段不代表已确认支持。 */
+  imageCapability?: ImageModelCapability;
 }
 
 export const GENERAL_MODEL_CATEGORY_LABELS: Record<GeneralModelCategory, string> = {

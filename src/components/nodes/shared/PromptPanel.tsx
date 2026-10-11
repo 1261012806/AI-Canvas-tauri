@@ -560,27 +560,28 @@ export default function PromptPanel({
   );
 
   useEffect(() => {
-    if (!imageResolutions?.length || !imageRatioValues?.length) return;
+    if (nodeType !== 'ai-image') return;
     const normalizedSize = imageSize?.toLowerCase();
-    const supportedSize = imageResolutions.some(
+    const supportedSize = imageResolutions?.some(
       (size) => size.toLowerCase() === normalizedSize,
     );
-    if (!supportedSize) {
+    if (imageResolutions?.length && !supportedSize) {
       const fallback = imageCapability?.defaultResolution
         ?? imageResolutions.find((size) => size.toLowerCase() === '2k')
         ?? imageResolutions[0];
       onChangeImageSize?.(fallback);
     }
     const normalizedRatio = aspectRatio === '自适应' ? 'auto' : aspectRatio;
-    const supportedRatios: readonly string[] = imageCapability?.ratios ?? imageRatioValues;
-    if (!normalizedRatio || !supportedRatios.includes(normalizedRatio)) {
+    const supportedRatios: readonly string[] = imageCapability?.ratios ?? imageRatioValues ?? [];
+    if (supportedRatios.length && (!normalizedRatio || !supportedRatios.includes(normalizedRatio))) {
       const fallback = imageCapability?.defaultRatio === 'auto'
         ? '自适应'
-        : (imageCapability?.defaultRatio ?? '16:9');
+        : (imageCapability?.defaultRatio ?? supportedRatios[0]);
       onChangeAspectRatio?.(fallback);
     }
   }, [
     aspectRatio,
+    nodeType,
     imageCapability,
     imageRatioValues,
     imageResolutions,
@@ -623,7 +624,11 @@ export default function PromptPanel({
   }, []);
 
   const hasGenerationInput = !!prompt.trim() || selectedProvider === 'runninghub' || selectedProvider === 'runninghubwf' || selectedProvider === 'workflow-api';
-  const batchSupported = nodeType === 'ai-image'
+  const imageBatchMaximum = imageCapability?.supportsBatch === false
+    ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, imageCapability?.maxBatchCount ?? MAX_IMAGE_BATCH_COUNT);
+  const imageBatchCounts = IMAGE_BATCH_COUNTS.filter((count) => count <= imageBatchMaximum);
+  const batchSupported = (selectedProvider !== 'general' || imageCapability?.supportsBatch === true)
+    && imageBatchMaximum > 1 && nodeType === 'ai-image'
     && Boolean(onChangeBatchCount)
     && selectedProvider !== 'dreamina'
     && !selectedWorkflowId;
@@ -1014,18 +1019,24 @@ export default function PromptPanel({
           )}
 
           {nodeType === 'ai-image' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
-            <QualityRatioSelector
-              imageSize={imageSize}
-              aspectRatio={aspectRatio}
-              onChangeImageSize={onChangeImageSize || (() => {})}
-              onChangeAspectRatio={onChangeAspectRatio || (() => {})}
-              imageSizes={imageResolutions}
-              showAdaptive={imageSupportsAdaptive}
-              ratios={imageRatioValues?.map((value) => ({
-                value,
-                className: getImageRatioClassName(value),
-              }))}
-            />
+            <>
+              <QualityRatioSelector
+                imageSize={imageResolutions?.length === 0 ? t('未声明') : imageSize}
+                aspectRatio={imageRatioValues?.length === 0 && !imageSupportsAdaptive ? t('比例待确认') : aspectRatio}
+                onChangeImageSize={onChangeImageSize || (() => {})}
+                onChangeAspectRatio={onChangeAspectRatio || (() => {})}
+                showImageSize={imageResolutions === undefined || imageResolutions.length > 0}
+                imageSizes={imageResolutions}
+                showAdaptive={imageSupportsAdaptive}
+                ratios={imageRatioValues?.map((value) => ({
+                  value,
+                  className: getImageRatioClassName(value),
+                }))}
+              />
+              {selectedProvider === 'general' && (!imageResolutions?.length || !imageCapability?.ratios?.length) ? (
+                <span className="text-[10px] text-canvas-text-muted">{t('部分图片参数未声明，请在模型设置中按文档补齐')}</span>
+              ) : null}
+            </>
           )}
 
           {nodeType === 'ai-panorama' && (
@@ -1195,7 +1206,7 @@ export default function PromptPanel({
                       aria-label={t('选择批量生成数量')}
                       aria-hidden={!batchMenuOpen}
                     >
-                      {IMAGE_BATCH_COUNTS.map((count) => (
+                      {imageBatchCounts.map((count) => (
                         <button
                           key={count}
                           type="button"

@@ -38,6 +38,28 @@ afterEach(() => {
 });
 
 describe('model request transport boundary', () => {
+  it('uses custom image defaults and blocks unsupported tiers before submission', async () => {
+    useAppStore.getState().saveProviderConfig('custom-image-parameters', {
+      name: 'Images', catalogId: 'custom-openai', apiKey: 'fixture', baseUrl: 'https://gateway.example/v1',
+      selectedModels: [{ id: 'image', name: 'Image', category: 'image', provider: 'custom-image-parameters',
+        imageCapability: { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
+          supportsBatch: true, maxBatchCount: 2, supportsImageReference: false },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync', auth: { type: 'bearer' },
+          submit: { method: 'POST', path: '/images/generations', body: { model: '{{model}}', prompt: '{{prompt}}', size: '{{size}}', n: '{{n}}' } },
+          response: { type: 'json', result: { urlPath: 'data.0.url' } } } },
+      }],
+    });
+    const model = useAppStore.getState().config.generalModels![0];
+    const params = { provider: 'general', model: `general/${model.id}`, prompt: 'cat' };
+    for (const invalid of [{ imageSize: '4K' }, { aspectRatio: '16:9' }, { image_urls: ['https://cdn.example/ref.png'] }]) {
+      await expect(generateImagesBatch({ ...params, ...invalid }, 1)).rejects.toThrow();
+    }
+    await expect(generateImagesBatch(params, 3)).rejects.toThrow('最多生成 2');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    transportMocks.corsSafeFetch.mockResolvedValue(jsonResponse({ data: [{ url: 'https://cdn.example/result.png' }] }));
+    await generateImagesBatch(params, 1);
+    expect(JSON.parse(transportMocks.corsSafeFetch.mock.calls[0][1].body)).toMatchObject({ size: '1024x1024', n: 1 });
+  });
   it.each([undefined, '   ', 'https://custom.example/v1/'])('reverses images and chats with the selected CCC group when its address is %s', async (baseUrl) => {
     for (const group of ['pro', 'discount']) useAppStore.getState().saveProviderConfig(`cccapi-${group}`, {
       name: 'CCC', catalogId: 'cccapi', cccGroup: group, apiKey: `${group}-fixture`, baseUrl,

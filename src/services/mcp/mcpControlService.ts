@@ -3,6 +3,7 @@
  */
 import { useAppStore } from '../../store/useAppStore';
 import type { ChatConversation, ChatMessage } from '../../types/chat';
+import type { AgentStep } from '../../types/agent';
 import type {
   McpBridgeRequestEvent,
   McpToolCallResult,
@@ -33,6 +34,8 @@ import {
   toMcpToolDescriptor,
 } from './mcpToolCatalog';
 
+import { isMcpSettingsContext, isMcpSettingsTool, MCP_SETTINGS_CONVERSATION_ID, MCP_SETTINGS_SCOPE_ID, MCP_SETTINGS_TOOL_NAMES } from './mcpSettingsScope';
+
 const MCP_CONVERSATION_TITLE = 'MCP 控制';
 const MCP_EXECUTION_MODE = 'autonomous' as const;
 
@@ -45,6 +48,7 @@ const MCP_EXECUTION_MODE = 'autonomous' as const;
 export const MCP_TOOL_DISCOVERY_TASK_ID = 'mcp-tool-discovery';
 
 const activeRequestTasks = new Map<string, string>();
+let settingsAuditInitialization: Promise<void> | undefined;
 
 function createId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -86,7 +90,7 @@ export function ensureMcpControlConversation(
   const conversation: ChatConversation = {
     id,
     projectId,
-    title: MCP_CONVERSATION_TITLE,
+    title: projectId === MCP_SETTINGS_SCOPE_ID ? 'MCP 全局模型设置' : MCP_CONVERSATION_TITLE,
     titleSource: 'user',
     pinned: true,
     archived: false,
@@ -99,15 +103,21 @@ export function ensureMcpControlConversation(
   return conversation;
 }
 
-function getCurrentMcpContext(): {
+function getCurrentMcpContext(toolName?: string): {
   projectId: string;
   conversation: ChatConversation;
+  toolAllowlist?: string[];
 } | null {
-  const projectId = useAppStore.getState().currentProjectId;
-  if (!projectId) return null;
+  const activeProject = useAppStore.getState().currentProjectId;
+  const globalSettings = !activeProject
+    ? !toolName || isMcpSettingsTool(toolName)
+    : Boolean(toolName && isMcpSettingsTool(toolName) && !isMcpDiscoveryTool(toolName));
+  if (!activeProject && !globalSettings) return null;
+  const projectId = globalSettings ? MCP_SETTINGS_SCOPE_ID : activeProject!;
   return {
     projectId,
     conversation: ensureMcpControlConversation(projectId),
+    ...(globalSettings ? { toolAllowlist: [...MCP_SETTINGS_TOOL_NAMES] } : {}),
   };
 }
 
@@ -137,6 +147,7 @@ export async function listMcpTools(
     conversationId: current.conversation.id,
     mode: MCP_EXECUTION_MODE,
     baseRevision: useAppStore.getState().getCurrentRevision(),
+    toolAllowlist: current.toolAllowlist,
   }).filter((definition) => !isMcpDiscoveryTool(definition.id)).map(toMcpToolDescriptor);
 }
 
@@ -144,19 +155,57 @@ function addAuditMessage(message: ChatMessage): void {
   useAppStore.getState().addMessage(message);
 }
 
+function revealMcpUserChoice(projectId: string, conversationId: string, step: AgentStep): void {
+  const store = useAppStore.getState();
+  const settingsChoice = projectId === MCP_SETTINGS_SCOPE_ID && conversationId === `mcp-control-${MCP_SETTINGS_SCOPE_ID}`
+    && store.agentTasks.some((task) => task.id === step.taskId && isMcpSettingsContext(task));
+  if (step.approval?.kind !== 'user_choice' || (!settingsChoice && store.currentProjectId !== projectId)) return;
+
+  store.setActiveConversation(conversationId);
+  store.setChatPanelView('chat');
+  store.openChat();
+  if (!store.chatPanelDetached) return;
+
+  const isCurrentChoice = () => {
+    const current = useAppStore.getState();
+    return (settingsChoice || current.currentProjectId === projectId)
+      && current.activeConversationId === conversationId
+      && current.agentTasks.some((task) => task.id === step.taskId
+        && task.status === 'waiting_approval'
+        && task.steps.some((item) => item.id === step.id && item.approval?.status === 'pending'));
+  };
+  // 沿用独立窗口与主窗口的状态同步，不重建窗口或丢弃正在编辑的草稿。
+  void (async () => {
+    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    const detached = await WebviewWindow.getByLabel('chat-assistant');
+    if (!isCurrentChoice()) return;
+    if (!detached) throw new Error('助手窗口不可用');
+    await detached.unminimize();
+    if (!isCurrentChoice()) return;
+    await detached.show();
+    if (!isCurrentChoice()) return;
+    await detached.setFocus();
+  })().catch(() => {
+    if (!isCurrentChoice()) return;
+    const current = useAppStore.getState();
+    current.setChatPanelDetached(false);
+    current.openChat();
+  });
+}
+
 async function callMcpTool(
   request: McpBridgeRequestEvent,
 ): Promise<McpToolCallResult> {
   await ensureToolsRegistered();
-  const current = getCurrentMcpContext();
+  const name = typeof request.params.name === 'string' ? request.params.name : '';
+  const current = getCurrentMcpContext(name);
   if (!current) {
     return {
       isError: true,
-      summary: '当前没有已加载项目，无法调用 AI Canvas 工具',
-      content: [{ type: 'text', text: '当前没有已加载项目，无法调用 AI Canvas 工具' }],
+      summary: '该工具需要打开项目；未打开项目时可管理厂商和模型设置',
+      content: [{ type: 'text', text: '该工具需要打开项目；未打开项目时可管理厂商和模型设置' }],
     };
   }
-  const name = typeof request.params.name === 'string' ? request.params.name : '';
   const input = request.params.arguments && typeof request.params.arguments === 'object'
     ? request.params.arguments
     : {};
@@ -190,6 +239,7 @@ async function callMcpTool(
     userMessageId,
     mode: MCP_EXECUTION_MODE,
     goal: `MCP 请求：${title}。${inputSummary}`,
+    toolAllowlist: current.toolAllowlist,
     budget: {
       maxModelRounds: 1,
       maxToolCalls: 1,
@@ -224,6 +274,7 @@ async function callMcpTool(
         transitionTask: transitionAgentTask,
         waitForApproval: waitForAgentApproval,
         policyMode: MCP_EXECUTION_MODE,
+        onApprovalRequired: (step) => revealMcpUserChoice(current.projectId, current.conversation.id, step),
       });
       return executionResult.summary.status === 'success' ? 'completed' : 'failed';
     });
@@ -296,6 +347,21 @@ export async function handleMcpBridgeRequest(
 }
 
 export async function initMcpControlService(): Promise<() => void> {
+  // 全局审计域不在 CanvasProject 清单中，启动时单独复用既有中断修复。
+  // 同一应用会话只修复一次，监听器重挂载不能暂停正在运行的请求。
+  settingsAuditInitialization ??= (async () => {
+    const store = useAppStore.getState();
+    await store.repairInterruptedAgentTasksForProject(MCP_SETTINGS_SCOPE_ID);
+    await store.repairInterruptedForProject(MCP_SETTINGS_SCOPE_ID);
+    const { loadProjectConversations } = await import('../chat/chatHistoryService');
+    const saved = await loadProjectConversations(MCP_SETTINGS_SCOPE_ID).catch(() => []);
+    const conversation = saved.find((item) => item.id === MCP_SETTINGS_CONVERSATION_ID);
+    if (conversation && !useAppStore.getState().conversations.some((item) => item.id === conversation.id)) {
+      const current = useAppStore.getState();
+      current.setConversations([...current.conversations, conversation]);
+    }
+  })();
+  await settingsAuditInitialization;
   const unlisten = await listenForMcpBridgeRequests(async (request) => {
     try {
       const result = await handleMcpBridgeRequest(request);
