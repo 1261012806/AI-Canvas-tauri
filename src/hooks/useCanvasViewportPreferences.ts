@@ -3,10 +3,9 @@ import { useReactFlow, type FitViewOptions } from '@xyflow/react';
 import { useAppStore } from '../store/useAppStore';
 import type { CanvasViewportMode } from '../types';
 import {
-  CANVAS_ZOOM_PRESETS,
   getCanvasFitViewOptions,
-  MAX_CANVAS_ZOOM,
-  MIN_CANVAS_ZOOM,
+  getCanvasZoomPresets,
+  getCanvasZoomRange,
   normalizeCanvasViewportMode,
   normalizeCanvasZoom,
 } from '../utils/canvasViewportPreferences';
@@ -20,14 +19,16 @@ export function useCanvasViewportPreferences(
   const projectId = useAppStore((state) => state.currentProjectId);
   const hydrated = useAppStore((state) => state.configHydrated);
   const mode = useAppStore((state) => normalizeCanvasViewportMode(state.config.canvasViewportMode));
-  const preferredZoom = useAppStore((state) => normalizeCanvasZoom(state.config.canvasViewportZoom));
+  const preferredZoom = useAppStore((state) => normalizeCanvasZoom(state.config.canvasViewportZoom, state.config));
+  const rangeMinZoom = useAppStore((state) => getCanvasZoomRange(state.config).minZoom);
+  const rangeMaxZoom = useAppStore((state) => getCanvasZoomRange(state.config).maxZoom);
   const userMovingRef = useRef(false);
   const isCurrent = useCallback(() => useAppStore.getState().currentProjectId === projectId, [projectId]);
 
   const savePreference = useCallback((nextMode: CanvasViewportMode, zoom: number) => {
     const state = useAppStore.getState();
     if (!state.configHydrated || !isCurrent()) return;
-    state.updateConfig({ canvasViewportMode: nextMode, canvasViewportZoom: normalizeCanvasZoom(zoom) });
+    state.updateConfig({ canvasViewportMode: nextMode, canvasViewportZoom: normalizeCanvasZoom(zoom, state.config) });
     // 保存失败由既有配置状态展示，保留待保存修改。
     void state.saveConfig({ silent: true }).catch(() => {});
   }, [isCurrent]);
@@ -46,13 +47,14 @@ export function useCanvasViewportPreferences(
     cancelWheelRef.current?.();
     savePreference('manual', zoom);
     // 节点定位可能临时改过比例；重复选择已保存的同一预设也必须立即生效。
-    void flow.zoomTo(normalizeCanvasZoom(zoom));
+    void flow.zoomTo(normalizeCanvasZoom(zoom, state.config));
   }, [cancelWheelRef, flow, isCurrent, savePreference]);
 
   const stepZoom = useCallback((direction: number) => {
     const percent = flow.getZoom() * 100;
-    const presets = direction > 0 ? CANVAS_ZOOM_PRESETS : [...CANVAS_ZOOM_PRESETS].reverse();
-    const next = presets.find((value) => direction > 0 ? value > percent + 0.1 : value < percent - 0.1);
+    const allowedPresets = getCanvasZoomPresets(useAppStore.getState().config);
+    const presets = direction > 0 ? allowedPresets : allowedPresets.reverse();
+    const next = presets.find((value) => direction > 0 ? value > percent + 0.001 : value < percent - 0.001);
     if (next !== undefined) setZoom(next / 100);
   }, [flow, setZoom]);
 
@@ -100,7 +102,7 @@ export function useCanvasViewportPreferences(
     } else {
       void flow.zoomTo(preferredZoom);
     }
-  }, [cancelWheelRef, fitView, flow, hydrated, isCurrent, mode, preferredZoom]);
+  }, [cancelWheelRef, fitView, flow, hydrated, isCurrent, mode, preferredZoom, rangeMinZoom, rangeMaxZoom]);
 
   useEffect(() => {
     const element = rootRef.current;
@@ -125,7 +127,7 @@ export function useCanvasViewportPreferences(
           void flow.setViewport({
             x: viewport.x + (next.width - previous.width) / 2,
             y: viewport.y + (next.height - previous.height) / 2,
-            zoom: viewport.zoom,
+            zoom: normalizeCanvasZoom(viewport.zoom, useAppStore.getState().config),
           });
         }
       }, 160);
@@ -150,12 +152,13 @@ export function useCanvasViewportPreferences(
   const locked = mode === 'locked';
   const initialFitOptions = useMemo(() => getCanvasFitViewOptions({
     canvasViewportMode: mode, canvasViewportZoom: preferredZoom,
-  }, { padding: 0.2 }, true), [mode, preferredZoom]);
+    canvasViewportMinZoom: rangeMinZoom, canvasViewportMaxZoom: rangeMaxZoom,
+  }, { padding: 0.2 }, true), [mode, preferredZoom, rangeMinZoom, rangeMaxZoom]);
 
   return {
     mode, locked, hydrated, preferredZoom, initialFitOptions,
-    minZoom: locked ? preferredZoom : MIN_CANVAS_ZOOM,
-    maxZoom: locked ? preferredZoom : MAX_CANVAS_ZOOM,
+    minZoom: locked ? preferredZoom : rangeMinZoom,
+    maxZoom: locked ? preferredZoom : rangeMaxZoom,
     fitView, setZoom, stepZoom, toggleLock, autoFit, beginUserMove, endUserMove,
   };
 }

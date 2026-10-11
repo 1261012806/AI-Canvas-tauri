@@ -16,6 +16,7 @@ import OnnxModelStorageManager from './settings/OnnxModelStorageManager';
 import McpControlSettings from './settings/McpControlSettings';
 import SettingsNavigation from './settings/SettingsNavigation';
 import ShortcutSettings from './settings/ShortcutSettings';
+import CanvasZoomRangeSettings from './settings/CanvasZoomRangeSettings';
 import ComfyUISettings from './settings/ComfyUISettings';
 import FileAppSettings from './settings/FileAppSettings';
 import PluginSettings from './settings/PluginSettings';
@@ -858,6 +859,8 @@ export default function SettingsPanel() {
                   </div>
                 </section>
                 )}
+
+                <CanvasZoomRangeSettings onPersist={persist} />
 
                 {/* 节点顶部工具栏显示方式 */}
                 <section>

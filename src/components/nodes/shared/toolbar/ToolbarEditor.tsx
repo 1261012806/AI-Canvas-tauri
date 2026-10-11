@@ -10,7 +10,7 @@ import type { ToolbarButtonDef, NodeType } from '../../../../types';
 import type { UseToolbarEditReturn } from '../../../../hooks/useToolbarEdit';
 import { getSlashCommands } from '../slashCommands';
 import { useAppStore } from '../../../../store/useAppStore';
-import { getCanvasLockedZoom } from '../../../../utils/canvasViewportPreferences';
+import { getCanvasLockedZoom, normalizeCanvasZoom } from '../../../../utils/canvasViewportPreferences';
 
 interface ToolbarEditorProps {
   edit: UseToolbarEditReturn;
@@ -148,11 +148,12 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
     const originalViewport = originalViewportRef.current;
     if (!originalViewport) return;
     originalViewportRef.current = null;
-    const zoom = getCanvasLockedZoom(useAppStore.getState().config) ?? originalViewport.zoom;
+    const config = useAppStore.getState().config;
+    const zoom = getCanvasLockedZoom(config) ?? normalizeCanvasZoom(originalViewport.zoom, config);
     void setViewport({ ...originalViewport, zoom }, {
       duration: VIEWPORT_TRANSITION_DURATION_MS,
       ease: easeOutCubic,
-      interpolate: getCanvasLockedZoom(useAppStore.getState().config) !== null ? 'linear' : 'smooth',
+      interpolate: 'linear',
     });
   }, [setViewport]);
 
@@ -190,15 +191,16 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
       const editorCenterX = editorRect.left + editorRect.width / 2;
       const editorCenterY = editorRect.top + editorRect.height / 2;
       const editorFlowCenter = screenToFlowPosition({ x: editorCenterX, y: editorCenterY });
+      const config = useAppStore.getState().config;
 
       void setCenter(
         editorFlowCenter.x,
         editorFlowCenter.y,
         {
-          zoom: getCanvasLockedZoom(useAppStore.getState().config) ?? EDITOR_TARGET_ZOOM,
+          zoom: getCanvasLockedZoom(config) ?? normalizeCanvasZoom(EDITOR_TARGET_ZOOM, config),
           duration: VIEWPORT_TRANSITION_DURATION_MS,
           ease: easeOutCubic,
-          interpolate: getCanvasLockedZoom(useAppStore.getState().config) !== null ? 'linear' : 'smooth',
+          interpolate: 'linear',
         },
       );
     });

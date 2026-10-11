@@ -25,6 +25,7 @@ import {
 import { setLocale } from '../i18n';
 import { applyConfigPatch, ConfigConflictError, configValuesEqual, configWithoutSecrets, createConfigPatch } from '../services/configPatch';
 import { areSettingsMutationsFrozen, registerSettingsPersistence } from '../services/configPersistenceQueue';
+import { getCanvasZoomRange, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, normalizeCanvasZoom } from '../utils/canvasViewportPreferences';
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../services/appearance/appearanceDefaults';
 import { migrateLegacyAppearance } from '../services/appearance/appearanceMigration';
 
@@ -41,6 +42,8 @@ const defaultConfig: AppConfig = {
   interactionMode: 'default',
   canvasViewportMode: 'auto',
   canvasViewportZoom: 1,
+  canvasViewportMinZoom: MIN_CANVAS_ZOOM,
+  canvasViewportMaxZoom: MAX_CANVAS_ZOOM,
   nodeToolbarMode: 'icons',
   nodeLabelVisible: true,
   startupView: 'project-library',
@@ -419,7 +422,16 @@ export const createConfigSlice: StateCreator<AppState, [], [], ConfigSlice> = (r
 
   updateConfig: (partial) => {
     if (areSettingsMutationsFrozen()) return;
-    set((state) => ({ config: { ...state.config, ...partial } }));
+    set((state) => {
+      const config = { ...state.config, ...partial };
+      if ('canvasViewportMinZoom' in partial || 'canvasViewportMaxZoom' in partial || 'canvasViewportZoom' in partial) {
+        const { minZoom, maxZoom } = getCanvasZoomRange(config);
+        config.canvasViewportMinZoom = minZoom;
+        config.canvasViewportMaxZoom = maxZoom;
+        config.canvasViewportZoom = normalizeCanvasZoom(config.canvasViewportZoom, config);
+      }
+      return { config };
+    });
     if ('baseDataDir' in partial && partial.baseDataDir !== undefined) {
       setBaseDataDir(partial.baseDataDir);
     }

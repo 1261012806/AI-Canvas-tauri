@@ -2,6 +2,12 @@
  * 设置面板：语言与启动 / 画布背景 / 画布交互 / 界面偏好
  */
 const settings = {
+  '画布缩放范围': 'Canvas zoom range',
+  '最小缩放比例': 'Minimum zoom',
+  '最大缩放比例': 'Maximum zoom',
+  '恢复默认范围': 'Reset zoom range',
+  '自动适配、滚轮和快捷键均在此范围内缩放，修改后即时生效。': 'Auto-fit, mouse wheel and keyboard zoom stay within this range. Changes apply instantly.',
+  '可设置 10%～500%，例如 50%～60%；两端相同则固定为该比例。': 'Choose 10%–500%, for example 50%–60%. Set both ends to the same value for a fixed zoom.',
   "图形启动设置保存失败，未重启": "Could not save graphics startup settings. The app was not restarted.",
   "设置尚未保存，已取消自动重启": "Settings are not saved. Automatic restart was cancelled.",
   "项目尚未就绪，已取消自动重启": "The project is not ready. Automatic restart was cancelled.",

@@ -76,7 +76,7 @@ import { useNodeCreation } from '../hooks/useNodeCreation';
 import { useCanvasDrawing } from '../hooks/useCanvasDrawing';
 import { useCanvasWheelZoom } from '../hooks/useCanvasWheelZoom';
 import { useCanvasViewportPreferences } from '../hooks/useCanvasViewportPreferences';
-import { getCanvasLockedZoom, MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM } from '../utils/canvasViewportPreferences';
+import { getCanvasLockedZoom, normalizeCanvasZoom } from '../utils/canvasViewportPreferences';
 import type { BaseNodeData } from '../types';
 import { SHOTLIST_FRAME_SOURCE_TYPES, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
 import type { Node as RFNode, NodeProps, NodeTypes, OnMove } from '@xyflow/react';
@@ -527,7 +527,8 @@ function CanvasInner({ onReady }: CanvasProps) {
     },
     setViewport: async (viewport, duration = 0) => {
       wheelZoomCancelRef.current?.();
-      const zoom = getCanvasLockedZoom(useAppStore.getState().config) ?? viewport.zoom;
+      const config = useAppStore.getState().config;
+      const zoom = getCanvasLockedZoom(config) ?? normalizeCanvasZoom(viewport.zoom, config);
       await reactFlowInstance.setViewport({ ...viewport, zoom }, { duration, interpolate: 'linear' });
     },
     fitView: async (options = {}) => {
@@ -732,6 +733,18 @@ function CanvasInner({ onReady }: CanvasProps) {
 
   const handleCanvasViewportMove = useCallback<OnMove>((_, viewport) => {
     const { width, height } = flowStore.getState();
+    const config = useAppStore.getState().config;
+    const zoom = getCanvasLockedZoom(config) ?? normalizeCanvasZoom(viewport.zoom, config);
+    if (zoom !== viewport.zoom) {
+      // 配置可能在旧镜头动画或手势进行中变化；以画布中心纠正迟到的越界视口。
+      const ratio = zoom / viewport.zoom;
+      void reactFlowInstance.setViewport({
+        x: width / 2 + (viewport.x - width / 2) * ratio,
+        y: height / 2 + (viewport.y - height / 2) * ratio,
+        zoom,
+      });
+      return;
+    }
     nodeLodRuntime.viewport(viewport.zoom, (width / 2 - viewport.x) / viewport.zoom, (height / 2 - viewport.y) / viewport.zoom);
     updateNodeZoomCompensation(viewport.zoom);
     const activePan = activeCanvasPanRef.current;
@@ -740,7 +753,7 @@ function CanvasInner({ onReady }: CanvasProps) {
       deltaX: viewport.x - activePan.startX,
       deltaY: viewport.y - activePan.startY,
     });
-  }, [flowStore, nodeLodRuntime, updateNodeZoomCompensation]);
+  }, [flowStore, nodeLodRuntime, reactFlowInstance, updateNodeZoomCompensation]);
 
   const handleWheelZoomStart = useCallback(() => {
     beginUserMove();
@@ -761,8 +774,8 @@ function CanvasInner({ onReady }: CanvasProps) {
     setViewport: reactFlowInstance.setViewport,
     onStart: handleWheelZoomStart,
     onEnd: handleWheelZoomEnd,
-    minZoom: MIN_CANVAS_ZOOM,
-    maxZoom: MAX_CANVAS_ZOOM,
+    minZoom: viewportPreferences.minZoom,
+    maxZoom: viewportPreferences.maxZoom,
   });
 
   const {
@@ -1639,6 +1652,8 @@ function CanvasInner({ onReady }: CanvasProps) {
             onToggleLine={() => setSmoothLine((v) => !v)}
             mode={viewportPreferences.mode}
             disabled={!viewportPreferences.hydrated}
+            minZoom={viewportPreferences.minZoom}
+            maxZoom={viewportPreferences.maxZoom}
             onAutoFit={autoFitCanvas}
             onZoomChange={viewportPreferences.setZoom}
             onStepZoom={viewportPreferences.stepZoom}
