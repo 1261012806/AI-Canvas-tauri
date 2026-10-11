@@ -37,6 +37,7 @@
 @import './styles/separators.css';
 @import './styles/character-library.css';
 @import './styles/canvas-drawing.css';
+@import './styles/canvas-viewport.css';
 @import './styles/video-editor.css';
 @import './styles/range-controls.css';
 @import './styles/minimap-stats.css';

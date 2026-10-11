@@ -10,6 +10,7 @@ import type { ToolbarButtonDef, NodeType } from '../../../../types';
 import type { UseToolbarEditReturn } from '../../../../hooks/useToolbarEdit';
 import { getSlashCommands } from '../slashCommands';
 import { useAppStore } from '../../../../store/useAppStore';
+import { getCanvasLockedZoom } from '../../../../utils/canvasViewportPreferences';
 
 interface ToolbarEditorProps {
   edit: UseToolbarEditReturn;
@@ -147,9 +148,11 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
     const originalViewport = originalViewportRef.current;
     if (!originalViewport) return;
     originalViewportRef.current = null;
-    void setViewport(originalViewport, {
+    const zoom = getCanvasLockedZoom(useAppStore.getState().config) ?? originalViewport.zoom;
+    void setViewport({ ...originalViewport, zoom }, {
       duration: VIEWPORT_TRANSITION_DURATION_MS,
       ease: easeOutCubic,
+      interpolate: getCanvasLockedZoom(useAppStore.getState().config) !== null ? 'linear' : 'smooth',
     });
   }, [setViewport]);
 
@@ -174,7 +177,7 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
     };
   }, [restoreOriginalViewport]);
 
-  // 编辑框完成首次布局后，将其平滑移动到画布可视区域中央并缩放至 120%。
+  // 编辑框完成首次布局后居中；锁定画布时沿用用户比例。
   useEffect(() => {
     if (!edit.isEditing) return;
     originalViewportRef.current ??= getViewport();
@@ -192,9 +195,10 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
         editorFlowCenter.x,
         editorFlowCenter.y,
         {
-          zoom: EDITOR_TARGET_ZOOM,
+          zoom: getCanvasLockedZoom(useAppStore.getState().config) ?? EDITOR_TARGET_ZOOM,
           duration: VIEWPORT_TRANSITION_DURATION_MS,
           ease: easeOutCubic,
+          interpolate: getCanvasLockedZoom(useAppStore.getState().config) !== null ? 'linear' : 'smooth',
         },
       );
     });

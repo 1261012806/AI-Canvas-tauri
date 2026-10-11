@@ -716,6 +716,7 @@ export interface CanvasQuickAction {
 }
 
 export type PromptSubmitShortcut = 'enter' | 'shift-enter' | 'ctrl-enter' | 'alt-enter';
+export type CanvasViewportMode = 'auto' | 'manual' | 'locked';
 
 export interface AppConfig {
   providers: Record<string, ApiProviderConfig>;
@@ -729,6 +730,8 @@ export interface AppConfig {
   defaultDarkBackgroundShade?: number; // 默认暗色背景灰度，0-58；未设置时为 20
   offWhiteBackgroundColor?: string; // 米白浅色背景颜色；未设置时沿用原有 #F4F6FB
   interactionMode?: InteractionMode; // 画布交互模式，默认 'default'
+  canvasViewportMode?: CanvasViewportMode; // 自动适配窗口 / 手动 / 锁定比例，默认 auto
+  canvasViewportZoom?: number; // 手动或锁定模式的全局比例，范围 0.1–5
   nodeToolbarMode?: NodeToolbarMode; // 节点顶部工具栏显示方式，默认 'icons'
   nodeLabelVisible?: boolean; // 是否显示节点顶部标题标签，默认 true
   canvasNoteToolbarVisible?: boolean; // 是否显示画布笔记工具栏，默认 true

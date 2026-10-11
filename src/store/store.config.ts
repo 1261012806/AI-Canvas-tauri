@@ -39,6 +39,8 @@ const defaultConfig: AppConfig = {
   generalModels: [],
   mascotVisible: false,
   interactionMode: 'default',
+  canvasViewportMode: 'auto',
+  canvasViewportZoom: 1,
   nodeToolbarMode: 'icons',
   nodeLabelVisible: true,
   startupView: 'project-library',
