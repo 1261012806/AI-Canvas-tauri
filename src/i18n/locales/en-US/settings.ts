@@ -709,8 +709,8 @@ const settings = {
   '正在验证 {name} 连接...': 'Verifying the {name} connection…',
   '{name} 连接验证成功': '{name} connection verified',
   '{name} 连接验证失败': '{name} connection verification failed',
-  '已从接口文档导入模型 {id}，保存前可继续检查调用协议':
-    'Imported model {id} from API docs; you can keep reviewing the call protocol before saving',
+  '已从接口文档导入模型 {id}，保存前请检查调用协议并逐模型补齐参数能力':
+    'Imported model {id} from API docs; review the call protocol and configure each model’s parameter capabilities before saving',
   '连接配置已复制（不含 API Key）': 'Connection config copied (API key excluded)',
   '剪贴板里没有可导入的连接配置': 'No importable connection config on the clipboard',
   '该连接类型不支持导入': 'This connection type cannot be imported',

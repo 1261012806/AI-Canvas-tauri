@@ -1165,6 +1165,16 @@ describe('Seedance built-in provider templates', () => {
     })).toThrow('examples 模式必须提供 submitRequest');
   });
 
+  it.each(['h3-standard', 'h3-max'] as const)('H3 %s quick templates declare only mapped audio controls', (variant) => {
+    for (const transport of ['minimax', 'apimart', 'aiping'] as const) {
+      const draft = createProviderConfigDraft(`task-${variant}-${transport}`, {
+        connectionName: 'H3 template fixture', baseUrl: 'https://example.test',
+        models: [{ modelId: variant, templateId: `${variant}:${transport}` }],
+      });
+      expect(draft.config.selectedModels?.[0].videoCapability?.supportsAudio).toBeUndefined();
+    }
+  });
+
   it('creates an H3 draft from a verified AI Ping template', () => {
     const draft = createProviderConfigDraft('task-h3-aiping', {
       connectionName: 'AI Ping H3',

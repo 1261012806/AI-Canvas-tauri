@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
+import { createHash } from 'node:crypto';
 import type { AppState } from '../../src/store/useAppStore';
 
 
@@ -114,11 +115,16 @@ async function clickDelete() {
 beforeEach(async () => {
   driver.slots = [];
   driver.native = false; driver.secrets.clear();
-  driver.invoke.mockReset().mockImplementation(async (command: string, args: { key: string; value?: string }) => {
+  driver.invoke.mockReset().mockImplementation(async (command: string, args: { key: string; value?: string; fingerprintOnly?: boolean; expected?: { fingerprint?: string } }) => {
     if (command === 'secret_store_available') return true;
-    if (command === 'secret_get') return driver.secrets.get(args.key) ?? null;
+    const current = driver.secrets.get(args.key) ?? null;
+    const fingerprint = current === null ? null : createHash('sha256').update(current).digest('hex');
+    if (command === 'secret_get') return args.fingerprintOnly ? fingerprint : current;
     if (command === 'secret_set') { driver.secrets.set(args.key, args.value!); return; }
-    if (command === 'secret_delete') { driver.secrets.delete(args.key); return; }
+    if (command === 'secret_delete') {
+      if (current !== null && args.expected?.fingerprint && args.expected.fingerprint !== fingerprint) throw { code: 'conflict' };
+      driver.secrets.delete(args.key); return;
+    }
     throw new Error('测试未声明的原生命令');
   });
   driver.listProjects.mockReset().mockResolvedValue([]);
