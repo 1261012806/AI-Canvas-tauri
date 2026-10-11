@@ -974,6 +974,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // ── 芯片 hover：读取对应内容的小卡片，保留原有引用高亮联动 ──
   const lastHoverIdRef = useRef<string | null>(null);
   const chipHoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chipHoverSuppressedRef = useRef(false);
+  const [chipHoverSuppressed, setChipHoverSuppressed] = useState(false);
   const [chipTip, setChipTip] = useState<{ id: string; label: string; x: number; y: number; width: number; ownerNodeId?: string } | null>(null);
   const handleEditorMouseLeave = useCallback(() => {
     if (chipHoverTimer.current !== null) clearTimeout(chipHoverTimer.current);
@@ -983,7 +985,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     setChipTip(null);
   }, []);
   const handleEditorMouseOver = useCallback((e: React.MouseEvent) => {
-    if (editorRef.current?.classList.contains('is-chip-dragging')) return;
+    if (e.buttons !== 0 || chipHoverSuppressedRef.current || editorRef.current?.classList.contains('is-chip-dragging')) {
+      handleEditorMouseLeave();
+      return;
+    }
     const el = (e.target as HTMLElement).closest?.('[data-ref-id]') as HTMLElement | null;
     const id = el?.getAttribute('data-ref-id') ?? null;
     if (id === lastHoverIdRef.current) return; // 同一芯片，跳过避免抖动
@@ -994,7 +999,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       const label = el.getAttribute('data-ref-label') || '节点';
       chipHoverTimer.current = setTimeout(() => {
         chipHoverTimer.current = null;
-        if (lastHoverIdRef.current !== id || !el.isConnected) return;
+        if (chipHoverSuppressedRef.current || editorRef.current?.classList.contains('is-chip-dragging') || lastHoverIdRef.current !== id || !el.isConnected) return;
         const rect = el.getBoundingClientRect();
         const width = Math.min(264, window.innerWidth - 24);
         const height = Math.min(208, window.innerHeight - 24);
@@ -1033,9 +1038,41 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ? resolveMentionPreview(nodes, chipTip.id, chipTip.label, nodeMetaMap.get(chipTip.id)?.thumbnailUrl)
     : null;
   useEffect(() => {
+    // 捕获画布、文字选择和胶囊拖动；原生拖放开始后可能立即收到 pointercancel。
+    let nativeDragging = false;
+    const updateSuppressed = (pressed: boolean) => {
+      const suppressed = pressed || nativeDragging;
+      chipHoverSuppressedRef.current = suppressed;
+      setChipHoverSuppressed(suppressed);
+      if (suppressed) handleEditorMouseLeave();
+    };
+    const pointerDown = () => updateSuppressed(true);
+    const pointerUp = (event: PointerEvent) => updateSuppressed(event.buttons !== 0);
+    const pointerMove = (event: PointerEvent) => {
+      // 在窗口外松开后重新进入，也能恢复普通悬浮。
+      if (event.buttons === 0 && !nativeDragging && chipHoverSuppressedRef.current) updateSuppressed(false);
+    };
+    const pointerCancel = () => updateSuppressed(false);
+    const dragStart = () => {
+      nativeDragging = true;
+      updateSuppressed(true);
+    };
+    const reset = () => {
+      nativeDragging = false;
+      updateSuppressed(false);
+      handleEditorMouseLeave();
+    };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && lastHoverIdRef.current) handleEditorMouseLeave();
     };
+    window.addEventListener('pointerdown', pointerDown, true);
+    window.addEventListener('pointerup', pointerUp, true);
+    window.addEventListener('pointermove', pointerMove, true);
+    window.addEventListener('pointercancel', pointerCancel, true);
+    window.addEventListener('dragstart', dragStart, true);
+    window.addEventListener('dragend', reset, true);
+    window.addEventListener('drop', reset, true);
+    window.addEventListener('blur', reset);
     window.addEventListener('resize', handleEditorMouseLeave);
     window.addEventListener('scroll', handleEditorMouseLeave, true);
     window.addEventListener('keydown', escape);
@@ -1043,6 +1080,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       if (chipHoverTimer.current !== null) clearTimeout(chipHoverTimer.current);
       lastHoverIdRef.current = null;
       useAppStore.getState().setHoveredMentionNodeId(null);
+      window.removeEventListener('pointerdown', pointerDown, true);
+      window.removeEventListener('pointerup', pointerUp, true);
+      window.removeEventListener('pointermove', pointerMove, true);
+      window.removeEventListener('pointercancel', pointerCancel, true);
+      window.removeEventListener('dragstart', dragStart, true);
+      window.removeEventListener('dragend', reset, true);
+      window.removeEventListener('drop', reset, true);
+      window.removeEventListener('blur', reset);
       window.removeEventListener('resize', handleEditorMouseLeave);
       window.removeEventListener('scroll', handleEditorMouseLeave, true);
       window.removeEventListener('keydown', escape);
@@ -1333,7 +1378,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
       {/* 保留 chip-name-tip 的 Portal 标记，宿主点外关闭逻辑继续识别。 */}
       {createPortal(
-        <AnimatePresence>
+        // 按下时直接卸载详情卡片，避免拖动期间仍残留退出动画。
+        chipHoverSuppressed ? null : <AnimatePresence>
           {chipTip && chipPreview && (
             <motion.div
               key={chipTip.id}
