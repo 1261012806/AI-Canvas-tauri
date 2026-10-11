@@ -509,7 +509,7 @@ function AvatarMenu() {
               className="flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-indigo-500/20 transition-transform active:scale-95"
               aria-label={t('AI Canvas')}
             >
-              <img src="/icons.svg" alt="" />
+              <img src={`${import.meta.env.BASE_URL}icons.svg`} alt="" />
             </button>
             <div>
               <h2 className="text-lg font-semibold text-canvas-text">AI Canvas</h2>
