@@ -1148,6 +1148,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(native_rendering::NativeRenderingState::default())
         .manage(proxy_http_state)
+        .manage(comfyui::management::ManagementState::default())
         .manage(blender_runtime::BlenderRuntimeState::default())
         .manage(blender_runtime::ProjectGrantState::default())
         .manage(blender_runtime::production_blender_job_core())
@@ -1158,6 +1159,7 @@ pub fn run() {
         .register_uri_scheme_protocol("plugin-ui", plugin_ui::handle_protocol)
         .register_uri_scheme_protocol("plugin-window", plugin_window::handle_protocol)
         .plugin(tauri_plugin_fs::init())
+        .plugin(comfyui::installation::privacy_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -1230,8 +1232,19 @@ pub fn run() {
             native_rendering::sync_native_performance_mode,
             sync_authorized_directories,
             comfyui::launch_comfyui,
+            comfyui::installation::select_comfyui_installation,
+            comfyui::installation::get_comfyui_installation,
             comfyui::open_comfyui_window,
             comfyui::complete_comfyui_workflow_save,
+            comfyui::management::open_comfyui_settings_window,
+            comfyui::management::get_comfyui_management_snapshot,
+            comfyui::management::list_comfyui_versions,
+            comfyui::management::apply_comfyui_repository_action,
+            comfyui::management::list_comfyui_catalog,
+            comfyui::management::install_comfyui_extension,
+            comfyui::management::install_comfyui_dependencies,
+            comfyui::launch_settings::get_comfyui_launch_settings,
+            comfyui::launch_settings::save_comfyui_launch_settings,
             onnx::get_models_dir,
             onnx::check_model_exists,
             onnx::list_onnx_models,
