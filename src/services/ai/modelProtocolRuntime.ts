@@ -123,11 +123,20 @@ function readReferenceStrings(value: unknown): string[] {
   return Object.values(value).flatMap(readReferenceStrings);
 }
 
+function referenceTransportValue(name: string, value: unknown): unknown {
+  if (name !== 'seedanceContent' || !Array.isArray(value)) return value;
+  // 类型、角色和提示词不是素材；保持原下标，让子路径与真实请求使用同一索引。
+  return value.map((item) => {
+    if (!isRecord(item)) return undefined;
+    const field = item.type;
+    return field === 'image_url' || field === 'video_url' || field === 'audio_url'
+      ? { [field]: item[field] }
+      : undefined;
+  });
+}
+
 function readProtocolReferenceStrings(name: string, value: unknown): string[] {
-  if (name !== 'seedanceContent' || !Array.isArray(value)) return readReferenceStrings(value);
-  return value.flatMap((item) => (
-    isRecord(item) && item.type === 'text' ? [] : readReferenceStrings(item)
-  ));
+  return readReferenceStrings(referenceTransportValue(name, value));
 }
 
 function containsAllValues(available: readonly string[], expected: readonly string[]): boolean {
@@ -166,7 +175,7 @@ function collectTemplateTransportUsages(
 ): TemplateTransportUsage[] {
   return collectTransportTemplatePaths(extractSubmitValue(protocolSource)).flatMap((path) => {
     const root = path.split('.')[0];
-    const sourceValue = variables[root];
+    const sourceValue = referenceTransportValue(root, variables[root]);
     if (sourceValue === undefined) return [];
     const resolved = path === root
       ? [sourceValue]
