@@ -29,6 +29,25 @@ export function assertImageModelCapability(capability: ImageModelCapability): vo
   if (capability.supportsImageReference === false && (capability.maxImageReferences ?? 0) > 0) {
     throw new Error('不支持参考图时 maxImageReferences 不能大于 0');
   }
+  if (capability.dimensionPresets) {
+    for (const ratios of Object.values(capability.dimensionPresets)) {
+      if (!ratios || typeof ratios !== 'object' || Array.isArray(ratios)) throw new Error('图片像素尺寸表必须按分辨率和比例声明');
+      for (const dimensions of Object.values(ratios)) {
+        if (!Array.isArray(dimensions) || dimensions.length !== 2
+          || dimensions.some((value) => !Number.isInteger(value) || value <= 0)) {
+          throw new Error('图片像素尺寸必须是两个正整数');
+        }
+      }
+    }
+    for (const resolution of capability.resolutions ?? []) {
+      const key = Object.keys(capability.dimensionPresets).find((value) => value.toLowerCase() === resolution.toLowerCase());
+      for (const ratio of capability.ratios ?? []) {
+        if (!key || !capability.dimensionPresets[key][ratio]) {
+          throw new Error(`图片参数 ${resolution} / ${ratio} 缺少像素尺寸映射，请重新应用相应模板`);
+        }
+      }
+    }
+  }
 }
 
 export function resolveConfiguredImageParameters(
@@ -84,8 +103,8 @@ export function assertModelCapabilityProtocol(model: ProviderModelSelection): vo
     requireMapping((capability.resolutions?.length ?? 0) > 1, '分辨率', ['imageSize', 'size', 'width', 'height']);
     requireMapping((capability.ratios?.length ?? 0) > 1, '比例', ['aspectRatio', 'size', 'width', 'height']);
     requireMapping(capability.supportsBatch === true && (capability.maxBatchCount ?? 2) > 1, '数量', ['n', 'batchCount']);
-    requireMapping(capability.supportsImageReference === true, '参考图', ['imageUrls']);
-    if (capability.supportsImageReference === false && modelProtocolUsesVariable(source, 'imageUrls')) {
+    requireMapping(capability.supportsImageReference === true, '参考图', ['imageUrls', 'googleImageParts']);
+    if (capability.supportsImageReference === false && modelProtocolUsesVariable(source, 'imageUrls', 'googleImageParts')) {
       throw new Error(`模型“${model.name}”声明不支持参考图，但协议仍映射参考图`);
     }
   } else if (model.category === 'video') {

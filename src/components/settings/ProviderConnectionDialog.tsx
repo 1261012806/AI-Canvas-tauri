@@ -25,6 +25,7 @@ import {
   inferH3ModelVariant,
 } from '../../services/ai/h3ModelCapabilities';
 import type { ImageModelCapability, VideoModelCapability } from '../../types/aiTypes';
+import { createImageQuickAdaptTemplate } from '../../services/ai/imageModelTemplates';
 import {
   capCatalogModels,
   createConnectionId,
@@ -75,6 +76,7 @@ export default function ProviderConnectionDialog({
   isOpen,
   connectionId,
   initialConfig,
+  initialModelId,
   providerConfigs,
   connectedProviderIds,
   fallbackModels,
@@ -101,6 +103,9 @@ export default function ProviderConnectionDialog({
   const initialSelectedModels = materializeLegacyImageProtocolDefault(
     initialConfig?.selectedModels || [], initialConfig,
   );
+  const initialModel = initialDefinition?.id === 'custom-openai'
+    ? initialSelectedModels.find((model) => model.id === initialModelId)
+    : undefined;
   const initialCatalogModels = initialConfig?.catalogModels || [];
   const initialLocalModels = initialDefinition ? (fallbackModels[initialDefinition.id] || []) : [];
   const initialBaseUrl = initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '';
@@ -138,9 +143,15 @@ export default function ProviderConnectionDialog({
   const [manualModelId, setManualModelId] = useState('');
   const [manualModelName, setManualModelName] = useState('');
   const [manualCategory, setManualCategory] = useState<GeneralModelCategory>('text');
-  const [imageCapabilityModelId, setImageCapabilityModelId] = useState<string | null>(null);
-  const [videoCapabilityModelId, setVideoCapabilityModelId] = useState<string | null>(null);
-  const [protocolModelId, setProtocolModelId] = useState<string | null>(null);
+  const [imageCapabilityModelId, setImageCapabilityModelId] = useState<string | null>(
+    () => initialModel?.category === 'image' ? initialModel.id : null,
+  );
+  const [videoCapabilityModelId, setVideoCapabilityModelId] = useState<string | null>(
+    () => initialModel?.category === 'video' ? initialModel.id : null,
+  );
+  const [protocolModelId, setProtocolModelId] = useState<string | null>(
+    () => initialModel && initialModel.category !== 'image' && initialModel.category !== 'video' ? initialModel.id : null,
+  );
   const [protocolValid, setProtocolValid] = useState(true);
   const [protocolImportOpen, setProtocolImportOpen] = useState(false);
   const [protocolImportSnapshot, setProtocolImportSnapshot] = useState<ProtocolImportSnapshot | null>(null);
@@ -532,6 +543,14 @@ export default function ProviderConnectionDialog({
     setModels((current) => current.map((model) => model.id === modelId ? { ...model, imageCapability } : model));
   };
 
+  const applyImageTemplate = (modelId: string, templateId: string) => {
+    const template = createImageQuickAdaptTemplate(templateId);
+    setModels((current) => current.map((model) => model.id === modelId && model.category === 'image'
+      ? { ...model, ...template } : model));
+    // 避免已展开的旧协议编辑器继续回写覆盖新模板。
+    closeProtocolEditor();
+  };
+
   const updateImageReferenceRequestMode = (
     modelId: string,
     imageReferenceRequestMode: ImageReferenceRequestMode | undefined,
@@ -808,6 +827,7 @@ export default function ProviderConnectionDialog({
                 imageCapabilityModel={imageCapabilityModel}
                 setImageCapabilityModelId={setImageCapabilityModelId}
                 onUpdateImageCapability={updateImageCapability}
+                onApplyImageTemplate={applyImageTemplate}
                 videoCapabilityModel={videoCapabilityModel}
                 setProtocolModelId={setProtocolModelId}
                 setVideoCapabilityModelId={setVideoCapabilityModelId}

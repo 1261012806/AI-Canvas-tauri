@@ -2,6 +2,7 @@
  * PromptPanel 提示词面板 — AI 生成节点的核心输入面板，集成模型选择器、提示词编辑器、质量/比例/视频参数、生成按钮、/ 指令菜单
  */
 import Select from '../../shared/Select';
+import AnimatedButton from '../../shared/AnimatedButton';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import LazyLoadBoundary from '../../shared/LazyLoadBoundary';
@@ -59,6 +60,7 @@ import { useT } from '../../../i18n';
 import WorkflowApiParameterFields from './WorkflowApiParameterFields';
 import { DREAMINA_IMAGE_RATIOS, getDreaminaImageModel } from '../../../services/ai/dreaminaModels';
 import { resolveImageParameterCapability } from '../../../services/ai/mediaModelCapabilities';
+import { getProviderDefinition } from '../../../services/ai/providerCatalogService';
 import { calcAnchoredPosition } from '../../../utils/popupPosition';
 import { getPromptSubmitShortcutHint, normalizePromptSubmitShortcut, PROMPT_SUBMIT_SHORTCUT_OPTIONS } from '../../../utils/promptSubmitShortcut';
 
@@ -548,6 +550,22 @@ export default function PromptPanel({
     ? resolveImageParameterCapability(selectedModel, selectedProvider, imageModelConfig)
     : undefined;
   const imageResolutions = dreaminaImageModel?.resolutions ?? imageCapability?.resolutions;
+  const imageGeneralModel = selectedProvider === 'general'
+    ? imageModelConfig.generalModels?.find((model) => model.id === selectedModel?.replace(/^general\//, ''))
+    : undefined;
+  const imageConnectionId = imageGeneralModel?.providerConfigId ?? selectedProvider;
+  const imageConnection = imageConnectionId ? imageModelConfig.providers[imageConnectionId] : undefined;
+  const imageModelId = imageGeneralModel?.modelId
+    ?? (imageConnectionId && selectedModel?.startsWith(`${imageConnectionId}/`)
+      ? selectedModel.slice(imageConnectionId.length + 1) : selectedModel);
+  const imageSettingsModel = imageConnectionId && imageConnection
+    && getProviderDefinition(imageConnectionId, imageConnection)?.id === 'custom-openai'
+    ? imageConnection.selectedModels?.find((model) => model.id === imageModelId && model.category === 'image')
+    : undefined;
+  const imageNeedsParameterSettings = !!imageSettingsModel && (
+    !imageCapability?.ratios?.length
+    || (imageCapability?.hasResolutionField !== false && !imageResolutions?.length)
+  );
   const imageRatioValues = useMemo<readonly string[] | undefined>(() => (
     dreaminaImageModel
       ? DREAMINA_IMAGE_RATIOS
@@ -1019,7 +1037,17 @@ export default function PromptPanel({
           )}
 
           {nodeType === 'ai-image' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
-            <>
+            imageNeedsParameterSettings && imageSettingsModel ? (
+              <AnimatedButton type="button" className="img-pill-btn" disabled={isGenerating}
+                aria-label={t('打开 {name} 图片参数设置', { name: imageSettingsModel.name })}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  useAppStore.getState().openApiKeySettings(imageConnectionId, imageSettingsModel.id);
+                }}>
+                <Icon icon="lucide:sliders-horizontal" width="16" />
+                <span>{t('参数')}</span>
+              </AnimatedButton>
+            ) : (
               <QualityRatioSelector
                 imageSize={imageResolutions?.length === 0 ? t('未声明') : imageSize}
                 aspectRatio={imageRatioValues?.length === 0 && !imageSupportsAdaptive ? t('比例待确认') : aspectRatio}
@@ -1033,10 +1061,7 @@ export default function PromptPanel({
                   className: getImageRatioClassName(value),
                 }))}
               />
-              {selectedProvider === 'general' && (!imageResolutions?.length || !imageCapability?.ratios?.length) ? (
-                <span className="text-[10px] text-canvas-text-muted">{t('部分图片参数未声明，请在模型设置中按文档补齐')}</span>
-              ) : null}
-            </>
+            )
           )}
 
           {nodeType === 'ai-panorama' && (

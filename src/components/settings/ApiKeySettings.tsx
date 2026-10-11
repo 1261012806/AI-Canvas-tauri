@@ -85,6 +85,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     removeProviderConfig,
     saveConfig,
     pendingApiKeyConnectionId,
+    pendingApiKeyModelId,
     setPendingApiKeyConnectionId,
   } = useAppStore(
     useShallow((state) => ({
@@ -95,6 +96,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       removeProviderConfig: state.removeProviderConfig,
       saveConfig: state.saveConfig,
       pendingApiKeyConnectionId: state.pendingApiKeyConnectionId,
+      pendingApiKeyModelId: state.pendingApiKeyModelId,
       setPendingApiKeyConnectionId: state.setPendingApiKeyConnectionId,
     })),
   );
@@ -214,7 +216,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     return () => { cancelled = true; };
   }, [billingOpen, hasVolcengineConnection]);
 
-  // Agent 保存厂商配置后请求补填密钥：在渲染期直接生效，不用 effect 回写本地 state。
+  // 补填密钥或节点请求模型参数：在渲染期直接生效，不用 effect 回写本地 state。
   // 任何一次手动开关对话框都视为消费掉该请求（关闭设置面板时 store 也会清空它）。
   const requestedConnectionId = pendingApiKeyConnectionId === NEW_API_KEY_CONNECTION_ID
     ? NEW_API_KEY_CONNECTION_ID
@@ -226,7 +228,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     ? undefined
     : requestedConnectionId ?? dialog.connectionId;
   const connectionDialogKey = requestedConnectionId
-    ? `pending-${requestedConnectionId}`
+    ? `pending-${requestedConnectionId}-${pendingApiKeyModelId ?? ''}`
     : dialog.revision;
 
   const editingConfig = editingConnectionId
@@ -844,6 +846,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         isOpen={connectionDialogOpen}
         connectionId={editingConnectionId}
         initialConfig={editingConfig}
+        initialModelId={requestedConnectionId ? pendingApiKeyModelId ?? undefined : undefined}
         providerConfigs={config.providers}
         connectedProviderIds={connectedProviderIds}
         fallbackModels={fallbackModels}

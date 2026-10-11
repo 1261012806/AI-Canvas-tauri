@@ -52,6 +52,7 @@ interface ProviderModelSectionProps {
   imageCapabilityModel: ProviderModelSelection | undefined;
   setImageCapabilityModelId: Dispatch<SetStateAction<string | null>>;
   onUpdateImageCapability: (modelId: string, capability: ImageModelCapability) => void;
+  onApplyImageTemplate: (modelId: string, templateId: string) => void;
   videoCapabilityModel: ProviderModelSelection | undefined;
   setProtocolModelId: Dispatch<SetStateAction<string | null>>;
   setVideoCapabilityModelId: Dispatch<SetStateAction<string | null>>;
@@ -108,6 +109,7 @@ export default function ProviderModelSection({
   imageCapabilityModel,
   setImageCapabilityModelId,
   onUpdateImageCapability,
+  onApplyImageTemplate,
   videoCapabilityModel,
   setProtocolModelId,
   setVideoCapabilityModelId,
@@ -345,8 +347,9 @@ export default function ProviderModelSection({
                   <>
                     {model.category === 'image' ? (
                       <AnimatedButton type="button"
-                        className={`provider-model-protocol-btn ${model.imageCapability ? 'is-configured' : ''}`}
+                        className={`ui-btn ui-icon-btn ui-icon-btn--sm${imageSettingsId === model.id ? ' is-active' : ''}`}
                         aria-label={`配置 ${model.name} 图片参数能力`} title="图片参数能力"
+                        aria-pressed={imageSettingsId === model.id}
                         onClick={() => {
                           setImageCapabilityModelId(model.id); setVideoCapabilityModelId(null);
                           setProtocolModelId(null); setProtocolValid(true); scrollToSettings();
@@ -355,9 +358,10 @@ export default function ProviderModelSection({
                     {model.category === 'video' ? (
                       <AnimatedButton
                         type="button"
-                        className={`provider-model-protocol-btn ${model.videoCapability ? 'is-configured' : ''}`}
+                        className={`ui-btn ui-icon-btn ui-icon-btn--sm${videoSettingsId === model.id ? ' is-active' : ''}`}
                         aria-label={`配置 ${model.name} 视频参数能力`}
                         title="视频参数能力"
+                        aria-pressed={videoSettingsId === model.id}
                         onClick={() => {
                           setVideoCapabilityModelId(model.id);
                           setImageCapabilityModelId(null);
@@ -371,9 +375,10 @@ export default function ProviderModelSection({
                     ) : null}
                     <AnimatedButton
                       type="button"
-                      className={`provider-model-protocol-btn ${model.executionProfile ? 'is-configured' : ''}`}
+                      className={`ui-btn ui-icon-btn ui-icon-btn--sm${protocolSettingsId === model.id ? ' is-active' : ''}`}
                       aria-label={`配置 ${model.name} 调用协议`}
                       title="调用协议"
+                      aria-pressed={protocolSettingsId === model.id}
                       onClick={() => {
                         setProtocolModelId(model.id);
                         setImageCapabilityModelId(null);
@@ -382,7 +387,7 @@ export default function ProviderModelSection({
                         scrollToSettings();
                       }}
                     >
-                      <Icon icon="mdi:tune-variant" width="15" />
+                      <Icon icon="lucide:sliders-horizontal" width="16" />
                     </AnimatedButton>
                   </>
                   ) : null}
@@ -458,6 +463,7 @@ export default function ProviderModelSection({
               && selectedIds.has(imageCapabilityModel.id) ? (
                 <ImageCapabilityEditor key={imageCapabilityModel.id} model={imageCapabilityModel}
                   onChange={(capability) => onUpdateImageCapability(imageCapabilityModel.id, capability)}
+                  onApplyTemplate={(templateId) => onApplyImageTemplate(imageCapabilityModel.id, templateId)}
                   onClose={() => setImageCapabilityModelId(null)} />
               ) : null}
             {definition.id === 'custom-openai'

@@ -4,17 +4,23 @@ import type { ProviderModelSelection } from '../../../types';
 import type { ImageModelCapability } from '../../../types/aiTypes';
 import { assertModelCapabilityProtocol, describeModelParameterGaps } from '../../../services/ai/modelCapabilityValidation';
 import Select from '../../shared/Select';
+import { IMAGE_QUICK_ADAPT_OPTIONS } from '../../../services/ai/imageModelTemplates';
+import { useT } from '../../../i18n';
 
 interface Props {
   model: ProviderModelSelection;
   onChange: (capability: ImageModelCapability) => void;
+  onApplyTemplate: (templateId: string) => void;
   onClose: () => void;
 }
 
-export default function ImageCapabilityEditor({ model, onChange, onClose }: Props) {
+export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate, onClose }: Props) {
+  const t = useT();
   const capability = model.imageCapability ?? {};
   const [customResolution, setCustomResolution] = useState('');
   const [customRatio, setCustomRatio] = useState('');
+  const [gptTemplate, setGptTemplate] = useState('gpt-2:openai');
+  const [bananaTemplate, setBananaTemplate] = useState('banana-pro:google');
   let error = '';
   try { assertModelCapabilityProtocol(model); } catch (reason) {
     error = reason instanceof Error ? reason.message : '图片参数声明无效';
@@ -36,6 +42,28 @@ export default function ImageCapabilityEditor({ model, onChange, onClose }: Prop
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onClose}>关闭</button>
       </div>
       <p className="text-xs text-canvas-text-secondary">按该渠道文档勾选。留空表示未声明；多选参数还须在调用协议中映射对应变量。</p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {([
+          ['gpt', 'GPT Image 快速适配', gptTemplate, setGptTemplate,
+            '同步更新当前模型的能力、协议与参考图方式；GPT 2／2.5 的高分辨率为实验档。'],
+          ['banana', 'Nano Banana 快速适配', bananaTemplate, setBananaTemplate,
+            '原生格式完整发送参考图，受应用 Base64 预算限制最多 6 张；中转站须支持所选接口格式。'],
+        ] as const).map(([family, title, templateId, setTemplateId, description]) => (
+          <section key={family} className="ui-card p-2 space-y-2" aria-label={t(title)}>
+            <h5 className="text-xs font-medium text-canvas-text">{t(title)}</h5>
+            <div className="flex items-center gap-2">
+              <Select fixedMenu size="sm" className="min-w-0 flex-1" aria-label={t(title)} value={templateId} onChange={setTemplateId}>
+                {IMAGE_QUICK_ADAPT_OPTIONS.filter((option) => option.family === family).map((option) => (
+                  <option key={option.id} value={option.id}>{option.modelLabel} · {t(option.formatLabel)}</option>
+                ))}
+              </Select>
+              <button type="button" className="ui-btn ui-btn--sm shrink-0" onClick={() => onApplyTemplate(templateId)}>{t('应用模板')}</button>
+            </div>
+            <p className="text-xs text-canvas-text-secondary">{t(description)}</p>
+          </section>
+        ))}
+      </div>
+      <p className="text-xs text-canvas-text-muted">{t('应用模板后仍可按渠道文档调整，保存连接后生效。')}</p>
       {([
         ['resolutions', 'defaultResolution', '分辨率', ['720p', '1K', '2K', '4K'], customResolution, setCustomResolution],
         ['ratios', 'defaultRatio', '比例', ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', 'auto'], customRatio, setCustomRatio],

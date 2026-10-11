@@ -36,6 +36,7 @@ import { executeModelProtocol, modelProtocolUsesVariable, resolveModelExecutionP
 import { assertConfiguredImageReferences, assertModelCapabilityProtocol, resolveConfiguredImageParameters } from './modelCapabilityValidation';
 import { getProviderDefinition } from './providerCatalogService';
 import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from './imageRequestContracts';
+import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
 
 function hasReferenceImageFile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -319,7 +320,7 @@ export async function generateImagesBatch(
       const connection = resolveGeneralModelConnection(model);
       if (!connection) throw new Error(`通用模型 "${gm.name}" 的连接配置不存在`);
       if (!connection.baseUrl) throw new Error(`通用模型 "${gm.name}" 未配置接口地址`);
-      const dimensions = mapImageDimensions(/^\d+k$/i.test(imageSize) ? imageSize.toUpperCase() : imageSize, aspectRatio);
+      const dimensions = resolveImageTemplateDimensions(configuredCapability, imageSize, aspectRatio);
       const hasExplicitStandardRequestMode = allImageUrls.length > 0
         && imageReferenceRequestMode !== undefined
         && usesStandardImageRequest;
@@ -340,6 +341,8 @@ export async function generateImagesBatch(
             n: requestedCount,
             batchCount: requestedCount,
             imageUrls: allImageUrls,
+            ...(customProtocol && modelProtocolUsesVariable(JSON.stringify(customProtocol.submit), 'googleImageParts')
+              ? { googleImageParts: buildGoogleImageParts(prompt, allImageUrls) } : {}),
           },
         });
         const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions }));

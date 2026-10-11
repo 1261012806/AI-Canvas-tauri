@@ -2,6 +2,17 @@
  * 设置面板：语言与启动 / 画布背景 / 画布交互 / 界面偏好
  */
 const settings = {
+  'GPT Image 快速适配': 'GPT Image quick setup',
+  'Nano Banana 快速适配': 'Nano Banana quick setup',
+  'OpenAI 官方 Images': 'Official OpenAI Images',
+  '中转 JSON（images）': 'Gateway JSON (images)',
+  'Google 官方 generateContent': 'Official Google generateContent',
+  '中转 Gemini 原生透传': 'Gateway Gemini native pass-through',
+  'APIMart 异步': 'APIMart asynchronous',
+  '应用模板': 'Apply template',
+  '同步更新当前模型的能力、协议与参考图方式；GPT 2／2.5 的高分辨率为实验档。': 'Updates this model’s capabilities, protocol and reference image format together. High resolutions for GPT 2/2.5 are experimental.',
+  '原生格式完整发送参考图，受应用 Base64 预算限制最多 6 张；中转站须支持所选接口格式。': 'Native formats send all reference images, up to 6 within the app’s Base64 budget. The gateway must support the selected API format.',
+  '应用模板后仍可按渠道文档调整，保存连接后生效。': 'You can adjust the template to match your provider’s documentation. Changes take effect after saving the connection.',
   '画布缩放范围': 'Canvas zoom range',
   '最小缩放比例': 'Minimum zoom',
   '最大缩放比例': 'Maximum zoom',
@@ -719,6 +730,7 @@ const settings = {
   'JSON 文件不能超过 8 MiB': 'The JSON file must not exceed 8 MiB',
   '文件必须使用 UTF-8 编码': 'The file must use UTF-8 encoding',
   '导出 {name} JSON': 'Export {name} JSON',
+  '打开 {name} 图片参数设置': 'Open image parameter settings for {name}',
   '导出 JSON（不含 API Key）': 'Export JSON (API key excluded)',
   '该连接类型不支持导入': 'This connection type cannot be imported',
   '已存在 {name} 连接，请先删除后再导入': 'A {name} connection already exists — delete it before importing',

@@ -45,6 +45,7 @@ import PopupCloseButton from '../shared/PopupCloseButton';
 import { describeProtocolTestRunBlocker, resolveProtocolTestRunDraft, type ProtocolChoice } from './modelProtocolTestRun';
 import { useT } from '../../i18n';
 import { copyText } from '../../services/clipboardService';
+import { buildGoogleImageParts, resolveImageTemplateDimensions } from '../../services/ai/imageModelTemplates';
 import {
   buildChatApiRequest,
   isNativeTextProtocolPreset,
@@ -142,16 +143,22 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
     };
   }
   if (model.category === 'image') {
+    const imageSize = model.imageCapability?.defaultResolution ?? model.imageCapability?.resolutions?.[0] ?? '1K';
+    const aspectRatio = model.imageCapability?.defaultRatio ?? model.imageCapability?.ratios?.[0] ?? '1:1';
+    const imageUrls = ['data:image/png;base64,iVBORw0KGgo='];
+    // 未完成的编辑草稿不能让整个设置窗口加载失败；真实发送仍严格校验尺寸。
+    let dimensions = { width: 1024, height: 1024 };
+    try { dimensions = resolveImageTemplateDimensions(model.imageCapability, imageSize, aspectRatio); } catch { /* 保留预览占位 */ }
     return {
       ...common,
-      imageSize: '1K',
-      aspectRatio: '1:1',
-      size: '1024x1024',
-      width: 1024,
-      height: 1024,
+      imageSize,
+      aspectRatio,
+      size: `${dimensions.width}x${dimensions.height}`,
+      ...dimensions,
       n: 1,
       batchCount: 1,
-      imageUrls: ['data:image/png;base64,iVBORw0KGgo='],
+      imageUrls,
+      googleImageParts: buildGoogleImageParts(common.prompt, imageUrls),
     };
   }
   if (model.category === 'video') {
