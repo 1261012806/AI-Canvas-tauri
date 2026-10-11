@@ -11,6 +11,7 @@ const driver = vi.hoisted(() => ({
   listProjects: vi.fn(), loadProject: vi.fn(), saveProject: vi.fn(),
   saveCurrentProject: vi.fn(), toast: vi.fn(),
   native: false, secrets: new Map<string, string>(), invoke: vi.fn(),
+  exportJson: vi.fn(), readJson: vi.fn(),
 }));
 // 执行真实按钮事件和 Store / IndexedDB；不挂载余额查询及其他窗口副作用。
 vi.mock('react', async () => ({
@@ -59,11 +60,15 @@ vi.mock('../../src/services/fileService', async () => ({
   ...await vi.importActual<typeof import('../../src/services/storageService')>('../../src/services/storageService'),
   loadProjectsList: driver.listProjects, loadProjectData: driver.loadProject,
   saveProject: driver.saveProject, setBaseDataDir: vi.fn(), syncAuthorizedDirectories: async () => {},
+  exportJsonTextFile: driver.exportJson, readJsonTextFile: driver.readJson,
+  JsonFileTransferError: (await vi.importActual<typeof import('../../src/services/fs/jsonFileTransfer')>('../../src/services/fs/jsonFileTransfer')).JsonFileTransferError,
 }));
 
 import ApiKeySettings from '../../src/components/settings/ApiKeySettings';
 import { createConfigSlice } from '../../src/store/store.config';
 import { loadConfigFromDb, saveConfigToDb } from '../../src/services/indexedDbService';
+import { serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
+import { JsonFileTransferError } from '../../src/services/fs/jsonFileTransfer';
 
 function configStore() {
   return createStore<AppState>()((set, get, api) => ({
@@ -132,6 +137,8 @@ beforeEach(async () => {
   driver.saveProject.mockReset().mockResolvedValue('project');
   driver.saveCurrentProject.mockReset().mockResolvedValue('current');
   driver.toast.mockReset();
+  driver.exportJson.mockReset().mockResolvedValue(true);
+  driver.readJson.mockReset();
   vi.stubGlobal('window', {});
   await saveConfigToDb({
     providers: {
@@ -195,6 +202,79 @@ describe('API Key 连接删除持久化', () => {
     await fresh.getState().loadConfig();
     expect(fresh.getState().config.providers).not.toHaveProperty('custom-1');
     expect(fresh.getState().config.generalModels?.map((model) => model.id)).toEqual(['kept-model']);
+  });
+});
+
+describe('自定义连接 JSON 文件入口', () => {
+  function importInput() {
+    return find(render(), (element) => element.props.type === 'file')!;
+  }
+
+  async function chooseFile(file?: File) {
+    const target = { files: file ? [file] : [], value: file ? 'config.json' : '' };
+    await (importInput().props.onChange as (event: unknown) => Promise<void>)({ currentTarget: target });
+    expect(target.value).toBe(''); // 同一文件可重新选择。
+  }
+
+  it('自定义连接按钮导出脱敏 JSON，取消或失败不会报成功', async () => {
+    driver.state().setProviderConfig('custom-1', { apiKey: 'private-fixture' });
+    const exportButton = () => find(render(), (element) => element.props['aria-label'] === '导出 待删除连接 JSON')!;
+    expect(exportButton().props['data-tooltip']).toBe('导出 JSON（不含 API Key）');
+    (exportButton().props.onClick as () => void)();
+    await vi.waitFor(() => expect(driver.toast).toHaveBeenCalledWith('连接配置已导出（不含 API Key）', 'success'));
+    expect(driver.exportJson).toHaveBeenCalledWith(expect.any(String), '待删除连接');
+    expect(driver.exportJson.mock.calls[0][0]).not.toContain('private-fixture');
+    driver.toast.mockClear();
+    driver.exportJson.mockResolvedValueOnce(false);
+    (exportButton().props.onClick as () => void)();
+    await vi.waitFor(() => expect(driver.exportJson).toHaveBeenCalledTimes(2));
+    expect(driver.toast).not.toHaveBeenCalled();
+    driver.exportJson.mockRejectedValueOnce(new Error('private path fixture'));
+    (exportButton().props.onClick as () => void)();
+    await vi.waitFor(() => expect(driver.toast).toHaveBeenCalledWith('导出 JSON 文件失败', 'error'));
+    expect(JSON.stringify(driver.toast.mock.calls)).not.toContain('private path fixture');
+  });
+
+  it('上传文件保留图片参数能力，重写模型身份并持久化，等待补 Key', async () => {
+    const capability = { resolutions: ['1K', '2K', '4K'], defaultResolution: '2K', ratios: ['1:1', '16:9'],
+      defaultRatio: '16:9', supportsBatch: true, maxBatchCount: 4, supportsImageReference: true, maxImageReferences: 10 };
+    driver.readJson.mockResolvedValue(serializeConnection({ name: '导入图片', catalogId: 'custom-openai', apiKey: 'excluded',
+      baseUrl: 'https://custom.example/v1', selectedModels: [{ id: 'image-fixture', name: '图片', category: 'image',
+        provider: 'old-identity', imageCapability: capability }] }));
+    const file = new File(['fixture'], 'config.json');
+    await chooseFile(file);
+    expect(driver.readJson).toHaveBeenCalledWith(file);
+    const entry = Object.entries(driver.state().config.providers).find(([, connection]) => connection.name === '导入图片')!;
+    const [id, connection] = entry;
+    expect(connection.apiKey).toBe('');
+    expect(connection.selectedModels![0]).toMatchObject({ provider: id, imageCapability: capability });
+    expect(driver.state().setPendingApiKeyConnectionId).toHaveBeenCalledWith(id);
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.providers[id].selectedModels![0].imageCapability).toEqual(capability);
+  });
+
+  it('取消选择不读文件，内置连接和非法 JSON 不改变配置', async () => {
+    const before = Object.keys(driver.state().config.providers);
+    await chooseFile();
+    expect(driver.readJson).not.toHaveBeenCalled();
+    driver.readJson.mockResolvedValueOnce('{');
+    await chooseFile(new File(['{'], 'bad.json'));
+    expect(driver.toast).toHaveBeenCalledWith('文件里没有有效的连接配置', 'error');
+    driver.readJson.mockResolvedValueOnce(serializeConnection({ name: '内置连接', catalogId: 'cccapi', apiKey: '' }));
+    await chooseFile(new File(['fixture'], 'ccc.json'));
+    expect(driver.toast).toHaveBeenCalledWith('该连接类型不支持导入', 'error');
+    expect(Object.keys(driver.state().config.providers)).toEqual(before);
+  });
+
+  it.each([
+    ['too-large', 'JSON 文件不能超过 8 MiB'], ['invalid-utf8', '文件必须使用 UTF-8 编码'],
+  ] as const)('文件读取错误 %s 给出提示且不保存', async (code, message) => {
+    const before = Object.keys(driver.state().config.providers);
+    driver.readJson.mockRejectedValueOnce(new JsonFileTransferError(code));
+    await chooseFile(new File(['fixture'], 'bad.json'));
+    expect(driver.toast).toHaveBeenCalledWith(message, 'error');
+    expect(Object.keys(driver.state().config.providers)).toEqual(before);
   });
 });
 

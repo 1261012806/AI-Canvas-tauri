@@ -18,7 +18,8 @@ import {
   parseConnectionShare,
   serializeConnection,
 } from '../../services/ai/providerConnectionTransfer';
-import { copyText, readText } from '../../services/clipboardService';
+import { copyText } from '../../services/clipboardService';
+import { exportJsonTextFile, readJsonTextFile, JsonFileTransferError } from '../../services/fileService';
 import type {
   ApiProviderConfig,
   DreaminaRuntime,
@@ -71,6 +72,9 @@ function isTauri(): boolean {
 
 export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   const t = useT();
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const importBusyRef = useRef(false);
+  const [importBusy, setImportBusy] = useState(false);
   const unreadSecrets = useAppStore((state) => state.configSecretReadErrors);
   const workflows = useAppStore((state) => state.workflows);
   const {
@@ -426,15 +430,30 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     );
   };
 
-  /** 从剪贴板导入连接；保存后直接打开对话框让用户补填 API Key。 */
-  const handleImportConnection = async () => {
-    const parsed = parseConnectionShare(await readText());
+  const handleExportConnection = async (connectionId: string) => {
+    const providerConfig = config.providers[connectionId];
+    if (!providerConfig) return;
+    try {
+      const connectionWorkflows = useAppStore.getState().workflows
+        .filter((workflow) => workflow.workflowApi?.connectionId === connectionId);
+      const exported = await exportJsonTextFile(
+        serializeConnection(providerConfig, connectionWorkflows), providerConfig.name || 'connection',
+      );
+      if (exported) useAppStore.getState().showToast(t('连接配置已导出（不含 API Key）'), 'success');
+    } catch {
+      useAppStore.getState().showToast(t('导出 JSON 文件失败'), 'error');
+    }
+  };
+
+  /** 从用户选择的 JSON 文件导入自定义连接；保存后补填 API Key。 */
+  const importConnectionFile = async (file: File) => {
+    const parsed = parseConnectionShare(await readJsonTextFile(file));
     if (!parsed) {
-      useAppStore.getState().showToast(t('剪贴板里没有可导入的连接配置'), 'error');
+      useAppStore.getState().showToast(t('文件里没有有效的连接配置'), 'error');
       return;
     }
     const definition = getProviderDefinition(parsed.catalogId);
-    if (!definition || definition.authType === 'oauth') {
+    if (!definition || (definition.id !== 'custom-openai' && definition.kind !== 'workflow-api')) {
       useAppStore.getState().showToast(t('该连接类型不支持导入'), 'error');
       return;
     }
@@ -468,6 +487,23 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     }
     useAppStore.getState().showToast(t('已导入连接，请补填 API Key'));
     setPendingApiKeyConnectionId(newConnectionId);
+  };
+
+  const handleImportConnection = async (file: File) => {
+    if (importBusyRef.current) return;
+    importBusyRef.current = true;
+    setImportBusy(true);
+    try {
+      await importConnectionFile(file);
+    } catch (error) {
+      const message = error instanceof JsonFileTransferError
+        ? error.code === 'too-large' ? t('JSON 文件不能超过 8 MiB') : t('文件必须使用 UTF-8 编码')
+        : t('读取 JSON 文件失败');
+      useAppStore.getState().showToast(message, 'error');
+    } finally {
+      importBusyRef.current = false;
+      setImportBusy(false);
+    }
   };
 
   const openAddDialog = () => {
@@ -572,12 +608,20 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
           <AnimatedButton
             type="button"
             className="settings-add-provider-btn"
-            aria-label={t('从剪贴板导入连接')}
-            data-tooltip={t('从剪贴板导入连接')}
-            onClick={() => void handleImportConnection()}
+            aria-label={t('从 JSON 文件导入自定义连接')}
+            data-tooltip={t('从 JSON 文件导入自定义连接')}
+            disabled={importBusy}
+            onClick={() => importFileRef.current?.click()}
           >
-            <Icon icon="mdi:clipboard-arrow-down-outline" width="17" />
+            <Icon icon="mdi:file-import-outline" width="17" />
           </AnimatedButton>
+          <input ref={importFileRef} type="file" accept=".json,application/json" className="hidden"
+            aria-label={t('从 JSON 文件导入自定义连接')}
+            onChange={async (event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) await handleImportConnection(file);
+            }} />
           <AnimatedButton
             type="button"
             className="settings-add-provider-btn"
@@ -622,6 +666,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
               const isRunningHub = definition.id === 'runninghub-model';
               const isWebSearchProvider = definition.kind === 'web-search';
               const isWorkflowApi = definition.kind === 'workflow-api';
+              const isCustomConnection = definition.id === 'custom-openai' || isWorkflowApi;
               const connectionWorkflows = workflows.filter((workflow) => workflow.workflowApi?.connectionId === item.id);
               const needsWorkflowKey = connectionWorkflows.some((workflow) => workflow.workflowApi?.version !== 2 || workflow.workflowApi.protocol.auth?.type !== 'none');
               const isPendingApiKey = isCcc ? cccKeyCount === 0
@@ -736,11 +781,14 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                         <AnimatedButton
                           type="button"
                           className="provider-icon-btn"
-                          aria-label={t('复制 {name} 配置', { name: definition.name })}
-                          data-tooltip={t('复制配置（不含 API Key）')}
-                          onClick={() => void handleCopyConnection(item.id)}
+                          aria-label={isCustomConnection
+                            ? t('导出 {name} JSON', { name: displayName }) : t('复制 {name} 配置', { name: definition.name })}
+                          data-tooltip={isCustomConnection
+                            ? t('导出 JSON（不含 API Key）') : t('复制配置（不含 API Key）')}
+                          onClick={() => void (isCustomConnection
+                            ? handleExportConnection(item.id) : handleCopyConnection(item.id))}
                         >
-                          <Icon icon="mdi:content-copy" width="15" />
+                          <Icon icon={isCustomConnection ? 'mdi:file-export-outline' : 'mdi:content-copy'} width="15" />
                         </AnimatedButton>
                       )}
                       <AnimatedButton

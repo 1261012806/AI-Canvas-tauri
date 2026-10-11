@@ -472,6 +472,7 @@ export * from './fs/assetLibrary';
 export * from './fs/assetFileMove';
 export * from './fs/skillFiles';
 export * from './fs/externalEditors';
+export * from './fs/jsonFileTransfer';
 
 /**
  * 同步用户明确选择的文件目录白名单。
