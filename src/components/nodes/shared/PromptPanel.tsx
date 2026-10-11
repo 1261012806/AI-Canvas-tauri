@@ -28,9 +28,9 @@ import type {
   NodeType,
   PromptSubmitShortcut,
   UserPreset,
-  UserSkill,
   WorkflowDefinition,
 } from '../../../types';
+import type { SkillPickerOption } from '../../../types/agentPackage';
 import { ANIMATION_ACTION_LABELS } from '../../../types';
 import { resolveAppearanceMode } from '../../../services/appearance/appearanceRuntime';
 import type { PresetOverride } from './SlashCommandMenu';
@@ -51,6 +51,7 @@ import SlashCommandMenu from './SlashCommandMenu';
 import PresetManager from './PresetManager';
 import SkillManager from './SkillManager';
 import { expandSkillReferences } from '../../../services/skillPromptService';
+import { listRuntimeSkills, projectSkillPickerOptions } from '../../../services/chat/skillCatalog';
 import { MAX_IMAGE_BATCH_COUNT } from '../../../types/aiTypes';
 import type { AudioOutputFormat, AudioSpeechSettings, AudioSpeechReference, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
@@ -591,6 +592,11 @@ export default function PromptPanel({
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
   const userPresets = useAppStore((s) => s.userPresets);
   const userSkills = useAppStore((s) => s.userSkills);
+  const agentPackageSkills = useAppStore((s) => s.agentPackageSkills);
+  const skillOptions = useMemo(
+    () => projectSkillPickerOptions(userSkills, agentPackageSkills),
+    [userSkills, agentPackageSkills],
+  );
   const uploadSkill = useAppStore((s) => s.uploadSkill);
   const setPresetManagerOpen = useAppStore((s) => s.setPresetManagerOpen);
   const setPresetRunRequest = useAppStore((s) => s.setPresetRunRequest);
@@ -600,8 +606,8 @@ export default function PromptPanel({
 
   const handleSubmit = useCallback((overridePrompt?: string, postProcess?: ImagePostProcess) => {
     const sourcePrompt = overridePrompt ?? prompt;
-    onSubmit(expandSkillReferences(sourcePrompt, userSkills), postProcess);
-  }, [onSubmit, prompt, userSkills]);
+    onSubmit(expandSkillReferences(sourcePrompt, listRuntimeSkills()), postProcess);
+  }, [onSubmit, prompt]);
 
   const handleSingleSubmit = useCallback((overridePrompt?: string, postProcess?: ImagePostProcess) => {
     onChangeBatchCount?.(1);
@@ -776,7 +782,7 @@ export default function PromptPanel({
     setSkillManagerOpen(true);
   }, []);
 
-  const handleSkillSelect = useCallback((skill: UserSkill) => {
+  const handleSkillSelect = useCallback((skill: SkillPickerOption) => {
     setSlashOpen(false);
     const token = `@skill{${skill.id}|${encodeURIComponent(skill.name)}}`;
     const spacer = prompt && !/\s$/.test(prompt) ? ' ' : '';
@@ -1252,7 +1258,7 @@ export default function PromptPanel({
         currentPrompt={prompt}
         anchorEl={slashAnchor}
         userPresets={userPresets}
-        userSkills={userSkills}
+        skillOptions={skillOptions}
         onSelect={handleSlashSelect}
         onRunAdvancedPreset={handleRunAdvancedPreset}
         onSelectSkill={handleSkillSelect}

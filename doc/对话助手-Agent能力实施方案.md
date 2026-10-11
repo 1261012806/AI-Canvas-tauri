@@ -83,13 +83,20 @@ A–D 历史联合复核未覆盖真实桌面 WebView、双窗口审批、真实
 - 状态：已实现。定向 ESLint、应用/测试类型检查及面板、安装目录、Skill 服务回归通过；实际组件的隔离浏览器检查通过默认折叠、鼠标/键盘操作、长名称、320/400/600px 宽度和明暗主题。真实 Tauri 安装包目录尚未进行界面验收。
 - 回滚：撤销本次面板与对应测试改动即可，不涉及存储格式、原生权限或依赖变化。
 
+## Skill 共享目录与导入
+
+- 节点 `/` 菜单、主窗口和独立窗口助手、提示词润色、子智能体绑定共用手动上传和智能体包的 Skill 目录，以同一 Skill ID 调用。显式调用遵守 `user-invocable` 和包路由声明，自动发现沿用既有开关。
+- 节点提交和子智能体执行从当前共享目录读取正文；来源停用、删除或目录刷新后不从组件旧快照读取。子智能体绑定不可用时，有内联角色提示词则回退，否则明确报错。
+- 主窗口助手提供单文件与文件夹上传，复用已有 Store Action；文件夹导入授权所选目录的多级附属资料。Skill 管理展示两种来源，包内 Skill 保持只读并由智能体中心管理。
+- 状态：已实现，待用户验收。本次未运行测试；回归用例已补充。范围、Tauri 桌面验收顺序和回滚见 [Skill 全软件统一调用计划](./plans/2026-10-11-unified-skill-access.md)。
+
 ## 验证入口
 
 - Agent Package 归档预览与导入支持全局 PAX 元数据，局部 PAX 的实际路径仍经过原生校验；异常导入保留可读错误详情，元数据不作为文件或脚本执行。前端回归入口为 [agentPackageImportService.test.ts](../tests/services/agentPackageImportService.test.ts)，原生回归位于 `agent_package::tests`；具体导入健康与权限边界仍以当前源码为准。
 
 - 权限：[policyEngine.test.ts](../tests/services/chat/policyEngine.test.ts)；控制与预算：[agentTaskControl.test.ts](../tests/services/chat/agentTaskControl.test.ts)、[agentBudgetService.test.ts](../tests/services/chat/agentBudgetService.test.ts)。
 - 执行诊断：[agentRuntimeDiagnostics.test.ts](../tests/services/chat/agentRuntimeDiagnostics.test.ts)；Agent Package：[Store 测试](../tests/store/agentPackages.test.ts)、[Skill 接入测试](../tests/services/agentPackageSkillService.test.ts)。
-- 代码变更按范围运行定向 Vitest、ESLint、应用/测试类型检查；涉及原生网页或包读取时补充对应 Rust 检查。
+- 代码变更由用户按范围运行定向 Vitest、ESLint、应用/测试类型检查；涉及原生网页或包读取时补充对应 Rust 检查。助手仅在用户明确授权对应检查时执行。
 - 实机验收至少覆盖所改链路的审批、停止、切项目、双窗口同步与重启恢复。记录实际通过项和未覆盖项；文档整理只验证内容、链接、编码与差异。
 
 ## 后续维护
