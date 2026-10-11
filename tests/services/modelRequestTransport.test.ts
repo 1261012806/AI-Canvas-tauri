@@ -65,7 +65,10 @@ describe('image quick template request transport', () => {
     expect(url).toBe(`https://images.example${path}`);
     expect(init.headers).toMatchObject(auth);
     const body = JSON.parse(String(init.body));
-    expect(body.contents[0].parts).toEqual([{ text: params.prompt }, ...references.map((reference) => ({
+    expect(body.contents[0].parts[0].text).toContain(params.prompt);
+    expect(body.contents[0].parts[0].text).toContain('3 张参考图');
+    expect(body.contents[0].parts[0].text).toContain('16:9');
+    expect(body.contents[0].parts).toEqual([{ text: expect.any(String) }, ...references.map((reference) => ({
       inlineData: { mimeType: 'image/png', data: reference.split(',')[1] },
     }))]);
     expect(body.generationConfig[field]).toEqual(field === 'imageConfig'
@@ -129,7 +132,11 @@ describe('image quick template request transport', () => {
     expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
     const [submitUrl, submit] = transportMocks.corsSafeFetch.mock.calls[0];
     expect(submitUrl).toBe('https://images.example/v1/images/generations');
-    expect(JSON.parse(String(submit.body))).toEqual({ model: 'actual-model-id', prompt: params.prompt,
+    const submitted = JSON.parse(String(submit.body));
+    expect(submitted.prompt).toContain(params.prompt);
+    expect(submitted.prompt).toContain('1 张参考图');
+    expect(submitted.prompt).toContain('3:2');
+    expect(submitted).toEqual({ model: 'actual-model-id', prompt: expect.any(String),
       size: '3:2', resolution: '2k', n: 1, image_urls: ['https://cdn.example/reference.png'] });
     const [pollUrl, poll] = transportMocks.corsSafeFetch.mock.calls[1];
     expect(pollUrl).toBe('https://images.example/v1/tasks/task-123');

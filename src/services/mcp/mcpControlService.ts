@@ -1,3 +1,5 @@
+import { clearSkillReadTask } from '../chat/skillReadService';
+import { clearSkillCatalogTask } from '../chat/skillCatalog';
 /**
  * MCP 前端控制层，将本地 bridge 请求映射到受 Policy 约束的 Agent 工具和专用审计任务。
  */
@@ -301,6 +303,8 @@ async function callMcpTool(
           }],
     };
   } finally {
+    clearSkillReadTask(task.id);
+    clearSkillCatalogTask(task.id);
     activeRequestTasks.delete(request.requestId);
   }
 }
