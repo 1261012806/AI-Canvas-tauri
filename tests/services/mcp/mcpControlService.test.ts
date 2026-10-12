@@ -204,12 +204,95 @@ describe('MCP on-demand discovery', () => {
     expect(useAppStore.getState().agentTasks[0].projectId).toBe(MCP_SETTINGS_SCOPE_ID);
   });
 
-  it('discovers only provider settings without a project, including full exposure', async () => {
+  it('discovers provider settings and project navigation without a project, including full exposure', async () => {
     useAppStore.setState({ currentProjectId: null, configHydrated: true });
     const listed = await listMcpTools('full');
     expect(listed.some((tool) => tool.name === 'provider_config_preview')).toBe(true);
-    expect(listed.every((tool) => tool.name.startsWith('provider_'))).toBe(true);
+    expect(listed.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_get', 'project_open', 'project_switch']));
+    expect(listed.every((tool) => tool.name.startsWith('provider_') || ['project_list', 'project_get', 'project_open', 'project_switch'].includes(tool.name))).toBe(true);
     expect(await mcpCall('tools_describe', { names: ['canvas_query'] })).toMatchObject({ isError: true });
+    expect(await mcpCall('tools_describe', { names: ['project_delete'] })).toMatchObject({ isError: true });
+    const navigation = catalogResult(await mcpCall('tools_search', { category: 'project', detail: 'schema' }, 'startup-project-search'));
+    expect(navigation.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_open', 'project_switch']));
+  });
+
+  it('lists, opens and switches projects from startup through global audit tasks', async () => {
+    const switchProject = vi.fn(async (id: string) => {
+      useAppStore.setState({ currentProjectId: id, projectName: id, projectLoadStatus: 'ready' });
+      return id;
+    });
+    useAppStore.setState({ currentProjectId: null, projectLoadStatus: 'ready', switchProject, projects: [
+      { id: 'project-a', name: '重名项目', createdAt: 1, updatedAt: 1 },
+      { id: 'project-b', name: '重名项目', createdAt: 2, updatedAt: 2 },
+    ] });
+    const first = await mcpCall('tools_call', { name: 'project_list', arguments: {} }, 'startup-list');
+    expect(first.isError).toBe(false);
+    expect(JSON.parse((first.content[0] as { text: string }).text)).toMatchObject({ currentProjectId: null,
+      projects: [{ id: 'project-a', name: '重名项目' }, { id: 'project-b', name: '重名项目' }] });
+    const opened = await mcpCall('tools_call', { name: 'project_open', arguments: { projectId: 'project-a' } }, 'startup-open');
+    expect(opened.isError).toBe(false);
+    const switched = await mcpCall('project_switch', { projectId: 'project-b' }, 'project-switch');
+    expect(switched.isError).toBe(false);
+    expect(JSON.parse((switched.content[0] as { text: string }).text)).toMatchObject({ previousProjectId: 'project-a', currentProjectId: 'project-b' });
+    const repeated = await mcpCall('project_open', { projectId: 'project-b' }, 'project-repeat');
+    expect(JSON.parse((repeated.content[0] as { text: string }).text)).toMatchObject({ alreadyOpen: true });
+    expect(switchProject).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().agentTasks).toHaveLength(4);
+    expect(useAppStore.getState().agentTasks.every((task) => task.projectId === MCP_SETTINGS_SCOPE_ID
+      && task.conversationId === MCP_SETTINGS_CONVERSATION_ID && task.status === 'completed')).toBe(true);
+    expect((await listMcpTools('full')).some((tool) => tool.name === 'canvas_query')).toBe(true);
+    expect(await mcpCall('canvas_query', {}, 'after-open-query')).toMatchObject({ isError: false });
+    expect(useAppStore.getState().agentTasks.at(-1)?.projectId).toBe('project-b');
+  });
+
+  it('returns project pages above the generic result limit without leaking them into audit', async () => {
+    useAppStore.setState({ currentProjectId: null, projectLoadStatus: 'ready', projects: Array.from({ length: 100 }, (_, index) => ({
+      id: `project-${index}`, name: `project-list-private-marker-${index}` + '名'.repeat(210), createdAt: 1, updatedAt: 2,
+      dataFolder: 'secret-folder', snapshot: 'data:image/png;base64,secret',
+    })) });
+    const result = await mcpCall('project_list', { limit: 100 }, 'large-project-list');
+    expect(result.isError).toBe(false);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text.length).toBeGreaterThan(20_000);
+    expect(JSON.parse(text)).toMatchObject({ total: 100, returned: 100, hasMore: false });
+    expect(text).not.toContain('secret-folder');
+    expect(text).not.toContain('base64');
+    expect(JSON.stringify([useAppStore.getState().agentTasks, useAppStore.getState().messages])).not.toContain('project-list-private-marker');
+  });
+
+  it('reports failed project loads and rejects unavailable navigation parameters', async () => {
+    const switchProject = vi.fn(async () => undefined);
+    useAppStore.setState({ currentProjectId: null, projectLoadStatus: 'ready', switchProject });
+    expect(await mcpCall('project_open', { projectId: 'project-mcp' }, 'failed-open')).toMatchObject({ isError: true });
+    expect(await mcpCall('project_switch', { projectId: 'missing' }, 'missing-open')).toMatchObject({ isError: true });
+    expect(await mcpCall('project_open', { projectId: 'project-mcp', toolAllowlist: ['canvas_query'] }, 'invalid-open'))
+      .toMatchObject({ isError: true });
+    expect(switchProject).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+
+  it('rejects overlapping navigation and preserves cancellation on the original request', async () => {
+    let finishSwitch: (() => void) | undefined;
+    const switchProject = vi.fn(async () => {
+      useAppStore.setState({ switchingProjectName: 'MCP project' });
+      await new Promise<void>((resolve) => { finishSwitch = resolve; });
+      useAppStore.setState({ switchingProjectName: null });
+      return undefined;
+    });
+    useAppStore.setState({ currentProjectId: null, projectLoadStatus: 'ready', switchProject });
+    const pending = mcpCall('tools_call', { name: 'project_open', arguments: { projectId: 'project-mcp' } }, 'pending-project-open');
+    try {
+      await vi.waitFor(() => expect(switchProject).toHaveBeenCalledOnce());
+      expect(await mcpCall('project_switch', { projectId: 'project-mcp' }, 'overlapping-open')).toMatchObject({ isError: true, summary: expect.stringContaining('等待') });
+      expect(await handleMcpBridgeRequest({ sessionId: 'catalog-session', requestId: 'cancel-project-open', method: 'requests/cancel',
+        params: { requestId: 'pending-project-open' } })).toEqual({ cancelled: true });
+    } finally {
+      finishSwitch?.();
+      expect(await pending).toMatchObject({ isError: true });
+    }
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+    expect(switchProject).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().agentTasks.find((task) => task.steps[0]?.toolCall?.callId === 'pending-project-open')?.status).toBe('stopped');
   });
 
   it('previews and saves global image settings across project changes through the audited runtime', async () => {

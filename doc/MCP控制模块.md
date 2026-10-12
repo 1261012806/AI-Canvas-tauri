@@ -8,6 +8,7 @@
 |---|---|
 | [mcpControlService.ts](../src/services/mcp/mcpControlService.ts) | 主窗口工具发现、控制请求和任务映射 |
 | [mcpToolCatalog.ts](../src/services/mcp/mcpToolCatalog.ts) / [mcpDiscoveryTools.ts](../src/services/chat/tools/mcpDiscoveryTools.ts) | 有界目录检索、完整参数读取与 Registry 发现工具注册 |
+| [mcpSettingsScope.ts](../src/services/mcp/mcpSettingsScope.ts) / [projectTools.ts](../src/services/chat/tools/projectTools.ts) | 应用级审计白名单与启动页项目导航 |
 | [services/mcp](../src/services/mcp/) / [types/mcp.ts](../src/types/mcp.ts) | 前端桥接、会话配置及协议类型 |
 | [原生 mcp](../src-tauri/src/mcp/) | 端口、鉴权、请求关联与双传输 |
 | [ai-canvas-mcp.mjs](../scripts/ai-canvas-mcp.mjs) | 本机 stdio 客户端适配器 |
@@ -95,11 +96,45 @@ MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 
 
 默认媒体输入是优先槽而非启用上传的必要条件，所有 ComfyUI 工作流的普通 @ 图片、视频、音频都会按同类引用顺序自动匹配剩余上传槽。规则见 [ComfyUI工作流集成说明](./ComfyUI工作流集成说明.md#6-默认节点-defaultnodes)。
 
+## 启动页项目列表与打开、切换
+
+项目导航通过同一个 Registry、Policy 与审计任务执行。启动页和已打开画布都可发现、调用以下工具；项目创建、删除、设置写入以及画布、文件、媒体工具仍要求已打开项目。
+
+| 工具 | 参数与结果 |
+|---|---|
+| `project_list` | 可选 `limit`（默认 50，上限 100）、`offset`（默认 0）；返回项目/剧集/分集摘要、`currentProjectId`、`currentRootProjectId`、分页计数及 `nextOffset`。摘要含 ID、名称、类型、剧集归属、时间、`current`、`opened` 和 `openTargetId`，不返回路径、快照或正文 |
+| `project_get` | `projectId`；沿用既有安全元数据和项目设置读取 |
+| `project_open` / `project_switch` | `projectId`；共用 Store 的保存与加载流程，返回 `requestedProjectId`、`previousProjectId`、实际 `currentProjectId`、`alreadyOpen` 与打开的项目摘要 |
+
+同名项目必须用列表返回的 ID 区分。剧集从启动页默认打开第一集；再次打开当前剧集保留正在编辑的分集，重复打开当前画布不重载。成功后关闭项目库弹窗，切走前保存失败、目标加载失败、请求取消或被其他切换接管均不报告成功。MCP 导航在项目创建、返回启动页、加载和其他切换期间返回忙碌提示，不自动重试写操作。取消信号只保存在运行时，目标读取结束后复核信号与切换序号，防止迟到结果覆盖当前画布。
+
+导航任务归应用级「MCP 全局控制」审计会话，继续使用旧 `mcp-global-settings` 标识以兼容历史；旧会话标题可以保留。仅明确的设置、导航及目录白名单可独立于项目执行，导航不生成画布撤销 checkpoint，也不向其他项目工具授予权限。切换后新画布请求仍绑定实际当前项目；原 stdio/HTTP 鉴权、Policy 与取消协议保持原有边界。完整列表模式客户端需刷新目录或重新连接，按需模式的三个入口保持稳定。
+
+按需调用示例：先用 `tools_search({"category":"project","detail":"schema"})` 读取参数，再依次调用：
+
+```json
+{"name":"project_list","arguments":{}}
+{"name":"project_open","arguments":{"projectId":"列表返回的项目 ID"}}
+{"name":"project_switch","arguments":{"projectId":"另一个项目 ID"}}
+```
+
+以上均为 `tools_call` 的参数对象，也兼容直接调用原工具名。列表分页通过瞬时 MCP 内容返回完整 JSON，不把项目列表正文复制进消息或任务摘要。
+
+状态：已实现并补充回归用例，本次未运行测试，待用户验收。Tauri 桌面验收：
+
+1. 准备两个有不同画布内容的项目（可同名）及一个含两集的剧集，在启动页开启 MCP；分别以按需/完整模式发现项目工具。读取列表及分页，检查 ID、归属、打开状态，不应出现目录或快照。
+2. 用 `project_open` 打开第一个项目，再用 `project_switch` 切换第二个；检查画布、会话、Agent 任务、角色库与项目记忆。修改画布后切走再返回，确认修改已保存；用 `canvas_query` 核对实际项目内容。
+3. 打开剧集应进入第一集；手动切到第二集后再次打开剧集，应留在第二集。重复打开当前项目应返回 `alreadyOpen: true`，不丢失当前编辑。
+4. 传入不存在的 ID、错误参数及越界分页值应失败；列表尚在初始化时应明确提示加载中。加载失败或受控保存失败时保留旧画布，不能返回成功；导航忙碌时第二次 MCP 切换不应抢占。取消加载中的原请求后，迟到数据不应切换项目，遮罩应收起。
+5. 回归启动页厂商模型选择、全局配置预览/保存、主窗口与独立助手、普通项目会话、stdio/HTTP 请求取消。未打开项目时直接调用画布/项目删除仍应拒绝；打开后新请求绑定新项目。
+
+自动回归入口：`tests/services/chat/projectTools.test.ts`、`tests/services/chat/agentRoundExecutor.test.ts`、`tests/services/mcp/mcpControlService.test.ts`、`tests/store/projects.test.ts`。用户可在仓库根目录运行 `npm run test -- --exclude ".planning/**" tests/services/chat/projectTools.test.ts tests/services/chat/agentRoundExecutor.test.ts tests/services/mcp/mcpControlService.test.ts tests/store/projects.test.ts`；静态类型检查入口为 `npm run typecheck` 与 `npm run test:typecheck`。回滚撤销导航白名单、工具和 Store 切换补丁，无数据库迁移。
+
 ## 不依赖项目的模型设置
 
-- 厂商文档读取、模型选择、配置预览及保存通过专用「MCP 全局模型设置」会话执行，不需要加载项目，也不随项目切换失效。复用现有 Registry、Policy、AgentTask、审计摘要及凭据存储，不新增旁路保存。
-- `mcpSettingsScope.ts` 的保留审计域标识仅用于既有任务/会话关联，不创建或选中 CanvasProject。必须同时匹配会话身份与封闭工具白名单才能独立于项目执行；仅开放 `provider_docs_read`、`provider_models_select`、`provider_config_preview`、`provider_config_apply` 及目录发现。URL 授权、配置冲突检查和本人模型选择仍由原规则约束。
-- 未打开项目时 full 与 compact 发现均只提供厂商设置能力；打开项目后恢复完整目录，画布/文件/付费生成仍须有效项目。全局选择卡自动打开助手，项目切换保留会话；该审计会话不提供普通对话输入，也不允许恢复为通用模型循环。
+- 厂商文档读取、模型选择、配置预览及保存通过应用级审计会话执行（旧标题「MCP 全局模型设置」，新会话为「MCP 全局控制」），不需要加载项目，也不随项目切换失效。复用现有 Registry、Policy、AgentTask、审计摘要及凭据存储，不新增旁路保存。
+- `mcpSettingsScope.ts` 的保留审计域标识仅用于既有任务/会话关联，不创建或选中 CanvasProject。必须同时匹配会话身份与封闭工具白名单才能独立于项目执行。设置请求仍只使用 `provider_docs_read`、`provider_models_select`、`provider_config_preview`、`provider_config_apply` 及目录发现；项目导航使用独立子白名单。URL 授权、配置冲突检查和本人模型选择仍由原规则约束。
+- 未打开项目时 full 与 compact 发现提供厂商设置及上述项目导航能力；打开项目后恢复完整目录，画布/文件/付费生成仍须有效项目。全局选择卡自动打开助手，项目切换保留会话；该审计会话不提供普通对话输入，也不允许恢复为通用模型循环。
 - MCP 控制服务初始化时沿用既有中断修复加载全局审计任务；重启后的未完成任务恢复为暂停，不自动续执行。已有审计会话继续沿用，不覆盖历史摘要。
 - 已实现，待桌面验收；本次未运行测试。验收顺序：在项目库开启 MCP，发现厂商工具并选择模型，助手应自动显示勾选卡；选择后预览并保存配置。预览到保存之间切换项目，应仍保存全局设置；直接调用画布工具仍须先打开项目。普通项目会话、独立助手窗口和原有取消流程需要回归。
 - 回归入口：`tests/services/mcp/mcpControlService.test.ts`、`tests/services/chat/agentTaskControl.test.ts`、`agentRoundExecutor.test.ts`。回滚撤销本批全局审计域及守卫补丁，已有厂商配置保留。

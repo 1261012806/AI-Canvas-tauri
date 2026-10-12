@@ -36,7 +36,16 @@ import {
   toMcpToolDescriptor,
 } from './mcpToolCatalog';
 
-import { isMcpSettingsContext, isMcpSettingsTool, MCP_SETTINGS_CONVERSATION_ID, MCP_SETTINGS_SCOPE_ID, MCP_SETTINGS_TOOL_NAMES } from './mcpSettingsScope';
+import {
+  isMcpGlobalTool,
+  isMcpSettingsContext,
+  isMcpSettingsTool,
+  MCP_GLOBAL_TOOL_NAMES,
+  MCP_PROJECT_NAVIGATION_TOOL_NAMES,
+  MCP_SETTINGS_CONVERSATION_ID,
+  MCP_SETTINGS_SCOPE_ID,
+  MCP_SETTINGS_TOOL_NAMES,
+} from './mcpSettingsScope';
 
 const MCP_CONVERSATION_TITLE = 'MCP 控制';
 const MCP_EXECUTION_MODE = 'autonomous' as const;
@@ -92,7 +101,7 @@ export function ensureMcpControlConversation(
   const conversation: ChatConversation = {
     id,
     projectId,
-    title: projectId === MCP_SETTINGS_SCOPE_ID ? 'MCP 全局模型设置' : MCP_CONVERSATION_TITLE,
+    title: projectId === MCP_SETTINGS_SCOPE_ID ? 'MCP 全局控制' : MCP_CONVERSATION_TITLE,
     titleSource: 'user',
     pinned: true,
     archived: false,
@@ -111,15 +120,18 @@ function getCurrentMcpContext(toolName?: string): {
   toolAllowlist?: string[];
 } | null {
   const activeProject = useAppStore.getState().currentProjectId;
-  const globalSettings = !activeProject
-    ? !toolName || isMcpSettingsTool(toolName)
-    : Boolean(toolName && isMcpSettingsTool(toolName) && !isMcpDiscoveryTool(toolName));
-  if (!activeProject && !globalSettings) return null;
-  const projectId = globalSettings ? MCP_SETTINGS_SCOPE_ID : activeProject!;
+  const globalControl = !activeProject
+    ? !toolName || isMcpGlobalTool(toolName)
+    : Boolean(toolName && isMcpGlobalTool(toolName) && !isMcpDiscoveryTool(toolName));
+  if (!activeProject && !globalControl) return null;
+  const projectId = globalControl ? MCP_SETTINGS_SCOPE_ID : activeProject!;
+  const toolAllowlist = !toolName || isMcpDiscoveryTool(toolName)
+    ? MCP_GLOBAL_TOOL_NAMES
+    : isMcpSettingsTool(toolName) ? MCP_SETTINGS_TOOL_NAMES : MCP_PROJECT_NAVIGATION_TOOL_NAMES;
   return {
     projectId,
     conversation: ensureMcpControlConversation(projectId),
-    ...(globalSettings ? { toolAllowlist: [...MCP_SETTINGS_TOOL_NAMES] } : {}),
+    ...(globalControl ? { toolAllowlist: [...toolAllowlist] } : {}),
   };
 }
 
@@ -204,8 +216,8 @@ async function callMcpTool(
   if (!current) {
     return {
       isError: true,
-      summary: '该工具需要打开项目；未打开项目时可管理厂商和模型设置',
-      content: [{ type: 'text', text: '该工具需要打开项目；未打开项目时可管理厂商和模型设置' }],
+      summary: '该工具需要打开项目；请先用 project_list 读取列表，再用 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。',
+      content: [{ type: 'text', text: '该工具需要打开项目；请先用 project_list 读取列表，再用 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。' }],
     };
   }
   const input = request.params.arguments && typeof request.params.arguments === 'object'
