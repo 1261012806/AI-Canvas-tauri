@@ -19,6 +19,12 @@ import MentionPicker, { type MentionPickerChip, type MentionPickerItem } from '.
 import ViewportImage from '../../shared/ViewportImage';
 import { findDraggableMentionChip, startMentionChipDrag } from './mentionEditorChipDrag';
 import {
+  captureMentionEditorSelection,
+  captureMentionEditorSnapshot,
+  MentionEditorHistory,
+  restoreMentionEditorSnapshot,
+} from './mentionEditorHistory';
+import {
   DRAMA_MENTION_MERGE_ALL,
   buildDramaMentionId,
   buildDramaActionMentionId,
@@ -106,6 +112,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const mentionDropdownRef = useRef<HTMLDivElement>(null);
   const [mentionDropdownPosition, setMentionDropdownPosition] = useState({ left: 12, top: 0 });
   const editorRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef(new MentionEditorHistory());
   const syncedPromptRef = useRef(prompt);
   const composingRef = useRef(false);
   const [compositionRevision, setCompositionRevision] = useState(0);
@@ -123,6 +130,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     })),
   );
   const editorOwnerRef = useRef({ projectId: currentProjectId, nodeId });
+  useEffect(() => {
+    const history = historyRef.current;
+    return () => history.clear();
+  }, []);
   useEffect(() => () => {
     cancelChipDragRef.current?.();
     cancelChipDragRef.current = null;
@@ -157,19 +168,27 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const el = editorRef.current;
     if (!el) return;
     const owner = editorOwnerRef.current;
-    if (owner.projectId !== currentProjectId || owner.nodeId !== nodeId) {
+    const ownerChanged = owner.projectId !== currentProjectId || owner.nodeId !== nodeId;
+    if (ownerChanged) {
       composingRef.current = false;
       editorOwnerRef.current = { projectId: currentProjectId, nodeId };
+      historyRef.current.clear();
     }
     // IME 组合输入期间保留浏览器的文本节点，结束后再通过输入基线合并新引用。
     if (composingRef.current) return;
     syncImageReferenceLabels(el, nodeMetaMap);
+    const previousPrompt = syncedPromptRef.current;
     syncedPromptRef.current = prompt;
+    const syncHistory = () => {
+      const history = historyRef.current;
+      const snapshot = captureMentionEditorSnapshot(el, prompt);
+      if (!history.current) history.reset(snapshot);
+      else if (history.current.prompt !== prompt) history.record(snapshot);
+      else history.refresh(snapshot);
+    };
     if (serializeDOM(el) === prompt) {
-      // 删空后浏览器常残留 <br>，而 serializeDOM 会剥掉尾部换行使其「看起来为空」，
-      // 于是 DOM 不会被清理、光标停在残留空行（第 2/3 行）。这里把真正的空状态归一化。
-      // 仅在 prompt 由非空变空时触发（此 effect 才会重跑），不影响用户主动换行。
-      if (prompt === '' && el.innerHTML !== '') {
+      // 外部清空才归一化残留空行；本地换行及其撤销快照保留真实 DOM。
+      if (prompt === '' && el.innerHTML !== '' && (ownerChanged || previousPrompt !== prompt)) {
         const hadFocus = document.activeElement === el;
         el.innerHTML = '';
         if (hadFocus) {
@@ -181,6 +200,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           sel?.addRange(r);
         }
       }
+      syncHistory();
       return;
     }
     const sel = window.getSelection();
@@ -194,6 +214,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     }
     syncImageReferenceLabels(el, nodeMetaMap);
     if (cursorOffset !== null) restoreCursor(el, cursorOffset);
+    syncHistory();
   }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap]);
 
   // ── Cursor save/restore ──
@@ -268,15 +289,52 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   };
 
   // ── Emit prompt string to parent ──
-  const emitDOM = useCallback(() => {
+  const emitDOM = useCallback((group: string | null = null) => {
     const el = editorRef.current;
     if (!el) return;
     syncImageReferenceLabels(el, nodeMetaMap);
     const nextPrompt = serializeDOM(el);
     const previousPrompt = syncedPromptRef.current;
     syncedPromptRef.current = nextPrompt;
+    // IME 中间态仍实时回写，整次组合输入只在结束时形成一个撤销步骤。
+    if (!composingRef.current) historyRef.current.record(captureMentionEditorSnapshot(el, nextPrompt), group);
     onChange(nextPrompt, previousPrompt);
   }, [nodeMetaMap, onChange]);
+
+  const applyHistory = useCallback((direction: 'undo' | 'redo') => {
+    const el = editorRef.current;
+    if (!el || composingRef.current) return;
+    cancelChipDragRef.current?.();
+    cancelChipDragRef.current = null;
+    historyRef.current.updateSelection(captureMentionEditorSelection(el));
+    const snapshot = historyRef.current[direction]();
+    if (!snapshot) return;
+    const previousPrompt = syncedPromptRef.current;
+    restoreMentionEditorSnapshot(el, snapshot);
+    syncImageReferenceLabels(el, nodeMetaMap);
+    syncedPromptRef.current = snapshot.prompt;
+    lastFocusedWfValueRef.current = (document.activeElement as HTMLElement | null)?.closest<HTMLSpanElement>('.prompt-chip-wf-value') ?? null;
+    savedMentionRangeRef.current = null;
+    setShowMention(false);
+    onChange(snapshot.prompt, previousPrompt);
+  }, [nodeMetaMap, onChange]);
+
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const beforeInput = (event: InputEvent) => {
+      if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+        if (composingRef.current || event.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyHistory(event.inputType === 'historyUndo' ? 'undo' : 'redo');
+        return;
+      }
+      historyRef.current.updateSelection(captureMentionEditorSelection(el));
+    };
+    el.addEventListener('beforeinput', beforeInput);
+    return () => el.removeEventListener('beforeinput', beforeInput);
+  }, [applyHistory]);
 
   const canvasMentionNodes = useMemo(
     () => (showMention ? resolveCanvasMentionNodes(nodeId, nodes, edges) : []),
@@ -753,7 +811,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   }, [filteredAssets.length, visibleAssets.length]);
 
   // ── Input handler: detect @ and / ──
-  const handleInput = useCallback(() => {
+  const handleInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
     const el = editorRef.current;
     if (!el) return;
     normalizeChipSlots(el); // 删字后行首化的芯片补回光标落点
@@ -791,14 +849,24 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         setShowMention(false);
       }
     }
-    emitDOM();
+    const inputType = (event.nativeEvent as InputEvent).inputType;
+    const group = ['insertText', 'deleteContentBackward', 'deleteContentForward'].includes(inputType) ? inputType : null;
+    emitDOM(group);
   }, [emitDOM, onSlashTrigger, showMention]);
 
   // ── KeyDown: mention navigation / submit / chip deletion ──
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // 输入法组合中：回车/方向键属于候选框，不该触发提交或 @ 选中
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      if (editorRef.current) historyRef.current.updateSelection(captureMentionEditorSelection(editorRef.current));
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === 'z' || (key === 'y' && !e.shiftKey))) {
+        e.preventDefault();
+        e.stopPropagation();
+        applyHistory(key === 'y' || e.shiftKey ? 'redo' : 'undo');
+        return;
+      }
       const enterAction = resolvePromptEnterAction(e, submitShortcut ?? (submitOnShiftEnter ? 'shift-enter' : 'enter'), showMention);
       // 方向键导航前先补好行首芯片的光标落点（ZWSP），否则光标跳不到芯片前
       if (e.key.startsWith('Arrow') && editorRef.current) normalizeChipSlots(editorRef.current);
@@ -950,6 +1018,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       submitOnShiftEnter,
       submitShortcut,
       emitDOM,
+      applyHistory,
     ],
   );
 
@@ -1347,7 +1416,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         className={`prompt-editor${!prompt ? ' is-empty' : ''}`}
         data-placeholder={placeholder}
         onInput={handleInput}
-        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionStart={() => {
+          if (editorRef.current) historyRef.current.updateSelection(captureMentionEditorSelection(editorRef.current));
+          historyRef.current.endGroup();
+          composingRef.current = true;
+        }}
         onCompositionEnd={() => {
           composingRef.current = false;
           emitDOM();
@@ -1357,6 +1430,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         onPointerDown={handleChipPointerDown}
+        onPointerDownCapture={() => {
+          historyRef.current.endGroup();
+          if (editorRef.current) historyRef.current.updateSelection(captureMentionEditorSelection(editorRef.current));
+        }}
         onDragStart={(event) => {
           if (editorRef.current && findDraggableMentionChip(editorRef.current, event.target)) event.preventDefault();
         }}
