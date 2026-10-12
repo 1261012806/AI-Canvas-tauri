@@ -260,7 +260,7 @@ function CameraSettingsSelector({
     <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
-        className={`prompt-btn${activeCount > 0 ? ' text-indigo-400 bg-indigo-500/10' : ''}`}
+        className={`prompt-btn${activeCount > 0 ? ' is-configured' : ''}`}
         aria-label={activeCount > 0 ? t('摄影参数：已设置 {count} 项', { count: activeCount }) : t('选择摄影参数')}
         aria-haspopup="dialog"
         aria-expanded={open}
