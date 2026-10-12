@@ -35,6 +35,7 @@ import NodeRenderBoundary from './nodes/shared/NodeRenderBoundary';
 import CanvasNodeLodBoundary from './nodes/shared/CanvasNodeLodBoundary';
 import { CanvasNodeLodContext } from '../hooks/useCanvasNodeLod';
 import { createCanvasNodeLodRuntime } from '../services/canvasNodeLodRuntime';
+import { getPerformanceModeEnabled, subscribePerformanceMode } from '../services/performanceModeRuntime';
 import { waitForCanvasFirstPaint } from '../services/canvasReadyService';
 import { isEditableTarget } from '../utils/textSelection';
 import { playNodeFocusPulse } from '../utils/nodeAnimations';
@@ -177,6 +178,8 @@ const NODE_TOOLBAR_MAX_SCREEN_SCALE = 1.25;
 const NODE_TOOLBAR_SCALE_EPSILON = 0.0005;
 const VISIBLE_NODE_TOOLBARS = '.node-toolbar-shell.is-visible .node-floating-toolbar, .node:hover .node-floating-toolbar, .node.selected .node-floating-toolbar';
 const VISIBLE_GOOEY_BUTTONS = '.react-flow__node:hover .gooey-btn-wrapper, .react-flow__node.selected .gooey-btn-wrapper, .node-handle:hover .gooey-btn-wrapper';
+const ZOOM_TARGET_STRUCTURE = '.react-flow__node, .node, .node-toolbar-shell, .node-floating-toolbar, .node-handle, .gooey-btn-wrapper';
+const ZOOM_POINTER_CONTEXT = '.node-toolbar-shell, .node-handle, .node, .react-flow__node';
 
 // ── 交互模式预设（冻结对象，避免每次 render 产生新身份，导致 React Flow 内部 effect 重跑、拖拽掉帧）──
 const DEFAULT_INTERACTION = Object.freeze({
@@ -482,16 +485,12 @@ function CanvasInner({ onReady }: CanvasProps) {
   }, [currentProjectId, hasRenderableNodes, onReady, reactFlowInstance, fitCanvasView]);
   const lodSession = useMemo(() => ({
     projectId: currentProjectId,
-    runtime: createCanvasNodeLodRuntime(reactFlowInstance.getViewport().zoom, undefined, useAppStore.getState().config.performanceMode === true),
+    runtime: createCanvasNodeLodRuntime(reactFlowInstance.getViewport().zoom, undefined, getPerformanceModeEnabled()),
   }), [currentProjectId, reactFlowInstance]);
   const nodeLodRuntime = lodSession.runtime;
   useEffect(() => {
-    nodeLodRuntime.setPerformanceMode(useAppStore.getState().config.performanceMode === true);
-    return useAppStore.subscribe((state, previous) => {
-      if (state.config.performanceMode !== previous.config.performanceMode) {
-        nodeLodRuntime.setPerformanceMode(state.config.performanceMode === true);
-      }
-    });
+    nodeLodRuntime.setPerformanceMode(getPerformanceModeEnabled());
+    return subscribePerformanceMode(() => nodeLodRuntime.setPerformanceMode(getPerformanceModeEnabled()));
   }, [nodeLodRuntime]);
   useEffect(() => {
     nodeLodRuntime.activate();
@@ -558,6 +557,7 @@ function CanvasInner({ onReady }: CanvasProps) {
   const localGooeyButtonsRef = useRef(new Set<HTMLElement>());
   const cachedZoomTargetsRef = useRef(new WeakSet<Set<HTMLElement>>());
   const zoomTargetsObserverRef = useRef<MutationObserver | null>(null);
+  const zoomTargetsRefreshFrameRef = useRef(0);
 
   const clearLocalZoomCompensation = useCallback(() => {
     localToolbarsRef.current.forEach((element) => element.style.removeProperty('--toolbar-zoom-compensation'));
@@ -586,7 +586,7 @@ function CanvasInner({ onReady }: CanvasProps) {
       const updateLocal = (selector: string, elements: Set<HTMLElement>, property: string, value: number) => {
         // 性能模式只在首次使用、挂载/可见状态变化时搜索；空结果也缓存。
         // 普通模式保持原有查询路径，开关切换不影响控件的缩放补偿。
-        if (useAppStore.getState().config.performanceMode !== true || refreshTargets || !cachedZoomTargetsRef.current.has(elements)) {
+        if (!getPerformanceModeEnabled() || refreshTargets || !cachedZoomTargetsRef.current.has(elements)) {
           canvasRoot.querySelectorAll<HTMLElement>(selector).forEach((element) => elements.add(element));
           cachedZoomTargetsRef.current.add(elements);
         }
@@ -623,17 +623,36 @@ function CanvasInner({ onReady }: CanvasProps) {
   }, [clearLocalZoomCompensation]);
 
   const refreshLocalZoomTargets = useCallback(() => {
-    if (activeInteractionsRef.current.size > 0) {
+    if (activeInteractionsRef.current.size === 0) return;
+    if (!getPerformanceModeEnabled()) {
       updateNodeZoomCompensation(latestCanvasZoomRef.current, true);
+      return;
     }
+    if (zoomTargetsRefreshFrameRef.current) return;
+    // 同帧的节点挂载、选中变化与指针穿越共用一次查询，不在每个子元素事件中扫描。
+    zoomTargetsRefreshFrameRef.current = requestAnimationFrame(() => {
+      zoomTargetsRefreshFrameRef.current = 0;
+      if (activeInteractionsRef.current.size > 0) updateNodeZoomCompensation(latestCanvasZoomRef.current, true);
+    });
   }, [updateNodeZoomCompensation]);
 
+  const handleZoomTargetPointer = useCallback((event: PointerEvent) => {
+    if (getPerformanceModeEnabled()) {
+      const target = event.target instanceof Element ? event.target.closest(ZOOM_POINTER_CONTEXT) : null;
+      const previous = event.relatedTarget instanceof Element ? event.relatedTarget.closest(ZOOM_POINTER_CONTEXT) : null;
+      if (target === previous) return;
+    }
+    refreshLocalZoomTargets();
+  }, [refreshLocalZoomTargets]);
+
   const stopObservingZoomTargets = useCallback(() => {
+    if (zoomTargetsRefreshFrameRef.current) cancelAnimationFrame(zoomTargetsRefreshFrameRef.current);
+    zoomTargetsRefreshFrameRef.current = 0;
     zoomTargetsObserverRef.current?.disconnect();
     zoomTargetsObserverRef.current = null;
-    canvasRootRef.current?.removeEventListener('pointerover', refreshLocalZoomTargets);
-    canvasRootRef.current?.removeEventListener('pointerout', refreshLocalZoomTargets);
-  }, [refreshLocalZoomTargets]);
+    canvasRootRef.current?.removeEventListener('pointerover', handleZoomTargetPointer);
+    canvasRootRef.current?.removeEventListener('pointerout', handleZoomTargetPointer);
+  }, [handleZoomTargetPointer]);
 
   useEffect(() => {
     updateNodeZoomCompensation(reactFlowInstance.getViewport().zoom);
@@ -651,22 +670,31 @@ function CanvasInner({ onReady }: CanvasProps) {
       if (canvasRoot) {
         // 只在交互期间监听挂载/选中与 hover；不读取布局，也不监听自身的 style 写入。
         const observer = new MutationObserver((records) => {
-          if (records.some((record) => record.type === 'childList'
-            || (record.target instanceof Element && record.target.matches('.react-flow__node, .node, .node-toolbar-shell')))) {
+          const performanceMode = getPerformanceModeEnabled();
+          if (records.some((record) => {
+            if (record.type === 'attributes') {
+              return record.target instanceof Element && record.target.matches('.react-flow__node, .node, .node-toolbar-shell');
+            }
+            if (!performanceMode) return true;
+            // 图片加载、文本/图标更新不影响可见工具栏目标；只处理相关结构的新增与移除。
+            const affectsTargets = (node: Node) => node instanceof Element
+              && (node.matches(ZOOM_TARGET_STRUCTURE) || node.querySelector(ZOOM_TARGET_STRUCTURE) !== null);
+            return Array.from(record.addedNodes).some(affectsTargets) || Array.from(record.removedNodes).some(affectsTargets);
+          })) {
             refreshLocalZoomTargets();
           }
         });
         zoomTargetsObserverRef.current = observer;
         observer.observe(canvasRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-        canvasRoot.addEventListener('pointerover', refreshLocalZoomTargets, { passive: true });
-        canvasRoot.addEventListener('pointerout', refreshLocalZoomTargets, { passive: true });
+        canvasRoot.addEventListener('pointerover', handleZoomTargetPointer, { passive: true });
+        canvasRoot.addEventListener('pointerout', handleZoomTargetPointer, { passive: true });
       }
     } else {
       stopObservingZoomTargets();
       updateNodeZoomCompensation(reactFlowInstance.getViewport().zoom);
     }
     document.documentElement.classList.toggle(CANVAS_INTERACTING_CLASS, interacting);
-  }, [nodeLodRuntime, reactFlowInstance, refreshLocalZoomTargets, stopObservingZoomTargets, updateNodeZoomCompensation]);
+  }, [handleZoomTargetPointer, nodeLodRuntime, reactFlowInstance, refreshLocalZoomTargets, stopObservingZoomTargets, updateNodeZoomCompensation]);
 
   const beginCanvasInteraction = useCallback((kind: CanvasInteractionKind) => {
     const pendingFrame = interactionReleaseFramesRef.current[kind];

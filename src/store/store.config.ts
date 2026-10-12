@@ -28,6 +28,7 @@ import { areSettingsMutationsFrozen, registerSettingsPersistence } from '../serv
 import { getCanvasZoomRange, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, normalizeCanvasZoom } from '../utils/canvasViewportPreferences';
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../services/appearance/appearanceDefaults';
 import { migrateLegacyAppearance } from '../services/appearance/appearanceMigration';
+import { syncPerformanceModeRuntime } from '../services/performanceModeRuntime';
 
 const defaultConfig: AppConfig = {
   providers: {},
@@ -64,6 +65,7 @@ function syncNodeLabelVisible(visible: AppConfig['nodeLabelVisible']): void {
 }
 
 function syncPerformanceMode(enabled: AppConfig['performanceMode']): void {
+  syncPerformanceModeRuntime(enabled === true);
   if (typeof document === 'undefined') return;
   document.documentElement.toggleAttribute('data-performance-mode', enabled === true);
 }

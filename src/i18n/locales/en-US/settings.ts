@@ -177,9 +177,12 @@ const settings = {
   '性能模式下已关闭玻璃外框': 'The glass frame is disabled in performance mode',
   '图形与性能': 'Graphics & performance',
   '性能模式': 'Performance mode',
-  '卡顿或页面显示不全时开启': 'Enable if the interface lags or appears incomplete',
-  '已关闭毛玻璃、自定义圆角、玻璃外框和装饰动画，保留 Windows 默认圆角':
-    'Frosted glass, custom rounding, the glass frame, and decorative animations are disabled; Windows default rounding is kept',
+  '低配置省内存，界面闪烁时可开启': 'Save memory on low-end devices; enable if the interface flickers',
+  '使用轻量媒体预览和较小缓存，释放离屏媒体；关闭图片与动态背景、3D 吉祥物和装饰动画':
+    'Use lightweight media previews and smaller caches, release offscreen media, and disable image and animated backgrounds, the 3D mascot, and decorative animations',
+  '关闭后恢复原有背景与视觉设置，原图与生成内容不变。': 'Turning this off restores your background and visual settings. Original files and generated content are unchanged.',
+  '画布助手': 'Canvas assistant',
+  '正在下载更新': 'Downloading update',
   '保留完整视觉效果与界面动画': 'Keep the full visual effects and interface animations',
   '侧边栏': 'Sidebar',
   '悬浮显示': 'Floating',
