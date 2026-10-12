@@ -20,7 +20,7 @@ import { checkForUpdate, downloadAndInstallUpdate } from '../services/updateServ
 import AnimatedButton from './shared/AnimatedButton';
 import LazyLoadBoundary, { LazyLoadFallback } from './shared/LazyLoadBoundary';
 import ProjectLibraryModal from './ProjectLibraryModal';
-import { invoke } from '@tauri-apps/api/core';
+import { openDetachedChatWindow } from '../services/chat/chatWindowLifecycle';
 import { useT } from '../i18n';
 import { openStyleGuideWindow } from '../utils/styleGuideWindow';
 import {
@@ -801,9 +801,10 @@ export default function Sidebar() {
           if (store.chatPanelDetached) {
             // 保留独立显示偏好：窗口被关闭后，再次点击仍打开独立窗口。
             try {
-              await invoke('open_chat_window');
-            } catch {
-              store.showToast(t('打开独立窗口失败'), 'error');
+              await openDetachedChatWindow();
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : '';
+              store.showToast(`${t('打开独立窗口失败')}${detail ? `：${detail}` : ''}`, 'error');
             }
           } else {
             store.toggleChat();

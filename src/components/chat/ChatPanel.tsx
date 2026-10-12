@@ -27,6 +27,7 @@ import {
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { invoke } from '@tauri-apps/api/core';
+import { openDetachedChatWindow } from '../../services/chat/chatWindowLifecycle';
 import { useAppStore } from '../../store/useAppStore';
 import { seriesOwnerId } from '../../store/store.utils';
 import ConversationList from './ConversationList';
@@ -802,13 +803,11 @@ export default function ChatPanel({
     } else {
       // 必须先置位：独立窗口一加载就会来要快照，而同步器在 detached 为假时会把请求丢掉
       flushDraftSync();
-      setChatPanelDetached(true);
       try {
-        await invoke('open_chat_window');
+        await openDetachedChatWindow();
       } catch (e) {
-        setChatPanelDetached(false);
-        console.error('[ChatPanel] failed to open chat window:', e);
-        showToast(t('打开独立窗口失败'), 'error');
+        const detail = e instanceof Error ? e.message : '';
+        showToast(`${t('打开独立窗口失败')}${detail ? `：${detail}` : ''}`, 'error');
       }
     }
   }, [chatPanelDetached, flushDraftSync, setChatPanelDetached, showToast, t]);

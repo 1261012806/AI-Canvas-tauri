@@ -28,6 +28,7 @@ import { checkForUpdate, downloadAndInstallUpdate, type UpdateInfo } from './ser
 import { DOWNLOAD_MASCOT_EVENT } from './components/shared/ModelDownloadDialog';
 import UpdateBubble from './components/shared/mascot/UpdateBubble';
 import HiddenFilmSet from './components/shared/mascot/HiddenFilmSet';
+import { openDetachedChatWindow } from './services/chat/chatWindowLifecycle';
 import LazyLoadBoundary, { LazyLoadFallback } from './components/shared/LazyLoadBoundary';
 import ModalOverlay from './components/shared/ModalOverlay';
 import { useMascotStatus } from './hooks/useMascotStatus';
@@ -423,14 +424,11 @@ export default function App() {
         store.showToast('独立窗口功能需要 Tauri 环境', 'info');
         return;
       }
-      const wasDetached = store.chatPanelDetached;
-      // 独立窗口首帧请求快照前置位，复用现有主窗口同步协议。
-      if (!wasDetached) store.setChatPanelDetached(true);
       try {
-        await invoke('open_chat_window');
-      } catch {
-        if (!wasDetached) store.setChatPanelDetached(false);
-        store.showToast('打开独立窗口失败', 'error');
+        await openDetachedChatWindow();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : '';
+        store.showToast(`打开独立窗口失败${detail ? `：${detail}` : ''}`, 'error');
       }
       return;
     }
