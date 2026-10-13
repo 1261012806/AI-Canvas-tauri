@@ -41,6 +41,7 @@ const SECTIONS: GuideSection[] = [
   { id: 'sg-badges', title: '徽标与表格' },
   { id: 'sg-feedback', title: '反馈与状态' },
   { id: 'sg-toast', title: '吐司提示' },
+  { id: 'sg-dialogs', title: '弹窗' },
   { id: 'sg-generation-effects', title: '生成特效' },
   { id: 'sg-video-player', title: '视频播放器' },
   { id: 'sg-markdown-editor', title: 'Markdown 编辑器' },

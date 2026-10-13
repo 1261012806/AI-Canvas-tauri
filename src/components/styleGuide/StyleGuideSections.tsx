@@ -27,6 +27,7 @@ import { Icon } from '@iconify/react';
 import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import StyleGuideMascot from './StyleGuideMascot';
 import StyleGuideGenerationEffects from './StyleGuideGenerationEffects';
+import StyleGuideDialogs from './StyleGuideDialogs';
 
 const InputMetalFx = lazy(() => import('../nodes/shared/PolishMetalFx'));
 
@@ -1595,6 +1596,11 @@ export function StyleGuideContent({ theme }: { theme: 'dark' | 'light' }) {
       <BadgesSection />
       <FeedbackSection />
       <ToastSection />
+      <Section id="sg-dialogs" title="弹窗" desc="复用 ModalOverlay、PopupCloseButton 和 UI Kit 标题、表单、按钮样式，预览普通、表单、确认与长内容弹窗。">
+        <Demo label="弹窗交互演示" code="ModalOverlay / PopupCloseButton / ui-card__header / ui-card__body / ui-card__footer · closeOnBackdrop / draggable / backdropBlur">
+          <StyleGuideDialogs />
+        </Demo>
+      </Section>
       <Section id="sg-generation-effects" title="生成特效" desc="生成思考球、对话框边框流光与金属按钮，复用画布中的真实组件。">
         <StyleGuideGenerationEffects theme={theme} />
       </Section>
