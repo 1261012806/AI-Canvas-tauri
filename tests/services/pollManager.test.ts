@@ -24,7 +24,7 @@ describe('pending generation task recovery', () => {
   function pausedVideo() {
     useAppStore.setState((state) => ({
       config: { ...state.config, providers: { ...state.config.providers,
-        'slow-provider': { apiKey: 'current-key', baseUrl: 'https://gateway.example/v1' } } },
+        'slow-provider': { name: 'Slow provider', apiKey: 'current-key', baseUrl: 'https://gateway.example/v1' } } },
       nodes: [{ id: 'slow-node', type: 'ai-video', position: { x: 0, y: 0 },
         data: { type: 'ai-video', label: 'Slow video', prompt: 'original prompt', model: 'original-model',
           provider: 'general', status: 'loading' } satisfies BaseNodeData }],

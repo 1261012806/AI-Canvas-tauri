@@ -44,7 +44,7 @@ describe('declarative model execution protocol', () => {
       nodes: [{ id: 'slow-protocol', type: 'ai-video', position: { x: 0, y: 0 },
         data: { type: 'ai-video', label: 'Slow', prompt: 'video', status: 'loading' } }],
       config: { ...state.config, providers: { ...state.config.providers,
-        slow: { apiKey: 'fixture-key', baseUrl: 'https://gateway.example/v1' } } } }));
+        slow: { name: 'Slow', apiKey: 'fixture-key', baseUrl: 'https://gateway.example/v1' } } } }));
     const protocol: ModelExecutionProtocol = { version: 2, mode: 'async', auth: { type: 'bearer' },
       submit: { method: 'POST', path: '/videos', body: { model: '{{model}}', prompt: '{{prompt}}' } },
       response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/videos/{{submit.id}}',

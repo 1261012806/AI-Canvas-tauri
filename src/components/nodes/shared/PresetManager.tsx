@@ -25,6 +25,7 @@ import {
 } from '../../../types';
 import AnimatedButton from '../../shared/AnimatedButton';
 import PopupCloseButton from '../../shared/PopupCloseButton';
+import Select from '../../shared/Select';
 import ModelSelector from './ModelSelector';
 import QualityRatioSelector from './QualityRatioSelector';
 import PresetAdvancedEditor from './PresetAdvancedEditor';
@@ -700,10 +701,10 @@ export default function PresetManager() {
                 </label>
                 {folderGroups.length > 1 && <label className="preset-manager-field">
                   <span className="preset-manager-label">所属文件夹</span>
-                  <select className="ui-select__control w-full" value={folderId} onChange={(event) => setFolderId(event.target.value)}>
+                  <Select fixedMenu className="w-full" value={folderId} onChange={setFolderId}>
                     <option value="">无文件夹</option>
                     {presetFolders.filter((folder) => folder.nodeType === activeTab).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-                  </select>
+                  </Select>
                 </label>}
                 <label className="preset-manager-field">
                   <span className="preset-manager-label">说明</span>

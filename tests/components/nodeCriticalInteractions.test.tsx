@@ -1185,6 +1185,11 @@ describe('critical canvas node interactions', () => {
       requestCanvasPanBy: vi.fn(),
     }));
     vi.doMock('../../src/services/projectSettingsService', () => ({ resolveProjectGenerationPrompt }));
+    vi.doMock('../../src/services/pollManager', () => ({
+      getPendingTasksForProject: () => [],
+      prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
+      VideoPollingPausedError: class extends Error {},
+    }));
 
     const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
     const tree = AINodeDialog();

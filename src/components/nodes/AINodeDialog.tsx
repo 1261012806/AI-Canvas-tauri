@@ -412,7 +412,7 @@ function AINodeDialog() {
       }
     }
     const runningHubTask = cloudWorkflow || latestData.provider === 'runninghub';
-    const guardedSubmission = runningHubTask || (['ai-animation', 'ai-video'].includes(nodeType) && !!submittingProjectId);
+    const guardedSubmission = runningHubTask || (['ai-animation', 'ai-video'].includes(latestData.type) && !!submittingProjectId);
     let cloudGuard = guardedSubmission ? registerCanvasDerivation(store, submittingNodeId) : null;
     const isStillCurrentSubmission = () => {
       const state = useAppStore.getState();

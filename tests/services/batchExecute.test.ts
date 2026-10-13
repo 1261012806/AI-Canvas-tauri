@@ -40,7 +40,9 @@ vi.mock('../../src/services/fileService', () => ({
 vi.mock('../../src/services/pollManager', () => ({
   prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
   getPendingTasksForProject: () => [],
-  VideoPollingPausedError: class extends Error {},
+  VideoPollingPausedError: class extends Error {
+    constructor() { super('视频查询已暂停'); }
+  },
 }));
 
 vi.mock('../../src/store/useAppStore', () => ({
@@ -113,7 +115,7 @@ beforeEach(() => {
 
 describe('batchExecuteNodes', () => {
   it('does not mark a paused video query as a failed node or resubmit it', async () => {
-    mocks.generateVideo.mockRejectedValueOnce(new VideoPollingPausedError('视频查询已暂停'));
+    mocks.generateVideo.mockRejectedValueOnce(new VideoPollingPausedError());
     const node = createNode('slow-video', 'ai-video');
     const ctx = createContext();
     await batchExecuteNodes([node.id], [node], [], ctx);
@@ -137,8 +139,9 @@ describe('batchExecuteNodes', () => {
     ];
     const ctx = createContext();
     ctx.currentProjectId = 'project';
+    mocks.liveState = { currentProjectId: 'project', nodes, revision: 0 };
     const execution = batchExecuteNodes(nodes.map((node) => node.id), nodes, [], ctx);
-    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['random-z', 'ordinary']);
+    await vi.waitFor(() => expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['random-z', 'ordinary']));
     generated.resolve({ url: 'first.mp4' });
     await vi.waitFor(() => expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith(
       'first.mp4', 'project', 'ai-video', 'random-z',
@@ -211,7 +214,7 @@ describe('batchExecuteNodes', () => {
     const ctx = createContext();
     const execution = batchExecuteNodes(nodes.map((node) => node.id), nodes, edges, ctx);
 
-    expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['a', 'c']);
+    await vi.waitFor(() => expect(mocks.generateVideo.mock.calls.map(([request]) => request.nodeId)).toEqual(['a', 'c']));
 
     pending.get('c')!.resolve({ url: 'https://example.com/c.png', width: 64, height: 64 });
     pending.get('a')!.resolve({ url: 'https://example.com/a.png', width: 64, height: 64 });

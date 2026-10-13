@@ -28,7 +28,9 @@ vi.mock('../../src/services/videoBatchPlanning', () => ({ videoInputFingerprint:
 vi.mock('../../src/services/pollManager', () => ({
   prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
   getPendingTasksForProject: () => [],
-  VideoPollingPausedError: class extends Error {},
+  VideoPollingPausedError: class extends Error {
+    constructor() { super('视频查询已暂停'); }
+  },
 }));
 
 import { executeGeneration, type GenerationLease } from '../../src/services/generationService';
@@ -60,7 +62,7 @@ beforeEach(() => {
 
 describe('节点视频生成的宿主任务租约', () => {
   it('leaves a paused query out of failed output history and error toasts', async () => {
-    mocks.generate.mockRejectedValueOnce(new VideoPollingPausedError('视频查询已暂停'));
+    mocks.generate.mockRejectedValueOnce(new VideoPollingPausedError());
     expect(await run()).toEqual({ success: false, message: '视频查询已暂停' });
     expectNoCommit();
     expect(mocks.store.showToast).not.toHaveBeenCalled();

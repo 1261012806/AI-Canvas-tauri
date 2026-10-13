@@ -56,10 +56,13 @@ const EXECUTABLE_NODE_TYPES = new Set<AINodeType>([
 ]);
 
 // ── 执行单个节点 ──
-async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Promise<boolean> {
+async function executeOneNode(
+  node: Node<BaseNodeData>,
+  ctx: BatchContext,
+  useAppStore: typeof import('../store/useAppStore').useAppStore,
+): Promise<boolean> {
   const d = node.data!;
   if (d.provider === 'workflow-api') {
-    const { useAppStore } = await import('../store/useAppStore');
     if (useAppStore.getState().currentProjectId !== ctx.currentProjectId) return false;
     const { executeGeneration } = await import('../services/generationService');
     if (useAppStore.getState().currentProjectId !== ctx.currentProjectId) return false;
@@ -67,7 +70,6 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
   }
   const nt = d.type as AINodeType;
   if (nt === 'ai-video') {
-    const { useAppStore } = await import('../store/useAppStore');
     if (useAppStore.getState().currentProjectId !== ctx.currentProjectId) return false;
     try { prepareVideoNodeGeneration(node.id); }
     catch { return false; }
@@ -78,7 +80,6 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
   let animationGuard: CanvasDerivationGuard | null = null;
   const guarded = ['ai-animation', 'ai-video'].includes(nt) && !!ctx.currentProjectId;
   if (guarded) {
-    const { useAppStore } = await import('../store/useAppStore');
     const state = useAppStore.getState();
     if (state.currentProjectId !== ctx.currentProjectId) return false;
     animationGuard = registerCanvasDerivation(state, node.id);
@@ -86,7 +87,6 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
   }
   const isFresh = async () => {
     if (!guarded) return true;
-    const { useAppStore } = await import('../store/useAppStore');
     return !!animationGuard && isCanvasDerivationFresh(animationGuard, useAppStore.getState());
   };
 
@@ -109,7 +109,6 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         status: 'success',
       });
       if (processed.ok && processed.parsed) {
-        const { useAppStore } = await import('../store/useAppStore');
         useAppStore.getState().mergeDramaExtract(processed.parsed, {
           sourceNodeId: node.id,
           modelId: d.model,
@@ -155,7 +154,6 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         ...(isAnimation ? { aspectRatio, ...animationResultPatch(d) } : {}),
       });
       {
-        const { useAppStore } = await import('../store/useAppStore');
         useAppStore.getState().syncDramaAssetImageFromNode?.(node.id, mediaUrl);
       }
       ctx.recordOutputHistory(node.id, {
@@ -511,6 +509,7 @@ export async function batchExecuteNodes(
   const toRun = executable.map((node) => node.data.workflowId ? workflows[workflowIndex++] : node);
   if (toRun.length === 0) return { ok: 0, fail: 0 };
   ctx.commitToHistory();
+  const { useAppStore } = await import('../store/useAppStore');
 
   // 仅在调度图添加串行约束，不修改画布连线。复用现有依赖排序，避免
   // 将工作流拆出独立队列后，与其普通上游/下游节点同时执行。
@@ -547,14 +546,14 @@ export async function batchExecuteNodes(
 
   const runConnected = async () => {
     for (const node of orderedConnected) {
-      const success = await executeOneNode(node, ctx);
+      const success = await executeOneNode(node, ctx, useAppStore);
       if (success) ok++;
       else fail++;
     }
   };
 
   const runIsolated = async () => {
-    const results = await Promise.all(isolatedNodes.map((n) => executeOneNode(n, ctx)));
+    const results = await Promise.all(isolatedNodes.map((n) => executeOneNode(n, ctx, useAppStore)));
     for (const r of results) {
       if (r) ok++;
       else fail++;
