@@ -26,6 +26,7 @@ import { resolveVideoSubmissionControls } from '../services/ai/videoRequestResol
 import { persistMediaUrlToProjectData } from '../services/fileService';
 import { animationProcessing, animationResultPatch } from '../services/animationService';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation, type CanvasDerivationGuard } from '../services/canvasDerivationGuard';
+import { completeVideoNodeTask, getPendingTasksForProject, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../services/pollManager';
 
 export interface BatchContext {
   commitToHistory: () => void;
@@ -65,9 +66,17 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
     return (await executeGeneration(node.id)).success;
   }
   const nt = d.type as AINodeType;
+  if (nt === 'ai-video') {
+    const { useAppStore } = await import('../store/useAppStore');
+    if (useAppStore.getState().currentProjectId !== ctx.currentProjectId) return false;
+    try { prepareVideoNodeGeneration(node.id); }
+    catch { return false; }
+  }
   const prompt = (d.prompt as string) || '';
+  let videoResultReceived = false;
+  let videoTaskId: string | undefined;
   let animationGuard: CanvasDerivationGuard | null = null;
-  const guarded = nt === 'ai-animation' && !!ctx.currentProjectId;
+  const guarded = ['ai-animation', 'ai-video'].includes(nt) && !!ctx.currentProjectId;
   if (guarded) {
     const { useAppStore } = await import('../store/useAppStore');
     const state = useAppStore.getState();
@@ -81,7 +90,7 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
     return !!animationGuard && isCanvasDerivationFresh(animationGuard, useAppStore.getState());
   };
 
-  ctx.updateNodeDataTransient(node.id, { status: 'loading', error: undefined });
+  ctx.updateNodeDataTransient(node.id, { status: 'loading', error: undefined, videoTaskState: undefined });
   try {
     if (nt === 'ai-text') {
       const result = await generateText({ prompt, model: d.model!, provider: d.provider! });
@@ -240,9 +249,19 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         workflowInputs: d.workflowInputs,
         nodeId: node.id,
       });
+      videoResultReceived = true;
+      videoTaskId = ctx.currentProjectId ? getPendingTasksForProject(ctx.currentProjectId).find((task) => task.nodeId === node.id)?.taskId : undefined;
+      if (!await isFresh()) {
+        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId);
+        return false;
+      }
       const persisted = ctx.currentProjectId
         ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-video', d.label)
         : { mediaUrl: result.url, sourceUrl: result.url };
+      if (!await isFresh()) {
+        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId);
+        return false;
+      }
       const mediaUrl = persisted.mediaUrl;
       ctx.updateNodeDataTransient(node.id, {
         videoUrl: mediaUrl,
@@ -251,7 +270,9 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
         thumbnailUrl: mediaUrl,
         output: persisted.sourceUrl,
         status: 'success',
+        videoTaskState: undefined,
       });
+      completeVideoNodeTask(node.id, videoTaskId);
       ctx.recordOutputHistory(node.id, {
         nodeId: node.id,
         nodeLabel: d.label,
@@ -326,6 +347,8 @@ async function executeOneNode(node: Node<BaseNodeData>, ctx: BatchContext): Prom
     }
     return true;
   } catch (err) {
+    if (err instanceof VideoPollingPausedError) return false;
+    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId)) return false;
     if (!await isFresh()) return false;
     const msg = err instanceof Error ? err.message : typeof err === 'string' && err.trim() ? err : '生成失败';
     ctx.updateNodeDataTransient(node.id, { status: 'error', error: msg });

@@ -223,6 +223,8 @@ export interface BaseNodeData {
   prompt?: string;           // 提示词
   output?: string;            // 输出结果（文本/URL等）
   status?: 'idle' | 'loading' | 'success' | 'error';
+  /** 已提交的视频任务暂停本地查询，仍可续查或提交新的生成。 */
+  videoTaskState?: 'paused';
   model?: string;             // 模型 ID；空字符串表示主动清除，不回填偏好或项目默认模型
   provider?: string;          // 选择的供应商 ID（如 apimart）
   workflowId?: string;        // 选择的工作流 ID

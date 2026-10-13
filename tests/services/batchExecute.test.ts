@@ -37,6 +37,11 @@ vi.mock('../../src/services/ai/generateAudio', () => ({
 vi.mock('../../src/services/fileService', () => ({
   persistMediaUrlToProjectData: mocks.persistMediaUrlToProjectData,
 }));
+vi.mock('../../src/services/pollManager', () => ({
+  prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
+  getPendingTasksForProject: () => [],
+  VideoPollingPausedError: class extends Error {},
+}));
 
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: {
@@ -49,6 +54,7 @@ vi.mock('../../src/store/useAppStore', () => ({
 }));
 
 import { batchExecuteNodes } from '../../src/utils/batchExecute';
+import { VideoPollingPausedError } from '../../src/services/pollManager';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -106,6 +112,15 @@ beforeEach(() => {
 });
 
 describe('batchExecuteNodes', () => {
+  it('does not mark a paused video query as a failed node or resubmit it', async () => {
+    mocks.generateVideo.mockRejectedValueOnce(new VideoPollingPausedError('视频查询已暂停'));
+    const node = createNode('slow-video', 'ai-video');
+    const ctx = createContext();
+    await batchExecuteNodes([node.id], [node], [], ctx);
+    expect(mocks.generateVideo).toHaveBeenCalledOnce();
+    expect(ctx.recordOutputHistory).not.toHaveBeenCalled();
+    expect(ctx.updateNodeDataTransient).not.toHaveBeenCalledWith(node.id, expect.objectContaining({ status: 'error' }));
+  });
   it('queues workflows by display number and waits for generation and saving before starting the next', async () => {
     const generated = deferred<{ url: string }>();
     const saved = deferred<{ mediaUrl: string; sourceUrl: string }>();
