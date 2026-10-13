@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore } from '../../store/useAppStore';
-import { getNodeTypeConfig, type AppearanceTheme, type BaseNodeData } from '../../types';
+import { getNodeTypeConfig, type AppearanceBackgroundImage, type AppearanceTheme, type BaseNodeData } from '../../types';
 import type { Node } from '@xyflow/react';
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../../services/appearance/appearanceDefaults';
-import { contrastColor, isTransparentColor, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
-import { exportAppearanceTheme, importAppearanceTheme } from '../../services/appearance/appearanceThemeService';
+import { contrastColor, isTransparentColor, resolveAppearanceBackground, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
+import { exportAppearanceTheme, importAppearanceTheme, MAX_APPEARANCE_THEME_BYTES } from '../../services/appearance/appearanceThemeService';
 import { saveBinaryToLocalFile } from '../../services/fileService';
 import { isTauriEnv } from '../../services/fs/core';
 import { registerSettingsProducer } from '../../services/configPersistenceQueue';
@@ -34,13 +34,27 @@ const SOLAR_SYSTEM_PLANETS = [
   { id: 'neptune', name: '海王星', image: neptuneImg },
 ];
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+async function readFileAsDataUrl(file: File): Promise<string> {
+  const declaredType = file.type.split(';')[0].trim().toLowerCase();
+  const mimeType = (!declaredType || declaredType === 'application/octet-stream') && /\.svg$/i.test(file.name)
+    ? 'image/svg+xml' : declaredType;
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(mimeType)) throw new Error('请选择 PNG、JPG、WebP 或 SVG 图片');
+  if (file.size > 5 * 1024 * 1024) throw new Error('背景图片不能超过 5MB');
+  const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(new Error('图片读取失败'));
-    reader.readAsDataURL(file);
+    reader.onabort = () => reject(new Error('图片读取已取消'));
+    // 某些系统未识别 SVG MIME；统一为图片类型后再进入已有图片解码与保存流程。
+    reader.readAsDataURL(file.type === mimeType ? file : new Blob([file], { type: mimeType }));
   });
+  await new Promise<void>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => image.naturalWidth && image.naturalHeight ? resolve() : reject(new Error('图片内容无效'));
+    image.onerror = () => reject(new Error('图片内容无效'));
+    image.src = dataUrl;
+  });
+  return dataUrl;
 }
 
 const DARK_THEME_COLOR_SWATCHES = [
@@ -249,9 +263,9 @@ function PresetSingleNodePreview({
       <div
         className="relative p-2 shadow-xs transition-all flex flex-col justify-between"
         style={{
-          backgroundColor: isTransparentColor(themeResolved.node.background)
+          background: resolveAppearanceBackground(isTransparentColor(themeResolved.node.background)
             ? 'transparent'
-            : themeResolved.node.background,
+            : themeResolved.node.background, themeResolved.node.backgroundImage),
           borderColor: isTransparentColor(themeResolved.node.border)
             ? 'transparent'
             : themeResolved.node.border,
@@ -468,8 +482,66 @@ function PresetSingleNodePreview({
 
 function imagePreviewStyle(imageDataUrl: string | undefined, size: CSSProperties['backgroundSize'] = 'cover'): CSSProperties | undefined {
   return imageDataUrl
-    ? { backgroundImage: `url(${imageDataUrl})`, backgroundPosition: 'center', backgroundSize: size === 'fill' ? '100% 100%' : size }
+    ? { backgroundImage: `url(${imageDataUrl})`, backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundSize: size === 'fill' ? '100% 100%' : size }
     : undefined;
+}
+
+function BackgroundImageControls({ label, image, onChange }: {
+  label: string;
+  image: AppearanceBackgroundImage;
+  onChange: (image: AppearanceBackgroundImage) => void;
+}) {
+  const t = useT();
+  const showToast = useAppStore((state) => state.showToast);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const requestRef = useRef(0);
+  const latestRef = useRef({ image, onChange });
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { latestRef.current = { image, onChange }; }, [image, onChange]);
+  useEffect(() => () => { requestRef.current += 1; }, []);
+
+  const upload = async (file: File) => {
+    const request = ++requestRef.current;
+    setLoading(true);
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      if (request !== requestRef.current) return;
+      const latest = latestRef.current;
+      latest.onChange({ ...latest.image, kind: 'image', imageDataUrl });
+    } catch (error) {
+      if (request === requestRef.current) showToast(error instanceof Error ? error.message : t('图片读取失败'), 'error');
+    } finally {
+      if (request === requestRef.current) setLoading(false);
+    }
+  };
+
+  return (
+    <div className="ui-stack">
+      <div className="ui-card h-20 bg-no-repeat" role="img" aria-label={`${label}图片预览`} style={imagePreviewStyle(image.imageDataUrl, image.imageFit)}>
+        {!image.imageDataUrl && <span className="flex h-full items-center justify-center ui-hint">{t('未选图片')}</span>}
+      </div>
+      <div className="ui-row ui-row--tight">
+        <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={loading} onClick={() => inputRef.current?.click()}>
+          {loading ? t('读取中…') : image.imageDataUrl ? t('替换图片') : t('上传图片')}
+        </button>
+        {image.imageDataUrl && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={loading}
+          onClick={() => onChange({ ...image, kind: 'color', imageDataUrl: undefined })}>{t('移除图片')}</button>}
+        <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg" className="hidden" aria-label={`${label}上传图片`}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.currentTarget.value = '';
+            if (file) void upload(file);
+          }} />
+      </div>
+      <Select aria-label={`${label}图片铺放方式`} value={image.imageFit}
+        onChange={(value) => onChange({ ...image, imageFit: value as AppearanceBackgroundImage['imageFit'] })}>
+        <option value="cover">{t('覆盖填满')}</option>
+        <option value="contain">{t('完整显示')}</option>
+        <option value="fill">{t('拉伸填满')}</option>
+      </Select>
+      <p className="ui-hint">{t('PNG / JPG / WebP / SVG，最大 5MB；透明或未铺满的区域沿用底色。')}</p>
+    </div>
+  );
 }
 
 function ColorCardInput({
@@ -479,6 +551,8 @@ function ColorCardInput({
   allowNone = true,
   fallbackColor = '#6366f1',
   followThemeVar,
+  image,
+  onImageChange,
 }: {
   label: string;
   value: string;
@@ -486,21 +560,33 @@ function ColorCardInput({
   allowNone?: boolean;
   fallbackColor?: string;
   followThemeVar?: string;
+  image?: AppearanceBackgroundImage;
+  onImageChange?: (image: AppearanceBackgroundImage) => void;
 }) {
   const t = useT();
   const isAuto = Boolean(followThemeVar) && value === 'auto';
   const isNone = isTransparentColor(value);
   const safeHex = /^#[0-9a-f]{6}$/i.test(value) ? value : fallbackColor;
+  const imageConfig: AppearanceBackgroundImage = image ?? { kind: 'color', imageFit: 'cover' };
+  const stacked = Boolean(followThemeVar || onImageChange);
 
   return (
-    <div className={`p-3 settings-sub-card rounded-xl transition-colors ${followThemeVar ? 'ui-field' : 'flex items-center justify-between'}`}>
-      <span className={`text-xs font-semibold text-canvas-text ${followThemeVar ? 'whitespace-nowrap' : ''}`}>{label}</span>
-      <div className={`flex items-center space-x-1.5 settings-sub-card-inner px-2 py-1.5 rounded-lg shadow-2xs ${followThemeVar ? 'min-w-0 max-w-full' : ''}`}>
+    <div className={`p-3 settings-sub-card rounded-xl transition-colors ${stacked ? 'ui-field' : 'flex items-center justify-between'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className={`text-xs font-semibold text-canvas-text ${stacked ? 'whitespace-nowrap' : ''}`}>{label}</span>
+        {onImageChange && <Select aria-label={`${label}背景类型`} value={imageConfig.kind} className="shrink-0 w-24" size="sm"
+          onChange={(kind) => onImageChange({ ...imageConfig, kind: kind as AppearanceBackgroundImage['kind'] })}>
+          <option value="color">{t('纯色')}</option>
+          <option value="image">{t('上传图片')}</option>
+        </Select>}
+      </div>
+      {onImageChange && imageConfig.kind === 'image' ? <BackgroundImageControls label={label} image={imageConfig} onChange={onImageChange} /> : (
+      <div className={`flex items-center space-x-1.5 settings-sub-card-inner px-2 py-1.5 rounded-lg shadow-2xs ${stacked ? 'min-w-0 max-w-full' : ''}`}>
         <label
           className="relative w-6 h-5 rounded cursor-pointer block border border-black/10 shrink-0 overflow-hidden shadow-2xs"
           style={
             isAuto
-              ? { backgroundColor: `var(${followThemeVar})` }
+              ? { background: `var(${followThemeVar})` }
               : isNone
               ? {
                   background:
@@ -566,6 +652,7 @@ function ColorCardInput({
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -678,7 +765,6 @@ export default function AppearanceSettings() {
   const [solarPlanetIndex] = useState(() => Math.floor(Math.random() * SOLAR_SYSTEM_PLANETS.length));
 
   const importRef = useRef<HTMLInputElement>(null);
-  const canvasImageRef = useRef<HTMLInputElement>(null);
   const handleImageRef = useRef<HTMLInputElement>(null);
 
   const [draft, setDraft] = useState<AppearanceTheme | null>(null);
@@ -705,13 +791,33 @@ export default function AppearanceSettings() {
     if (useAppStore.getState().appearancePreview) clearPreview();
   }, [clearPreview]);
 
-  const update = (patch: (theme: AppearanceTheme) => AppearanceTheme) => {
-    const editable = structuredClone(draft ?? savedActive);
-    const next = normalizeAppearanceTheme(patch(editable));
+  const update = (patch: (theme: AppearanceTheme) => AppearanceTheme | null) => {
+    // 图片读取是异步的；使用最新草稿，避免完成上传时覆盖其间的其他编辑。
+    const editable = structuredClone(draftRef.current ?? normalizeAppearanceTheme(useAppStore.getState().config.appearance ?? savedActive));
+    const patched = patch(editable);
+    if (!patched) return;
+    const next = normalizeAppearanceTheme(patched);
     draftRef.current = next;
     setDraft(next);
     setAutoSaveStatus('saving');
     preview(next);
+  };
+
+  const updateImage = (patch: (theme: AppearanceTheme) => AppearanceTheme) => {
+    try {
+      update((theme) => {
+        // 切换预设后，不将旧上传任务应用到新主题。
+        if (theme.id !== active.id) return null;
+        const next = patch(theme);
+        const size = new Blob([JSON.stringify(next, null, 2)]).size;
+        if (size > MAX_APPEARANCE_THEME_BYTES && size > new Blob([JSON.stringify(theme, null, 2)]).size) {
+          throw new Error('图片使主题文件超过 8MB，请换用较小图片或移除其他背景图片');
+        }
+        return next;
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('背景图片设置失败'), 'error');
+    }
   };
 
   const flushDraft = useCallback(async () => {
@@ -757,7 +863,7 @@ export default function AppearanceSettings() {
   const canvasStyle = resolved.canvas.kind === 'color'
     ? { backgroundColor: resolved.canvas.color }
     : resolved.canvas.kind === 'image'
-      ? imagePreviewStyle(resolved.canvas.imageDataUrl)
+      ? imagePreviewStyle(resolved.canvas.imageDataUrl, resolved.canvas.imageFit)
       : { backgroundColor: resolved.ui.background };
 
   const updateMode = async (mode: AppearanceTheme['mode']) => {
@@ -811,14 +917,13 @@ export default function AppearanceSettings() {
     }
   };
 
-  const setCanvasImage = async (file: File) => {
-    const imageDataUrl = await readFileAsDataUrl(file);
-    update((theme) => ({ ...theme, canvas: { ...theme.canvas, kind: 'image', imageDataUrl } }));
-  };
-
   const setHandleImage = async (file: File) => {
-    const imageDataUrl = await readFileAsDataUrl(file);
-    update((theme) => ({ ...theme, handle: { ...theme.handle, kind: 'image', imageDataUrl } }));
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      updateImage((theme) => ({ ...theme, handle: { ...theme.handle, kind: 'image', imageDataUrl } }));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('图片读取失败'), 'error');
+    }
   };
 
   const savePreset = async () => {
@@ -1410,8 +1515,11 @@ export default function AppearanceSettings() {
             onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, background: value } }))}
           />
           <ColorCardInput
-            label={t('窗口背景')}
+            key={`${active.id}:surface-background`}
+            label={t('窗口 / 弹窗背景')}
             value={active.ui.surface}
+            image={active.ui.surfaceImage}
+            onImageChange={(surfaceImage) => updateImage((theme) => ({ ...theme, ui: { ...theme.ui, surfaceImage } }))}
             fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
             onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, surface: value } }))}
           />
@@ -1543,46 +1651,15 @@ export default function AppearanceSettings() {
             )}
 
             {active.canvas.kind === 'image' && (
-              <div className="flex items-center space-x-3 p-3 settings-sub-card rounded-lg">
-                <div
-                  className="h-14 w-20 shrink-0 overflow-hidden rounded-md border border-canvas-border bg-canvas-card bg-cover bg-center"
-                  style={imagePreviewStyle(active.canvas.imageDataUrl)}
-                >
-                  {!active.canvas.imageDataUrl && (
-                    <span className="flex h-full items-center justify-center text-[10px] text-canvas-text-muted text-center px-1">
-                      {t('未选图片')}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => canvasImageRef.current?.click()}
-                    className="px-3 py-1.5 text-xs font-medium bg-canvas-card border border-canvas-border rounded-lg text-canvas-text hover:bg-canvas-hover"
-                  >
-                    {t('选择画布图片')}
-                  </button>
-                  {active.canvas.imageDataUrl && (
-                    <button
-                      type="button"
-                      onClick={() => update((theme) => ({ ...theme, canvas: { ...theme.canvas, imageDataUrl: undefined } }))}
-                      className="px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 rounded-lg"
-                    >
-                      {t('移除图片')}
-                    </button>
-                  )}
-                  <input
-                    ref={canvasImageRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) void setCanvasImage(file);
-                      e.currentTarget.value = '';
-                    }}
-                  />
-                </div>
+              <div className="p-3 settings-sub-card rounded-lg">
+                <BackgroundImageControls
+                  key={`${active.id}:canvas-background`}
+                  label={t('画布背景')}
+                  image={{ kind: 'image', imageDataUrl: active.canvas.imageDataUrl, imageFit: active.canvas.imageFit }}
+                  onChange={({ kind, imageDataUrl, imageFit }) => updateImage((theme) => ({
+                    ...theme, canvas: { ...theme.canvas, kind, imageDataUrl, imageFit },
+                  }))}
+                />
               </div>
             )}
 
@@ -1617,8 +1694,11 @@ export default function AppearanceSettings() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <ColorCardInput
+                key={`${active.id}:node-background`}
                 label={t('节点底色')}
                 value={active.node.background}
+                image={active.node.backgroundImage}
+                onImageChange={(backgroundImage) => updateImage((theme) => ({ ...theme, node: { ...theme.node, backgroundImage } }))}
                 fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
                 onChange={(value) => update((theme) => ({ ...theme, node: { ...theme.node, background: value } }))}
               />
@@ -1797,7 +1877,7 @@ export default function AppearanceSettings() {
                     <input
                       ref={handleImageRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/webp"
+                      accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -1887,7 +1967,7 @@ export default function AppearanceSettings() {
 
       <SectionCard
         title={t('按钮外观')}
-        description={t('普通按钮和主按钮分别配色，默认跟随主题')}
+        description={t('普通按钮和主按钮分别设置纯色或图片背景，默认跟随主题')}
         icon={<Icon icon="lucide:mouse-pointer-2" className="w-4 h-4" aria-hidden="true" />}
         dataPurpose="button-appearance-settings"
       >
@@ -1945,20 +2025,30 @@ export default function AppearanceSettings() {
                   { key: 'hoverBackground', label: '悬停背景', token: 'hover-bg', allowNone: true },
                   { key: 'text', label: '文字', token: 'text', allowNone: false },
                   { key: 'border', label: '边框', token: 'border', allowNone: true },
-                ] as const).map((field) => (
-                  <ColorCardInput
-                    key={field.key}
-                    label={t(`${variant.title}${field.label}`)}
-                    value={active.ui.button[variant.key][field.key]}
-                    fallbackColor={fallback[field.key]}
-                    followThemeVar={`${variant.prefix}-${field.token}`}
-                    allowNone={field.allowNone}
-                    onChange={(value) => update((theme) => ({
-                      ...theme,
-                      ui: { ...theme.ui, button: { ...theme.ui.button, [variant.key]: { ...theme.ui.button[variant.key], [field.key]: value } } },
-                    }))}
-                  />
-                ))}
+                ] as const).map((field) => {
+                  const imageField = field.key === 'background' ? 'backgroundImage'
+                    : field.key === 'hoverBackground' ? 'hoverBackgroundImage' : undefined;
+                  const colors = active.ui.button[variant.key];
+                  return (
+                    <ColorCardInput
+                      key={`${active.id}:${field.key}`}
+                      label={t(`${variant.title}${field.label}`)}
+                      value={active.ui.button[variant.key][field.key]}
+                      image={imageField === 'hoverBackgroundImage' ? colors.hoverBackgroundImage ?? colors.backgroundImage : colors.backgroundImage}
+                      onImageChange={imageField ? (image) => updateImage((theme) => ({
+                        ...theme,
+                        ui: { ...theme.ui, button: { ...theme.ui.button, [variant.key]: { ...theme.ui.button[variant.key], [imageField]: image } } },
+                      })) : undefined}
+                      fallbackColor={fallback[field.key]}
+                      followThemeVar={`${variant.prefix}-${field.token}`}
+                      allowNone={field.allowNone}
+                      onChange={(value) => update((theme) => ({
+                        ...theme,
+                        ui: { ...theme.ui, button: { ...theme.ui.button, [variant.key]: { ...theme.ui.button[variant.key], [field.key]: value } } },
+                      }))}
+                    />
+                  );
+                })}
               </div>
             );
           })}

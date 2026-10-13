@@ -53,6 +53,7 @@
   border: 1px solid transparent;
   border-radius: var(--ui-radius-xl);
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-bg-light), var(--glass-bg-light)) padding-box,
     var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-md));
@@ -62,12 +63,14 @@
 .ui-ai-input:not(:focus-within):has(.ui-ai-input__editor:hover) {
   background:
     linear-gradient(to bottom, var(--white-alpha-03), transparent) padding-box,
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-bg-light), var(--glass-bg-light)) padding-box,
     var(--glass-bevel-border) border-box;
 }
 .ui-ai-input:has(.ui-ai-input__editor:focus) {
   background:
     linear-gradient(to bottom, var(--brand-alpha-12), transparent) padding-box,
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-bg-light), var(--glass-bg-light)) padding-box,
     var(--glass-bevel-border) border-box;
 }
@@ -160,9 +163,9 @@
   .ui-ai-input__footer--single-row .ui-ai-input__shortcut-hint { display: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .ui-ai-input { background: var(--glass-bg); backdrop-filter: none; }
+  .ui-ai-input { background: var(--appearance-surface-image, none), var(--glass-bg); backdrop-filter: none; }
   .ui-ai-input:not(:focus-within):has(.ui-ai-input__editor:hover),
-  .ui-ai-input:has(.ui-ai-input__editor:focus) { background: var(--glass-bg); }
+  .ui-ai-input:has(.ui-ai-input__editor:focus) { background: var(--appearance-surface-image, none), var(--glass-bg); }
 }
 @media (prefers-contrast: more) {
   .ui-ai-input { border-color: var(--border-secondary); }

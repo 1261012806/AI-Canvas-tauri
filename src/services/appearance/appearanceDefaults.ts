@@ -1,4 +1,4 @@
-import type { AppearanceTheme, AppearanceMode, AppearanceButtonColors } from '../../types';
+import type { AppearanceTheme, AppearanceMode, AppearanceButtonColors, AppearanceBackgroundImage } from '../../types';
 
 const BUTTON_UI = {
   radius: 7,
@@ -149,12 +149,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function normalizeAppearanceBackgroundImage(input: unknown): AppearanceBackgroundImage | undefined {
+  if (!isRecord(input)) return undefined;
+  // 仅接受随主题携带的图片，不把外部 URL、文件路径或 CSS 片段交给背景样式；SVG 仅作图片加载。
+  const imageDataUrl = typeof input.imageDataUrl === 'string'
+    && /^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[a-z0-9+/]+={0,2}$/i.test(input.imageDataUrl)
+    ? input.imageDataUrl : undefined;
+  return {
+    kind: input.kind === 'image' ? 'image' : 'color',
+    imageDataUrl,
+    imageFit: input.imageFit === 'contain' || input.imageFit === 'fill' ? input.imageFit : 'cover',
+  };
+}
+
 function normalizeButtonColors(input: unknown): AppearanceButtonColors {
   const source = isRecord(input) ? input : {};
   const color = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : 'auto';
   return {
     background: color(source.background),
     hoverBackground: color(source.hoverBackground),
+    backgroundImage: normalizeAppearanceBackgroundImage(source.backgroundImage),
+    hoverBackgroundImage: normalizeAppearanceBackgroundImage(source.hoverBackgroundImage),
     text: color(source.text),
     border: color(source.border),
   };
@@ -186,6 +201,7 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
     ui: {
       ...base.ui,
       ...ui,
+      surfaceImage: normalizeAppearanceBackgroundImage(ui.surfaceImage),
       button: {
         radius: typeof button.radius === 'number' && Number.isFinite(button.radius)
           ? Math.max(0, Math.min(24, button.radius)) : BUTTON_UI.radius,
@@ -196,7 +212,7 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
       },
     },
     canvas: { ...base.canvas, ...canvas },
-    node: { ...base.node, ...node },
+    node: { ...base.node, ...node, backgroundImage: normalizeAppearanceBackgroundImage(node.backgroundImage) },
     edge: { ...base.edge, ...edge },
     handle: {
       ...base.handle,

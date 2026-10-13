@@ -231,7 +231,7 @@ function ButtonsSection({ theme }: { theme: 'dark' | 'light' }) {
     <Section
       id="sg-buttons"
       title="按钮"
-      desc="普通和主按钮的颜色、圆角、边框可在设置 → 外观 → 按钮外观中调整。primary 用于主行动，ghost 用于工具栏，danger 保留危险操作语义。"
+      desc="普通和主按钮的纯色或上传图片背景、圆角、边框可在设置 → 外观 → 按钮外观中调整。悬停可单独配图，未设置时沿用普通状态图片；ghost 用于工具栏，danger 保留危险操作语义。"
     >
       <Demo label="按钮外观 · 实时同步设置" code="--button-bg / --button-hover-bg / --button-text / --button-border / --button-primary-bg / --button-primary-hover-bg / --button-primary-text / --button-primary-border / --button-radius / --button-border-width">
         <div className="ui-row mb-3">
@@ -1596,7 +1596,7 @@ export function StyleGuideContent({ theme }: { theme: 'dark' | 'light' }) {
       <BadgesSection />
       <FeedbackSection />
       <ToastSection />
-      <Section id="sg-dialogs" title="弹窗" desc="复用 ModalOverlay、PopupCloseButton 和 UI Kit 标题、表单、按钮样式，预览普通、表单、确认与长内容弹窗。">
+      <Section id="sg-dialogs" title="弹窗" desc="复用 ModalOverlay、PopupCloseButton 和 UI Kit 标题、表单、按钮样式；跟随外观中的窗口 / 弹窗背景图片，预览普通、表单、确认与长内容弹窗。">
         <Demo label="弹窗交互演示" code="ModalOverlay / PopupCloseButton / ui-card__header / ui-card__body / ui-card__footer · closeOnBackdrop / draggable / backdropBlur">
           <StyleGuideDialogs />
         </Demo>

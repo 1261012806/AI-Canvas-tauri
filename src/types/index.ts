@@ -583,10 +583,20 @@ export type AppearanceMode = 'dark' | 'light' | 'system';
 
 export type AppearanceCanvasKind = CanvasBackground | 'color' | 'image';
 
+/** 底色保留为颜色令牌，图片独立叠加，切回纯色时恢复原配色。 */
+export interface AppearanceBackgroundImage {
+  kind: 'color' | 'image';
+  imageDataUrl?: string;
+  imageFit: 'cover' | 'contain' | 'fill';
+}
+
 /** auto 表示跟随当前主题，其他值为用户自定义颜色。 */
 export interface AppearanceButtonColors {
   background: string;
   hoverBackground: string;
+  backgroundImage?: AppearanceBackgroundImage;
+  /** 未单独配置时沿用普通状态的背景图片。 */
+  hoverBackgroundImage?: AppearanceBackgroundImage;
   text: string;
   border: string;
 }
@@ -601,6 +611,7 @@ export interface AppearanceButtonTokens {
 export interface AppearanceUiTokens {
   background: string;
   surface: string;
+  surfaceImage?: AppearanceBackgroundImage;
   card: string;
   hover: string;
   border: string;
@@ -638,6 +649,7 @@ export interface AppearanceCanvasConfig {
 
 export interface AppearanceNodeConfig {
   background: string;
+  backgroundImage?: AppearanceBackgroundImage;
   backgroundOpacity: number;
   border: string;
   borderWidth: number;
@@ -693,7 +705,7 @@ export interface AppearanceTheme {
   updatedAt: number;
 }
 
-/** 独立 UI Kit 窗口的外观投影，不携带画布图片、文件引用或应用配置。 */
+/** 独立 UI Kit 窗口的 UI 令牌及内嵌背景图片投影，不携带画布图片、文件引用或应用配置。 */
 export type AppearanceUiSnapshot = Pick<AppearanceTheme, 'id' | 'name' | 'mode' | 'ui'>;
 
 /** 画布交互模式：default = Figma 风格（左键框选 / 右键·中键平移 / 滚轮缩放）；classic = 传统（左键平移 / Shift+拖动框选 / 滚轮纵横平移 / Ctrl+滚轮缩放） */

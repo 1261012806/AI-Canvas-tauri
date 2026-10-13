@@ -122,6 +122,7 @@ export default function StyleGuideWindow() {
         danger: resolved.ui.danger,
         info: resolved.ui.info,
         button: resolved.ui.button,
+        surfaceImage: resolved.ui.surfaceImage,
       },
     };
   }, [appearance, previewMode, systemMode]);

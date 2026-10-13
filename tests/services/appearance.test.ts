@@ -4,7 +4,139 @@ import { migrateLegacyAppearance } from '../../src/services/appearance/appearanc
 import { applyAppearanceTheme, resolveAppearanceTheme } from '../../src/services/appearance/appearanceRuntime';
 import type { AppConfig } from '../../src/types';
 
+const BACKGROUND_IMAGE = {
+  kind: 'image' as const,
+  imageFit: 'fill' as const,
+  imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2WQAAAAASUVORK5CYII=',
+};
+
+const SVG_BACKGROUND_IMAGE = {
+  ...BACKGROUND_IMAGE,
+  imageDataUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxIDEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9InJlZCIvPjwvc3ZnPg==',
+};
+
 describe('appearance themes', () => {
+  it.each(['https://example.com/image.png', 'file:///private/image.png', 'data:text/html;base64,PHN2Zy8+', 'data:image/png;base64,abc") ; color:red'])('rejects background source %s without changing its color fallback', (imageDataUrl) => {
+    const theme = normalizeAppearanceTheme({
+      ui: { surfaceImage: { ...BACKGROUND_IMAGE, imageDataUrl }, button: { normal: { background: '#123456', backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl } } } },
+      node: { background: '#345678', backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl } },
+    });
+    expect(theme.ui.surfaceImage?.imageDataUrl).toBeUndefined();
+    expect(theme.ui.button.normal.backgroundImage?.imageDataUrl).toBeUndefined();
+    expect(theme.node.backgroundImage?.imageDataUrl).toBeUndefined();
+    expect(theme.ui.button.normal.background).toBe('#123456');
+    expect(theme.node.background).toBe('#345678');
+  });
+
+  it('keeps background images when the system palette changes', () => {
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: true }) });
+    try {
+      const theme = normalizeAppearanceTheme({
+        id: 'standard-dark', mode: 'system',
+        ui: { surfaceImage: BACKGROUND_IMAGE, button: { normal: { backgroundImage: BACKGROUND_IMAGE } } },
+        node: { backgroundImage: BACKGROUND_IMAGE },
+        canvas: { kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageFit: 'fill' },
+      });
+      const resolved = resolveAppearanceTheme(theme);
+      expect(resolved.mode).toBe('light');
+      expect(resolved.ui.surface).toBe('#FFFFFF');
+      expect(resolved.ui.surfaceImage).toEqual(BACKGROUND_IMAGE);
+      expect(resolved.node.backgroundImage).toEqual(BACKGROUND_IMAGE);
+      expect(resolved.ui.button.normal.backgroundImage).toEqual(BACKGROUND_IMAGE);
+      expect(resolved.canvas).toMatchObject({ kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageFit: 'fill' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    { format: 'PNG', image: BACKGROUND_IMAGE },
+    { format: 'SVG', image: SVG_BACKGROUND_IMAGE },
+  ])('inherits hover images, allows color overrides, and clears images on preset reset ($format)', ({ image }) => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('document', { documentElement: {
+      dataset: {}, setAttribute: vi.fn(),
+      style: { setProperty: (name: string, value: string) => values.set(name, value), removeProperty: (name: string) => values.delete(name) },
+    } });
+    try {
+      const base = createBuiltinAppearanceThemes()[0];
+      const theme = normalizeAppearanceTheme({
+        ...base,
+        ui: { ...base.ui, surfaceImage: image, button: {
+          ...base.ui.button,
+          normal: { ...base.ui.button.normal, backgroundImage: image },
+          primary: { ...base.ui.button.primary, backgroundImage: image },
+        } },
+        node: { ...base.node, backgroundImage: image },
+      });
+      applyAppearanceTheme(theme);
+      for (const token of ['--button-bg', '--button-hover-bg', '--button-secondary-bg', '--button-primary-bg', '--button-primary-hover-bg', '--appearance-node-background', '--appearance-surface-image']) {
+        expect(values.get(token)).toContain(image.imageDataUrl);
+        expect(values.get(token)).toContain('/ 100% 100% no-repeat');
+      }
+      theme.ui.button.normal.hoverBackgroundImage = { kind: 'color', imageFit: 'cover' };
+      applyAppearanceTheme(theme);
+      expect(values.get('--button-hover-bg')).toBe('var(--white-alpha-08)');
+      expect(values.get('--button-bg')).toContain(image.imageDataUrl);
+      applyAppearanceTheme(base);
+      expect(values.get('--appearance-surface-image')).toBe('none');
+      expect([...values.values()].some((value) => value.includes('data:image'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retains embedded SVG backgrounds in a serialized preset', () => {
+    const theme = normalizeAppearanceTheme({
+      ui: { surfaceImage: SVG_BACKGROUND_IMAGE, button: { primary: { backgroundImage: SVG_BACKGROUND_IMAGE } } },
+      node: { backgroundImage: SVG_BACKGROUND_IMAGE },
+    });
+    const restored = normalizeAppearanceTheme(JSON.parse(JSON.stringify(theme)));
+    expect(restored.ui.surfaceImage).toEqual(SVG_BACKGROUND_IMAGE);
+    expect(restored.ui.button.primary.backgroundImage).toEqual(SVG_BACKGROUND_IMAGE);
+    expect(restored.node.backgroundImage).toEqual(SVG_BACKGROUND_IMAGE);
+  });
+
+  it('uses short runtime URLs for large images, reuses them, and releases them after reset', () => {
+    const values = new Map<string, string>();
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:appearance-large-image');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+    vi.stubGlobal('document', { documentElement: {
+      dataset: {}, setAttribute: vi.fn(),
+      style: { setProperty: (name: string, value: string) => values.set(name, value), removeProperty: (name: string) => values.delete(name) },
+    } });
+    try {
+      // 超过 Chromium 2MiB 变量限制的编码；关注显示 URL 与持久化数据的边界。
+      const image = { ...BACKGROUND_IMAGE, imageDataUrl: `data:image/png;base64,${'AAAA'.repeat(550 * 1024)}` };
+      const base = createBuiltinAppearanceThemes()[1];
+      const theme = normalizeAppearanceTheme({
+        ...base,
+        ui: { ...base.ui, surfaceImage: image, button: { ...base.ui.button, normal: { ...base.ui.button.normal, backgroundImage: image } } },
+        node: { ...base.node, backgroundImage: image },
+      });
+      applyAppearanceTheme(theme);
+      for (const token of ['--button-bg', '--button-hover-bg', '--button-secondary-bg', '--appearance-node-background', '--appearance-surface-image']) {
+        expect(values.get(token)).toContain('blob:appearance-large-image');
+        expect(values.get(token)!.length).toBeLessThan(1024);
+      }
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(createObjectURL.mock.calls[0][0]).toMatchObject({ type: 'image/png', size: 550 * 1024 * 3 });
+      expect(theme.node.backgroundImage?.imageDataUrl).toBe(image.imageDataUrl);
+      expect(theme.ui.surfaceImage?.imageDataUrl).toBe(image.imageDataUrl);
+      theme.node.backgroundImage!.imageFit = 'contain';
+      applyAppearanceTheme(theme);
+      expect(values.get('--appearance-node-background')).toContain('/ contain no-repeat');
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+      applyAppearanceTheme(base);
+      expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith('blob:appearance-large-image');
+      expect([...values.values()].some((value) => value.includes('blob:'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('ships complete snapshots for every built-in preset', () => {
     const themes = createBuiltinAppearanceThemes();
     expect(themes.map((theme) => theme.id)).toEqual([

@@ -246,6 +246,7 @@
    ============================================ */
 .glass-panel {
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
     var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-lg));
@@ -320,6 +321,7 @@
   min-height: 0;
   padding: 12px 14px 14px;
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
     var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-lg));
@@ -1056,6 +1058,7 @@ button.wf-ionode-badge.is-default {
   display: flex;
   flex-direction: column;
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
     var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-lg));
@@ -2297,6 +2300,7 @@ button.wf-ionode-badge.is-default {
   max-width: calc(100vw - 64px);
   height: calc(100vh - 40px);
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
     var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-lg));
@@ -2346,6 +2350,7 @@ body.chat-panel-resizing {
 .chat-panel-detached {
   border-color: transparent;
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
     var(--glass-bevel-border) border-box;
   box-shadow: var(--glass-bevel-inset);
