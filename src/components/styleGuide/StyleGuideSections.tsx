@@ -17,10 +17,12 @@ import MarkdownEditor from '../shared/MarkdownEditor';
 import FileUploadButton from '../shared/FileUploadButton';
 import ProviderBadge from '../shared/ProviderBadge';
 import SendShortcutMenu from '../shared/SendShortcutMenu';
+import Toast from '../Toast';
+import { useAppStore } from '../../store/useAppStore';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PromptSubmitShortcut } from '../../types';
 import { getPromptSubmitShortcutHint, PROMPT_SUBMIT_SHORTCUT_OPTIONS, resolvePromptEnterAction } from '../../utils/promptSubmitShortcut';
-import { useReducedMotion } from 'framer-motion';
+import { MotionConfig, useReducedMotion } from 'framer-motion';
 import { Icon } from '@iconify/react';
 import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import StyleGuideMascot from './StyleGuideMascot';
@@ -127,7 +129,7 @@ function ColorsSection() {
     <Section
       id="sg-colors"
       title="颜色令牌"
-      desc="全部颜色来自 base.css 的变量。写样式时只引用变量（或 Tailwind 的 canvas-* token），不要写死色值，浅色主题才能自动生效。"
+      desc="外观设置提供主题颜色，统一运行时派生 CSS 令牌，base.css 提供默认值。选择“跟随外观”可实时查看自定义配色；写样式时只引用变量（或 Tailwind 的 canvas-* token）。"
     >
       <Demo code="--theme-bg / --theme-surface / --theme-card / --theme-border / --theme-hover">
         <p className="m-0 mb-2 text-[11px] text-canvas-text-secondary">主题层 · 背景与描边</p>
@@ -159,13 +161,21 @@ function ColorsSection() {
         ]} />
       </Demo>
 
-      <Demo code="--success / --info / --warning / --danger">
+      <Demo code="--success / --success-bg / --info / --info-bg / --warning / --warning-bg / --danger / --danger-bg">
         <p className="m-0 mb-2 text-[11px] text-canvas-text-secondary">语义色 · 状态提示与危险操作</p>
         <div className="ui-row ui-row--loose">
           <span className="ui-badge ui-badge--success"><i className="ui-badge__dot" />成功</span>
           <span className="ui-badge ui-badge--info"><i className="ui-badge__dot" />信息</span>
           <span className="ui-badge ui-badge--warning"><i className="ui-badge__dot" />警告</span>
           <span className="ui-badge ui-badge--danger"><i className="ui-badge__dot" />危险</span>
+        </div>
+        <div className="mt-3">
+          <SwatchGrid items={[
+            { cssVar: '--success-bg', usage: '成功提示底色，随成功色派生' },
+            { cssVar: '--info-bg', usage: '信息提示底色，随信息色派生' },
+            { cssVar: '--warning-bg', usage: '警告提示底色，随警告色派生' },
+            { cssVar: '--danger-bg', usage: '危险提示底色，随危险色派生' },
+          ]} />
         </div>
       </Demo>
 
@@ -220,8 +230,25 @@ function ButtonsSection({ theme }: { theme: 'dark' | 'light' }) {
     <Section
       id="sg-buttons"
       title="按钮"
-      desc="基础按钮带淡底与淡描边，与工作流面板一致；primary 一个界面只放一个，ghost 用于工具栏，danger 只给不可逆操作。节点主题色按钮让分类切换与节点类型对应。"
+      desc="普通和主按钮的颜色、圆角、边框可在设置 → 外观 → 按钮外观中调整。primary 用于主行动，ghost 用于工具栏，danger 保留危险操作语义。"
     >
+      <Demo label="按钮外观 · 实时同步设置" code="--button-bg / --button-hover-bg / --button-text / --button-border / --button-primary-bg / --button-primary-hover-bg / --button-primary-text / --button-primary-border / --button-radius / --button-border-width">
+        <div className="ui-row mb-3">
+          <button type="button" className="ui-btn">普通按钮</button>
+          <button type="button" className="ui-btn ui-btn--secondary">次级按钮</button>
+          <button type="button" className="ui-btn ui-btn--primary">主按钮</button>
+        </div>
+        <SwatchGrid items={[
+          { cssVar: '--button-bg', usage: '普通按钮背景' },
+          { cssVar: '--button-hover-bg', usage: '普通按钮悬停背景' },
+          { cssVar: '--button-text', usage: '普通按钮文字' },
+          { cssVar: '--button-border', usage: '普通按钮边框' },
+          { cssVar: '--button-primary-bg', usage: '主按钮背景' },
+          { cssVar: '--button-primary-hover-bg', usage: '主按钮悬停背景' },
+          { cssVar: '--button-primary-text', usage: '主按钮文字' },
+          { cssVar: '--button-primary-border', usage: '主按钮边框' },
+        ]} />
+      </Demo>
       <Demo label="变体" code="ui-btn ui-btn--primary | --secondary | --ghost | --danger | --link">
         <div className="ui-row">
           <button type="button" className="ui-btn ui-btn--primary">主行动</button>
@@ -1288,6 +1315,64 @@ function FeedbackSection() {
   );
 }
 
+function ToastSection() {
+  const showToast = useAppStore((state) => state.showToast);
+  const dismissToast = useAppStore((state) => state.dismissToast);
+  const [message, setMessage] = useState('这是来自 UI Kit 的吐司提示示例。');
+
+  useEffect(() => () => dismissToast(), [dismissToast]);
+
+  return (
+    <Section
+      id="sg-toast"
+      title="吐司提示"
+      desc="复用应用真实 Toast，顶部居中弹出，支持复制和关闭。成功、信息提示 2.5 秒后消失，错误提示保留 15 秒。"
+    >
+      <Demo label="交互演示 · 成功 / 信息 / 错误" code="<Toast /> / useAppStore.getState().showToast(message, 'success' | 'info' | 'error') / dismissToast()">
+        <label className="ui-field mb-3">
+          <span className="ui-label">提示内容</span>
+          <textarea
+            className="ui-textarea"
+            rows={2}
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="输入提示内容，再选择状态预览"
+          />
+        </label>
+        <div className="ui-row ui-row--loose">
+          {([
+            { type: 'success', label: '成功提示' },
+            { type: 'info', label: '信息提示' },
+            { type: 'error', label: '错误提示' },
+          ] as const).map(({ type, label }) => (
+            <button
+              key={type}
+              type="button"
+              className="ui-btn ui-btn--secondary"
+              disabled={!message.trim()}
+              onClick={() => showToast(message.trim(), type)}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="ui-btn ui-btn--secondary"
+            onClick={() => showToast('长文本提示示例：这是一条用于检查换行、窄窗口布局和复制操作的通知。窗口变窄时，正文应自然换行，复制与关闭按钮保持可见；连续触发新提示后，应显示最新内容，并按新提示的停留时间自动消失。', 'error')}
+          >
+            长文本示例
+          </button>
+          <button type="button" className="ui-btn ui-btn--ghost" onClick={dismissToast}>关闭提示</button>
+        </div>
+        <p className="ui-hint mt-3">可连续切换状态，检查新提示替换、复制对勾和自动关闭；切换明暗主题或“跟随外观”查看配色。</p>
+      </Demo>
+      <MotionConfig reducedMotion="user">
+        <Toast />
+      </MotionConfig>
+    </Section>
+  );
+}
+
 function ScrollbarsSection() {
   return (
     <Section
@@ -1408,7 +1493,7 @@ function LayoutSection() {
         <div className="ui-row ui-row--loose">
           {[
             { v: 'var(--ui-radius-sm)', label: 'sm · 6px' },
-            { v: 'var(--ui-radius-md)', label: 'md · 7px（输入/按钮/chip）' },
+            { v: 'var(--ui-radius-md)', label: 'md · 7px（输入/chip）' },
             { v: 'var(--ui-radius)', label: '默认 · 8px' },
             { v: 'var(--ui-radius-lg)', label: 'lg · 12px' },
             { v: 'var(--ui-radius-xl)', label: 'xl · 14px（上传区/大卡片）' },
@@ -1491,7 +1576,7 @@ export function StyleGuideContent({ theme }: { theme: 'dark' | 'light' }) {
         <h2 className="m-0 text-lg font-semibold text-canvas-text">AI Canvas · UI Kit</h2>
         <p className="m-0 mt-1 text-xs leading-relaxed text-canvas-text-secondary">
           全应用公用控件一览。样式定义在 <code className="ui-code">src/styles/ui-kit.css</code>，
-          颜色与间距全部来自 <code className="ui-code">src/styles/base.css</code> 的 CSS 变量。
+          颜色由外观设置同步到 CSS 变量，<code className="ui-code">src/styles/base.css</code> 提供默认令牌。
           写新界面时先来这里挑控件，不要另造一套；点击每个样例下方的类名即可复制。
         </p>
       </header>
@@ -1509,6 +1594,7 @@ export function StyleGuideContent({ theme }: { theme: 'dark' | 'light' }) {
       <CardsSection />
       <BadgesSection />
       <FeedbackSection />
+      <ToastSection />
       <Section id="sg-generation-effects" title="生成特效" desc="生成思考球、对话框边框流光与金属按钮，复用画布中的真实组件。">
         <StyleGuideGenerationEffects theme={theme} />
       </Section>

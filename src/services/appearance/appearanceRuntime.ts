@@ -10,7 +10,8 @@ export function resolveAppearanceMode(mode: AppearanceMode | undefined): 'dark' 
 export function resolveAppearanceTheme(theme: AppearanceTheme): AppearanceTheme {
   const normalized = normalizeAppearanceTheme(theme);
   if (normalized.mode === 'system' && (normalized.id === 'standard-dark' || normalized.id === 'standard-light')) {
-    return getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode('system')}`);
+    const systemTheme = getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode('system')}`);
+    return { ...systemTheme, ui: { ...systemTheme.ui, button: normalized.ui.button } };
   }
   return normalized;
 }
@@ -29,6 +30,10 @@ export function isTransparentColor(val: string | undefined | null): boolean {
 
 function setVar(root: HTMLElement, name: string, value: string | number): void {
   root.style.setProperty(name, String(value));
+}
+
+function resolveButtonColor(color: string, fallback: string): string {
+  return color === 'auto' ? fallback : isTransparentColor(color) ? 'transparent' : color;
 }
 
 function brandAlphaVars(accent: string): Record<string, string> {
@@ -66,7 +71,7 @@ function hexToRgb(value: string): [number, number, number] | null {
   ];
 }
 
-function contrastColor(value: string): string {
+export function contrastColor(value: string): string {
   const rgb = hexToRgb(value);
   if (!rgb) return '#ffffff';
   const channels = rgb.map((channel) => {
@@ -120,6 +125,7 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
   const mode = resolveAppearanceMode(theme.mode);
   const resolvedTheme = resolveAppearanceTheme(theme);
   const { ui, node, edge, handle } = resolvedTheme;
+  const { button } = ui;
   // 背景、面板、卡片和边框保持预设原值；主题色只用于选中态和强调控件。
   const themeBackground = isTransparentColor(ui.background) ? 'transparent' : ui.background;
   const themeSurface = isTransparentColor(ui.surface) ? 'transparent' : ui.surface;
@@ -160,18 +166,41 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
     '--brand-hover': ui.accentStrong,
     '--brand-pale': ui.accentSoft,
     '--brand-contrast': contrastColor(ui.accent),
+    '--button-radius': `${button.radius}px`,
+    '--button-radius-sm': `${Math.round(button.radius * 6 / 7)}px`,
+    '--button-radius-lg': `${Math.round(button.radius * 12 / 7)}px`,
+    '--button-border-width': `${button.borderWidth}px`,
+    '--button-bg': resolveButtonColor(button.normal.background, 'var(--white-alpha-04)'),
+    '--button-hover-bg': resolveButtonColor(button.normal.hoverBackground, 'var(--white-alpha-08)'),
+    '--button-text': resolveButtonColor(button.normal.text, 'var(--theme-text)'),
+    '--button-border': resolveButtonColor(button.normal.border, 'var(--white-alpha-08)'),
+    '--button-hover-border': resolveButtonColor(button.normal.border, 'var(--white-alpha-12)'),
+    '--button-secondary-bg': resolveButtonColor(button.normal.background, 'var(--theme-surface)'),
+    '--button-secondary-hover-bg': resolveButtonColor(button.normal.hoverBackground, 'var(--theme-hover)'),
+    '--button-secondary-border': resolveButtonColor(button.normal.border, 'var(--theme-border)'),
+    '--button-secondary-hover-border': resolveButtonColor(button.normal.border, 'var(--border-secondary)'),
+    '--button-primary-bg': resolveButtonColor(button.primary.background, 'var(--brand)'),
+    '--button-primary-hover-bg': resolveButtonColor(button.primary.hoverBackground, 'var(--brand-hover)'),
+    '--button-primary-text': resolveButtonColor(button.primary.text, contrastColor(button.primary.background === 'auto' ? ui.accent : button.primary.background)),
+    '--button-primary-border': resolveButtonColor(button.primary.border, 'color-mix(in srgb, var(--brand) 80%, var(--theme-text))'),
+    '--button-primary-hover-border': resolveButtonColor(button.primary.border, 'var(--brand-hover)'),
     ...brandAlphaVars(ui.accent),
     ...themeAlphaVars(ui.text, mode),
     '--border-focus': `color-mix(in srgb, ${ui.focus} 55%, transparent)`,
     '--success': ui.success,
     '--success-light': ui.success,
     '--success-text': ui.success,
+    '--success-bg': `color-mix(in srgb, ${ui.success} ${mode === 'light' ? 20 : 15}%, transparent)`,
     '--warning': ui.warning,
     '--warning-light': ui.warning,
+    '--warning-bg': `color-mix(in srgb, ${ui.warning} ${mode === 'light' ? 22 : 15}%, transparent)`,
     '--danger': ui.danger,
     '--danger-light': ui.danger,
+    '--danger-pale': mixHex(ui.danger, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.18 : 0.34),
+    '--danger-bg': `color-mix(in srgb, ${ui.danger} ${mode === 'light' ? 18 : 15}%, transparent)`,
     '--info': ui.info,
     '--info-light': ui.info,
+    '--info-bg': `color-mix(in srgb, ${ui.info} ${mode === 'light' ? 20 : 15}%, transparent)`,
     '--canvas-edge': isTransparentColor(edge.color) ? 'transparent' : edge.color,
     '--appearance-edge-color': isTransparentColor(edge.color) ? 'transparent' : edge.color,
     '--appearance-edge-selected': isTransparentColor(edge.selectedColor) ? 'transparent' : edge.selectedColor,

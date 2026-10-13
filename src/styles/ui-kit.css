@@ -241,10 +241,10 @@
   gap: 6px;
   height: var(--ui-control-h);
   padding: 0 12px;
-  border: 1px solid var(--white-alpha-08);
-  border-radius: var(--ui-radius-md);
-  background: var(--white-alpha-04);
-  color: var(--theme-text);
+  border: var(--button-border-width) solid var(--button-border);
+  border-radius: var(--button-radius);
+  background: var(--button-bg);
+  color: var(--button-text);
   font-family: inherit;
   font-size: var(--ui-font);
   font-weight: 500;
@@ -258,10 +258,10 @@
     color var(--transition-base),
     transform var(--transition-base);
 }
-.ui-btn:hover:not(:disabled):not(.is-active) {
-  background: var(--white-alpha-08);
-  border-color: var(--white-alpha-12);
-  color: var(--theme-text);
+.ui-btn:hover:where(:not(:disabled):not(.is-active)) {
+  background: var(--button-hover-bg);
+  border-color: var(--button-hover-border);
+  color: var(--button-text);
 }
 .ui-btn:active:not(:disabled) { transform: scale(0.97); }
 .ui-btn:focus-visible {
@@ -273,23 +273,25 @@
 .ui-btn:empty { padding: 0; width: var(--ui-control-h); }
 
 .ui-btn--primary {
-  background: var(--brand);
-  border-color: color-mix(in srgb, var(--brand) 80%, var(--theme-text));
-  color: #fff;
+  background: var(--button-primary-bg);
+  border-color: var(--button-primary-border);
+  color: var(--button-primary-text);
 }
-.ui-btn--primary:hover:not(:disabled) {
-  background: var(--brand-hover);
-  border-color: var(--brand-hover);
+.ui-btn--primary:hover:not(:disabled):not(.is-active) {
+  background: var(--button-primary-hover-bg);
+  border-color: var(--button-primary-hover-border);
+  color: var(--button-primary-text);
 }
 
 .ui-btn--secondary {
-  background: var(--theme-surface);
-  border-color: var(--theme-border);
-  color: var(--theme-text);
+  background: var(--button-secondary-bg);
+  border-color: var(--button-secondary-border);
+  color: var(--button-text);
 }
-.ui-btn--secondary:hover:not(:disabled) {
-  background: var(--theme-hover);
-  border-color: var(--border-secondary);
+.ui-btn--secondary:hover:not(:disabled):not(.is-active) {
+  background: var(--button-secondary-hover-bg);
+  border-color: var(--button-secondary-hover-border);
+  color: var(--button-text);
 }
 
 .ui-btn--ghost {
@@ -297,7 +299,7 @@
   border-color: transparent;
   color: var(--theme-text-secondary);
 }
-.ui-btn--ghost:hover:not(:disabled) {
+.ui-btn--ghost:hover:not(:disabled):not(.is-active) {
   background: var(--white-alpha-06);
   border-color: var(--white-alpha-10);
   color: var(--theme-text);
@@ -308,9 +310,10 @@
   border-color: color-mix(in srgb, var(--danger) 30%, transparent);
   color: var(--danger-light);
 }
-.ui-btn--danger:hover:not(:disabled) {
+.ui-btn--danger:hover:not(:disabled):not(.is-active) {
   background: color-mix(in srgb, var(--danger) 20%, transparent);
   border-color: var(--danger);
+  color: var(--danger-light);
 }
 
 /* 无边框的文字按钮，用于行内次要操作 */
@@ -323,6 +326,8 @@
 }
 .ui-btn--link:hover:not(:disabled) {
   color: var(--brand-pale);
+  background: transparent;
+  border-color: transparent;
   text-decoration: underline;
 }
 
@@ -330,7 +335,7 @@
   height: var(--ui-control-h-sm);
   padding: 0 8px;
   font-size: var(--ui-font-sm);
-  border-radius: var(--ui-radius-sm);
+  border-radius: var(--button-radius-sm);
 }
 .ui-btn--sm:empty { width: var(--ui-control-h-sm); }
 
@@ -338,7 +343,7 @@
   height: var(--ui-control-h-lg);
   padding: 0 18px;
   font-size: var(--ui-font-lg);
-  border-radius: var(--ui-radius-lg);
+  border-radius: var(--button-radius-lg);
 }
 .ui-btn--lg:empty { width: var(--ui-control-h-lg); }
 
@@ -538,14 +543,14 @@
 }
 .ui-btn-group > .ui-btn {
   border-radius: 0;
-  margin-left: -1px;
+  margin-left: calc(-1 * var(--button-border-width));
 }
 .ui-btn-group > .ui-btn:first-child {
   margin-left: 0;
-  border-radius: var(--ui-radius-md) 0 0 var(--ui-radius-md);
+  border-radius: var(--button-radius) 0 0 var(--button-radius);
 }
 .ui-btn-group > .ui-btn:last-child {
-  border-radius: 0 var(--ui-radius-md) var(--ui-radius-md) 0;
+  border-radius: 0 var(--button-radius) var(--button-radius) 0;
 }
 
 /* 加载态：文字前转圈（配合 .ui-spinner 使用） */

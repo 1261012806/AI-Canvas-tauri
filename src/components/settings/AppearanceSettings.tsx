@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { getNodeTypeConfig, type AppearanceTheme, type BaseNodeData } from '../../types';
 import type { Node } from '@xyflow/react';
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../../services/appearance/appearanceDefaults';
-import { isTransparentColor, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
+import { contrastColor, isTransparentColor, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
 import { exportAppearanceTheme, importAppearanceTheme } from '../../services/appearance/appearanceThemeService';
 import { saveBinaryToLocalFile } from '../../services/fileService';
 import { isTauriEnv } from '../../services/fs/core';
@@ -478,48 +478,57 @@ function ColorCardInput({
   onChange,
   allowNone = true,
   fallbackColor = '#6366f1',
+  followThemeVar,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   allowNone?: boolean;
   fallbackColor?: string;
+  followThemeVar?: string;
 }) {
+  const t = useT();
+  const isAuto = Boolean(followThemeVar) && value === 'auto';
   const isNone = isTransparentColor(value);
   const safeHex = /^#[0-9a-f]{6}$/i.test(value) ? value : fallbackColor;
 
   return (
-    <div className="p-3 settings-sub-card rounded-xl flex items-center justify-between transition-colors">
-      <span className="text-xs font-semibold text-canvas-text">{label}</span>
-      <div className="flex items-center space-x-1.5 settings-sub-card-inner px-2 py-1.5 rounded-lg shadow-2xs">
+    <div className={`p-3 settings-sub-card rounded-xl transition-colors ${followThemeVar ? 'ui-field' : 'flex items-center justify-between'}`}>
+      <span className={`text-xs font-semibold text-canvas-text ${followThemeVar ? 'whitespace-nowrap' : ''}`}>{label}</span>
+      <div className={`flex items-center space-x-1.5 settings-sub-card-inner px-2 py-1.5 rounded-lg shadow-2xs ${followThemeVar ? 'min-w-0 max-w-full' : ''}`}>
         <label
           className="relative w-6 h-5 rounded cursor-pointer block border border-black/10 shrink-0 overflow-hidden shadow-2xs"
           style={
-            isNone
+            isAuto
+              ? { backgroundColor: `var(${followThemeVar})` }
+              : isNone
               ? {
                   background:
                     'linear-gradient(to top right, transparent calc(50% - 1px), #ef4444 calc(50% - 1px), #ef4444 calc(50% + 1px), transparent calc(50% + 1px)), #ffffff',
                 }
               : { backgroundColor: safeHex }
           }
-          title={isNone ? '无颜色（点击选择颜色）' : '点击选择颜色'}
+          title={isAuto ? t('当前跟随主题，点击选择自定义颜色') : isNone ? '无颜色（点击选择颜色）' : '点击选择颜色'}
         >
           <input
             className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
             type="color"
+            aria-label={t(`${label}选择颜色`)}
             value={safeHex}
             onChange={(e) => onChange(e.target.value)}
           />
         </label>
         <input
           className={`w-16 text-xs font-medium bg-transparent border-none p-0 focus:ring-0 uppercase focus:outline-none ${
-            isNone ? 'text-canvas-text-muted font-sans' : 'text-canvas-text font-mono'
-          }`}
+            isNone || isAuto ? 'text-canvas-text-muted font-sans' : 'text-canvas-text font-mono'
+          } ${followThemeVar ? 'min-w-0 flex-1' : ''}`}
           type="text"
-          value={isNone ? '无' : value}
+          value={isAuto ? '' : isNone ? '无' : value}
           onChange={(e) => {
             const raw = e.target.value;
-            if (isTransparentColor(raw) || raw.trim() === '') {
+            if (followThemeVar && (raw.trim() === '' || raw.trim().toLowerCase() === 'auto')) {
+              onChange('auto');
+            } else if (isTransparentColor(raw) || raw.trim() === '') {
               onChange('transparent');
             } else if (/^#?[0-9a-f]{6}$/i.test(raw.trim())) {
               onChange(raw.trim().startsWith('#') ? raw.trim() : `#${raw.trim()}`);
@@ -527,14 +536,26 @@ function ColorCardInput({
               onChange(raw);
             }
           }}
-          placeholder={isNone ? '无' : '#HEX'}
+          placeholder={isAuto ? t('跟随') : isNone ? '无' : '#HEX'}
           aria-label={`${label}颜色值`}
         />
+        {followThemeVar && (
+          <button
+            type="button"
+            onClick={() => onChange('auto')}
+            className={`shrink-0 whitespace-nowrap text-[11px] px-1.5 py-0.5 rounded transition-colors ${isAuto ? 'text-brand-light bg-brand/15' : 'text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover'}`}
+            aria-label={t(`${label}恢复跟随主题`)}
+            aria-pressed={isAuto}
+            title={t('恢复跟随主题配色')}
+          >
+            {t('跟随')}
+          </button>
+        )}
         {allowNone && (
           <button
             type="button"
             onClick={() => onChange(isNone ? safeHex : 'transparent')}
-            className={`text-[11px] px-1.5 py-0.5 rounded transition-all select-none ${
+            className={`shrink-0 whitespace-nowrap text-[11px] px-1.5 py-0.5 rounded transition-all select-none ${
               isNone
                 ? 'bg-brand/15 text-brand-light font-bold ring-1 ring-brand/30'
                 : 'text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover'
@@ -1464,201 +1485,6 @@ export default function AppearanceSettings() {
       </SectionCard>
       {/* END: SplineConnectionLinesSection */}
 
-      {/* BEGIN: ConnectionPortsSection */}
-      <SectionCard
-        title={t('连接手柄')}
-        description={t('设置节点连接入口的颜色或图片样式')}
-        icon={
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <polygon points="3 11 22 2 13 21 11 13 3 11" />
-          </svg>
-        }
-        dataPurpose="connection-handles-settings"
-        className="mb-4"
-      >
-        <div className="space-y-4">
-          {/* Port Type Selector */}
-          <div className="p-3 settings-sub-card rounded-xl flex items-center justify-between">
-            <span className="text-xs font-semibold text-canvas-text">{t('手柄类型')}</span>
-            <Select
-              fixedMenu
-              size="sm"
-              value={active.handle.kind}
-              onChange={(val) =>
-                update((theme) => ({
-                  ...theme,
-                  handle: { ...theme.handle, kind: val as AppearanceTheme['handle']['kind'] },
-                }))
-              }
-            >
-              <option value="color">{t('纯色')}</option>
-              <option value="image">{t('图片')}</option>
-            </Select>
-          </div>
-
-          {/* Color Mode Settings */}
-          {active.handle.kind === 'color' && (
-            <div className="p-4 settings-sub-card rounded-xl space-y-4">
-              <div className="flex items-center justify-between pb-1 border-b settings-h-divider">
-                <span className="text-xs font-bold text-canvas-text">{t('颜色设置')}</span>
-                <span className="text-[11px] text-canvas-text-muted">{t('普通状态与悬浮状态')}</span>
-              </div>
-
-              {/* Normal Handle Color */}
-              <div className="space-y-2">
-                <ColorCardInput
-                  label={t('手柄颜色')}
-                  value={active.handle.color}
-                  fallbackColor={active.mode === 'light' ? '#7280E4' : '#6366f1'}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
-                />
-                <QuickSwatches
-                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
-                  value={active.handle.color}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
-                />
-              </div>
-
-              {/* Hover Handle Color */}
-              <div className="space-y-2 pt-1">
-                <ColorCardInput
-                  label={t('悬浮颜色')}
-                  value={active.handle.hoverColor}
-                  fallbackColor={active.mode === 'light' ? '#5A69D4' : '#818cf8'}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
-                />
-                <QuickSwatches
-                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
-                  value={active.handle.hoverColor}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Image Mode Settings */}
-          {active.handle.kind === 'image' && (
-            <div className="p-4 settings-sub-card rounded-xl space-y-3">
-              <div className="flex items-center space-x-3">
-                <div
-                  className="h-16 w-16 shrink-0 overflow-hidden rounded-full border border-canvas-border bg-canvas-surface bg-center bg-no-repeat shadow-xs"
-                  style={imagePreviewStyle(active.handle.imageDataUrl, active.handle.imageFit)}
-                >
-                  {!active.handle.imageDataUrl && (
-                    <span className="flex h-full items-center justify-center px-1 text-center text-[9px] text-canvas-text-muted">
-                      {t('未上传')}
-                    </span>
-                  )}
-                </div>
-                <div className="flex-1 space-y-1.5">
-                  <div className="flex items-center space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => handleImageRef.current?.click()}
-                      className="px-3 py-1.5 text-xs font-medium bg-canvas-surface border border-canvas-border rounded-lg text-canvas-text hover:bg-canvas-hover"
-                    >
-                      {t('选择手柄图片')}
-                    </button>
-                    {active.handle.imageDataUrl && (
-                      <button
-                        type="button"
-                        onClick={() => update((theme) => ({ ...theme, handle: { ...theme.handle, imageDataUrl: undefined } }))}
-                        className="px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 rounded-lg"
-                      >
-                        {t('移除图片')}
-                      </button>
-                    )}
-                    <input
-                      ref={handleImageRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void setHandleImage(file);
-                        e.currentTarget.value = '';
-                      }}
-                    />
-                  </div>
-                  <p className="text-[11px] text-canvas-text-muted">{t('上传图片后会立即应用到节点连接手柄')}</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <div className="flex items-center justify-between p-2.5 bg-canvas-surface rounded-lg border border-canvas-border">
-                  <span className="text-xs text-canvas-text-secondary">{t('图片适配')}</span>
-                  <Select
-                    fixedMenu
-                    size="sm"
-                    value={active.handle.imageFit}
-                    onChange={(val) =>
-                      update((theme) => ({
-                        ...theme,
-                        handle: { ...theme.handle, imageFit: val as AppearanceTheme['handle']['imageFit'] },
-                      }))
-                    }
-                  >
-                    <option value="contain">{t('完整显示')}</option>
-                    <option value="cover">{t('铺满')}</option>
-                    <option value="fill">{t('拉伸')}</option>
-                  </Select>
-                </div>
-
-                <div className="flex items-center justify-between p-2.5 bg-canvas-surface rounded-lg border border-canvas-border">
-                  <span className="text-xs text-canvas-text-secondary">{t('不透明度')}</span>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="range"
-                      min="0.2"
-                      max="1"
-                      step="0.05"
-                      value={active.handle.opacity}
-                      onChange={(e) => update((theme) => ({ ...theme, handle: { ...theme.handle, opacity: Number(e.target.value) } }))}
-                      className="w-24 accent-brand cursor-pointer"
-                    />
-                    <span className="text-xs text-canvas-text font-mono w-9 text-right">
-                      {Math.round(active.handle.opacity * 100)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Handle Size Slider */}
-          <div className="p-4 settings-sub-card rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-canvas-text">{t('手柄尺寸')}</span>
-              <NumberStepper
-                id="portSizeInput"
-                value={active.handle.size}
-                min={16}
-                max={64}
-                step={1}
-                unit="px"
-                size="sm"
-                onChange={(size) =>
-                  update((theme) => ({
-                    ...theme,
-                    handle: { ...theme.handle, size },
-                  }))
-                }
-              />
-            </div>
-            <input
-              className="w-full h-1.5 bg-canvas-border rounded-lg appearance-none cursor-pointer accent-brand"
-              id="portSizeSlider"
-              max={64}
-              min={16}
-              type="range"
-              value={active.handle.size}
-              onChange={(e) => update((theme) => ({ ...theme, handle: { ...theme.handle, size: Number(e.target.value) } }))}
-            />
-          </div>
-        </div>
-      </SectionCard>
-      {/* END: ConnectionPortsSection */}
-
       {/* BEGIN: Canvas & Node Appearance Section */}
       <SectionCard
         title={t('画布与节点外观')}
@@ -1863,6 +1689,299 @@ export default function AppearanceSettings() {
         </div>
       </SectionCard>
       {/* END: Canvas & Node Appearance Section */}
+
+      {/* BEGIN: ConnectionPortsSection */}
+      <SectionCard
+        title={t('连接手柄')}
+        description={t('设置节点连接入口的颜色或图片样式')}
+        icon={
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <polygon points="3 11 22 2 13 21 11 13 3 11" />
+          </svg>
+        }
+        dataPurpose="connection-handles-settings"
+        className="mb-4"
+      >
+        <div className="space-y-4">
+          {/* Port Type Selector */}
+          <div className="p-3 settings-sub-card rounded-xl flex items-center justify-between">
+            <span className="text-xs font-semibold text-canvas-text">{t('手柄类型')}</span>
+            <Select
+              fixedMenu
+              size="sm"
+              value={active.handle.kind}
+              onChange={(val) =>
+                update((theme) => ({
+                  ...theme,
+                  handle: { ...theme.handle, kind: val as AppearanceTheme['handle']['kind'] },
+                }))
+              }
+            >
+              <option value="color">{t('纯色')}</option>
+              <option value="image">{t('图片')}</option>
+            </Select>
+          </div>
+
+          {/* Color Mode Settings */}
+          {active.handle.kind === 'color' && (
+            <div className="p-4 settings-sub-card rounded-xl space-y-4">
+              <div className="flex items-center justify-between pb-1 border-b settings-h-divider">
+                <span className="text-xs font-bold text-canvas-text">{t('颜色设置')}</span>
+                <span className="text-[11px] text-canvas-text-muted">{t('普通状态与悬浮状态')}</span>
+              </div>
+
+              {/* Normal Handle Color */}
+              <div className="space-y-2">
+                <ColorCardInput
+                  label={t('手柄颜色')}
+                  value={active.handle.color}
+                  fallbackColor={active.mode === 'light' ? '#7280E4' : '#6366f1'}
+                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
+                />
+                <QuickSwatches
+                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
+                  value={active.handle.color}
+                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
+                />
+              </div>
+
+              {/* Hover Handle Color */}
+              <div className="space-y-2 pt-1">
+                <ColorCardInput
+                  label={t('悬浮颜色')}
+                  value={active.handle.hoverColor}
+                  fallbackColor={active.mode === 'light' ? '#5A69D4' : '#818cf8'}
+                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
+                />
+                <QuickSwatches
+                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
+                  value={active.handle.hoverColor}
+                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Image Mode Settings */}
+          {active.handle.kind === 'image' && (
+            <div className="p-4 settings-sub-card rounded-xl space-y-3">
+              <div className="flex items-center space-x-3">
+                <div
+                  className="h-16 w-16 shrink-0 overflow-hidden rounded-full border border-canvas-border bg-canvas-surface bg-center bg-no-repeat shadow-xs"
+                  style={imagePreviewStyle(active.handle.imageDataUrl, active.handle.imageFit)}
+                >
+                  {!active.handle.imageDataUrl && (
+                    <span className="flex h-full items-center justify-center px-1 text-center text-[9px] text-canvas-text-muted">
+                      {t('未上传')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => handleImageRef.current?.click()}
+                      className="px-3 py-1.5 text-xs font-medium bg-canvas-surface border border-canvas-border rounded-lg text-canvas-text hover:bg-canvas-hover"
+                    >
+                      {t('选择手柄图片')}
+                    </button>
+                    {active.handle.imageDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => update((theme) => ({ ...theme, handle: { ...theme.handle, imageDataUrl: undefined } }))}
+                        className="px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 rounded-lg"
+                      >
+                        {t('移除图片')}
+                      </button>
+                    )}
+                    <input
+                      ref={handleImageRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void setHandleImage(file);
+                        e.currentTarget.value = '';
+                      }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-canvas-text-muted">{t('上传图片后会立即应用到节点连接手柄')}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <div className="flex items-center justify-between p-2.5 bg-canvas-surface rounded-lg border border-canvas-border">
+                  <span className="text-xs text-canvas-text-secondary">{t('图片适配')}</span>
+                  <Select
+                    fixedMenu
+                    size="sm"
+                    value={active.handle.imageFit}
+                    onChange={(val) =>
+                      update((theme) => ({
+                        ...theme,
+                        handle: { ...theme.handle, imageFit: val as AppearanceTheme['handle']['imageFit'] },
+                      }))
+                    }
+                  >
+                    <option value="contain">{t('完整显示')}</option>
+                    <option value="cover">{t('铺满')}</option>
+                    <option value="fill">{t('拉伸')}</option>
+                  </Select>
+                </div>
+
+                <div className="flex items-center justify-between p-2.5 bg-canvas-surface rounded-lg border border-canvas-border">
+                  <span className="text-xs text-canvas-text-secondary">{t('不透明度')}</span>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="1"
+                      step="0.05"
+                      value={active.handle.opacity}
+                      onChange={(e) => update((theme) => ({ ...theme, handle: { ...theme.handle, opacity: Number(e.target.value) } }))}
+                      className="w-24 accent-brand cursor-pointer"
+                    />
+                    <span className="text-xs text-canvas-text font-mono w-9 text-right">
+                      {Math.round(active.handle.opacity * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Handle Size Slider */}
+          <div className="p-4 settings-sub-card rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-canvas-text">{t('手柄尺寸')}</span>
+              <NumberStepper
+                id="portSizeInput"
+                value={active.handle.size}
+                min={16}
+                max={64}
+                step={1}
+                unit="px"
+                size="sm"
+                onChange={(size) =>
+                  update((theme) => ({
+                    ...theme,
+                    handle: { ...theme.handle, size },
+                  }))
+                }
+              />
+            </div>
+            <input
+              className="w-full h-1.5 bg-canvas-border rounded-lg appearance-none cursor-pointer accent-brand"
+              id="portSizeSlider"
+              max={64}
+              min={16}
+              type="range"
+              value={active.handle.size}
+              onChange={(e) => update((theme) => ({ ...theme, handle: { ...theme.handle, size: Number(e.target.value) } }))}
+            />
+          </div>
+        </div>
+      </SectionCard>
+      {/* END: ConnectionPortsSection */}
+
+      <SectionCard
+        title={t('按钮外观')}
+        description={t('普通按钮和主按钮分别配色，默认跟随主题')}
+        icon={<Icon icon="lucide:mouse-pointer-2" className="w-4 h-4" aria-hidden="true" />}
+        dataPurpose="button-appearance-settings"
+      >
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-3">
+          {([
+            { key: 'radius', label: '按钮圆角', max: 24, step: 1, precision: 0 },
+            { key: 'borderWidth', label: '按钮边框宽度', max: 3, step: 0.5, precision: 1 },
+          ] as const).map(({ key, label, max, step, precision }) => (
+            <div key={key} className="p-3 settings-sub-card rounded-xl space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor={`appearance-button-${key}`} className="text-xs font-semibold text-canvas-text">{t(label)}</label>
+                <NumberStepper
+                  aria-label={t(label)}
+                  value={active.ui.button[key]}
+                  min={0}
+                  max={max}
+                  step={step}
+                  precision={precision}
+                  unit="px"
+                  size="sm"
+                  onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, button: { ...theme.ui.button, [key]: value } } }))}
+                />
+              </div>
+              <input
+                id={`appearance-button-${key}`}
+                type="range"
+                min={0}
+                max={max}
+                step={step}
+                value={active.ui.button[key]}
+                onChange={(event) => update((theme) => ({ ...theme, ui: { ...theme.ui, button: { ...theme.ui.button, [key]: Number(event.target.value) } } }))}
+                className="ui-slider w-full"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-3 mt-3">
+          {([
+            { key: 'normal', title: '普通按钮', prefix: '--button' },
+            { key: 'primary', title: '主按钮', prefix: '--button-primary' },
+          ] as const).map((variant) => {
+            const fallback = variant.key === 'normal'
+              ? { background: resolved.ui.card, hoverBackground: resolved.ui.hover, text: resolved.ui.text, border: resolved.ui.border }
+              : {
+                background: resolved.ui.accent,
+                hoverBackground: resolved.ui.accentStrong,
+                text: contrastColor(resolved.ui.button.primary.background === 'auto' ? resolved.ui.accent : resolved.ui.button.primary.background),
+                border: resolved.ui.accent,
+              };
+            return (
+              <div key={variant.key} className="space-y-2">
+                <h4 className="text-xs font-semibold text-canvas-text-secondary">{t(variant.title)}</h4>
+                {([
+                  { key: 'background', label: '背景', token: 'bg', allowNone: true },
+                  { key: 'hoverBackground', label: '悬停背景', token: 'hover-bg', allowNone: true },
+                  { key: 'text', label: '文字', token: 'text', allowNone: false },
+                  { key: 'border', label: '边框', token: 'border', allowNone: true },
+                ] as const).map((field) => (
+                  <ColorCardInput
+                    key={field.key}
+                    label={t(`${variant.title}${field.label}`)}
+                    value={active.ui.button[variant.key][field.key]}
+                    fallbackColor={fallback[field.key]}
+                    followThemeVar={`${variant.prefix}-${field.token}`}
+                    allowNone={field.allowNone}
+                    onChange={(value) => update((theme) => ({
+                      ...theme,
+                      ui: { ...theme.ui, button: { ...theme.ui.button, [variant.key]: { ...theme.ui.button[variant.key], [field.key]: value } } },
+                    }))}
+                  />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        <div className="p-3 settings-sub-card rounded-xl mt-3 space-y-2">
+          <p className="text-xs text-canvas-text-secondary">{t('预览，悬停查看效果；小号和大号按钮圆角按比例调整')}</p>
+          <div className="ui-row ui-row--loose">
+            <button type="button" className="ui-btn">{t('普通按钮')}</button>
+            <button type="button" className="ui-btn ui-btn--secondary">{t('次级按钮')}</button>
+            <button type="button" className="ui-btn ui-btn--primary">{t('主按钮')}</button>
+            <button type="button" className="ui-btn" disabled>{t('禁用')}</button>
+          </div>
+        </div>
+        <div className="flex justify-end mt-3">
+          <button
+            type="button"
+            className="ui-btn ui-btn--ghost ui-btn--sm"
+            onClick={() => update((theme) => ({ ...theme, ui: { ...theme.ui, button: getBuiltinAppearanceTheme('standard-dark').ui.button } }))}
+          >
+            {t('恢复按钮默认')}
+          </button>
+        </div>
+      </SectionCard>
 
       {/* BEGIN: CursorSection */}
       <section data-purpose="cursor-styling">

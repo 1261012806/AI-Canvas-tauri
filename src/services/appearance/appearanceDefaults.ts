@@ -1,4 +1,11 @@
-import type { AppearanceTheme, AppearanceMode } from '../../types';
+import type { AppearanceTheme, AppearanceMode, AppearanceButtonColors } from '../../types';
+
+const BUTTON_UI = {
+  radius: 7,
+  borderWidth: 1,
+  normal: { background: 'auto', hoverBackground: 'auto', text: 'auto', border: 'auto' },
+  primary: { background: 'auto', hoverBackground: 'auto', text: 'auto', border: 'auto' },
+} as const;
 
 const DARK_UI = {
   background: '#0a0a0f',
@@ -23,6 +30,7 @@ const DARK_UI = {
   glassBlur: 16,
   scrollbar: '#3a3a50',
   scrollbarHover: '#555570',
+  button: BUTTON_UI,
 } as const;
 
 const LIGHT_UI = {
@@ -48,6 +56,7 @@ const LIGHT_UI = {
   glassBlur: 16,
   scrollbar: '#b3bdce',
   scrollbarHover: '#8996aa',
+  button: BUTTON_UI,
 } as const;
 
 function completeTheme(
@@ -64,7 +73,7 @@ function completeTheme(
     name,
     builtin: true,
     mode,
-    ui: { ...ui },
+    ui: { ...ui, button: { ...ui.button, normal: { ...ui.button.normal }, primary: { ...ui.button.primary } } },
     canvas,
     // These values intentionally match the pre-appearance baseline node defaults.
     node: {
@@ -140,6 +149,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function normalizeButtonColors(input: unknown): AppearanceButtonColors {
+  const source = isRecord(input) ? input : {};
+  const color = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : 'auto';
+  return {
+    background: color(source.background),
+    hoverBackground: color(source.hoverBackground),
+    text: color(source.text),
+    border: color(source.border),
+  };
+}
+
 /**
  * 补齐旧版或外部导入的半成品快照。持久化数据是不可信输入，运行时不能只依赖 TS 类型。
  */
@@ -149,6 +169,7 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
   const requestedId = typeof source.id === 'string' ? source.id : '';
   const base = getBuiltinAppearanceTheme(requestedId, mode === 'light' ? 'light' : 'dark');
   const ui = isRecord(source.ui) ? source.ui : {};
+  const button = isRecord(ui.button) ? ui.button : {};
   const canvas = isRecord(source.canvas) ? source.canvas : {};
   const node = isRecord(source.node) ? source.node : {};
   const edge = isRecord(source.edge) ? source.edge : {};
@@ -162,7 +183,18 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
     name: typeof source.name === 'string' && source.name.trim() ? source.name : base.name,
     builtin: typeof source.builtin === 'boolean' ? source.builtin : base.builtin,
     mode,
-    ui: { ...base.ui, ...ui },
+    ui: {
+      ...base.ui,
+      ...ui,
+      button: {
+        radius: typeof button.radius === 'number' && Number.isFinite(button.radius)
+          ? Math.max(0, Math.min(24, button.radius)) : BUTTON_UI.radius,
+        borderWidth: typeof button.borderWidth === 'number' && Number.isFinite(button.borderWidth)
+          ? Math.max(0, Math.min(3, button.borderWidth)) : BUTTON_UI.borderWidth,
+        normal: normalizeButtonColors(button.normal),
+        primary: normalizeButtonColors(button.primary),
+      },
+    },
     canvas: { ...base.canvas, ...canvas },
     node: { ...base.node, ...node },
     edge: { ...base.edge, ...edge },

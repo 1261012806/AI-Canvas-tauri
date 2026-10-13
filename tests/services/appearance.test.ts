@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBuiltinAppearanceThemes, normalizeAppearanceTheme } from '../../src/services/appearance/appearanceDefaults';
 import { migrateLegacyAppearance } from '../../src/services/appearance/appearanceMigration';
-import { applyAppearanceTheme } from '../../src/services/appearance/appearanceRuntime';
+import { applyAppearanceTheme, resolveAppearanceTheme } from '../../src/services/appearance/appearanceRuntime';
 import type { AppConfig } from '../../src/types';
 
 describe('appearance themes', () => {
@@ -89,6 +89,37 @@ describe('appearance themes', () => {
     expect(theme.handle.kind).toBe('image');
   });
 
+  it('fills old button snapshots, retains partial overrides, and bounds imported dimensions', () => {
+    const old = normalizeAppearanceTheme({ id: 'old-button-theme', ui: { accent: '#c24172' } });
+    expect(old.ui.button).toEqual({
+      radius: 7, borderWidth: 1,
+      normal: { background: 'auto', hoverBackground: 'auto', text: 'auto', border: 'auto' },
+      primary: { background: 'auto', hoverBackground: 'auto', text: 'auto', border: 'auto' },
+    });
+    const partial = normalizeAppearanceTheme({ ui: { button: { radius: -3, borderWidth: 99, primary: { background: '#c24172', text: null } } } });
+    expect(partial.ui.button.radius).toBe(0);
+    expect(partial.ui.button.borderWidth).toBe(3);
+    expect(partial.ui.button.primary.background).toBe('#c24172');
+    expect(partial.ui.button.primary.text).toBe('auto');
+    expect(partial.ui.button.normal.background).toBe('auto');
+    const malformed = normalizeAppearanceTheme({ ui: { button: { radius: NaN, borderWidth: Infinity, normal: [] } } });
+    expect(malformed.ui.button).toEqual(old.ui.button);
+  });
+
+  it('keeps explicit button settings while the system mode resolves the built-in palette', () => {
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: true }) });
+    try {
+      const theme = normalizeAppearanceTheme({ id: 'standard-dark', mode: 'system', ui: { button: { radius: 0, primary: { background: '#c24172' } } } });
+      const resolved = resolveAppearanceTheme(theme);
+      expect(resolved.mode).toBe('light');
+      expect(resolved.ui.surface).toBe('#FFFFFF');
+      expect(resolved.ui.button.radius).toBe(0);
+      expect(resolved.ui.button.primary.background).toBe('#c24172');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('preserves valid custom colors while normalizing the surrounding snapshot', () => {
     const theme = normalizeAppearanceTheme({
       id: 'custom-colors',
@@ -148,6 +179,85 @@ describe('appearance themes', () => {
       expect(values.get('--theme-card')).toBe('#1a1a26');
       expect(values.get('--theme-hover')).toBe('#252535');
       expect(values.get('--theme-border')).toBe('#2a2a3a');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['dark', 'light'] as const)('derives status backgrounds from custom colors in %s mode', (mode) => {
+    const values = new Map<string, string>();
+    const root = {
+      dataset: {},
+      setAttribute: vi.fn(),
+      style: {
+        setProperty: (name: string, value: string) => values.set(name, value),
+        removeProperty: (name: string) => values.delete(name),
+      },
+    } as unknown as HTMLElement;
+    vi.stubGlobal('document', { documentElement: root });
+
+    try {
+      const base = createBuiltinAppearanceThemes().find((theme) => theme.mode === mode)!;
+      const colors = { success: '#168a63', info: '#2874b8', warning: '#b86418', danger: '#cc3256' };
+      applyAppearanceTheme({ ...base, ui: { ...base.ui, ...colors } });
+
+      for (const [status, color] of Object.entries(colors)) {
+        const opacity = mode === 'dark' ? 15 : status === 'warning' ? 22 : status === 'danger' ? 18 : 20;
+        expect(values.get(`--${status}`)).toBe(color);
+        expect(values.get(`--${status}-bg`)).toBe(`color-mix(in srgb, ${color} ${opacity}%, transparent)`);
+      }
+      expect(values.get('--danger-pale')).toBe(mode === 'dark' ? '#dd788f' : '#a72947');
+
+      applyAppearanceTheme(base);
+      expect(values.get('--danger-bg')).toBe(`color-mix(in srgb, ${base.ui.danger} ${mode === 'dark' ? 15 : 18}%, transparent)`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['dark', 'light'] as const)('applies custom buttons and restores automatic tokens in %s mode', (mode) => {
+    const values = new Map<string, string>();
+    const root = {
+      dataset: {},
+      setAttribute: vi.fn(),
+      style: {
+        setProperty: (name: string, value: string) => values.set(name, value),
+        removeProperty: (name: string) => values.delete(name),
+      },
+    } as unknown as HTMLElement;
+    vi.stubGlobal('document', { documentElement: root });
+    try {
+      const base = createBuiltinAppearanceThemes().find((theme) => theme.mode === mode)!;
+      const custom = normalizeAppearanceTheme({
+        ...base,
+        ui: { ...base.ui, button: {
+          radius: 0, borderWidth: 0,
+          normal: { background: '#123456', hoverBackground: '#234567', text: '#ddeeff', border: 'none' },
+          primary: { background: '#ffffff', hoverBackground: '#eeeeee', text: 'auto', border: '#765432' },
+        } },
+      });
+      applyAppearanceTheme(custom);
+      expect(values.get('--button-bg')).toBe('#123456');
+      expect(values.get('--button-secondary-bg')).toBe('#123456');
+      expect(values.get('--button-hover-bg')).toBe('#234567');
+      expect(values.get('--button-text')).toBe('#ddeeff');
+      expect(values.get('--button-border')).toBe('transparent');
+      expect(values.get('--button-primary-bg')).toBe('#ffffff');
+      expect(values.get('--button-primary-hover-bg')).toBe('#eeeeee');
+      expect(values.get('--button-primary-text')).toBe('#111827');
+      expect(values.get('--button-primary-border')).toBe('#765432');
+      for (const token of ['--button-radius', '--button-radius-sm', '--button-radius-lg', '--button-border-width']) {
+        expect(values.get(token)).toBe('0px');
+      }
+      applyAppearanceTheme(base);
+      expect(values.get('--button-bg')).toBe('var(--white-alpha-04)');
+      expect(values.get('--button-secondary-bg')).toBe('var(--theme-surface)');
+      expect(values.get('--button-primary-bg')).toBe('var(--brand)');
+      expect(values.get('--button-primary-hover-bg')).toBe('var(--brand-hover)');
+      expect(values.get('--button-radius')).toBe('7px');
+      expect(values.get('--button-radius-sm')).toBe('6px');
+      expect(values.get('--button-radius-lg')).toBe('12px');
+      expect(values.get('--button-border-width')).toBe('1px');
     } finally {
       vi.unstubAllGlobals();
     }

@@ -583,6 +583,21 @@ export type AppearanceMode = 'dark' | 'light' | 'system';
 
 export type AppearanceCanvasKind = CanvasBackground | 'color' | 'image';
 
+/** auto 表示跟随当前主题，其他值为用户自定义颜色。 */
+export interface AppearanceButtonColors {
+  background: string;
+  hoverBackground: string;
+  text: string;
+  border: string;
+}
+
+export interface AppearanceButtonTokens {
+  radius: number;
+  borderWidth: number;
+  normal: AppearanceButtonColors;
+  primary: AppearanceButtonColors;
+}
+
 export interface AppearanceUiTokens {
   background: string;
   surface: string;
@@ -606,6 +621,7 @@ export interface AppearanceUiTokens {
   glassBlur: number;
   scrollbar: string;
   scrollbarHover: string;
+  button: AppearanceButtonTokens;
 }
 
 export interface AppearanceCanvasConfig {
@@ -676,6 +692,9 @@ export interface AppearanceTheme {
   createdAt: number;
   updatedAt: number;
 }
+
+/** 独立 UI Kit 窗口的外观投影，不携带画布图片、文件引用或应用配置。 */
+export type AppearanceUiSnapshot = Pick<AppearanceTheme, 'id' | 'name' | 'mode' | 'ui'>;
 
 /** 画布交互模式：default = Figma 风格（左键框选 / 右键·中键平移 / 滚轮缩放）；classic = 传统（左键平移 / Shift+拖动框选 / 滚轮纵横平移 / Ctrl+滚轮缩放） */
 export type InteractionMode = 'default' | 'classic';
