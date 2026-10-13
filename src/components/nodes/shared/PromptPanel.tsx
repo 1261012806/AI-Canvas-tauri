@@ -5,16 +5,11 @@ import Select from '../../shared/Select';
 import AnimatedButton from '../../shared/AnimatedButton';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
+import { Sparkles } from 'lucide-react';
 import LazyLoadBoundary from '../../shared/LazyLoadBoundary';
 import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { useReducedMotion } from 'framer-motion';
 const MetalFx = lazy(() => import('./PolishMetalFx'));
-// 与参考徽标相同的全填充金属遮罩，宽度随中文标签自适应。
-function paintPolishBadge(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  ctx.beginPath();
-  ctx.roundRect(0, 0, width, height, height / 2);
-  ctx.fill();
-}
 // 生成中的思考球：仅在生成时按需加载
 const ThinkingOrb = lazy(() => import('../../../vendor/generation-effects/thinking-orbs/src').then((m) => ({ default: m.ThinkingOrb })));
 import type {
@@ -518,6 +513,31 @@ export default function PromptPanel({
 }: PromptPanelProps) {
   const t = useT();
   const reduceMotion = useReducedMotion();
+  const polishIconPathRef = useRef<Path2D | null>(null);
+  const capturePolishIcon = useCallback((icon: SVGSVGElement | null) => {
+    if (!icon) { polishIconPathRef.current = null; return; }
+    const path = new Path2D();
+    icon.querySelectorAll('path').forEach((element) => {
+      const data = element.getAttribute('d');
+      if (data) path.addPath(new Path2D(data));
+    });
+    polishIconPathRef.current = path;
+  }, []);
+  // 复用真实星光 SVG；与金属文字一样，仅在笔画上合成纹理。
+  const paintPolishIcon = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    const path = polishIconPathRef.current;
+    if (!path) return;
+    const scale = Math.min(width, height) * (16 / 30) / 24;
+    ctx.save();
+    ctx.translate(width / 2, height / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-12, -12);
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(path);
+    ctx.restore();
+  }, []);
   const submitShortcut = useAppStore((state) => normalizePromptSubmitShortcut(state.config.promptSubmitShortcut));
   const configHydrated = useAppStore((state) => state.configHydrated);
   const updateConfig = useAppStore((state) => state.updateConfig);
@@ -913,8 +933,9 @@ export default function PromptPanel({
     </button>
   );
   const polishButton = onPolish ? (
-    <button type="button" className="prompt-polish-button" aria-expanded={polishOpen} onClick={onPolish}>
-      {t('AI 润色')}
+    <button type="button" className="ui-icon-btn ui-icon-btn--ghost prompt-polish-button"
+      aria-label={t('AI 润色')} aria-expanded={polishOpen} data-tooltip={t('AI 润色')} onClick={onPolish}>
+      <Sparkles ref={capturePolishIcon} size={16} aria-hidden="true" />
     </button>
   ) : null;
   return (
@@ -938,11 +959,6 @@ export default function PromptPanel({
           }}
           onSlashTrigger={handleEditorSlash}
         />
-      {polishButton && (
-        <div className="prompt-polish-entry">
-          {performanceMode || reduceMotion ? polishButton : <LazyLoadBoundary label="润色按钮特效" errorFallback={polishButton}><Suspense fallback={polishButton}><MetalFx className="prompt-polish-metal" variant="button" preset={appearanceMode === 'light' ? 'silver' : 'chromatic'} theme={appearanceMode} strength={appearanceMode === 'light' ? 0.55 : 0.8} shaderScale={1.6} mask={paintPolishBadge} glowMode="ring" normalizeHostStyles={false} innerShadow>{polishButton}</MetalFx></Suspense></LazyLoadBoundary>}
-        </div>
-      )}
       </div>
       {runninghubModel && onRunninghubModelParametersChange && <details className="ui-card m-2 p-2">
         <summary className="cursor-pointer text-xs">模型参数 · {runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length} 项需填写</summary>
@@ -1173,6 +1189,22 @@ export default function PromptPanel({
                   <polyline points="5 12 12 5 19 12" />
                 </svg>
               </button>
+            )}
+            {polishButton && (
+              <div className="prompt-polish-entry">
+                {performanceMode || reduceMotion ? polishButton : (
+                  <LazyLoadBoundary label="润色按钮特效" errorFallback={polishButton}>
+                    <Suspense fallback={polishButton}>
+                      <MetalFx className="prompt-polish-metal" variant="button"
+                        preset={appearanceMode === 'light' ? 'silver' : 'chromatic'} theme={appearanceMode}
+                        strength={appearanceMode === 'light' ? 0.55 : 0.62} shaderScale={2.8}
+                        mask={paintPolishIcon} disableGlow normalizeHostStyles={false}>
+                        {polishButton}
+                      </MetalFx>
+                    </Suspense>
+                  </LazyLoadBoundary>
+                )}
+              </div>
             )}
             {isGenerating && onCancelGeneration ? (
               <div className="prompt-submit-wrap">
