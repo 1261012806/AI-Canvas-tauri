@@ -6,13 +6,6 @@
   z-index: 200;
   width: 640px;
   max-width: calc(100vw - 32px);
-  background:
-    linear-gradient(var(--glass-bg-light), var(--glass-bg-light)) padding-box,
-    var(--glass-bevel-border) border-box;
-  backdrop-filter: blur(var(--glass-blur-md));
-  border: 1px solid transparent;
-  border-radius: 14px;
-  box-shadow: var(--glass-shadow-panel);
   animation: floatIn var(--dur-normal) var(--ease-out-expo);
   transition: left 0.28s var(--ease-spring), top 0.28s var(--ease-spring);
 }
@@ -122,13 +115,6 @@
 .ai-dialog-float .prompt-panel {
   border-top: none;
   container: ai-prompt / inline-size;
-}
-.ai-dialog-float .prompt-editor {
-  min-height: 112px;
-  max-height: min(200px, 40vh);
-  font-size: 14px;
-  padding: 0;
-  border-radius: 0;
 }
 .ai-dialog-float .prompt-editor .prompt-chip {
   /* 胶囊留在行内布局中，避免无内边距时被编辑器滚动边界裁切。 */

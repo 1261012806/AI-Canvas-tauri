@@ -803,7 +803,7 @@ body {
 .app-shell {
   --app-shell-inset: 0px;
   /* 内置聊天助手面板尺寸；操作记录浮层按此让位 */
-  --chat-panel-width: 400px;
+  --chat-panel-width: 480px;
   --chat-panel-inset: 12px;
   --app-shell-content-radius: 16px;
   isolation: isolate;

@@ -16,9 +16,17 @@ import Timeline from '../shared/Timeline';
 import MarkdownEditor from '../shared/MarkdownEditor';
 import FileUploadButton from '../shared/FileUploadButton';
 import ProviderBadge from '../shared/ProviderBadge';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import SendShortcutMenu from '../shared/SendShortcutMenu';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import type { PromptSubmitShortcut } from '../../types';
+import { getPromptSubmitShortcutHint, PROMPT_SUBMIT_SHORTCUT_OPTIONS, resolvePromptEnterAction } from '../../utils/promptSubmitShortcut';
+import { useReducedMotion } from 'framer-motion';
+import { Icon } from '@iconify/react';
+import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import StyleGuideMascot from './StyleGuideMascot';
 import StyleGuideGenerationEffects from './StyleGuideGenerationEffects';
+
+const InputMetalFx = lazy(() => import('../nodes/shared/PolishMetalFx'));
 
 /* ── 分区 id 约定 ──────────────────────────────────────────────────────────
    每个 <Section> 的 id 同时是左侧目录的锚点，目录列表在 StyleGuideWindow.tsx
@@ -372,7 +380,7 @@ function ChipsSection() {
   );
 }
 
-function InputsSection() {
+function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
   return (
     <Section
       id="sg-inputs"
@@ -434,6 +442,10 @@ function InputsSection() {
         </div>
       </Demo>
 
+      <Demo label="AI 输入框 · 节点与助手共用" code="ui-ai-input / ui-ai-input__footer--single-row / ui-ai-input__shortcut-hint / ui-ai-input__submit / ui-ai-input__send-metal / SendShortcutMenu(anchor, value, onChange, onClose)">
+        <AIInputDemo theme={theme} />
+      </Demo>
+
       <Demo label="多行文本与禁用" code=".ui-textarea（可纵向拉伸）/ :disabled">
         <div className="ui-field">
           <label className="ui-label" htmlFor="sg-textarea">提示词</label>
@@ -454,6 +466,65 @@ function InputsSection() {
       </Demo>
     </Section>
   );
+}
+
+function AIInputDemo({ theme }: { theme: 'dark' | 'light' }) {
+  const [value, setValue] = useState('');
+  const [submitShortcut, setSubmitShortcut] = useState<PromptSubmitShortcut>('enter');
+  const [shortcutMenuAnchor, setShortcutMenuAnchor] = useState<HTMLElement | null>(null);
+  const closeShortcutMenu = useCallback(() => setShortcutMenuAnchor(null), []);
+  const shortcutLabel = PROMPT_SUBMIT_SHORTCUT_OPTIONS.find((option) => option.value === submitShortcut)?.label;
+  const reduceMotion = useReducedMotion();
+  const sendDisabled = !value.trim();
+  const sendButton = <button type="button" className="ui-ai-input__icon-btn ui-ai-input__submit" disabled={sendDisabled}
+    aria-label="演示发送后清空输入" onClick={() => setValue('')} aria-haspopup="menu" aria-expanded={!!shortcutMenuAnchor}
+    title={`右键设置发送快捷键 · ${shortcutLabel}`}>
+    <Icon icon="lucide:arrow-up" width={16} height={16} aria-hidden="true" />
+  </button>;
+  return <div className="ui-stack max-w-lg">
+    <div className="ui-ai-input">
+      <div className="ui-ai-input__body">
+        <textarea className="ui-ai-input__editor" aria-label="AI 输入框样例"
+          placeholder={`输入提示词，@ 引用素材，/ 调用 Skill\n${getPromptSubmitShortcutHint(submitShortcut)}`}
+          value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => {
+            const action = resolvePromptEnterAction(event.nativeEvent, submitShortcut);
+            if (action === 'submit') {
+              event.preventDefault();
+              if (!sendDisabled) setValue('');
+            } else if (event.key === 'Enter' && action === 'ignore' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+              event.preventDefault();
+            }
+          }} />
+      </div>
+      <div className="ui-ai-input__footer ui-ai-input__footer--single-row">
+        <span className="model-selector model-selector--pill ui-row ui-row--tight text-xs">
+          <span className="ui-model-pill__avatar"><ProviderBadge providerId="apimart" appearance="metal" theme={theme} /></span>
+          <span className="ui-model-pill__label" title="超长模型名称 · 视频生成预览版本">超长模型名称 · 视频生成预览版本</span>
+        </span>
+        <div className="ui-ai-input__tools">
+          <button type="button" className="ui-ai-input__icon-btn" aria-label="插入引用标记" onClick={() => setValue((text) => `${text}@`)}>@</button>
+          <button type="button" className="ui-ai-input__icon-btn" aria-label="插入指令标记" onClick={() => setValue((text) => `${text}/`)}>/</button>
+          {value.trim() && <span className="ui-ai-input__shortcut-hint text-[11px] text-canvas-text-muted">{shortcutLabel}</span>}
+          <div className="inline-flex shrink-0" onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setShortcutMenuAnchor(event.currentTarget);
+          }}>
+            {reduceMotion ? sendButton : <LazyLoadBoundary label="AI 输入框金属样例" errorFallback={sendButton}>
+              <Suspense fallback={sendButton}>
+                <InputMetalFx className="ui-ai-input__send-metal" variant="circle" theme={theme}
+                  preset={theme === 'light' ? 'silver' : 'chromatic'} strength={theme === 'light' ? 0.65 : 0.81}
+                  paused={sendDisabled} normalizeHostStyles={false} innerShadow>{sendButton}</InputMetalFx>
+              </Suspense>
+            </LazyLoadBoundary>}
+          </div>
+        </div>
+      </div>
+    </div>
+    {shortcutMenuAnchor && <SendShortcutMenu anchor={shortcutMenuAnchor} value={submitShortcut}
+      onChange={setSubmitShortcut} onClose={closeShortcutMenu} />}
+    <p className="ui-hint">右键发送按钮切换快捷键，设置只影响本样例；匹配的按键会清空文字以模拟发送，其余换行沿用节点规则。单排变体优先截断模型名称，窄容器隐藏提示；不调用模型。</p>
+  </div>;
 }
 
 /** 数字微调步进输入框展示：包含实时试验台、尺寸与状态矩阵、单位与联动场景 */
@@ -1429,7 +1500,7 @@ export function StyleGuideContent({ theme }: { theme: 'dark' | 'light' }) {
       <TypographySection />
       <ButtonsSection theme={theme} />
       <ChipsSection />
-      <InputsSection />
+      <InputsSection theme={theme} />
       <SelectsSection />
       <DropzoneSection />
       <SelectionSection />

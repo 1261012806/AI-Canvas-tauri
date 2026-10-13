@@ -1413,7 +1413,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         ref={editorRef}
         contentEditable
         suppressContentEditableWarning
-        className={`prompt-editor${!prompt ? ' is-empty' : ''}`}
+        className={`ui-ai-input__editor prompt-editor${!prompt ? ' is-empty' : ''}`}
         data-placeholder={placeholder}
         onInput={handleInput}
         onCompositionStart={() => {

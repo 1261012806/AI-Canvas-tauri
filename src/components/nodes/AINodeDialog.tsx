@@ -1117,7 +1117,7 @@ function AINodeDialog() {
 
       <div
         ref={panelRef}
-        className={`ai-dialog-float${isExpanded ? ' is-expanded' : ''}${polishOpen ? ' is-polishing' : ''}`}
+        className={`ui-ai-input ai-dialog-float${isExpanded ? ' is-expanded' : ''}${polishOpen ? ' is-polishing' : ''}`}
         role={isExpanded ? 'dialog' : undefined}
         aria-modal={isExpanded ? true : undefined}
         aria-label={isExpanded ? t('节点生成对话框') : undefined}
