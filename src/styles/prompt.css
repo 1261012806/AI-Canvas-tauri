@@ -780,11 +780,13 @@
   flex-shrink: 0;
 }
 .prompt-btn.is-configured,
+.prompt-btn.is-configured:hover {
+  color: var(--brand-light);
+}
 .style-selector-btn.has-style {
   color: var(--brand-light);
   background: var(--brand-alpha-15);
 }
-.prompt-btn.is-configured:hover,
 .style-selector-btn.has-style:hover {
   color: var(--brand-light);
   background: var(--brand-alpha-30);

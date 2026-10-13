@@ -46,6 +46,7 @@ import {
   resolveAnimationSheetAspectRatio,
 } from '../../services/ai/animationPrompt';
 import { resolveVideoSubmissionControls } from '../../services/ai/videoRequestResolver';
+import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
 import { getPendingTasksForProject, resumeComfyUINodeTask, resumeRunningHubNodeTask, updatePendingTask, removePendingTask, completeVideoNodeTask, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../../services/pollManager';
@@ -886,13 +887,26 @@ function AINodeDialog() {
 
   const onModelSelect = useCallback(
     (model: ModelOption) => {
+      const state = useAppStore.getState();
+      const current = state.nodes.find((item) => item.id === activeNodeId)?.data;
+      if (!activeNodeId || !current) return;
+      const modelChanged = current.model !== model.value || current.provider !== model.provider || !!current.workflowId;
+      const imageCapability = nodeType === 'ai-image' && modelChanged
+        ? resolveImageParameterCapability(model.value, model.provider, state.config) : undefined;
+      const aspectRatio = imageCapability?.defaultRatio === 'auto'
+        ? '自适应' : imageCapability?.defaultRatio || '16:9';
       updateNodeData(activeNodeId!, {
         model: model.value,
         provider: model.provider,
         ...(nodeType === 'ai-director' ? { directorPrevisModel: model.value, directorPrevisProvider: model.provider } : {}),
         audioPurpose: model.audioPurpose,
         runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined, workflowId: undefined,
-        ...(nodeType === 'ai-video' && model.provider === 'general' ? {
+        ...(nodeType === 'ai-image' && modelChanged ? {
+          imageSize: imageCapability?.defaultResolution || '2K',
+          aspectRatio,
+          ...getImageNodeDimensionsForAspectRatio(aspectRatio),
+        } : {}),
+        ...(nodeType === 'ai-video' && modelChanged ? {
           videoResolution: undefined,
           videoFps: undefined,
           videoFrames: undefined,
