@@ -610,6 +610,7 @@ export default function PromptPanel({
 
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
   const userPresets = useAppStore((s) => s.userPresets);
+  const presetFolders = useAppStore((s) => s.presetFolders);
   const userSkills = useAppStore((s) => s.userSkills);
   const agentPackageSkills = useAppStore((s) => s.agentPackageSkills);
   const skillOptions = useMemo(
@@ -1294,6 +1295,7 @@ export default function PromptPanel({
         currentPrompt={prompt}
         anchorEl={slashAnchor}
         userPresets={userPresets}
+        presetFolders={presetFolders}
         skillOptions={skillOptions}
         onSelect={handleSlashSelect}
         onRunAdvancedPreset={handleRunAdvancedPreset}
