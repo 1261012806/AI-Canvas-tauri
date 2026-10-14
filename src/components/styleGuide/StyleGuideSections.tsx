@@ -8,6 +8,7 @@
  * 与 AssetSearchWindow 一样不做逐条 i18n。
  */
 import Select from '../shared/Select';
+import ExpandableSearch from '../shared/ExpandableSearch';
 import NumberStepper from '../shared/NumberStepper';
 import Tabs from '../shared/Tabs';
 import PopupCloseButton from '../shared/PopupCloseButton';
@@ -28,6 +29,10 @@ import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import StyleGuideMascot from './StyleGuideMascot';
 import StyleGuideGenerationEffects from './StyleGuideGenerationEffects';
 import StyleGuideDialogs from './StyleGuideDialogs';
+import { buildReferenceChipEl } from '../shared/referenceChipDom';
+import { getNodeChipIconPath } from '../nodes/shared/mentionEditorDom';
+import referenceDemoImage from '../../assets/images/styles/realistic.webp';
+import referenceDemoImageAlt from '../../assets/images/styles/cinematic.webp';
 
 const InputMetalFx = lazy(() => import('../nodes/shared/PolishMetalFx'));
 
@@ -354,6 +359,24 @@ function ButtonsSection({ theme }: { theme: 'dark' | 'light' }) {
   );
 }
 
+function ReferenceChipsDemo() {
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const container = root.current; if (!container) return;
+    const doc = container.ownerDocument;
+    container.replaceChildren(
+      buildReferenceChipEl(doc, { label: '原片视频', kind: 'video', badge: '#19', mediaIndex: '(视频1)', iconPath: getNodeChipIconPath('ai-video') }),
+      buildReferenceChipEl(doc, { label: '参考音频', kind: 'audio', badge: '#30', mediaIndex: '(音频1)', iconPath: getNodeChipIconPath('ai-audio') }),
+      buildReferenceChipEl(doc, { label: '图像参考', kind: 'image', badge: '#14', mediaIndex: '(图1)', thumbnailUrl: referenceDemoImage }),
+      buildReferenceChipEl(doc, { label: '文本内容', kind: 'text', badge: '#13', iconPath: getNodeChipIconPath('ai-text') }),
+      buildReferenceChipEl(doc, { label: '场景参考', kind: 'image', badge: '#18', mediaIndex: '(图2)', thumbnailUrl: referenceDemoImageAlt }),
+      buildReferenceChipEl(doc, { label: '很长的引用名称会自动截断，完整名称保留在提示中', kind: 'text', iconPath: getNodeChipIconPath('ai-text') }),
+    );
+    return () => container.replaceChildren();
+  }, []);
+  return <div ref={root} className="ui-row" />;
+}
+
 function ChipsSection() {
   const [active, setActive] = useState('all');
   const filters = [
@@ -403,6 +426,9 @@ function ChipsSection() {
             </button>
           ))}
         </div>
+      </Demo>
+      <Demo label="提示词引用胶囊（真实 DOM 构造器）" code="ui-reference-chip ui-reference-chip--image | --video | --audio | --text | __icon | __thumb | __label | __index；buildReferenceChipEl(document, options)；iconPath: getNodeChipIconPath(nodeType)">
+        <ReferenceChipsDemo />
       </Demo>
     </Section>
   );
@@ -474,6 +500,10 @@ function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
         <AIInputDemo theme={theme} />
       </Demo>
 
+      <Demo label="图标展开搜索" code="ExpandableSearch(expanded, onExpandedChange, value, onChange) / ui-expandable-search / ui-input-group / ui-icon-btn--ghost">
+        <ExpandableSearchDemo />
+      </Demo>
+
       <Demo label="多行文本与禁用" code=".ui-textarea（可纵向拉伸）/ :disabled">
         <div className="ui-field">
           <label className="ui-label" htmlFor="sg-textarea">提示词</label>
@@ -494,6 +524,17 @@ function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
       </Demo>
     </Section>
   );
+}
+
+function ExpandableSearchDemo() {
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState('');
+  return <div className="ui-stack ui-stack--tight max-w-lg">
+    <div className="flex w-full min-w-0 justify-end">
+      <ExpandableSearch expanded={expanded} onExpandedChange={setExpanded} value={query} onChange={setQuery} />
+    </div>
+    <p className="ui-hint">{query ? `搜索：${query}` : '点击右侧图标展开；按 Esc 清空并收起。查询与结果由调用方提供。'}</p>
+  </div>;
 }
 
 function AIInputDemo({ theme }: { theme: 'dark' | 'light' }) {

@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import type { CharacterCropRect } from '../../types/dramaAssets';
 import { AVATAR_ASPECT, cropImageStyle } from '../character/characterReferencePresentation';
 import ViewportImage from './ViewportImage';
+import ExpandableSearch, { type ExpandableSearchProps } from './ExpandableSearch';
 
 export interface MentionPickerTab {
   id: string;
@@ -61,6 +62,8 @@ interface MentionPickerProps {
   ariaLabel?: string;
   className?: string;
   mediaAspectRatio?: number;
+  /** 可选受控搜索；共享组件不读取宿主 Store 或筛选业务来源。 */
+  search?: ExpandableSearchProps;
 }
 
 export default function MentionPicker({
@@ -80,24 +83,38 @@ export default function MentionPicker({
   ariaLabel,
   className = '',
   mediaAspectRatio,
+  search,
 }: MentionPickerProps) {
   const hasChipRow = !!leading || (chips?.length ?? 0) > 0;
   const gridRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLButtonElement>(null);
   const playerRef = useRef<HTMLAudioElement | null>(null);
+  const previousGridRef = useRef<{
+    tab: string; chip?: string; query: string; expanded: boolean; signature: string; activeKey?: string;
+  } | null>(null);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState(false);
   const previewSources = JSON.stringify(items.map((item) => [item.key, item.audioPreviewUrl]));
+  const searchQuery = search?.value ?? '';
+  const searchExpanded = search?.expanded ?? false;
 
   useLayoutEffect(() => {
-    // 分类、搜索和下钻内容变化时从顶部显示，悬浮高亮不重置滚动。
-    if (gridRef.current) gridRef.current.scrollTop = 0;
-  }, [activeTab, activeChip, previewSources]);
-
-  useLayoutEffect(() => {
+    const previous = previousGridRef.current;
+    const sameContext = previous !== null && previous.tab === activeTab && previous.chip === activeChip
+      && previous.query === searchQuery && previous.expanded === searchExpanded;
+    // JSON 由本组件生成；去掉末尾 ] 后的条目前缀只能匹配真正的分页追加。
+    const appended = sameContext && previous !== null && previous.signature !== '[]'
+      && previewSources.startsWith(`${previous.signature.slice(0, -1)},`);
+    previousGridRef.current = {
+      tab: activeTab, chip: activeChip, query: searchQuery, expanded: searchExpanded, signature: previewSources, activeKey,
+    };
     const grid = gridRef.current;
+    if (!grid) return;
+    if (!sameContext || (previous?.signature !== previewSources && !appended)) grid.scrollTop = 0;
+    // 加载更多保持当前位置；高亮改变后仍滚动到键盘选择的条目。
+    if (appended && previous?.activeKey === activeKey) return;
     const activeItem = activeItemRef.current;
-    if (!grid || !activeItem) return;
+    if (!activeItem) return;
     const viewport = grid.getBoundingClientRect();
     const item = activeItem.getBoundingClientRect();
     const scaleY = grid.offsetHeight > 0 ? viewport.height / grid.offsetHeight : 1;
@@ -105,7 +122,7 @@ export default function MentionPicker({
     // 只滚动卡片列表；不让 scrollIntoView 带动画布或宿主弹窗一起滚动。
     if (item.top < viewport.top) grid.scrollTop += (item.top - viewport.top) / scaleY;
     else if (item.bottom > viewport.bottom) grid.scrollTop += (item.bottom - viewport.bottom) / scaleY;
-  }, [activeKey, activeTab, activeChip, previewSources]);
+  }, [activeKey, activeTab, activeChip, previewSources, searchQuery, searchExpanded]);
 
   useEffect(() => {
     return () => {
@@ -146,22 +163,33 @@ export default function MentionPicker({
   };
 
   return (
-    <div className={`mention-picker nowheel nodrag nopan ${className}`}>
-      {tabs.length > 1 && (
-        <div className="mention-picker-tabs" role="tablist" aria-label={ariaLabel}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === activeTab}
-              className={`mention-picker-tab${tab.id === activeTab ? ' active' : ''}`}
-              onMouseDown={(e) => { e.preventDefault(); onTabChange(tab.id); }}
-            >
-              {tab.icon && <Icon icon={tab.icon} width="14" height="14" />}
-              {tab.label}
-            </button>
-          ))}
+    <div className={`mention-picker nowheel nodrag nopan ${className}`}
+      data-reference-preview-open={search?.expanded ? '' : undefined}>
+      {(tabs.length > 1 || search) && (
+        <div className={`mention-picker-header${search ? ' has-search' : ''}${search?.expanded ? ' is-searching' : ''}`}>
+          {tabs.length > 1 && (
+            <div className="mention-picker-tabs" role="tablist" aria-label={ariaLabel}
+              aria-hidden={search?.expanded || undefined} inert={search?.expanded || undefined}>
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab.id === activeTab}
+                  className={`mention-picker-tab${tab.id === activeTab ? ' active' : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); onTabChange(tab.id); }}
+                >
+                  {tab.icon && <Icon icon={tab.icon} width="14" height="14" />}
+                  <span className="mention-picker-tab-label">{tab.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {search && (
+            <ExpandableSearch {...search} listId={search.listId ?? listId}
+              activeDescendant={search.activeDescendant ?? items.find((item) => item.key === activeKey)?.domId}
+              className={`mention-picker-search ${search.className ?? ''}`} />
+          )}
         </div>
       )}
 
@@ -194,6 +222,7 @@ export default function MentionPicker({
               id={item.domId}
               type="button"
               role="option"
+              tabIndex={search?.expanded ? -1 : undefined}
               aria-selected={item.key === activeKey}
               disabled={item.disabled}
               title={item.title ?? item.label}
