@@ -501,7 +501,7 @@ function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
         <AIInputDemo theme={theme} />
       </Demo>
 
-      <Demo label="页签内展开搜索与弹窗尺寸过渡" code="MentionPicker(search) / ExpandableSearch(expanded, onExpandedChange, value, onChange) / mention-picker-header / ui-expandable-search">
+      <Demo label="@选择器弹窗" code="MentionPicker(search) / ExpandableSearch(expanded, onExpandedChange, value, onChange) / mention-picker-header / ui-expandable-search">
         <ExpandableSearchDemo />
       </Demo>
 
