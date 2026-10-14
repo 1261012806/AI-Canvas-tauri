@@ -8,7 +8,8 @@
  * 与 AssetSearchWindow 一样不做逐条 i18n。
  */
 import Select from '../shared/Select';
-import ExpandableSearch from '../shared/ExpandableSearch';
+import MentionPicker from '../shared/MentionPicker';
+import ModelPicker, { type ModelPickerGroup } from '../shared/ModelPicker';
 import NumberStepper from '../shared/NumberStepper';
 import Tabs from '../shared/Tabs';
 import PopupCloseButton from '../shared/PopupCloseButton';
@@ -500,7 +501,7 @@ function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
         <AIInputDemo theme={theme} />
       </Demo>
 
-      <Demo label="图标展开搜索" code="ExpandableSearch(expanded, onExpandedChange, value, onChange) / ui-expandable-search / ui-input-group / ui-icon-btn--ghost">
+      <Demo label="页签内展开搜索与弹窗尺寸过渡" code="MentionPicker(search) / ExpandableSearch(expanded, onExpandedChange, value, onChange) / mention-picker-header / ui-expandable-search">
         <ExpandableSearchDemo />
       </Demo>
 
@@ -529,11 +530,26 @@ function InputsSection({ theme }: { theme: 'dark' | 'light' }) {
 function ExpandableSearchDemo() {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
+  const [activeTab, setActiveTab] = useState('nodes');
+  const resources = [
+    { key: 'demo-video', label: '参考视频.mp4', icon: 'lucide:video', badge: '自身' },
+    { key: 'demo-image', label: '角色参考.png', thumbnailUrl: referenceDemoImage, badge: '#39' },
+    { key: 'demo-text', label: '三镜脚本', icon: 'lucide:file-text', badge: '#13' },
+    { key: 'demo-audio', label: '角色对白.wav', icon: 'lucide:volume-2', badge: '#30' },
+    { key: 'demo-character', label: '角色 · 月下剑客', icon: 'lucide:user' },
+    { key: 'demo-scene', label: '场景 · 湖心码头', icon: 'lucide:image' },
+    { key: 'demo-prop', label: '道具 · 青铜灯笼', icon: 'lucide:box' },
+  ];
+  const candidates = expanded ? resources : activeTab === 'nodes' ? resources.slice(0, 2) : resources.slice(4);
+  const items = candidates.filter((item) => `${item.badge ?? ''} ${item.label}`.includes(query.trim()))
+    .map((item) => ({ ...item, onSelect: () => setQuery(item.label) }));
   return <div className="ui-stack ui-stack--tight max-w-lg">
-    <div className="flex w-full min-w-0 justify-end">
-      <ExpandableSearch expanded={expanded} onExpandedChange={setExpanded} value={query} onChange={setQuery} />
-    </div>
-    <p className="ui-hint">{query ? `搜索：${query}` : '点击右侧图标展开；按 Esc 清空并收起。查询与结果由调用方提供。'}</p>
+    <MentionPicker tabs={[{ id: 'nodes', label: '输入图', icon: 'lucide:images' },
+      { id: 'assets', label: '资产库', icon: 'lucide:library' }]}
+      activeTab={activeTab} onTabChange={setActiveTab} items={items} ariaLabel="引用搜索示例"
+      search={{ expanded, onExpandedChange: setExpanded, value: query, onChange: setQuery }}
+      footer={<span className="ui-hint">引用资产</span>} />
+    <p className="ui-hint">页签与搜索共用外框；输入框向左展开，页签向左移出，资源增减时高度同步过渡。Esc 清空并收起，示例不读取项目资源。</p>
   </div>;
 }
 
@@ -870,6 +886,10 @@ function SelectsSection() {
         <CustomSelectDemo />
       </Demo>
 
+      <Demo label="厂商分层模型菜单 · 节点与插件共用" code="ModelPicker(groups, value, onChange) / ModelMenu(groups, expandedGroupIds, onGroupToggle) / ui-model-menu__surface">
+        <ModelPickerDemo />
+      </Demo>
+
       <Demo label="自定义菜单" code="ui-dropdown > ui-menu > ui-menu__label / ui-menu__item / ui-menu__sep / ui-menu__shortcut">
         <div className="pb-32">
           <DropdownMenuDemo />
@@ -880,6 +900,28 @@ function SelectsSection() {
       </Demo>
     </Section>
   );
+}
+
+const MODEL_PICKER_DEMO_GROUPS: ModelPickerGroup[] = [
+  { id: 'volcengine', label: '火山引擎', description: '图像与视频模型，展示厂商详情', badgeText: '火山', tone: 'info',
+    items: [{ value: 'demo-seedance', label: 'Seedance 2.5', description: '视频模型 · 保留动作与运镜' }] },
+  { id: 'cccapi', label: 'CCC API', description: '按模型所属分组使用对应连接', badgeText: 'CCC', tone: 'brand',
+    items: [{ value: 'demo-ccc-standard', label: 'Gemini 图像模型 · 标准分组', description: '图像模型' },
+      { value: 'demo-ccc-fast', label: 'Gemini 图像模型 · 极速分组', description: '另一条连接，相同模型名' },
+      { value: 'demo-long', label: '很长的模型名称用来检查窄面板中省略显示和完整名称提示 · 长名称连接分组', description: '很长的模型详情也会单行截断，悬停仍能阅读完整说明' }] },
+  { id: 'comfyui', label: 'ComfyUI', description: '本地工作流，由宿主提供可用性', badgeText: 'CF', tone: 'success',
+    items: [{ value: 'demo-workflow', label: 'MiniMax H3 图生视频工作流', description: '工作流 · 15 秒' },
+      { value: 'demo-unavailable-item', label: '离线工作流', description: '请连接服务器', disabled: true }] },
+  { id: 'unconfigured', label: '未配置厂商', description: '缺少连接凭据', badgeText: '锁', disabled: true,
+    disabledReason: '请先在设置中配置该厂商', items: [{ value: 'demo-disabled', label: '不可调用的模型' }] },
+];
+function ModelPickerDemo() {
+  const [value, setValue] = useState('demo-seedance');
+  return <div className="ui-stack ui-stack--tight max-w-lg">
+    <ModelPicker groups={MODEL_PICKER_DEMO_GROUPS} value={value} onChange={setValue}
+      defaultExpandedGroupIds={['volcengine']} aria-label="公共模型选择示例" />
+    <p className="ui-hint">展开厂商后选择模型；方向键浏览，左右键展开或收起，Esc 关闭。示例只更新本地展示。</p>
+  </div>;
 }
 
 function DropzoneSection() {

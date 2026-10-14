@@ -64,6 +64,8 @@ interface MentionPickerProps {
   mediaAspectRatio?: number;
   /** 可选受控搜索；共享组件不读取宿主 Store 或筛选业务来源。 */
   search?: ExpandableSearchProps;
+  /** 通知锚定容器目标高度；首次测量与过渡结束不动画。 */
+  onHeightChange?: (height: number, animated: boolean) => void;
 }
 
 export default function MentionPicker({
@@ -84,6 +86,7 @@ export default function MentionPicker({
   className = '',
   mediaAspectRatio,
   search,
+  onHeightChange,
 }: MentionPickerProps) {
   const hasChipRow = !!leading || (chips?.length ?? 0) > 0;
   const gridRef = useRef<HTMLDivElement>(null);
@@ -92,11 +95,49 @@ export default function MentionPicker({
   const previousGridRef = useRef<{
     tab: string; chip?: string; query: string; expanded: boolean; signature: string; activeKey?: string;
   } | null>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const measuredHeightRef = useRef<number | null>(null);
+  const heightCallbackRef = useRef(onHeightChange);
+  const [height, setHeight] = useState<number | undefined>(undefined);
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState(false);
   const previewSources = JSON.stringify(items.map((item) => [item.key, item.audioPreviewUrl]));
   const searchQuery = search?.value ?? '';
   const searchExpanded = search?.expanded ?? false;
+
+  useLayoutEffect(() => {
+    heightCallbackRef.current = onHeightChange;
+  }, [onHeightChange]);
+
+  useLayoutEffect(() => {
+    const picker = pickerRef.current;
+    const content = contentRef.current;
+    if (!picker || !content || typeof ResizeObserver === 'undefined') return;
+    const reducedMotion = typeof window === 'undefined' ? undefined : window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const measure = () => {
+      // 内层不随动画外层压缩，避免测量自身过渡产生 ResizeObserver 反馈循环。
+      const nextHeight = content.offsetHeight + picker.offsetHeight - picker.clientHeight;
+      const previousHeight = measuredHeightRef.current;
+      if (nextHeight <= 0 || nextHeight === previousHeight) return;
+      measuredHeightRef.current = nextHeight;
+      setHeight(nextHeight);
+      heightCallbackRef.current?.(nextHeight, previousHeight !== null && !reducedMotion?.matches);
+    };
+    const handleMotionChange = () => {
+      if (reducedMotion?.matches && measuredHeightRef.current !== null) {
+        heightCallbackRef.current?.(measuredHeightRef.current, false);
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    reducedMotion?.addEventListener('change', handleMotionChange);
+    return () => {
+      observer.disconnect();
+      reducedMotion?.removeEventListener('change', handleMotionChange);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const previous = previousGridRef.current;
@@ -163,8 +204,15 @@ export default function MentionPicker({
   };
 
   return (
-    <div className={`mention-picker nowheel nodrag nopan ${className}`}
-      data-reference-preview-open={search?.expanded ? '' : undefined}>
+    <div ref={pickerRef} className={`mention-picker nowheel nodrag nopan ${className}`}
+      style={height === undefined ? undefined : { height }}
+      data-reference-preview-open={search?.expanded ? '' : undefined}
+      onTransitionEnd={(event) => {
+        if (event.target === event.currentTarget && event.propertyName === 'height' && measuredHeightRef.current !== null) {
+          heightCallbackRef.current?.(measuredHeightRef.current, false);
+        }
+      }}>
+      <div ref={contentRef} className="mention-picker-content">
       {(tabs.length > 1 || search) && (
         <div className={`mention-picker-header${search ? ' has-search' : ''}${search?.expanded ? ' is-searching' : ''}`}>
           {tabs.length > 1 && (
@@ -274,6 +322,7 @@ export default function MentionPicker({
 
       {previewError && <p role="status" className="text-xs text-canvas-text-muted">声音试听失败，请重试</p>}
       {footer && <div className="mention-picker-footer">{footer}</div>}
+      </div>
     </div>
   );
 }

@@ -36,6 +36,7 @@ export default function ExpandableSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const composingRef = useRef(false);
+  const collapsedOnPointerDownRef = useRef(false);
 
   useLayoutEffect(() => {
     if (expanded && !disabled) inputRef.current?.focus({ preventScroll: true });
@@ -99,9 +100,29 @@ export default function ExpandableSearch({
         aria-controls={inputId}
         aria-expanded={expanded}
         disabled={disabled}
-        onMouseDown={(event) => event.preventDefault()}
-        onKeyDown={(event) => event.stopPropagation()}
-        onClick={() => {
+        onPointerDown={(event) => {
+          collapsedOnPointerDownRef.current = false;
+          if (disabled || event.button !== 0 || !event.isPrimary) return;
+          event.preventDefault();
+          event.stopPropagation();
+          // 关闭会改变弹层的位置：在按下时处理，避免按钮移出鼠标下方后丢失 click。
+          if (expanded) {
+            collapsedOnPointerDownRef.current = true;
+            collapse();
+          }
+        }}
+        onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+        onKeyDown={(event) => {
+          collapsedOnPointerDownRef.current = false;
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          // 保留键盘/辅助技术的 click；指针按下已关闭时不再次打开。
+          if (event.detail > 0 && collapsedOnPointerDownRef.current) {
+            collapsedOnPointerDownRef.current = false;
+            return;
+          }
           if (disabled) return;
           if (expanded) collapse();
           else onExpandedChange(true);

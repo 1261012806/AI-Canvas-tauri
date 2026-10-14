@@ -236,3 +236,11 @@
 可选自动化检查：在宿主仓库运行 `npx vitest run tests/components/referenceChipDom.test.ts tests/components/mentionEditorImageIndices.test.ts`；在插件仓库运行 `node --test video-replica/tests/ui.test.mjs video-replica/tests/referenceEditor.test.mjs`。本次未执行这些命令。
 
 回滚可恢复原 DOM 构造、提示词样式和上一个插件 UI；现有画布引用、生成任务和素材无需迁移。
+
+## 12. 共用模型菜单（2026-10-14，源码已实现，待重建与用户验证）
+
+- 从现有节点模型菜单抽出纯展示 `shared/ModelPicker.tsx`，菜单外观进入 UI Kit，节点保留目录、偏好、厂商可用性及工作流编辑逻辑。UI Kit「下拉选择」展示真实厂商分组、选中和禁用样例。
+- 插件一键与高级模式的视频模型/工作流、视觉分析模型同步使用共享 `ModelPicker`；成片音频、比例和分辨率仍使用普通 `Select`。模型选择不重置其他参数，控件重绘或关闭时清理 Portal 与事件。
+- 宿主目录仅新增可选 `group` 展示白名单，复用 CCC、Sora2U 和通用模型分组。模型 ID、执行 Provider、现有 quick 后端范围、参考视频能力预检、租约与权限边界不变；旧宿主按 Provider 展示回落，不给插件完整厂商配置或凭据。
+- 提交时的宿主与插件改动文件定向 ESLint 已通过；本轮未运行测试、类型检查或构建，也未更新安装 `ui.js`、清单摘要或市场 Release。需在插件仓库按既有 `node video-replica/tools/build-ui.mjs --host ../AI-Canvas-tauri` 重建，再导入 `video-replica/manifest.json` 完成原生信任确认；源码变更不会自动更新已安装的私有快照。
+- 桌面验收与异常/回归项见[共用模型选择菜单](../模型与生成模块.md#共用模型选择菜单)，无需发起付费生成。回滚恢复旧菜单接入与旧安装 UI；可选展示字段不影响已存在任务及生成协议。

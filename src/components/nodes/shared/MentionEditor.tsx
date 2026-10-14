@@ -121,6 +121,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const mentionEditorWrapRef = useRef<HTMLDivElement>(null);
   const mentionDropdownRef = useRef<HTMLDivElement>(null);
   const [mentionDropdownPosition, setMentionDropdownPosition] = useState({ left: 12, top: 0 });
+  const mentionDropdownHeightRef = useRef<number | null>(null);
+  const [mentionDropdownResizing, setMentionDropdownResizing] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef(new MentionEditorHistory());
   const syncedPromptRef = useRef(prompt);
@@ -1519,7 +1521,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const safePosition = calcAnchoredPosition(
       caretRect,
       dropdown.offsetWidth,
-      dropdown.offsetHeight,
+      mentionDropdownHeightRef.current ?? dropdown.offsetHeight,
       8,
       12,
     );
@@ -1532,8 +1534,16 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ));
   }, []);
 
+  const handleMentionHeightChange = useCallback((height: number, animated: boolean) => {
+    mentionDropdownHeightRef.current = height;
+    setMentionDropdownResizing(animated);
+    updateMentionDropdownPosition();
+  }, [updateMentionDropdownPosition]);
+
   useLayoutEffect(() => {
     if (!showMention) {
+      mentionDropdownHeightRef.current = null;
+      setMentionDropdownResizing(false);
       setMentionDropdownPosition({ left: 12, top: 0 });
       return undefined;
     }
@@ -1655,11 +1665,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       {showMention && (
         <div
           ref={mentionDropdownRef}
-          className="mention-dropdown absolute w-[336px] max-w-[calc(100vw-24px)] z-50 [&>.mention-picker]:max-h-[calc(100vh-24px)] [&>.mention-picker]:overflow-hidden [&_.mention-picker-grid]:min-h-0"
+          className={`mention-dropdown${mentionDropdownResizing ? ' is-resizing' : ''} absolute w-[336px] max-w-[calc(100vw-24px)] z-50 [&>.mention-picker]:max-h-[calc(100vh-24px)] [&>.mention-picker]:overflow-hidden [&_.mention-picker-grid]:min-h-0`}
           style={{ left: mentionDropdownPosition.left, top: mentionDropdownPosition.top }}
         >
           <MentionPicker
             ariaLabel="引用节点或资产"
+            onHeightChange={handleMentionHeightChange}
             search={{
               expanded: resourceSearchExpanded,
               onExpandedChange: (expanded) => {
@@ -1767,13 +1778,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'workflow' ? '当前工作流暂无可引用的节点' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
             footer={(
               <>
-              {resourceSearchExpanded && (
+              {resourceSearchExpanded && ((assetLoadError && !assetLoading)
+                || resourceSearchVisible < resourceSearchCandidates.length || assetScanTruncated) && (
                 <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-canvas-text-secondary">
-                  <span role="status" aria-live="polite">
-                    {resourceSearchLoading ? '正在读取全局资源…' : assetLoadError ? '部分图片目录读取失败' : `${resourceSearchCandidates.length} 项结果`}
-                  </span>
                   {assetLoadError && !assetLoading && (
                     <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
+                      title="部分图片目录读取失败，点击重试"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setAssetLoadRevision((revision) => revision + 1)}>
                       重试
