@@ -12,14 +12,16 @@ import Tabs from '../shared/Tabs';
 import ComfyVersionList from './ComfyVersionList';
 import ComfyLaunchSettings from './ComfyLaunchSettings';
 import ComfyDownloadProgress from './ComfyDownloadProgress';
+import ComfyModelDedupe from './ComfyModelDedupe';
 
-type Tab = 'core' | 'extensions' | 'catalog' | 'settings';
+type Tab = 'core' | 'extensions' | 'catalog' | 'settings' | 'models';
 interface Confirmation { title: string; detail: string; operation: () => Promise<string> }
 const TABS = [
   { id: 'core', label: '内核版本', icon: 'lucide:history' },
   { id: 'extensions', label: '已装插件', icon: 'lucide:blocks' },
   { id: 'catalog', label: '安装插件', icon: 'lucide:download' },
   { id: 'settings', label: '常用设置', icon: 'lucide:sliders-horizontal' },
+  { id: 'models', label: '模型去重', icon: 'lucide:files' },
 ] as const;
 
 function RepositorySummary({ repository }: { repository: ComfyRepository }) {
@@ -141,6 +143,7 @@ export default function ComfyManagementWindow() {
   const filteredCatalog = catalog?.filter((entry) => `${entry.name} ${entry.description}`.toLowerCase().includes(search.trim().toLowerCase())) ?? [];
   const isInstalled = (entry: ComfyCatalogEntry) => entry.installed || !!snapshot?.extensions.some((repository) => !repository.removed && repository.remoteUrl?.replace(/\.git\/?$/, '').replace(/\/$/, '') === entry.repositoryUrl.replace(/\.git\/?$/, '').replace(/\/$/, ''));
   const isPluginTab = tab === 'extensions' || tab === 'catalog';
+  const isListTab = isPluginTab || tab === 'models';
 
   return <div className="fixed inset-0 flex flex-col bg-canvas-bg text-canvas-text">
     <header className="shrink-0 border-b border-canvas-border bg-canvas-surface p-3 space-y-3">
@@ -161,9 +164,9 @@ export default function ComfyManagementWindow() {
         </div>}
       </div>
     </header>
-    <main className={`flex-1 min-h-0 min-w-0 p-3 ${isPluginTab ? 'flex flex-col gap-3 overflow-hidden' : 'ui-scroll space-y-3'}`} aria-busy={!!busy}>
+    <main className={`flex-1 min-h-0 min-w-0 p-3 ${isListTab ? 'flex flex-col gap-3 overflow-hidden' : 'ui-scroll space-y-3'}`} aria-busy={!!busy}>
       <div className="shrink-0 space-y-3">
-        <div className="ui-alert ui-alert--info"><Icon icon="lucide:info" width={16} className="ui-alert__icon" /><div className="ui-alert__body">{t('管理操作只作用于当前安装目录。修改版本或插件前请停止 ComfyUI，完成后重新启动。插件依赖需单独安装。')}</div></div>
+        <div className="ui-alert ui-alert--info"><Icon icon="lucide:info" width={16} className="ui-alert__icon" /><div className="ui-alert__body">{tab === 'models' ? t('扫描和链接替换作用于所选范围。扫描不会修改文件；创建链接前请停止 ComfyUI 和模型下载，完成后重新启动。') : t('管理操作只作用于当前安装目录。修改版本或插件前请停止 ComfyUI，完成后重新启动。插件依赖需单独安装。')}</div></div>
         {!!busy && <div className="ui-row text-xs text-canvas-text-secondary" role="status"><Icon icon="lucide:loader-circle" width={14} className="animate-spin" />{busy}…</div>}
         {!!busy && downloadProgress && <ComfyDownloadProgress progress={downloadProgress} />}
         {feedback && <div className={`ui-alert ${feedback.error ? 'ui-alert--danger' : 'ui-alert--success'}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</div>}
@@ -216,6 +219,7 @@ export default function ComfyManagementWindow() {
         </form>
       </section>}
       {snapshot && tab === 'settings' && <ComfyLaunchSettings busy={!!busy} run={run} />}
+      {snapshot && tab === 'models' && <ComfyModelDedupe busy={!!busy} run={run} />}
     </main>
     <ModalOverlay isOpen={!!versionRepository} onClose={() => { if (!busy) setVersionRepository(null); }} ariaLabel={t('插件版本')} className="w-[calc(100%_-_24px)] max-w-5xl max-h-[85vh] bg-canvas-surface" closeOnBackdrop={!busy}>
       {versionRepository && <><div className="ui-row ui-row--between border-b border-canvas-border p-3"><h2 className="text-sm font-semibold">{versionRepository.name} · {t('切换版本')}</h2><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" aria-label={t('关闭')} disabled={!!busy} onClick={() => setVersionRepository(null)}><Icon icon="lucide:x" width={16} /></button></div><div className="p-3 ui-scroll space-y-3"><RepositorySummary repository={versionRepository} /><ComfyVersionList repository={versionRepository} busy={!!busy} onSwitch={(reference, title) => switchVersion(versionRepository, reference, title)} /></div></>}

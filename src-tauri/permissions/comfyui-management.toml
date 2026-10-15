@@ -10,4 +10,12 @@ commands.allow = [
   "install_comfyui_dependencies",
   "get_comfyui_launch_settings",
   "save_comfyui_launch_settings",
+  "scan_comfyui_duplicate_models",
+  "choose_comfyui_model_scan_root",
+  "cancel_comfyui_model_scan",
+  "apply_comfyui_model_deduplication",
+  "apply_comfyui_model_deduplication_batch",
+  "list_comfyui_model_dedupe_history",
+  "list_comfyui_model_dedupe_recoveries",
+  "recover_comfyui_model_dedupe",
 ]

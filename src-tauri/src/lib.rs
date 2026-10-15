@@ -1172,6 +1172,7 @@ pub fn run() {
         .manage(native_rendering::NativeRenderingState::default())
         .manage(proxy_http_state)
         .manage(comfyui::management::ManagementState::default())
+        .manage(comfyui::model_dedupe::ModelDedupeState::default())
         .manage(blender_runtime::BlenderRuntimeState::default())
         .manage(blender_runtime::ProjectGrantState::default())
         .manage(blender_runtime::production_blender_job_core())
@@ -1268,6 +1269,14 @@ pub fn run() {
             comfyui::management::list_comfyui_catalog,
             comfyui::management::install_comfyui_extension,
             comfyui::management::install_comfyui_dependencies,
+            comfyui::model_dedupe::scan_comfyui_duplicate_models,
+            comfyui::model_dedupe::choose_comfyui_model_scan_root,
+            comfyui::model_dedupe::cancel_comfyui_model_scan,
+            comfyui::model_dedupe_links::apply_comfyui_model_deduplication,
+            comfyui::model_dedupe_links::apply_comfyui_model_deduplication_batch,
+            comfyui::model_dedupe_history::list_comfyui_model_dedupe_history,
+            comfyui::model_dedupe_links::list_comfyui_model_dedupe_recoveries,
+            comfyui::model_dedupe_links::recover_comfyui_model_dedupe,
             comfyui::launch_settings::get_comfyui_launch_settings,
             comfyui::launch_settings::save_comfyui_launch_settings,
             onnx::get_models_dir,

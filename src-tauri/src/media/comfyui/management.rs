@@ -72,6 +72,7 @@ fn sanitize_ui_context(mut context: ManagementUiContext) -> Result<ManagementUiC
 
 #[derive(Clone)]
 struct ManagementSession {
+    id: String,
     installation_root: PathBuf,
     source_root: PathBuf,
     origin: Url,
@@ -213,6 +214,10 @@ fn current_session(app: &tauri::AppHandle) -> Result<ManagementSession, String> 
         .clone().ok_or_else(|| "请从主窗口重新打开 ComfyUI 设置".to_string())
 }
 
+pub(super) fn management_session_id(app: &tauri::AppHandle) -> Result<String, String> {
+    Ok(current_session(app)?.id)
+}
+
 pub(super) fn ensure_management_caller(webview: &Webview, app: &tauri::AppHandle) -> Result<(), String> {
     let session = current_session(app)?;
     let current = webview.url().map_err(|_| "无法确认管理窗口来源".to_string())?;
@@ -227,6 +232,10 @@ pub(super) fn ensure_management_caller(webview: &Webview, app: &tauri::AppHandle
 
 pub(super) fn management_root(webview: &Webview, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     ensure_management_caller(webview, app)?;
+    management_source_root(app)
+}
+
+pub(super) fn management_source_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let session = current_session(app)?;
     let installation = authorized_installation_root(app)?;
     let root = crate::path_policy::reauthorize_existing_plain_directory_with_roots(app, &session.source_root, std::slice::from_ref(&installation))?;
@@ -520,12 +529,12 @@ fn snapshot(app: &tauri::AppHandle, root: &Path) -> Result<Snapshot, String> {
     })
 }
 
-fn assert_server_stopped(app: &tauri::AppHandle) -> Result<(), String> {
+pub(super) fn assert_server_stopped(app: &tauri::AppHandle) -> Result<(), String> {
     let ports: HashSet<u16> = [8188, super::launch_settings::configured_port(app)?, super::launch_settings::last_launch_port().unwrap_or(0)]
         .into_iter().filter(|port| *port > 0).collect();
     for port in ports {
         if std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(300)).is_ok() {
-            return Err("ComfyUI 服务仍在运行，请先关闭启动终端，再修改内核或扩展".into());
+            return Err("ComfyUI 服务仍在运行，请先停止服务，再修改内核、扩展或模型文件".into());
         }
     }
     Ok(())
@@ -558,7 +567,9 @@ pub async fn open_comfyui_settings_window(webview: Webview, app: tauri::AppHandl
         window.set_focus().map_err(|_| "无法聚焦设置窗口".to_string())?;
         return Ok(());
     }
+    super::model_dedupe::revoke_model_scan_roots(&app);
     *app.state::<ManagementState>().0.lock().map_err(|_| "管理会话不可用".to_string())? = Some(ManagementSession {
+        id: super::model_dedupe::opaque_id("management"),
         installation_root, source_root, origin: origin.clone(), ui_context, git_program,
     });
     let result = WebviewWindowBuilder::new(&app, WINDOW_LABEL, WebviewUrl::App("index.html?view=comfyui-settings".into()))
@@ -571,6 +582,7 @@ pub async fn open_comfyui_settings_window(webview: Webview, app: tauri::AppHandl
             let handle = app.clone();
             window.on_window_event(move |event| {
                 if matches!(event, tauri::WindowEvent::Destroyed) {
+                    super::model_dedupe::revoke_model_scan_roots(&handle);
                     if let Ok(mut state) = handle.state::<ManagementState>().0.lock() { *state = None; }
                 }
             });
@@ -691,6 +703,8 @@ pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHa
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
     assert_server_stopped(&app)?;
+    super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
+    super::model_dedupe::invalidate_model_scans(&app);
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &request.repository_id)?;
@@ -794,6 +808,8 @@ pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, 
     let root = management_root(&webview, &app)?;
     assert_server_stopped(&app)?;
     let url = safe_repository_url(&repository_url)?;
+    super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
+    super::model_dedupe::invalidate_model_scans(&app);
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         send_progress(on_progress.as_ref(), "connecting", 0, None, "objects");
@@ -833,6 +849,8 @@ pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandl
     if !approved { return Err("已取消依赖安装".into()); }
     let root = management_root(&webview, &app)?;
     assert_server_stopped(&app)?;
+    super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
+    super::model_dedupe::invalidate_model_scans(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &repository_id)?;
         let requirements = path.join("requirements.txt");

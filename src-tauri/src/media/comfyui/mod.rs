@@ -15,6 +15,9 @@
 pub mod installation;
 pub mod launch_settings;
 pub mod management;
+pub mod model_dedupe;
+pub mod model_dedupe_links;
+pub mod model_dedupe_history;
 
 use launch_settings::ComfyUILaunchSettings;
 use serde::{Deserialize, Serialize};

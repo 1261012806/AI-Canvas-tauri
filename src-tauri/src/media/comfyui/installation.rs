@@ -120,7 +120,7 @@ pub(crate) fn privacy_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-fn storage_directory<R: Runtime>(app: &AppHandle<R>, create: bool) -> Result<Option<PathBuf>, String> {
+pub(super) fn storage_directory<R: Runtime>(app: &AppHandle<R>, create: bool) -> Result<Option<PathBuf>, String> {
     isolate_private_storage(app)?;
     let directory = private_directory(app)?;
     match fs::symlink_metadata(&directory) {
