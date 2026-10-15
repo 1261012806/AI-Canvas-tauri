@@ -5,6 +5,8 @@
  * 不自动下载，用户可在吉祥物的聊天气泡中决定是否更新。
  */
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+// 每个更新源单独超时；失败后由原生 updater 尝试配置中的下一个地址。
+const UPDATE_CHECK_TIMEOUT_MS = 30_000;
 
 /** 开发模式下跳过更新检查：Vite 编译时常量，打包后恒为 false */
 function isDevMode(): boolean {
@@ -51,7 +53,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     }
 
     const { check } = await import('@tauri-apps/plugin-updater');
-    const update = await check();
+    const update = await check({ timeout: UPDATE_CHECK_TIMEOUT_MS });
 
     if (!update) {
       console.log('[Updater] 当前已是最新版本');
@@ -102,7 +104,7 @@ async function performUpdate(onProgress?: (progress: AppUpdateProgress) => void)
     const { check } = await import('@tauri-apps/plugin-updater');
     const { relaunch } = await import('@tauri-apps/plugin-process');
 
-    const update = await check();
+    const update = await check({ timeout: UPDATE_CHECK_TIMEOUT_MS });
     if (!update) {
       report({ phase: 'no-update', message: '已是最新版本' });
       return false;
