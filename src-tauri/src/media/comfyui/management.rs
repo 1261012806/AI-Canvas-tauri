@@ -8,7 +8,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
-use tauri::{Manager, Webview, WebviewUrl, WebviewWindowBuilder};
+use tauri::{ipc::Channel, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use url::Url;
 
@@ -130,6 +130,65 @@ pub struct RepositoryAction {
 #[derive(Serialize)]
 pub struct ManagementResult {
     message: String,
+}
+
+#[derive(Serialize)]
+pub struct DownloadProgress {
+    stage: &'static str,
+    completed: u64,
+    total: Option<u64>,
+    unit: &'static str,
+}
+
+fn send_progress(channel: Option<&Channel<String>>, stage: &'static str, completed: u64, total: Option<u64>, unit: &'static str) {
+    if let Some(channel) = channel {
+        if let Ok(message) = serde_json::to_string(&DownloadProgress { stage, completed, total, unit }) {
+            let _ = channel.send(message);
+        }
+    }
+}
+
+// 只投递固定阶段和计数，Git 原始输出可能包含路径或凭据，不越过原生边界。
+fn parse_git_progress(line: &str) -> Option<DownloadProgress> {
+    let line = line.trim().strip_prefix("remote:").unwrap_or(line).trim();
+    let (stage, counts) = [
+        ("Receiving objects:", "receiving"), ("Resolving deltas:", "resolving"),
+        ("Counting objects:", "counting"), ("Compressing objects:", "compressing"),
+    ].into_iter().find_map(|(prefix, stage)| line.strip_prefix(prefix).map(|rest| (stage, rest)))?;
+    let counts = counts.split_once('(')?.1.split_once(')')?.0;
+    let (completed, total) = counts.split_once('/')?;
+    let completed = completed.trim().parse::<u64>().ok()?;
+    let total = total.trim().parse::<u64>().ok()?;
+    if total == 0 || completed > total { return None; }
+    Some(DownloadProgress { stage, completed, total: Some(total), unit: "objects" })
+}
+
+fn read_git_status(mut pipe: impl Read, channel: Channel<String>) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut line = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let mut last_sent = Instant::now() - Duration::from_millis(100);
+    loop {
+        let count = match pipe.read(&mut buffer) { Ok(0) | Err(_) => break, Ok(count) => count };
+        let retained = count.min((MAX_OUTPUT + 1).saturating_sub(output.len()));
+        output.extend_from_slice(&buffer[..retained]);
+        for &byte in &buffer[..count] {
+            if matches!(byte, b'\r' | b'\n') {
+                if let Ok(text) = std::str::from_utf8(&line) {
+                    if let Some(progress) = parse_git_progress(text) {
+                        if progress.total == Some(progress.completed) || last_sent.elapsed() >= Duration::from_millis(100) {
+                            send_progress(Some(&channel), progress.stage, progress.completed, progress.total, progress.unit);
+                            last_sent = Instant::now();
+                        }
+                    }
+                }
+                line.clear();
+            } else if line.len() < 1024 {
+                line.push(byte);
+            }
+        }
+    }
+    output
 }
 
 #[derive(Serialize)]
@@ -283,7 +342,11 @@ impl Drop for ProcessJob {
     fn drop(&mut self) { unsafe { let _ = windows::Win32::Foundation::CloseHandle(self.0); } }
 }
 
-fn run_command(app: &tauri::AppHandle, mut command: Command, timeout: Duration) -> Result<String, String> {
+fn run_command(app: &tauri::AppHandle, command: Command, timeout: Duration) -> Result<String, String> {
+    run_command_with_progress(app, command, timeout, None)
+}
+
+fn run_command_with_progress(app: &tauri::AppHandle, mut command: Command, timeout: Duration, progress: Option<Channel<String>>) -> Result<String, String> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(super::CREATE_NO_WINDOW);
@@ -303,7 +366,10 @@ fn run_command(app: &tauri::AppHandle, mut command: Command, timeout: Duration) 
         bytes
     });
     let output_reader = read(Box::new(stdout));
-    let error_reader = read(Box::new(stderr));
+    let error_reader = match progress {
+        Some(channel) => std::thread::spawn(move || read_git_status(stderr, channel)),
+        None => read(Box::new(stderr)),
+    };
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -524,13 +590,16 @@ pub async fn get_comfyui_management_snapshot(webview: Webview, app: tauri::AppHa
     tauri::async_runtime::spawn_blocking(move || snapshot(&app, &root)).await.map_err(|_| "读取管理状态失败".to_string())?
 }
 
-fn fetch_origin(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
+fn fetch_origin(app: &tauri::AppHandle, path: &Path, progress: Option<Channel<String>>) -> Result<(), String> {
+    send_progress(progress.as_ref(), "connecting", 0, None, "objects");
     ensure_repository(app, path)?;
     let url = resolve_repository_url(git(app, path, &["remote", "get-url", "origin"])?.trim())?;
     let mut command = git_command(app, path)?;
     // 使用经过校验的 URL，而不是仓库中的 remote.*.pushurl / 上传命令。
-    command.args(["fetch", "--no-recurse-submodules", "--tags", &url, "+refs/heads/*:refs/remotes/origin/*"]);
-    run_command(app, command, Duration::from_secs(180))?;
+    command.args(["fetch", "--progress", "--no-recurse-submodules", "--tags", &url, "+refs/heads/*:refs/remotes/origin/*"])
+        .env("LC_ALL", "C").env("LANG", "C");
+    run_command_with_progress(app, command, Duration::from_secs(180), progress.clone())?;
+    send_progress(progress.as_ref(), "applying", 0, None, "objects");
     Ok(())
 }
 
@@ -567,13 +636,15 @@ fn versions(app: &tauri::AppHandle, path: &Path) -> Result<Vec<Version>, String>
     Ok(versions)
 }
 
+// Channel 依赖 Tauri 专用 CommandArg 解析，命令入参不能包在 Option 中。
 #[tauri::command]
-pub async fn list_comfyui_versions(webview: Webview, app: tauri::AppHandle, repository_id: String, refresh: bool) -> Result<Vec<Version>, String> {
+pub async fn list_comfyui_versions(webview: Webview, app: tauri::AppHandle, repository_id: String, refresh: bool, on_progress: Channel<String>) -> Result<Vec<Version>, String> {
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
+    let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &repository_id)?;
-        if refresh { fetch_origin(&app, &path)?; }
+        if refresh { fetch_origin(&app, &path, on_progress)?; }
         versions(&app, &path)
     }).await.map_err(|_| "读取版本列表失败".to_string())?
 }
@@ -616,10 +687,11 @@ fn valid_branch(branch: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHandle, request: RepositoryAction) -> Result<ManagementResult, String> {
+pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHandle, request: RepositoryAction, on_progress: Channel<String>) -> Result<ManagementResult, String> {
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
     assert_server_stopped(&app)?;
+    let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &request.repository_id)?;
         assert_server_stopped(&app)?;
@@ -630,7 +702,7 @@ pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHa
                 let branch = git(&app, &path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
                     .map_err(|_| "当前处于固定版本，请先切换到分支再更新".to_string())?;
                 if !valid_branch(branch.trim()) { return Err("仓库分支名无效".into()); }
-                fetch_origin(&app, &path)?;
+                fetch_origin(&app, &path, on_progress)?;
                 let reference = format!("refs/remotes/origin/{}", branch.trim());
                 if !versions(&app, &path)?.iter().any(|v| v.reference == reference) { return Err("远端不存在当前分支".into()); }
                 assert_server_stopped(&app)?;
@@ -670,20 +742,35 @@ pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHa
 }
 
 #[tauri::command]
-pub async fn list_comfyui_catalog(webview: Webview, app: tauri::AppHandle) -> Result<Vec<CatalogEntry>, String> {
+pub async fn list_comfyui_catalog(webview: Webview, app: tauri::AppHandle, on_progress: Channel<String>) -> Result<Vec<CatalogEntry>, String> {
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
+    let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         let installed: HashSet<_> = snapshot(&app, &root)?.extensions.into_iter().filter(|repository| !repository.removed)
             .filter_map(|repository| repository.remote_url).map(|url| url.trim_end_matches(".git").to_lowercase()).collect();
         let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "无法建立扩展目录连接".to_string())?;
-        let response = client.get(CATALOG_URL).send().and_then(|response| response.error_for_status())
+        send_progress(on_progress.as_ref(), "catalog", 0, None, "bytes");
+        let mut response = client.get(CATALOG_URL).send().and_then(|response| response.error_for_status())
             .map_err(|_| "无法读取 ComfyUI Manager 官方目录，请检查网络后重试".to_string())?;
         if response.content_length().is_some_and(|size| size > MAX_CATALOG) { return Err("扩展目录超过体积上限".into()); }
+        let total = response.content_length().filter(|size| *size > 0);
         let mut bytes = Vec::new();
-        response.take(MAX_CATALOG + 1).read_to_end(&mut bytes).map_err(|_| "读取扩展目录失败".to_string())?;
-        if bytes.len() as u64 > MAX_CATALOG { return Err("扩展目录超过体积上限".into()); }
+        let mut buffer = [0_u8; 32 * 1024];
+        let mut last_sent = Instant::now();
+        send_progress(on_progress.as_ref(), "catalog", 0, total, "bytes");
+        loop {
+            let count = response.read(&mut buffer).map_err(|_| "读取扩展目录失败".to_string())?;
+            if count == 0 { break; }
+            if bytes.len() as u64 + count as u64 > MAX_CATALOG { return Err("扩展目录超过体积上限".into()); }
+            bytes.extend_from_slice(&buffer[..count]);
+            if last_sent.elapsed() >= Duration::from_millis(100) {
+                send_progress(on_progress.as_ref(), "catalog", bytes.len() as u64, total, "bytes");
+                last_sent = Instant::now();
+            }
+        }
+        send_progress(on_progress.as_ref(), "catalog", bytes.len() as u64, total, "bytes");
         let catalog: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "官方扩展目录格式无效".to_string())?;
         let entries = catalog.get("custom_nodes").and_then(|value| value.as_array()).ok_or_else(|| "官方扩展目录格式无效".to_string())?;
         let mut result = Vec::new();
@@ -702,12 +789,14 @@ pub async fn list_comfyui_catalog(webview: Webview, app: tauri::AppHandle) -> Re
 }
 
 #[tauri::command]
-pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, repository_url: String) -> Result<ManagementResult, String> {
+pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, repository_url: String, on_progress: Channel<String>) -> Result<ManagementResult, String> {
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
     assert_server_stopped(&app)?;
     let url = safe_repository_url(&repository_url)?;
+    let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
+        send_progress(on_progress.as_ref(), "connecting", 0, None, "objects");
         let url = resolve_repository_url(&url)?;
         let parsed = Url::parse(&url).map_err(|_| "仓库 URL 无效".to_string())?;
         let name = parsed.path_segments().and_then(|segments| segments.last()).unwrap_or("").trim_end_matches(".git");
@@ -720,8 +809,10 @@ pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, 
         let target_name = format!("{name}{DISABLED_SUFFIX}");
         assert_server_stopped(&app)?;
         let mut command = git_command(&app, &nodes)?;
-        command.args(["clone", "--no-recurse-submodules", "--template=", "--", &url, &target_name]);
-        run_command(&app, command, Duration::from_secs(240))?;
+        command.args(["clone", "--progress", "--no-recurse-submodules", "--template=", "--", &url, &target_name])
+            .env("LC_ALL", "C").env("LANG", "C");
+        run_command_with_progress(&app, command, Duration::from_secs(240), on_progress.clone())?;
+        send_progress(on_progress.as_ref(), "applying", 0, None, "objects");
         let staged = plain_directory(&app, &nodes.join(&target_name), &nodes)?;
         ensure_repository(&app, &staged)?;
         Ok(ManagementResult { message: "扩展已下载并保持停用。请按需安装依赖，再启用并重启 ComfyUI；不会自动运行 install.py。".into() })
@@ -755,4 +846,36 @@ pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandl
         run_command(&app, command, Duration::from_secs(600))?;
         Ok(ManagementResult { message: "依赖安装完成，请重启 ComfyUI。".into() })
     }).await.map_err(|_| "依赖安装失败，请检查环境后重试".to_string())?
+}
+
+#[cfg(test)]
+mod download_progress_tests {
+    use super::parse_git_progress;
+
+    #[test]
+    fn reports_actual_object_counts_and_separate_git_phases() {
+        let receiving = parse_git_progress("Receiving objects:  25% (12/48), 1.2 MiB | 1 MiB/s").unwrap();
+        assert_eq!(receiving.stage, "receiving");
+        assert_eq!(receiving.completed, 12);
+        assert_eq!(receiving.total, Some(48));
+        let resolving = parse_git_progress("Resolving deltas: 100% (9/9), done.").unwrap();
+        assert_eq!(resolving.stage, "resolving");
+        assert_eq!(resolving.completed, 9);
+        let remote = parse_git_progress("remote: Counting objects: 50% (10/20)").unwrap();
+        assert_eq!(remote.stage, "counting");
+        assert_eq!(remote.total, Some(20));
+    }
+
+    #[test]
+    fn ignores_raw_output_and_invalid_counts() {
+        for line in [
+            "fatal: could not access https://user:secret@example.com/repo",
+            "Cloning into '/private/path'...",
+            "Receiving objects: 100% (2/0)",
+            "Receiving objects: 100% (3/2)",
+            "Receiving objects: (unknown/20)",
+        ] {
+            assert!(parse_git_progress(line).is_none());
+        }
+    }
 }

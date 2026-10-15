@@ -6,11 +6,12 @@ import {
   applyComfyRepositoryAction, getComfyManagementSnapshot, installComfyDependencies,
   installComfyExtension, listComfyCatalog,
 } from '../../services/comfyManagementService';
-import type { ComfyCatalogEntry, ComfyManagementSnapshot, ComfyRepository, ComfyRepositoryAction } from '../../types/comfyManagement';
+import type { ComfyCatalogEntry, ComfyDownloadProgress as DownloadProgress, ComfyManagementSnapshot, ComfyRepository, ComfyRepositoryAction } from '../../types/comfyManagement';
 import ModalOverlay from '../shared/ModalOverlay';
 import Tabs from '../shared/Tabs';
 import ComfyVersionList from './ComfyVersionList';
 import ComfyLaunchSettings from './ComfyLaunchSettings';
+import ComfyDownloadProgress from './ComfyDownloadProgress';
 
 type Tab = 'core' | 'extensions' | 'catalog' | 'settings';
 interface Confirmation { title: string; detail: string; operation: () => Promise<string> }
@@ -36,6 +37,7 @@ export default function ComfyManagementWindow() {
   const [snapshot, setSnapshot] = useState<ComfyManagementSnapshot | null>(null);
   const [busy, setBusy] = useState(() => t('读取安装信息'));
   const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [search, setSearch] = useState('');
   const [catalog, setCatalog] = useState<ComfyCatalogEntry[] | null>(null);
   const [catalogLimit, setCatalogLimit] = useState(80);
@@ -45,6 +47,9 @@ export default function ComfyManagementWindow() {
   const busyRef = useRef(true);
   const aliveRef = useRef(true);
   const themeCleanup = useRef<() => void>(() => {});
+  const onDownloadProgress = useCallback((progress: DownloadProgress) => {
+    if (aliveRef.current) setDownloadProgress(progress);
+  }, []);
 
   const refreshSnapshot = useCallback(async (isCurrent?: () => boolean) => {
     const next = await getComfyManagementSnapshot();
@@ -59,7 +64,7 @@ export default function ComfyManagementWindow() {
   const run = useCallback(async (label: string, operation: () => Promise<string>): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true;
-    setBusy(label); setFeedback(null);
+    setBusy(label); setFeedback(null); setDownloadProgress(null);
     try {
       const message = await operation();
       if (aliveRef.current && message) setFeedback({ text: message, error: false });
@@ -69,7 +74,7 @@ export default function ComfyManagementWindow() {
       return false;
     } finally {
       busyRef.current = false;
-      if (aliveRef.current) setBusy('');
+      if (aliveRef.current) { setBusy(''); setDownloadProgress(null); }
     }
   }, []);
   useEffect(() => {
@@ -87,7 +92,7 @@ export default function ComfyManagementWindow() {
   }, [refreshSnapshot]);
 
   const mutate = async (request: ComfyRepositoryAction) => {
-    const result = await applyComfyRepositoryAction(request);
+    const result = await applyComfyRepositoryAction(request, onDownloadProgress);
     await refreshSnapshot();
     setCatalog(null);
     setVersionRepository(null);
@@ -99,7 +104,7 @@ export default function ComfyManagementWindow() {
     operation: () => mutate({ repositoryId: repository.id, action: 'switch', reference }),
   });
   const loadCatalog = () => run(t('读取插件目录'), async () => {
-    const next = await listComfyCatalog();
+    const next = await listComfyCatalog(onDownloadProgress);
     if (aliveRef.current) { setCatalog(next); setCatalogLimit(80); }
     return t('插件目录已刷新');
   });
@@ -107,7 +112,7 @@ export default function ComfyManagementWindow() {
     title: t('安装插件'),
     detail: t('将安装 {name}，初始状态为停用。安装后可显式安装依赖，再启用并重启 ComfyUI。仅安装你信任的插件。', { name }),
     operation: async () => {
-      const result = await installComfyExtension(url);
+      const result = await installComfyExtension(url, onDownloadProgress);
       await refreshSnapshot(); setCatalog(null);
       return result.message;
     },
@@ -122,7 +127,8 @@ export default function ComfyManagementWindow() {
       try {
         for (const repository of repositories) {
           setBusy(t('正在更新 {name}', { name: repository.name }));
-          await applyComfyRepositoryAction({ repositoryId: repository.id, action: 'update' });
+          setDownloadProgress(null);
+          await applyComfyRepositoryAction({ repositoryId: repository.id, action: 'update' }, onDownloadProgress);
           completed += 1;
         }
       } catch (cause) {
@@ -159,6 +165,7 @@ export default function ComfyManagementWindow() {
       <div className="shrink-0 space-y-3">
         <div className="ui-alert ui-alert--info"><Icon icon="lucide:info" width={16} className="ui-alert__icon" /><div className="ui-alert__body">{t('管理操作只作用于当前安装目录。修改版本或插件前请停止 ComfyUI，完成后重新启动。插件依赖需单独安装。')}</div></div>
         {!!busy && <div className="ui-row text-xs text-canvas-text-secondary" role="status"><Icon icon="lucide:loader-circle" width={14} className="animate-spin" />{busy}…</div>}
+        {!!busy && downloadProgress && <ComfyDownloadProgress progress={downloadProgress} />}
         {feedback && <div className={`ui-alert ${feedback.error ? 'ui-alert--danger' : 'ui-alert--success'}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</div>}
         {!!snapshot?.warnings.length && <div className="ui-alert ui-alert--warning">
           <Icon icon="lucide:triangle-alert" width={16} className="ui-alert__icon" />

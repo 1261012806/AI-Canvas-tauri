@@ -25,7 +25,7 @@ import { parseAspectRatio, useMainWindowSize } from './hooks/useMainWindowSize';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, type AppState } from './store/useAppStore';
 import * as fileService from './services/fileService';
-import { checkForUpdate, downloadAndInstallUpdate, type UpdateInfo } from './services/updateService';
+import { checkForUpdate, downloadAndInstallUpdate, isAppUpdateRunning, type UpdateInfo } from './services/updateService';
 import { DOWNLOAD_MASCOT_EVENT } from './components/shared/ModelDownloadDialog';
 import UpdateBubble from './components/shared/mascot/UpdateBubble';
 import HiddenFilmSet from './components/shared/mascot/HiddenFilmSet';
@@ -160,7 +160,10 @@ export default function App() {
   // 更新检测
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateBubbleVisible, setUpdateBubbleVisible] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  const updating = useAppStore((state) => isAppUpdateRunning(state.appUpdateProgress));
+  const appUpdateMessage = useAppStore((state) => state.appUpdateProgress?.message);
+  const appUpdateVersion = useAppStore((state) => state.appUpdateProgress?.version);
+  const availableUpdateInfo = updateInfo ?? (appUpdateVersion ? { version: appUpdateVersion } : null);
   const configHydrated = useAppStore((state) => state.configHydrated);
   const projectLoadStatus = useAppStore((state) => state.projectLoadStatus);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
@@ -412,9 +415,7 @@ export default function App() {
 
   // ── 更新相关操作 ──
   const handleUpdateNow = async () => {
-    setUpdating(true);
-    await downloadAndInstallUpdate();
-    setUpdating(false);
+    await downloadAndInstallUpdate(useAppStore.getState().setAppUpdateProgress);
   };
   const handleDismissUpdate = () => {
     setUpdateBubbleVisible(false);
@@ -453,7 +454,7 @@ export default function App() {
   // 性能模式仅保留静态助手入口，不挂载 WebGL 吉祥物或调度生命周期动画。
   useMascotLifecycle(mascotHandleRef, Boolean(mascotVisible) && !updating && !performanceMode);
   const mascotFeedback = updating
-    ? t('正在下载更新')
+    ? t(appUpdateMessage ?? '正在下载更新')
     : mascotLoading
       ? t('生成中')
       : mascotStatus === 'thinking'
@@ -675,7 +676,7 @@ export default function App() {
                   }}
                   disabled={mascotShrink}
                   aria-label={updating
-                    ? '打开画布助手，正在下载更新'
+                    ? `打开画布助手，${mascotFeedback}`
                     : mascotLoading
                       ? '打开画布助手，正在生成'
                       : mascotStatus === 'thinking'
@@ -686,7 +687,7 @@ export default function App() {
                             ? '打开画布助手，任务失败'
                             : '打开画布助手'}
                   data-tooltip={updating
-                    ? t('正在下载更新')
+                    ? mascotFeedback
                     : mascotLoading
                       ? t('生成中')
                       : mascotStatus === 'thinking'
@@ -745,10 +746,10 @@ export default function App() {
       )}
 
       {/* 更新聊天气泡 — 悬停在吉祥物左上方 */}
-      {updateInfo && (
+      {availableUpdateInfo && (
         <UpdateBubble
-          info={updateInfo}
-          visible={updateBubbleVisible}
+          info={availableUpdateInfo}
+          visible={updateBubbleVisible || updating}
           onUpdate={() => { handleUpdateNow(); }}
           onDismiss={handleDismissUpdate}
           updating={updating}
