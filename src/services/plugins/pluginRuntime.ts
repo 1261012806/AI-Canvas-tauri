@@ -1424,7 +1424,7 @@ async function executeHostEffect(
         await resolvePluginResourceHostUrl(context.resourceReadContext, effect.resourceId);
         assertFresh();
         const resource = registerPluginPlaybackResource(context.resourceReadContext, effect.resourceId, preview);
-        return { type: effect.type, ok: true, value: { resource: toPluginJson(resource), duration: preview.duration, hasAudio: preview.hasAudio } };
+        return { type: effect.type, ok: true, value: toPluginJson({ resource, duration: preview.duration, hasAudio: preview.hasAudio }) };
       }
       if (effect.type === 'video.detectShots' || effect.type === 'video.inspectFrame') {
         const value = effect.type === 'video.detectShots'

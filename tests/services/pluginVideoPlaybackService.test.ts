@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('mediabunny', () => ({
   Conversion: { init: mocks.init },
   Mp4OutputFormat: class {},
-  Output: class { constructor(public options: unknown) {} },
+  Output: class { options: unknown; constructor(options: unknown) { this.options = options; } },
   BufferTarget: class { buffer: ArrayBuffer | null = null; constructor() { mocks.target = this; } },
 }));
 vi.mock('../../src/services/videoEditorMediaService', () => ({

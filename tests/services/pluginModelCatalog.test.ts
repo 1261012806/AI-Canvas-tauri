@@ -53,7 +53,7 @@ describe('pluginModelCatalog complete replica support', () => {
 
   it('keeps built-in video models visible with a separate pipeline support hint', () => {
     const config: AppConfig = { ...useAppStore.getState().config,
-      providers: { apimart: { apiKey: 'never-export-key' }, grsai: { apiKey: 'never-export-key' }, volcengine: { apiKey: 'never-export-key' } },
+      providers: { apimart: { name: 'APIMart', apiKey: 'never-export-key' }, grsai: { name: 'GRSAI', apiKey: 'never-export-key' }, volcengine: { name: '火山方舟', apiKey: 'never-export-key' } },
       generalModels: [],
     };
     const models = buildPluginModelCatalog(config, ['video'], []);
@@ -76,8 +76,8 @@ describe('pluginModelCatalog menu presentation', () => {
       },
       generalModels: [],
     };
-    const entry = buildPluginModelCatalog(config, ['text'], []).find((model) => model.id === 'apimart/gpt-4o');
-    expect(entry).toMatchObject({ id: 'apimart/gpt-4o', provider: 'apimart', category: 'text' });
+    const entry = buildPluginModelCatalog(config, ['text'], []).find((model) => model.id === 'apimart/gpt-6.1-sol');
+    expect(entry).toMatchObject({ id: 'apimart/gpt-6.1-sol', provider: 'apimart', category: 'text' });
     expect(entry?.group).toEqual({
       id: 'apimart', name: 'APIMart', description: '一个 API 搞定一切——节省 30-70%', badgeText: 'AM', tone: 'success',
     });
