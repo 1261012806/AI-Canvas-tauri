@@ -60,6 +60,7 @@ const AssetsPanel = lazy(() => import('./components/AssetsPanel'));
 const CharacterLibraryPanel = lazy(() => import('./components/CharacterLibraryPanel'));
 const OutputHistoryPanel = lazy(() => import('./components/OutputHistoryPanel'));
 const ChatPanel = lazy(() => import('./components/chat/ChatPanel'));
+const PresetManager = lazy(() => import('./components/nodes/shared/PresetManager'));
 const PresetRunnerDialog = lazy(() => import('./components/nodes/shared/PresetRunnerDialog'));
 const ReversePromptDialog = lazy(() => import('./components/nodes/shared/ReversePromptDialog'));
 const DirectorDeskRuntimeManager = lazy(() => import('./components/director/DirectorDeskRuntimeManager'));
@@ -122,6 +123,7 @@ export default function App() {
       characters: state.characterLibraryOpen || state.characterActionLibraryOpen,
       history: state.historyPanelOpen,
       chat: state.chatOpen || state.chatPanelDetached,
+      presetManager: state.presetManagerOpen,
       presetRunner: state.presetRunRequest !== null,
       reversePrompt: state.reversePromptRequest !== null,
     })),
@@ -133,6 +135,7 @@ export default function App() {
   const mountCharacters = useFeatureMount(featureVisibility.characters);
   const mountHistory = useFeatureMount(featureVisibility.history);
   const mountChat = useFeatureMount(featureVisibility.chat);
+  const mountPresetManager = useFeatureMount(featureVisibility.presetManager);
   const mountPresetRunner = useFeatureMount(featureVisibility.presetRunner);
   const mountReversePrompt = useFeatureMount(featureVisibility.reversePrompt);
 
@@ -634,6 +637,11 @@ export default function App() {
         <LazyLoadBoundary label="对话助手">
           <Suspense fallback={<LazyLoadFallback label="对话助手" />}>
             {mountChat && <ChatPanel />}
+          </Suspense>
+        </LazyLoadBoundary>
+        <LazyLoadBoundary label="快捷指令管理器">
+          <Suspense fallback={<LazyLoadFallback label="快捷指令管理器" />}>
+            {mountPresetManager && <PresetManager />}
           </Suspense>
         </LazyLoadBoundary>
         <LazyLoadBoundary label="快捷指令运行器">
