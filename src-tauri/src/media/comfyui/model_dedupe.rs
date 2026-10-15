@@ -696,14 +696,6 @@ pub(super) fn take_groups_for_replacement(app: &tauri::AppHandle, scan_id: &str,
     Ok(selections)
 }
 
-/// 保留单组入口的既有语义，复用同一套批量租约校验。
-pub(super) fn take_group_for_replacement(app: &tauri::AppHandle, scan_id: &str, group_id: &str, keeper_id: &str, target_ids: &[String]) -> Result<ResolvedDuplicateSelection, String> {
-    let mut selections = take_groups_for_replacement(app, scan_id, &[DuplicateSelectionRequest {
-        group_id: group_id.into(), keeper_id: keeper_id.into(), target_ids: target_ids.to_vec(),
-    }])?;
-    selections.pop().ok_or_else(|| "没有可执行的重复分组".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
