@@ -81,9 +81,25 @@ struct ManagementSession {
 }
 
 #[derive(Default)]
-pub struct ManagementState(Mutex<Option<ManagementSession>>);
+pub struct ManagementState(Mutex<Option<ManagementSession>>, Mutex<Option<CachedSnapshot>>);
 
-#[derive(Serialize)]
+// 展示缓存与窗口会话分开：关窗仍撤销会话，但不必重跑所有仓库的 Git 查询。
+struct CachedSnapshot {
+    installation_root: PathBuf,
+    source_root: PathBuf,
+    git_program: PathBuf,
+    snapshot: Snapshot,
+    versions: Vec<(String, Vec<Version>)>,
+}
+
+impl CachedSnapshot {
+    fn matches(&self, session: &ManagementSession) -> bool {
+        self.installation_root == session.installation_root && self.source_root == session.source_root
+            && self.git_program == session.git_program
+    }
+}
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
     id: String,
@@ -98,7 +114,7 @@ pub struct Repository {
     dirty: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Version {
     reference: String,
@@ -109,7 +125,7 @@ pub struct Version {
     current: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     installation_name: String,
@@ -245,7 +261,7 @@ pub(super) fn management_source_root(app: &tauri::AppHandle) -> Result<PathBuf, 
     Ok(root)
 }
 
-fn authorized_installation_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(super) fn authorized_installation_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let session = current_session(app)?;
     let root = super::installation::reauthorize_installation(app, &session.installation_root)?;
     if root != session.installation_root {
@@ -321,11 +337,11 @@ fn git_command(app: &tauri::AppHandle, path: &Path) -> Result<Command, String> {
 }
 
 #[cfg(windows)]
-struct ProcessJob(windows::Win32::Foundation::HANDLE);
+pub(super) struct ProcessJob(windows::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl ProcessJob {
-    fn attach(child: &std::process::Child) -> Result<Self, String> {
+    pub(super) fn attach(child: &std::process::Child) -> Result<Self, String> {
         use windows::{core::PCWSTR, Win32::{Foundation::HANDLE, System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
             JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -343,7 +359,7 @@ impl ProcessJob {
             .map_err(|_| "无法绑定 ComfyUI 管理进程".to_string())?;
         Ok(job)
     }
-    fn terminate(&self) { unsafe { let _ = windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1223); } }
+    pub(super) fn terminate(&self) { unsafe { let _ = windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1223); } }
 }
 
 #[cfg(windows)]
@@ -529,7 +545,39 @@ fn snapshot(app: &tauri::AppHandle, root: &Path) -> Result<Snapshot, String> {
     })
 }
 
+pub(super) fn invalidate_management_cache(app: &tauri::AppHandle) {
+    if let Ok(mut cache) = app.state::<ManagementState>().1.lock() { *cache = None; }
+}
+
+/// 只复用展示数据；调用方与实际安装授权仍须每次核对，写操作始终读取真实仓库。
+fn display_snapshot(app: &tauri::AppHandle, root: &Path, refresh: bool) -> Result<Snapshot, String> {
+    let session = current_session(app)?;
+    {
+        let state = app.state::<ManagementState>();
+        let mut cache = state.1.lock().map_err(|_| "管理信息缓存不可用".to_string())?;
+        if !refresh {
+            if let Some(cached) = cache.as_ref().filter(|cached| cached.matches(&session)) {
+                let mut result = cached.snapshot.clone();
+                result.ui_context = session.ui_context;
+                return Ok(result);
+            }
+        }
+        // 强制刷新失败也不恢复旧缓存，避免保存部分执行前的状态。
+        *cache = None;
+    }
+    let result = snapshot(app, root)?;
+    if current_session(app)?.id != session.id { return Err("ComfyUI 管理会话已变化，请重新打开设置".into()); }
+    *app.state::<ManagementState>().1.lock().map_err(|_| "管理信息缓存不可用".to_string())? = Some(CachedSnapshot {
+        installation_root: session.installation_root, source_root: session.source_root,
+        git_program: session.git_program, snapshot: result.clone(), versions: Vec::new(),
+    });
+    Ok(result)
+}
+
 pub(super) fn assert_server_stopped(app: &tauri::AppHandle) -> Result<(), String> {
+    if super::runtime_console::has_active_owned_run(app) {
+        return Err("ComfyUI 进程正在启动或运行，请先在运行输出页停止服务，再修改内核、扩展或模型文件".into());
+    }
     let ports: HashSet<u16> = [8188, super::launch_settings::configured_port(app)?, super::launch_settings::last_launch_port().unwrap_or(0)]
         .into_iter().filter(|port| *port > 0).collect();
     for port in ports {
@@ -596,10 +644,16 @@ pub async fn open_comfyui_settings_window(webview: Webview, app: tauri::AppHandl
 }
 
 #[tauri::command]
-pub async fn get_comfyui_management_snapshot(webview: Webview, app: tauri::AppHandle) -> Result<Snapshot, String> {
+pub async fn get_comfyui_management_snapshot(webview: Webview, app: tauri::AppHandle, refresh: Option<bool>) -> Result<Snapshot, String> {
     let _guard = OPERATION_LOCK.lock().await;
     let root = management_root(&webview, &app)?;
-    tauri::async_runtime::spawn_blocking(move || snapshot(&app, &root)).await.map_err(|_| "读取管理状态失败".to_string())?
+    let session_id = management_session_id(&app)?;
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || display_snapshot(&worker_app, &root, refresh.unwrap_or(false)))
+        .await.map_err(|_| "读取管理状态失败".to_string())??;
+    management_root(&webview, &app)?;
+    if management_session_id(&app)? != session_id { return Err("ComfyUI 管理会话已变化，请重新打开设置".into()); }
+    Ok(result)
 }
 
 fn fetch_origin(app: &tauri::AppHandle, path: &Path, progress: Option<Channel<String>>) -> Result<(), String> {
@@ -655,9 +709,33 @@ pub async fn list_comfyui_versions(webview: Webview, app: tauri::AppHandle, repo
     let root = management_root(&webview, &app)?;
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
+        let session = current_session(&app)?;
         let path = repository_path(&app, &root, &repository_id)?;
+        {
+            let state = app.state::<ManagementState>();
+            let mut cache = state.1.lock().map_err(|_| "管理信息缓存不可用".to_string())?;
+            if let Some(cached) = cache.as_mut().filter(|cached| cached.matches(&session)) {
+                if !refresh {
+                    if let Some(index) = cached.versions.iter().position(|(id, _)| id == &repository_id) {
+                        let entry = cached.versions.remove(index);
+                        let result = entry.1.clone();
+                        cached.versions.push(entry);
+                        return Ok(result);
+                    }
+                }
+                cached.versions.retain(|(id, _)| id != &repository_id);
+            }
+        }
         if refresh { fetch_origin(&app, &path, on_progress)?; }
-        versions(&app, &path)
+        let result = versions(&app, &path)?;
+        if current_session(&app)?.id != session.id { return Err("ComfyUI 管理会话已变化，请重新打开设置".into()); }
+        if let Some(cached) = app.state::<ManagementState>().1.lock().map_err(|_| "管理信息缓存不可用".to_string())?
+            .as_mut().filter(|cached| cached.matches(&session)) {
+            // 只保留最近八个仓库的版本列表，避免大量插件展开后无界增长。
+            if cached.versions.len() >= 8 { cached.versions.remove(0); }
+            cached.versions.push((repository_id, result.clone()));
+        }
+        Ok(result)
     }).await.map_err(|_| "读取版本列表失败".to_string())?
 }
 
@@ -705,6 +783,7 @@ pub async fn apply_comfyui_repository_action(webview: Webview, app: tauri::AppHa
     assert_server_stopped(&app)?;
     super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
     super::model_dedupe::invalidate_model_scans(&app);
+    invalidate_management_cache(&app);
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &request.repository_id)?;
@@ -761,7 +840,7 @@ pub async fn list_comfyui_catalog(webview: Webview, app: tauri::AppHandle, on_pr
     let root = management_root(&webview, &app)?;
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
-        let installed: HashSet<_> = snapshot(&app, &root)?.extensions.into_iter().filter(|repository| !repository.removed)
+        let installed: HashSet<_> = display_snapshot(&app, &root, false)?.extensions.into_iter().filter(|repository| !repository.removed)
             .filter_map(|repository| repository.remote_url).map(|url| url.trim_end_matches(".git").to_lowercase()).collect();
         let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "无法建立扩展目录连接".to_string())?;
@@ -810,6 +889,7 @@ pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, 
     let url = safe_repository_url(&repository_url)?;
     super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
     super::model_dedupe::invalidate_model_scans(&app);
+    invalidate_management_cache(&app);
     let on_progress = Some(on_progress);
     tauri::async_runtime::spawn_blocking(move || {
         send_progress(on_progress.as_ref(), "connecting", 0, None, "objects");
@@ -851,6 +931,7 @@ pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandl
     assert_server_stopped(&app)?;
     super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
     super::model_dedupe::invalidate_model_scans(&app);
+    invalidate_management_cache(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let path = repository_path(&app, &root, &repository_id)?;
         let requirements = path.join("requirements.txt");
@@ -864,6 +945,46 @@ pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandl
         run_command(&app, command, Duration::from_secs(600))?;
         Ok(ManagementResult { message: "依赖安装完成，请重启 ComfyUI。".into() })
     }).await.map_err(|_| "依赖安装失败，请检查环境后重试".to_string())?
+}
+
+#[cfg(test)]
+mod snapshot_cache_tests {
+    use super::*;
+
+    #[test]
+    fn closing_window_keeps_display_cache_without_keeping_authority_or_crossing_installations() {
+        let session = ManagementSession {
+            id: "previous-session".into(), installation_root: PathBuf::from("installation-a"),
+            source_root: PathBuf::from("installation-a/ComfyUI"),
+            origin: Url::parse("http://localhost").unwrap(),
+            ui_context: ManagementUiContext::default(), git_program: PathBuf::from("git"),
+        };
+        let state = ManagementState::default();
+        *state.0.lock().unwrap() = Some(session.clone());
+        *state.1.lock().unwrap() = Some(CachedSnapshot {
+            installation_root: session.installation_root.clone(), source_root: session.source_root.clone(),
+            git_program: session.git_program.clone(),
+            snapshot: Snapshot { installation_name: "installation-a".into(), git_available: true,
+                core: None, extensions: Vec::new(), warnings: Vec::new(), ui_context: session.ui_context.clone() },
+            versions: Vec::new(),
+        });
+        *state.0.lock().unwrap() = None;
+        assert!(state.0.lock().unwrap().is_none());
+        let cache = state.1.lock().unwrap();
+        let cached = cache.as_ref().unwrap();
+        let mut reopened = session;
+        reopened.id = "new-session".into();
+        reopened.ui_context.language = Some("en".into());
+        assert!(cached.matches(&reopened));
+        reopened.installation_root = PathBuf::from("installation-b");
+        assert!(!cached.matches(&reopened));
+        reopened.installation_root = cached.installation_root.clone();
+        reopened.source_root = PathBuf::from("installation-a/other-source");
+        assert!(!cached.matches(&reopened));
+        reopened.source_root = cached.source_root.clone();
+        reopened.git_program = PathBuf::from("different-git");
+        assert!(!cached.matches(&reopened));
+    }
 }
 
 #[cfg(test)]

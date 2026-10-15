@@ -35,8 +35,8 @@ export const getComfyInstallation = (): Promise<string | null> =>
 export const openComfyManagementWindow = (comfyPath: string, uiContext: ComfyManagementUiContext): Promise<void> =>
   invoke('open_comfyui_settings_window', { comfyPath, uiContext });
 
-export const getComfyManagementSnapshot = (): Promise<ComfyManagementSnapshot> =>
-  invoke('get_comfyui_management_snapshot');
+export const getComfyManagementSnapshot = (refresh = false): Promise<ComfyManagementSnapshot> =>
+  invoke('get_comfyui_management_snapshot', { refresh });
 
 export const listComfyVersions = (repositoryId: string, refresh = false, onProgress?: (progress: ComfyDownloadProgress) => void): Promise<ComfyVersion[]> =>
   invokeWithProgress('list_comfyui_versions', { repositoryId, refresh }, onProgress);

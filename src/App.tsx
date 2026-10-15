@@ -38,6 +38,7 @@ import { useMascotDrag } from './hooks/useMascotDrag';
 // type-only：Mascot 是懒加载的，类型导入不会把它拖进主包
 import type { MascotHandle } from './components/shared/mascot/Mascot';
 import { initComfyUIWindowBridge } from './services/comfyUIWindowService';
+import { initComfyRuntimeHostSync } from './services/comfyRuntimeHostSync';
 import { invoke } from '@tauri-apps/api/core';
 import { prepareSettingsClose, resumeSettingsPersistence } from './services/configPersistenceQueue';
 import { applyNativePerformanceMode, registerPerformanceRestartHost } from './services/nativePerformanceModeService';
@@ -370,6 +371,24 @@ export default function App() {
       dispose?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauri || !configHydrated) return;
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void initComfyRuntimeHostSync()
+      .then((cleanup) => {
+        if (cancelled) cleanup();
+        else dispose = cleanup;
+      })
+      .catch(() => {
+        useAppStore.getState().showToast('ComfyUI 运行状态同步未能初始化，请重新打开应用后重试', 'error');
+      });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [configHydrated]);
 
   useEffect(() => {
     if (!isTauri) return;
