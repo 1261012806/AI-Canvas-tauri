@@ -144,7 +144,7 @@ function parseJson<T>(raw: string | undefined, label: string): T {
 function normalizeArchiveSettings(settings: ProjectSaveData['settings']): ProjectSaveData['settings'] {
   if (!isRecord(settings)) return undefined;
   const normalized = normalizeProjectSettings(settings);
-  const reference = settings.visualStyle?.styleReference;
+  const reference = isRecord(settings.visualStyle) ? settings.visualStyle.styleReference : undefined;
   // 通用配置归一化处理展示字段；归档还需保留持久化的相对媒体身份。
   if (isRecord(reference) && typeof reference.relativePath === 'string') {
     normalized.visualStyle = {

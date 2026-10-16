@@ -146,6 +146,7 @@ describe('projectTransferService', () => {
     mocks.getVersion.mockResolvedValue('0.6.13');
     mocks.getAllProjects.mockResolvedValue([]);
     mocks.deleteProjectFromDb.mockResolvedValue(undefined);
+    mocks.deleteProjectDataDir.mockResolvedValue(undefined);
     mocks.getProjectConversations.mockResolvedValue([]);
     mocks.getConversationMessages.mockResolvedValue({ messages: [], total: 0 });
     mocks.getProjectMemories.mockResolvedValue([]);
