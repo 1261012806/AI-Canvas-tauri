@@ -115,6 +115,24 @@ beforeEach(() => {
 afterEach(() => { unmount(); vi.useRealTimers(); });
 
 describe('canvas edge pointer scheduling', () => {
+  it('keeps only the transparent hit path when Canvas owns the shared geometry', () => {
+    const tree = CanvasEdgeVisual({ ...edgeProps, baseStroke: false, interactive: true,
+      path: ['M10 20L30 40', 20, 30, 10, 10], performanceMode: false, onDelete });
+    expect(elements(tree, 'base-edge')).toHaveLength(0);
+    expect(elements(tree, CanvasEdgeHover)).toHaveLength(1);
+    expect(elements(tree, 'path').map((element) => element.props)).toEqual([
+      expect.objectContaining({ d: 'M10 20L30 40', className: 'react-flow__edge-interaction', strokeOpacity: 0, strokeWidth: 20 }),
+    ]);
+  });
+
+  it('retains no long SVG path when Canvas owns a noninteractive edge', () => {
+    const tree = CanvasEdgeVisual({ ...edgeProps, baseStroke: false, interactive: false,
+      performanceMode: false, onDelete });
+    expect(elements(tree, 'base-edge')).toHaveLength(0);
+    expect(elements(tree, 'path')).toHaveLength(0);
+    expect(elements(tree, CanvasEdgeHover)).toHaveLength(0);
+  });
+
   it('omits hover state, wide interaction strokes and flow decoration when no endpoints are mounted', () => {
     const tree = CanvasEdgeVisual({ ...edgeProps, type: 'selected-node-flow', interactive: false, performanceMode: false, onDelete });
     expect(elements(tree, CanvasEdgeHover)).toHaveLength(0);

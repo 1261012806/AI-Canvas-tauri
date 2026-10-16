@@ -6,14 +6,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import {
   BaseEdge,
   EdgeLabelRenderer,
-  getBezierPath,
-  getSmoothStepPath,
   useReactFlow,
   type EdgeProps,
 } from '@xyflow/react';
 import { useAppStore } from '../../store/useAppStore';
 import type { CanvasEdgeVisualProps } from '../../types/canvasEdges';
 import { canAnimateCanvasEdgeFlow } from '../../utils/canvasRenderProjection';
+import { getCanvasEdgePath } from '../../utils/canvasEdgePath';
 import scissorsIcon from '../../assets/scissors.svg';
 
 const SMOOTHSTEP_TYPE = 'smoothstep';
@@ -138,18 +137,20 @@ export const CanvasEdgeVisual = memo(function CanvasEdgeVisual({
   labelBgBorderRadius,
   data,
   type,
+  path,
+  baseStroke = true,
   interactive = true,
   performanceMode,
   onDelete,
 }: CanvasEdgeVisualProps) {
   const baseType = data?.selectedNodeFlowBaseType ?? (type === SMOOTHSTEP_TYPE ? SMOOTHSTEP_TYPE : 'default');
   const [edgePath, labelX, labelY] = useMemo(() => {
-    const params = { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition };
-    return baseType === SMOOTHSTEP_TYPE ? getSmoothStepPath(params) : getBezierPath(params);
-  }, [baseType, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition]);
+    return path ?? getCanvasEdgePath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition,
+      type: baseType === SMOOTHSTEP_TYPE ? SMOOTHSTEP_TYPE : 'default' });
+  }, [path, baseType, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition]);
   const effectWidth = Math.abs(targetX - sourceX) + FLOW_EFFECT_MARGIN * 2;
   const effectHeight = Math.abs(targetY - sourceY) + FLOW_EFFECT_MARGIN * 2;
-  const stroke = (
+  const stroke = baseStroke ? (
     <BaseEdge
       id={id}
       path={edgePath}
@@ -166,7 +167,10 @@ export const CanvasEdgeVisual = memo(function CanvasEdgeVisual({
       labelBgPadding={labelBgPadding}
       labelBgBorderRadius={labelBgBorderRadius}
     />
-  );
+  ) : interactive ? (
+    <path d={edgePath} fill="none" strokeOpacity={0} strokeWidth={interactionWidth ?? 20}
+      className="react-flow__edge-interaction" />
+  ) : null;
 
   return (
     <>

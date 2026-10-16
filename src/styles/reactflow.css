@@ -24,6 +24,26 @@
   pointer-events: none;
 }
 
+.canvas-edge-stroke-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
+.canvas-edge-stroke-probe {
+  width: 1px;
+  height: 1px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Read the target appearance once, rather than caching a transition midpoint. */
+.canvas-edge-stroke-probe .react-flow__edge-path {
+  transition: none;
+}
+
 .react-flow__panel {
   margin: 8px !important;
 }
@@ -81,6 +101,12 @@
 .canvas-interacting .react-flow__edge,
 .canvas-interacting .react-flow__edge path {
   pointer-events: none;
+}
+
+/* These hit areas are already disabled during gestures. Remove their SVG
+   geometry from rendering until the existing interaction state settles. */
+.canvas-interacting .react-flow__edge-interaction {
+  display: none;
 }
 
 .canvas-interacting .canvas-edge-delete-control {

@@ -437,3 +437,41 @@ npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canv
 - 本轮 rAF 采样出现约一秒长间隔，未形成可靠的前台帧率对照；桌面窗口激活重试失败，未继续争用输入。原故障 Tauri 项目尚未确认性能达标，不能以隔离页替代。临时诊断页、计数器及旧 Portal 实现已删除。
 
 用户验收入口：更新开发程序后重新打开原项目，在连线显示下对照 20%、52%、100%、140% 连续平移/缩放；拖动高出度节点时线端点跟随，停止后悬停一秒可剪断并撤销/重做。回归 Shift 多选、Enter/Space/Escape、标签/箭头、隐藏连线开关、项目切换，以及拖入文件夹、宫格和分镜表。开发 DOM 的 `.react-flow__edges[data-canvas-edge-renderer="central"]` 与 `[data-canvas-central-edge-id]` 可只读确认入口；普通项目不应再有逐边原生 SVG。生产构建/安装包和深浅主题、跨平台实机验证仍有缺口。
+
+### 视口 Canvas 基础连线层
+
+状态：已实现，11 个定向文件共 156 项回归通过；用户在原故障项目反馈当前可用。尚无前后 FPS 量化对照，完整倍率、兼容性及跨平台矩阵仍待验证，不把该反馈扩大为所有场景验收通过。
+
+依据：[xyflow #4617](https://github.com/xyflow/xyflow/discussions/4617) 有相似倍率敏感的 SVG 连线绘制报告，但无通用修复；[Gravity UI Graph 的 Layer](https://github.com/gravity-ui/graph/blob/c2cfc79859ffe741099801d5aa558a206f314750/src/services/Layer.ts) 和 [Path2D renderer](https://github.com/gravity-ui/graph/blob/c2cfc79859ffe741099801d5aa558a206f314750/src/components/canvas/connections/BatchPath2D/index.tsx) 提供视口画布、相机变换和路径缓存的实际参考。本批采用原生 Canvas API，不引入该库、不替换 React Flow，也不直接照搬透明路径合批。
+
+- `CanvasEdgeStrokeLayer.tsx`：位图尺寸仅为 React Flow 容器 × DPR，置于原有连续 z 图层段内；读取已提交的父视口矩阵并反向抵消，Canvas context 使用同一矩阵绘制世界坐标。纯视口变化经 rAF 合并；缓存可见范围及 Path2D，无交互时不持续空转。容器、DPR、主题或外观变化会更新，卸载取消帧与订阅并释放位图和路径缓存。
+- `canvasEdgeModels.ts`、`canvasEdgePath.ts`：SVG 命中与 Canvas 共用同一条缓存路径，位置或基础线型变化才失效；普通选中变化只换样式。Canvas 按原顺序逐边描边，保留透明交叉的 source-over 叠加，不全局按颜色重新排序。
+- `CanvasEdgeLayer.tsx`、`SelectedNodeFlowEdge.tsx`：Canvas 接管的基础 SVG path 不再输出，保留原生选择 Action、键盘组、透明命中、悬停剪刀与小规模流光。外观颜色和宽度读取现有 CSS 规则的最终值；探针禁用过渡，避免永久缓存中间样式。现有 CSS 的外观规则仍覆盖 `edge.style.stroke/strokeWidth`。
+- marker、非空 label、animated、自定义 className、其他 style 和原生特殊边继续 SVG；空字符串标签与无标签一致。连续段保持原绘制顺序，最多两个 Canvas 段，更多交错段回退 SVG，防止特殊边数量导致整屏位图无界增长。Canvas/Path2D 不可用、绘制失败或 context 丢失时本次挂载回退 SVG。共享 SVG 的 `data-canvas-edge-stroke-renderer` 标明当前实际后端。
+- 保留完整 edges、连接索引、节点尺寸、历史和持久化；不调整缩放算法、节点 LOD 阈值、线型按钮或原生安全策略。透明命中路径静止时保留，沿用 `canvas-interacting` 在拖拽/缩放时 `display:none`，结束恢复；不影响平时悬停。这不是全部连线交互的 Canvas 化，真实桌面绘制收益仍待验收。
+
+全缩放范围的处理边界：
+
+| 显示机制 | 实际档位 |
+|---|---|
+| 普通节点结构 LOD | 16% 进入简化 / 25% 恢复 |
+| 性能模式结构 LOD | 55% / 65% |
+| 网格点密度 | 38% / 62% / 85%，只改间距 |
+| 图片清晰度 | 节点长边 × zoom × DPR 跨 256/512/1024/原图，10% 滞回，非固定倍率 |
+
+没有固定 45% 或 120% 的资源加载分支。图片更新保留容器和 img、交互期由共享调度暂停入场；不能据此认定图片档位导致曲线卡顿。本批不改上述档位，改为统一限制提交给描边器的离屏几何：
+
+- `canvasEdgeClipping.ts` 严格解析标准 M/L/Q/C；控制点包围盒剔除、de Casteljau 精确子曲线及连续区间合并，保留跨屏曲线与原始曲率，不把贝塞尔折线化，不在特定倍率切换算法。有限深度几何缓存和查询预算防止无界工作；不支持或预算超限整边回退完整路径，不返回部分缺线。
+- 裁剪范围外扩屏幕余量与 miter 描边边距，新增端帽留在可见范围之外；每边一次 stroke 保持透明叠加。128px 预加载范围供小幅平移复用，缩放后若缓存的屏幕跨度过大则重新收敛，避免把低倍率的大范围几何持续放大。完全离屏的边不创建/描绘 Path2D，删除或换路径清理旧缓存。
+- `data-edge-drawn`、`data-edge-culled`、`data-edge-clip-fallbacks` 只暴露聚合计数，便于确认实际接管与回退，不保存路径或节点正文。模型 selector 使用可随热更新重建的 memo 缓存，避免新描边代码继续持有旧模型结构。
+
+用户验收（Tauri 桌面端）：
+
+1. 打开原故障项目并显示曲线，保持同一窗口、项目、视口中心和选中状态；连续往返 10%–500%，重点经过 16%、25%、38%、45%、55%、62%、65%、85%、100%、120%、140%，并平移，检查停顿、闪烁和新进入视口的连线。开发工具可只读查看 `[data-canvas-edge-stroke-layer="viewport"]`，常规项目通常一张，最多两张；位图尺寸应随窗口而非全图高度变化。检查两端都在屏幕外、曲线穿过屏幕的连接不丢失，靠近四边没有断线或跳直线。
+2. 对照原 SVG：控制台设置 `localStorage.setItem('canvas-edgeStrokeRenderer', 'svg')` 后重启应用，重复同一操作；恢复用 `localStorage.removeItem('canvas-edgeStrokeRenderer')` 后重启。记录帧耗时，并区分 Main、GPU、Raster；不以 JS heap 大小代替绘制成本。该诊断项不修改项目或连线数据。
+3. 拖动高出度节点，检查端点跟随；停止后悬停一秒剪断、撤销和重做。回归单选、Shift 多选、Enter/Space/Escape、框选、普通删除及选中节点的流光；Canvas 失败回退后仍可操作。
+4. 回归直角/曲线/隐藏切换、新建连线、跨项目切换、窗口尺寸与助手面板改变、深浅主题及外观颜色/宽度；高 DPR 或跨屏时检查清晰度和对齐。带标签/箭头/虚线或自定义样式的边应保持 SVG 外观；特殊边交错不增加超过两张 Canvas。
+
+已执行 `npm test --` 指定 clipping、stroke、model、layer、pointer、构建适配、节点 LOD、显示调度、图片显示与缩放性能共 11 个文件，156 项通过。新增用例含 DPR 1/1.5/2 的连续 10%–500% 扫描，检查提交曲线跨度、原曲率、跨屏连接、透明单次描边、离屏剔除、缓存复用及重裁；这些是几何与生命周期断言，不是桌面 FPS 测试。`npm run typecheck`、`npm run test:typecheck` 均仍被未改动的 `projectTransferService.ts:147`（`styleReference` 类型错误）阻断，不能标记全量类型检查通过。本轮未操作桌面、未运行构建或 Rust 检查。
+
+复查几何与绘制入口（仓库根目录）：`npm test -- tests/utils/canvasEdgeClipping.test.ts tests/components/canvasEdgeStrokeLayer.test.tsx`。若无稳定桌面收益，回退本节涉及的描边接入、裁剪、路径字段及样式即可；用户数据无需恢复或迁移。

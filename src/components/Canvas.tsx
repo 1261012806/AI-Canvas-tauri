@@ -17,6 +17,7 @@ import { ReactFlow,
   type OnSelectionChangeParams,
   type NodeChange,
   type EdgeTypes,
+  type MiniMapProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import TextNode from './nodes/TextNode';
@@ -918,6 +919,17 @@ function CanvasInner({ onReady }: CanvasProps) {
     setEdgeDisplayMode((mode) => mode === 'orthogonal' ? 'curved'
       : mode === 'curved' ? 'hidden' : 'orthogonal');
   }, []);
+  const handleMiniMapClick = useCallback<NonNullable<MiniMapProps['onClick']>>((event, position) => {
+    const state = useAppStore.getState();
+    if (event.button !== 0 || !state.configHydrated || state.currentProjectId !== currentProjectId
+      || !reactFlowInstance.viewportInitialized) return;
+    wheelZoomCancelRef.current?.();
+    beginUserMove();
+    // 小地图已返回画布坐标；显式保留倍率，避免 setCenter 默认放大。
+    void reactFlowInstance.setCenter(position.x, position.y, {
+      zoom: reactFlowInstance.getZoom(),
+    }).finally(endUserMove);
+  }, [beginUserMove, currentProjectId, endUserMove, reactFlowInstance]);
 
   // ── Connection drop menu ──
   const {
@@ -1652,7 +1664,7 @@ function CanvasInner({ onReady }: CanvasProps) {
         {/* Mini Map — interactive navigator, toggle with M key */}
         {minimapVisible && (
           <>
-            <MiniMapNodeStats />
+            <MiniMapNodeStats onClick={handleMiniMapClick} />
             <RoundedMiniMapMask />
           </>
         )}

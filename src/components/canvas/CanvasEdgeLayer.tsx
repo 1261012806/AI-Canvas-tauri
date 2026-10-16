@@ -16,6 +16,8 @@ import { useAppStore } from '../../store/useAppStore';
 import { createCanvasEdgeModelSelector, createCanvasEdgeSnapshotReader } from '../../utils/canvasEdgeModels';
 import type { CanvasEdgeLayerProps, CanvasSharedEdgeModel } from '../../types/canvasEdges';
 import { CanvasEdgeVisual } from './SelectedNodeFlowEdge';
+import { canUseCanvasEdgeStroke } from '../../utils/canvasEdgePath';
+import CanvasEdgeStrokeLayer from './CanvasEdgeStrokeLayer';
 
 type FlowStore = ReturnType<typeof useStoreApi>;
 type EdgeCallbacks = Pick<CanvasEdgeLayerProps,
@@ -23,6 +25,8 @@ type EdgeCallbacks = Pick<CanvasEdgeLayerProps,
   | 'onEdgeMouseEnter' | 'onEdgeMouseMove' | 'onEdgeMouseLeave'>;
 
 const EMPTY_NODE_IDS: ReadonlySet<string> = new Set();
+// Bound viewport bitmap memory even when custom/SVG edges alternate frequently.
+const MAX_CANVAS_STROKE_LAYERS = 2;
 
 /** One observer per flow, limited to direct node-wrapper mounts/unmounts. */
 function useMountedNodeIds(store: FlowStore) {
@@ -79,6 +83,7 @@ const SharedEdge = memo(function SharedEdge({
   disableKeyboardA11y,
   performanceMode,
   callbacks,
+  baseStroke = true,
 }: {
   model: CanvasSharedEdgeModel;
   store: FlowStore;
@@ -87,6 +92,7 @@ const SharedEdge = memo(function SharedEdge({
   disableKeyboardA11y?: boolean;
   performanceMode: boolean;
   callbacks: EdgeCallbacks;
+  baseStroke?: boolean;
 }) {
   const groupRef = useRef<SVGGElement>(null);
   const previouslySelected = useRef(model.edge.selected);
@@ -146,7 +152,8 @@ const SharedEdge = memo(function SharedEdge({
       onMouseMove={callbacks.onEdgeMouseMove ? (event) => callbacks.onEdgeMouseMove?.(event, { ...edge }) : undefined}
       onMouseLeave={callbacks.onEdgeMouseLeave ? (event) => callbacks.onEdgeMouseLeave?.(event, { ...edge }) : undefined}
     >
-      <CanvasEdgeVisual {...model.props} interactive={model.interactive} performanceMode={performanceMode} onDelete={deleteCanvasEdge} />
+      <CanvasEdgeVisual {...model.props} path={model.path} baseStroke={baseStroke}
+        interactive={model.interactive} performanceMode={performanceMode} onDelete={deleteCanvasEdge} />
     </g>
   );
 });
@@ -157,9 +164,15 @@ export default function CanvasEdgeLayer({
   onEdgeClick, onEdgeDoubleClick, onEdgeContextMenu, onEdgeMouseEnter, onEdgeMouseMove, onEdgeMouseLeave,
 }: CanvasEdgeLayerProps) {
   const store = useStoreApi();
+  const [canvasStroke, setCanvasStroke] = useState(() => {
+    if (typeof Path2D === 'undefined' || typeof DOMMatrixReadOnly === 'undefined') return false;
+    // Session-independent diagnostic fallback; does not change graph data or line type.
+    try { return localStorage.getItem('canvas-edgeStrokeRenderer') !== 'svg'; } catch { return true; }
+  });
+  const handleCanvasUnavailable = useCallback(() => setCanvasStroke(false), []);
   const performanceMode = useAppStore((state) => state.config.performanceMode === true);
   const mountedNodeIds = useMountedNodeIds(store);
-  const [selectModels] = useState(createCanvasEdgeModelSelector);
+  const selectModels = useMemo(() => createCanvasEdgeModelSelector(), []);
   const subscribe = useCallback((listener: () => void) => store.subscribe(listener), [store]);
   const snapshot = useMemo(() => createCanvasEdgeSnapshotReader(
     store.getState, selectModels, edgeIds, geometry, rfId, mountedNodeIds,
@@ -172,16 +185,26 @@ export default function CanvasEdgeLayer({
   // Consecutive runs preserve paint order across native fallbacks and z-layers.
   const layers: ReactNode[] = [];
   let run: ReactNode[] = [];
+  let runModels: CanvasSharedEdgeModel[] = [];
+  let runCanvas = false;
   let runZ: number | undefined;
   let runKey = '';
+  let canvasRuns = 0;
   const flush = () => {
     if (!run.length) return;
-    layers.push(
-      <svg key={runKey} className="canvas-shared-edge-layer" data-canvas-shared-edge-layer="central" style={{ zIndex: runZ }}>
+    const svg = (
+      <svg key={runKey} className="canvas-shared-edge-layer" data-canvas-shared-edge-layer="central"
+        data-canvas-edge-stroke-renderer={runCanvas ? 'canvas' : 'svg'} data-canvas-edge-count={run.length}
+        style={{ zIndex: runZ }}>
         {run}
-      </svg>,
+      </svg>
     );
+    layers.push(runCanvas ? <Fragment key={runKey}>
+      <CanvasEdgeStrokeLayer models={runModels} store={store} zIndex={runZ ?? 0} onUnavailable={handleCanvasUnavailable} />
+      {svg}
+    </Fragment> : svg);
     run = [];
+    runModels = [];
   };
   for (const model of models) {
     if (model.kind === 'native') {
@@ -189,12 +212,18 @@ export default function CanvasEdgeLayer({
       layers.push(<Fragment key={`native-${model.id}`}>{renderEdge(model.id)}</Fragment>);
       continue;
     }
-    if (run.length && runZ !== model.zIndex) flush();
+    const useCanvas: boolean = canvasStroke && canUseCanvasEdgeStroke(model)
+      && (canvasRuns < MAX_CANVAS_STROKE_LAYERS || (run.length > 0 && runCanvas && runZ === model.zIndex));
+    if (run.length && (runZ !== model.zIndex || runCanvas !== useCanvas)) flush();
     // Keep the SVG identity when its first visible edge leaves the viewport.
-    if (!run.length) { runZ = model.zIndex; runKey = `shared-${model.zIndex}-${layers.length}`; }
+    if (!run.length) {
+      runZ = model.zIndex; runCanvas = useCanvas; runKey = `shared-${model.zIndex}-${layers.length}`;
+      if (useCanvas) canvasRuns++;
+    }
+    runModels.push(model);
     run.push(<SharedEdge key={model.edge.id} model={model} store={store} rfId={rfId}
       noPanClassName={noPanClassName} disableKeyboardA11y={disableKeyboardA11y}
-      performanceMode={performanceMode} callbacks={callbacks} />);
+      performanceMode={performanceMode} callbacks={callbacks} baseStroke={!useCanvas} />);
   }
   flush();
   return <>{layers}</>;

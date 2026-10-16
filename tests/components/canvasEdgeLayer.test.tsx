@@ -5,10 +5,12 @@ import type { CanvasEdgeGeometry, CanvasEdgeLayerProps } from '../../src/types/c
 
 interface Hooks {
   states: unknown[];
+  memos: Array<{ deps?: readonly unknown[]; value: unknown }>;
   refs: Array<{ current: unknown }>;
   effects: Array<{ deps?: readonly unknown[]; cleanup?: () => void }>;
   pending: Array<() => void>;
   stateIndex: number;
+  memoIndex: number;
   refIndex: number;
   effectIndex: number;
 }
@@ -27,7 +29,16 @@ vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   memo: <T,>(component: T) => component,
   useCallback: <T,>(callback: T) => callback,
-  useMemo: (compute: () => unknown) => compute(),
+  useMemo: (compute: () => unknown, deps?: readonly unknown[]) => {
+    const hooks = driver.current!;
+    const index = hooks.memoIndex++;
+    const previous = hooks.memos[index];
+    if (previous && deps && deps.length === previous.deps?.length
+      && deps.every((dep, i) => Object.is(dep, previous.deps?.[i]))) return previous.value;
+    const value = compute();
+    hooks.memos[index] = { deps, value };
+    return value;
+  },
   useState: (initial: unknown) => {
     const hooks = driver.current!;
     const index = hooks.stateIndex++;
@@ -55,7 +66,10 @@ vi.mock('react', async () => ({
   },
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
 }));
-vi.mock('@xyflow/react', () => ({ useStoreApi: () => driver.store }));
+vi.mock('@xyflow/react', async () => ({
+  ...await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react'),
+  useStoreApi: () => driver.store,
+}));
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: Object.assign((selector: (state: typeof driver.appState) => unknown) => selector(driver.appState), {
     getState: () => driver.appState,
@@ -64,6 +78,7 @@ vi.mock('../../src/store/useAppStore', () => ({
 vi.mock('../../src/components/canvas/SelectedNodeFlowEdge', () => ({ CanvasEdgeVisual: 'edge-visual' }));
 
 import CanvasEdgeLayer from '../../src/components/canvas/CanvasEdgeLayer';
+import CanvasEdgeStrokeLayer from '../../src/components/canvas/CanvasEdgeStrokeLayer';
 
 interface ElementTree {
   type: unknown;
@@ -71,7 +86,7 @@ interface ElementTree {
   props: Record<string, unknown> & { children?: unknown };
 }
 
-function elements(tree: unknown, type: string): ElementTree[] {
+function elements(tree: unknown, type: unknown): ElementTree[] {
   if (Array.isArray(tree)) return tree.flatMap((child) => elements(child, type));
   if (!tree || typeof tree !== 'object' || !('props' in tree)) return [];
   const element = tree as ElementTree;
@@ -81,10 +96,10 @@ function elements(tree: unknown, type: string): ElementTree[] {
 function component<P>(name: string, render: (props: P) => ReactNode, props: P) {
   let hooks = driver.instances.get(name);
   if (!hooks) {
-    hooks = { states: [], refs: [], effects: [], pending: [], stateIndex: 0, refIndex: 0, effectIndex: 0 };
+    hooks = { states: [], memos: [], refs: [], effects: [], pending: [], stateIndex: 0, memoIndex: 0, refIndex: 0, effectIndex: 0 };
     driver.instances.set(name, hooks);
   }
-  hooks.stateIndex = hooks.refIndex = hooks.effectIndex = 0;
+  hooks.stateIndex = hooks.memoIndex = hooks.refIndex = hooks.effectIndex = 0;
   driver.current = hooks;
   const tree = render(props);
   hooks.pending.splice(0).forEach((effect) => effect());
@@ -174,6 +189,49 @@ afterEach(() => {
 });
 
 describe('central canvas edge rendering', () => {
+  it('uses Canvas for ordinary strokes while retaining SVG fallback for markers and Canvas failures', () => {
+    vi.stubGlobal('Path2D', class {});
+    vi.stubGlobal('DOMMatrixReadOnly', class {});
+    const f = fixture([
+      { id: 'ab', source: 'a', target: 'b' },
+      { id: 'arrow', source: 'b', target: 'a', markerEnd: 'arrow' },
+    ]);
+    const tree = f.render();
+    const strokes = elements(tree, CanvasEdgeStrokeLayer);
+    expect(strokes).toHaveLength(1);
+    expect(strokes[0].props.models).toMatchObject([{ edge: { id: 'ab' } }]);
+    const runs = elements(tree, 'svg');
+    const ordinary = (runs[0].props.children as ElementTree[])[0];
+    const arrow = (runs[1].props.children as ElementTree[])[0];
+    expect(ordinary.props.baseStroke).toBe(false);
+    expect(arrow.props.baseStroke).toBe(true);
+    (strokes[0].props.onUnavailable as () => void)();
+    const fallback = f.render();
+    expect(elements(fallback, CanvasEdgeStrokeLayer)).toHaveLength(0);
+    expect(elements(fallback, 'svg')).toHaveLength(1);
+    expect(elements(sharedGroup(fallback), 'edge-visual')[0].props.baseStroke).toBe(true);
+  });
+
+  it('caps Canvas backing stores at two without reordering later SVG fallback strokes', () => {
+    vi.stubGlobal('Path2D', class {});
+    vi.stubGlobal('DOMMatrixReadOnly', class {});
+    const f = fixture([
+      { id: 'first', source: 'a', target: 'b' },
+      { id: 'arrow-1', source: 'a', target: 'b', markerEnd: 'arrow' },
+      { id: 'second', source: 'b', target: 'a' },
+      { id: 'arrow-2', source: 'b', target: 'a', markerEnd: 'arrow' },
+      { id: 'third', source: 'a', target: 'b' },
+      { id: 'fourth', source: 'b', target: 'a' },
+    ]);
+    const tree = f.render();
+    expect(elements(tree, CanvasEdgeStrokeLayer)).toHaveLength(2);
+    const groups = elements(tree, 'svg').flatMap((svg) => svg.props.children as ElementTree[]);
+    expect(groups.map((group) => (group.props.model as { edge: Edge }).edge.id))
+      .toEqual(['first', 'arrow-1', 'second', 'arrow-2', 'third', 'fourth']);
+    expect(groups.map((group) => group.props.baseStroke)).toEqual([false, true, false, true, true, true]);
+    expect(f.renderEdge).not.toHaveBeenCalled();
+  });
+
   it('keeps the shared SVG key when the first visible edge changes', () => {
     const f = fixture([{ id: 'ab', source: 'a', target: 'b' }, { id: 'ba', source: 'b', target: 'a' }]);
     const first = elements(f.render(), 'svg')[0];

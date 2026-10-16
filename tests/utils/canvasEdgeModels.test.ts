@@ -231,8 +231,25 @@ describe('canvas edge model selector', () => {
     const second = read();
     expect(second[0]).toMatchObject({ kind: 'shared', zIndex: 100, interactive: false, props: { selected: true } });
     expect(second[1]).toBe(first[1]);
+    expect((second[0] as CanvasSharedEdgeModel).path).toBe((first[0] as CanvasSharedEdgeModel).path);
     expect(geometry.getElevatedEdgeZIndex).toHaveBeenLastCalledWith(expect.objectContaining({ selected: true, sourceNode: nodes[0] }));
     expect(geometry.getEdgePosition).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds cached path geometry only when an endpoint or base curve type changes', () => {
+    const { nodes, edges, read } = fixture();
+    const first = read() as CanvasSharedEdgeModel[];
+    nodes[0].internals.positionAbsolute.x = 75;
+    const moved = read() as CanvasSharedEdgeModel[];
+    expect(moved[0].path).not.toBe(first[0].path);
+    expect(moved[0].path[0]).not.toBe(first[0].path[0]);
+    expect(moved[1].path).toBe(first[1].path);
+
+    edges[0].type = 'selected-node-flow';
+    edges[0].data = { selectedNodeFlowBaseType: 'smoothstep' };
+    const orthogonal = read() as CanvasSharedEdgeModel[];
+    expect(orthogonal[0].path[0]).not.toBe(moved[0].path[0]);
+    expect(orthogonal[1].path).toBe(first[1].path);
   });
 
   it('merges defaults and forwards all edge component props and marker URLs', () => {

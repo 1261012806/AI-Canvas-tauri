@@ -12,6 +12,8 @@ export type CanvasEdgeDisplayMode = 'orthogonal' | 'curved' | 'hidden';
 export type CanvasEdgePosition = Pick<EdgeProps,
   'sourceX' | 'sourceY' | 'targetX' | 'targetY' | 'sourcePosition' | 'targetPosition'>;
 
+export type CanvasEdgePath = [path: string, labelX: number, labelY: number, offsetX: number, offsetY: number];
+
 /** Only the installed React Flow's geometry helpers cross the build adapter. */
 export interface CanvasEdgeGeometry {
   getEdgePosition(params: {
@@ -54,6 +56,9 @@ export type CanvasLayerEdgeComponent = ComponentType<EdgeProps> & {
 };
 
 export type CanvasEdgeVisualProps = EdgeProps & {
+  path?: CanvasEdgePath;
+  /** Canvas owns the base stroke; SVG keeps hit testing and decorations. */
+  baseStroke?: boolean;
   interactive?: boolean;
   performanceMode: boolean;
   onDelete(id: string): void;
@@ -63,6 +68,7 @@ export interface CanvasSharedEdgeModel {
   kind: 'shared';
   edge: Edge;
   props: EdgeProps;
+  path: CanvasEdgePath;
   zIndex: number;
   interactive: boolean;
   focusable: boolean;

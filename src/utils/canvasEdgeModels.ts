@@ -3,7 +3,9 @@ import type {
   CanvasEdgeGeometry,
   CanvasEdgeModel,
   CanvasEdgePosition,
+  CanvasEdgePath,
 } from '../types/canvasEdges';
+import { getCanvasEdgePath } from './canvasEdgePath';
 
 type Values = readonly unknown[];
 
@@ -17,6 +19,8 @@ interface EdgeSnapshot {
   position?: CanvasEdgePosition | null;
   elevationInputs?: Values;
   zIndex?: number;
+  pathInputs?: Values;
+  path?: CanvasEdgePath;
   modelInputs?: Values;
   model: CanvasEdgeModel | null;
 }
@@ -216,6 +220,9 @@ export function createCanvasEdgeModelSelector() {
       const selectable = !!(edge.selectable || (state.elementsSelectable && edge.selectable === undefined));
       const focusable = !!(edge.focusable || (state.edgesFocusable && edge.focusable === undefined));
       const interactive = mountedNodeIds.has(edge.source) || mountedNodeIds.has(edge.target);
+      const pathInputs = [position, edge.type, edge.data?.selectedNodeFlowBaseType];
+      const path = sameValues(previous?.pathInputs, pathInputs)
+        ? previous!.path! : getCanvasEdgePath({ ...position, type: edge.type, data: edge.data });
       const modelInputs = [
         ...edgeValues(edge), state.defaultEdgeOptions, position, zIndex,
         selectable, focusable, interactive, geometry.getMarkerId, rfId,
@@ -225,9 +232,9 @@ export function createCanvasEdgeModelSelector() {
         : {
           kind: 'shared' as const, edge,
           props: edgeProps(edge, position, selectable, geometry, rfId),
-          zIndex, selectable, focusable, interactive,
+          path, zIndex, selectable, focusable, interactive,
         };
-      nextEdges.set(id, { positionInputs, position, elevationInputs, zIndex, modelInputs, model });
+      nextEdges.set(id, { positionInputs, position, elevationInputs, zIndex, pathInputs, path, modelInputs, model });
       nextModels.push(model);
     }
     edges = nextEdges;
