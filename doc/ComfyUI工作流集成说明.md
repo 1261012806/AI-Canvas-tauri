@@ -309,11 +309,13 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 
 `savePendingTask` 在提交前落盘，`taskId` 留空、`submitted: false`；拿到 `prompt_id` 后回填 ID 和实际服务器地址。只有已记录 ID 的任务才能由 [pollManager.ts](../src/services/pollManager.ts) 继续查询。提交响应丢失或关窗时尚未记下 ID 的任务仍不能自动找回，也不会自动重新提交。
 
-- history 请求连续失败或查询达到一小时上限：抛出 `ComfyPendingError`，保留任务并标记 `comfyRecoveryState=disconnected`。节点显示“继续查询”和“再次终止”；续查复用原 ID，不再次生成。
+- history 请求连续失败或查询达到一小时上限：保留任务并标记 `comfyRecoveryState=disconnected`。图片/音频沿用 `ComfyPendingError` 和“继续查询”；视频复用暂停状态与“重试”入口，续查复用原 ID，不再次生成。
 - 取消前先标记 `cancel_pending` 并停止本地等待。远端取消得到成功响应后清理；请求失败保留记录和重试入口。重开项目不会自动再次发送取消请求。
-- 执行成功、明确执行失败、连续确认 history/queue 都不存在以及节点删除：正常清理。旧控制器退出或旧取消回执不得删除新任务。
+- 视频远端完成后仍保留任务，直到文件保存与节点回填成功才清理；下载失败或派生守卫过期时暂停，点击“重试”只续取原任务。保存期间退出应用，重开项目后等待用户重试，不自动查询。明确执行失败、连续确认 history/queue 都不存在以及节点删除正常清理。旧控制器退出或旧取消回执不得删除新任务。
 - 恢复下载回填须复核任务、项目和 canvas derivation guard；项目或画布已变化时保留任务供再次查询。
-- 已有可恢复任务时禁止覆盖提交；用户先续查或确认终止后再生成。
+- 视频已暂停时允许再次生成：旧任务及原始生成参数先移至独立恢复节点，保留重试入口。查询进行中或取消未确认时仍禁止覆盖提交；图片/音频沿用先续查或确认终止后再生成。
+
+本轮交付恢复与空视频框比例兜底已实现，待 macOS、Windows 桌面端验收；未运行测试。验收时选择 9:16 确认空框竖屏，再切回 16:9；使用 ComfyUI 生成视频，确认本地回填后可播放。模拟项目目录写入失败、保存期间切换项目或修改画布，恢复条件后点击“重试”，应保存原任务视频且不新增远端任务；重开项目应保留暂停状态，再次生成应保留独立恢复节点。上游明确失败仍报错，取消未确认仍禁止覆盖。已有视频保持真实比例；画风与摄影参数选中均只改变图标颜色。相关回归用例为 `tests/services/comfyTaskRecovery.test.ts`、`tests/components/videoNodePreviewLifecycle.test.tsx`。
 
 正常生成的实时进度保存在非持久化 UI Store，图片、动画、视频和音频节点共用 `NodeGenerationProgress`。WebSocket 失效时继续 HTTP 轮询，恢复任务当前仍以 HTTP 续查为主。
 

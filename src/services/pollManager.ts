@@ -127,7 +127,7 @@ const STORAGE_KEY = 'ai_canvas_pending_tasks';
 /** 无显式等待预算的云视频查询，每轮最多等待 30 分钟，随后可手动续查。 */
 export const VIDEO_POLL_MAX_DURATION_MS = 30 * 60 * 1000;
 
-const RECOVERABLE_VIDEO_TASK_TYPES: PendingTask['taskType'][] = ['custom-protocol', 'general', 'apimart', 'volcengine'];
+const RECOVERABLE_VIDEO_TASK_TYPES: PendingTask['taskType'][] = ['custom-protocol', 'general', 'apimart', 'volcengine', 'comfyui'];
 
 export class VideoPollingPausedError extends Error {
   constructor() {
@@ -138,6 +138,7 @@ export class VideoPollingPausedError extends Error {
 
 function isRecoverableVideoTask(task: PendingTask): boolean {
   return task.nodeType === 'ai-video' && task.submitted && !!task.taskId
+    && !(task.taskType === 'comfyui' && task.comfyRecoveryState === 'cancel_pending')
     && RECOVERABLE_VIDEO_TASK_TYPES.includes(task.taskType);
 }
 
@@ -882,6 +883,9 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
       extract,
       signal,
     );
+    if (nodeType === 'ai-video') {
+      updatePendingTask(nodeId, { videoRecoveryState: 'paused' }, taskId);
+    }
     await maybeAutoReleaseComfyMemory(
       baseUrl,
       useAppStore.getState().config.comfyMemoryPolicy ?? 'smart',
@@ -893,6 +897,7 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
     if (signal.aborted) return;
     if (err instanceof ComfyPendingError) {
       updatePendingTask(nodeId, { comfyRecoveryState: 'disconnected' }, taskId);
+      if (nodeType === 'ai-video' && pauseVideoNodeTask(nodeId, taskId)) return;
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: err.message });
     } else {
       await maybeAutoReleaseComfyMemory(
