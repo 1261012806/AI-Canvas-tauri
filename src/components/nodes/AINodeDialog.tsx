@@ -82,7 +82,9 @@ function AINodeDialog() {
   // 仅订阅当前激活的节点（而非整个 nodes 数组），拖拽其他节点时不会触发本弹窗重渲染
   const node = useAppStore((s) => (s.activeNodeId ? s.nodes.find((n) => n.id === s.activeNodeId) : undefined));
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
-  const data: BaseNodeData | undefined = node?.data;
+  // 源图片沿用生图的模型、参数和执行入口；只适配面板数据，不改变素材节点身份。
+  const data: BaseNodeData | undefined = node?.data.type === 'source-image'
+    ? { ...node.data, type: 'ai-image' } : node?.data;
   const nodeType = data?.type;
   const isPrevis = nodeType === 'ai-director' && data?.directorRuntimeKind === 'ai-threejs';
   const directorDialogBlocked = (node?.type === 'ai-director' || nodeType === 'ai-director') && !isPrevis;
@@ -358,7 +360,8 @@ function AINodeDialog() {
     // 实时从 store 读取全部数据 — 避免闭包 data 为 undefined
     const store = useAppStore.getState();
     const latestNode = store.nodes.find((n) => n.id === activeNodeId);
-    const latestData = latestNode?.data as BaseNodeData | undefined;
+    const latestData: BaseNodeData | undefined = latestNode?.data.type === 'source-image'
+      ? { ...latestNode.data, type: 'ai-image' } : latestNode?.data;
     if (!latestData) {
       showToast(t('节点不存在'), 'error');
       return;

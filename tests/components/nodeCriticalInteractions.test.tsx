@@ -1125,6 +1125,89 @@ describe('critical canvas node interactions', () => {
     expect(store.closeNodeDialog).toHaveBeenCalledTimes(4);
   });
 
+  describe('source image generation', () => {
+    afterEach(() => {
+      vi.doUnmock('../../src/services/ai/mediaModelCapabilities');
+      vi.doUnmock('../../src/services/projectSettingsService');
+    });
+
+    it.each([
+      { type: 'source-image', entry: 'dialog' }, { type: 'source-image', entry: 'toolbar' },
+      { type: 'ai-image', entry: 'dialog' }, { type: 'ai-image', entry: 'toolbar' },
+    ])('uses image models and generation for $type through $entry without changing source identity', async ({ type, entry }) => {
+      const store = createStore([{
+        id: 'imported-image', type, position: { x: 12, y: 34 },
+        data: { type, label: '上传图片', role: 'source', status: 'success',
+          imageUrl: 'asset://original.png', filePath: 'original.png', assetId: 'original-asset',
+          dramaAssetId: 'character-1', prompt: '@{reference:参考图} 重绘',
+          model: 'old-model', provider: 'general' },
+      }], () => 1);
+      store.activeNodeId = 'imported-image';
+      const generateImage = vi.fn().mockResolvedValue({ url: 'https://example.com/result.png', width: 768, height: 1024 });
+      const generateText = vi.fn();
+      const resolveProjectGenerationPrompt = vi.fn(
+        ({ prompt, data }: { prompt: string; data: Record<string, unknown> }) => `${data.type}:${prompt}`,
+      );
+      await installReactHookDriver();
+      installStoreMock(store);
+      vi.doUnmock('../../src/services/generationService');
+      vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+      vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+      vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }));
+      vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({
+        default: function PromptPanelMock() { return null; },
+      }));
+      vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+      vi.doMock('../../src/services/aiService', () => ({
+        generateText, generateImage, generateImagesBatch: vi.fn(), generateVideo: vi.fn(), generateAudio: vi.fn(), buildPanoramaPrompt: vi.fn(),
+      }));
+      vi.doMock('../../src/services/fileService', () => ({
+        persistMediaUrlToProjectData: vi.fn(async (url: string) => ({ mediaUrl: url, sourceUrl: url, filePath: 'result.png' })),
+      }));
+      vi.doMock('../../src/services/ai/mediaModelCapabilities', async () => ({
+        ...await vi.importActual<typeof import('../../src/services/ai/mediaModelCapabilities')>('../../src/services/ai/mediaModelCapabilities'),
+        resolveImageParameterCapability: () => ({ defaultResolution: '1K', defaultRatio: '3:4' }),
+      }));
+      vi.doMock('../../src/services/projectSettingsService', async () => ({
+        ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
+        resolveProjectGenerationPrompt,
+        getImageNodeDimensionsForAspectRatio: () => ({ nodeWidth: 210, nodeHeight: 280 }),
+        getProjectModelKind: (nodeType: string) => nodeType === 'ai-image' ? 'image' : null,
+        parseProjectModelRef: (model: string | undefined) => model ? { model, provider: 'general' } : null,
+      }));
+      vi.doMock('../../src/services/pollManager', () => ({ getPendingTasksForProject: () => [] }));
+
+      const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+      const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
+      expect(panel.props.nodeType).toBe('ai-image');
+      expect(panel.props.onPassThrough).toBeUndefined();
+      (panel.props.onModelSelect as (model: Record<string, unknown>) => void)({
+        value: 'general/image-model', provider: 'general', label: 'Image model',
+      });
+      expect(store.nodes[0].data).toMatchObject({
+        type, role: 'source', model: 'general/image-model', imageSize: '1K', aspectRatio: '3:4',
+        imageUrl: 'asset://original.png', filePath: 'original.png', assetId: 'original-asset', dramaAssetId: 'character-1',
+      });
+      if (entry === 'dialog') await (panel.props.onSubmit as () => Promise<void>)();
+      else {
+        const { executeGeneration } = await import('../../src/services/generationService');
+        expect(await executeGeneration('imported-image')).toEqual({ success: true });
+      }
+      expect(resolveProjectGenerationPrompt).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ type: 'ai-image', role: 'source' }),
+      }));
+      expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+        nodeId: 'imported-image', model: 'general/image-model', provider: 'general',
+        prompt: 'ai-image:@{reference:参考图} 重绘', imageSize: '1K', aspectRatio: '3:4',
+      }));
+      expect(generateText).not.toHaveBeenCalled();
+      expect(store.nodes[0]).toMatchObject({ id: 'imported-image', type, position: { x: 12, y: 34 },
+        data: { type, role: 'source', assetId: 'original-asset', dramaAssetId: 'character-1',
+          status: 'success', imageUrl: 'https://example.com/result.png' } });
+      expect(store.recordOutputHistory).toHaveBeenCalledWith('imported-image', expect.objectContaining({ nodeType: 'ai-image' }));
+    });
+  });
+
   it('AINodeDialog submits the latest video parameters and resolved project prompt', async () => {
     const originalData = {
       type: 'ai-video',

@@ -66,7 +66,10 @@ export async function executeGeneration(
     try { await assertLease(); } catch { return { success: false, message: '任务已取消' }; }
   }
   const store = useAppStore.getState();
-  const data: BaseNodeData | undefined = passData ?? (store.nodes.find((n) => n.id === nodeId)?.data as BaseNodeData | undefined);
+  const storedData = passData ?? store.nodes.find((n) => n.id === nodeId)?.data;
+  // MCP、角色库等导入的源图片同样可以生图，持久化类型及原有引用保持不变。
+  const data: BaseNodeData | undefined = storedData?.type === 'source-image'
+    ? { ...storedData, type: 'ai-image' } : storedData;
   if (!data) return { success: false, message: '节点不存在' };
 
   const nodeType = data?.type;
