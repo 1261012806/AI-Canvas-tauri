@@ -792,7 +792,7 @@ function AINodeDialog() {
       }
     } catch (err) {
       if (err instanceof VideoPollingPausedError) return;
-      if (videoResultReceived && videoTaskId && pauseVideoNodeTask(submittingNodeId, videoTaskId)) return;
+      if (videoResultReceived && videoTaskId && pauseVideoNodeTask(submittingNodeId, videoTaskId, err)) return;
       const msg = err instanceof Error ? err.message : (typeof err === 'string' && err.trim() ? err : t('生成失败'));
       if (
         (err instanceof DOMException && err.name === 'AbortError')

@@ -34,6 +34,13 @@ beforeEach(() => {
 });
 
 describe('video task retry entry', () => {
+  it('keeps a safe download failure reason visible alongside the retry entry', () => {
+    const reason = '生成媒体未能写入项目目录：视频下载返回空文件，可重试下载原任务';
+    mocks.tasks[0].videoRecoveryMessage = reason;
+    expect(elements(render()).find((element) => element.type === 'span')?.props.children).toBe(reason);
+    expect(retryButton().props.disabled).toBe(false);
+  });
+
   it('is available only for a paused, submitted task in the current project', () => {
     expect(retryButton().props['aria-label']).toBe('重试查询视频任务');
     mocks.tasks[0].taskId = ''; expect(render()).toBeNull();

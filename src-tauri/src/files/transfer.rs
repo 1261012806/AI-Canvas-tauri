@@ -296,6 +296,10 @@ where
     if !response.status().is_success() {
         return Err(format!("下载请求失败: HTTP {}", response.status()));
     }
+    // 本入口未请求 Range；不能把服务端返回的局部分段当作完整文件发布。
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err("下载返回不完整的分段内容".into());
+    }
     let metadata = DownloadMetadata {
         content_length: response.content_length(),
         content_type: response
@@ -413,6 +417,33 @@ pub async fn copy_file_streamed(
     result
 }
 
+/// 只读取容器头；完整性仍由传输长度校验负责，不以本机解码器支持与否判断下载成败。
+fn validate_downloaded_video(path: &Path, _metadata: &DownloadMetadata) -> Result<(), String> {
+    let mut file = File::open(path).map_err(|_| "无法读取下载视频".to_string())?;
+    let len = file.metadata().map_err(|_| "无法读取下载视频大小".to_string())?.len();
+    if len == 0 {
+        return Err("视频下载返回空文件".into());
+    }
+    let mut header = [0_u8; 64];
+    let count = len.min(header.len() as u64) as usize;
+    file.read_exact(&mut header[..count]).map_err(|_| "无法读取下载视频文件头".to_string())?;
+    let header = &header[..count];
+    let iso_video = header.len() >= 16
+        && matches!(&header[4..8], b"ftyp" | b"moov" | b"mdat" | b"free" | b"skip" | b"wide")
+        && {
+            let atom_len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+            if atom_len == 1 {
+                let extended = u64::from_be_bytes(header[8..16].try_into().unwrap());
+                extended >= 16 && extended <= len
+            } else {
+                atom_len == 0 || (atom_len >= 8 && u64::from(atom_len) <= len)
+            }
+        };
+    let matroska = header.len() >= 8 && header.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]);
+    let avi = header.len() >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"AVI ";
+    if iso_video || matroska || avi { Ok(()) } else { Err("下载结果不是有效视频".into()) }
+}
+
 #[tauri::command]
 pub async fn download_file_streamed(
     app: AppHandle,
@@ -420,9 +451,13 @@ pub async fn download_file_streamed(
     task_id: String,
     url: String,
     destination_path: String,
+    expected_media_kind: Option<String>,
 ) -> Result<FileTransferResult, String> {
     ensure_trusted_caller(&webview)?;
     let destination = authorize_path(&app, &destination_path, PathAccess::Write)?;
+    if expected_media_kind.as_deref().is_some_and(|kind| kind != "video") {
+        return Err("不支持的下载媒体校验类型".into());
+    }
 
     let task_id_for_worker = task_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -432,7 +467,9 @@ pub async fn download_file_streamed(
             &url,
             &destination,
             None,
-            |_, _| Ok(()),
+            |path, metadata| {
+                if expected_media_kind.is_some() { validate_downloaded_video(path, metadata) } else { Ok(()) }
+            },
         )
     })
     .await
@@ -871,6 +908,45 @@ pub fn cancel_file_transfer(task_id: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn video_download_accepts_recognizable_containers_without_requiring_a_decoder() {
+        let root = test_directory("video-containers");
+        let path = root.join("video.part");
+        let metadata = DownloadMetadata { content_length: None, content_type: Some("application/octet-stream".into()) };
+        for bytes in [
+            &b"\0\0\0\x18ftypisom\0\0\0\0isommp42"[..],
+            &b"\x1a\x45\xdf\xa3\x01\x02\x03\x04"[..],
+            &b"RIFF\x04\0\0\0AVI "[..],
+            &b"\0\0\0\x08wide\0\0\0\x10mdat12345678"[..],
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert!(validate_downloaded_video(&path, &metadata).is_ok());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_video_download_never_publishes_an_empty_file_error_page_or_preview() {
+        let root = test_directory("invalid-video-download");
+        let destination = root.join("video.mp4");
+        let metadata = DownloadMetadata { content_length: None, content_type: Some("video/mp4".into()) };
+        for bytes in [
+            &b""[..], &b"<html>upstream error</html>"[..],
+            &b"{\"error\":\"not found\"}"[..], &b"\x89PNG\r\n\x1a\npreview"[..],
+            &b"GIF89apreview"[..], &b"\0\0\x04\0ftypisom\0\0\0\0"[..],
+        ] {
+            let result = stream_to_file(
+                "invalid-video", &mut Cursor::new(bytes), &destination,
+                Some(bytes.len() as u64), None, None, || Ok(false), |_| {},
+                |path| validate_downloaded_video(path, &metadata),
+            );
+            assert!(result.is_err());
+            assert!(!destination.exists());
+            assert!(!part_path(&destination, "invalid-video").exists());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn project_media_reuse_keeps_the_existing_file_without_creating_a_copy() {

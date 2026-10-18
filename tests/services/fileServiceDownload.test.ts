@@ -59,6 +59,7 @@ vi.mock('../../src/services/fs/core', () => ({
 import {
   copyFileToProjectData,
   downloadUrlAndSave,
+  MediaPersistenceError,
   persistMediaUrlToProjectData,
   resolveProjectOutputPath,
   saveBinaryToProjectData,
@@ -231,6 +232,16 @@ describe('downloadUrlAndSave', () => {
       { filePath: '/project/data/AI 图片_1.png', assetUrl: 'asset:///project/data/AI 图片_1.png' },
     ]);
     expect(mocks.resolveUniqueDestPath).toHaveBeenCalledTimes(2);
+  });
+
+  it('requires native video validation when downloading a Windows ComfyUI result to a Mac project', async () => {
+    const url = 'http://comfy.test:8188/view?filename=final.mp4&subfolder=video&type=output';
+    mocks.invoke.mockResolvedValue({ path: '/project/data/镜3.mp4', totalBytes: 1024, contentType: 'video/mp4' });
+    await expect(persistMediaUrlToProjectData(url, 'project-1', 'ai-video', '镜3'))
+      .resolves.toMatchObject({ filePath: '/project/data/镜3.mp4', mediaUrl: 'asset:///project/data/镜3.mp4', sourceUrl: url });
+    expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.objectContaining({
+      url, destinationPath: '/project/data/镜3.mp4', expectedMediaKind: 'video',
+    }));
   });
 
   it('writes base64 image results directly into the project directory', async () => {
@@ -529,6 +540,9 @@ describe('persistMediaUrlToProjectData', () => {
     ['download', '下载请求失败: HTTP 403 Forbidden https://cdn.example/image?token=private-token', '图片或媒体下载失败（HTTP 403）'],
     ['download', '目标磁盘空间不足，需要至少 999 字节，当前可用 1 字节', '目标磁盘空间不足'],
     ['download', '下载请求失败: connection timed out https://cdn.example/private-token', '下载媒体失败，请检查网络或媒体链接是否已失效'],
+    ['download', '视频下载返回空文件', '视频下载返回空文件，可重试下载原任务'],
+    ['download', '下载结果不是有效视频', '下载结果不是有效视频，请检查输出格式或下载服务'],
+    ['download', '下载返回不完整的分段内容', '下载返回了不完整的视频或媒体，可重试下载原任务'],
     ['write', new Error('unknown private-token C:/private/user/image.png'), '保存过程发生异常，请检查文件保存目录和媒体来源'],
   ])('reports a safe reason for %s failures', async (operation, failure, reason) => {
     const log = vi.spyOn(console, 'error');
@@ -543,7 +557,7 @@ describe('persistMediaUrlToProjectData', () => {
       'project-1', 'ai-image', '图片', { deduplicateByContent: true },
     ).catch((failure: unknown) => failure);
 
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(MediaPersistenceError);
     expect((error as Error).message).toBe(`生成媒体未能写入项目目录：${reason}`);
     expect(error).not.toHaveProperty('cause');
     expect(log).not.toHaveBeenCalled();

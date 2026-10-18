@@ -973,6 +973,10 @@ export interface PersistedProjectMedia {
 /** 原始异常只用于本次分类，不把路径、签名 URL 或响应正文传入节点和历史。 */
 function describeMediaPersistenceFailure(error: unknown): string {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+  if (/视频下载返回空文件/.test(message)) return '视频下载返回空文件，可重试下载原任务';
+  if (/下载结果不是有效视频/.test(message)) return '下载结果不是有效视频，请检查输出格式或下载服务';
+  if (/下载返回不完整的分段内容/.test(message)) return '下载返回了不完整的视频或媒体，可重试下载原任务';
+  if (message === '项目目录或本地媒体地址不可用') return message;
   if (/forbidden path|路径未获授权|not allowed on the scope/i.test(message)) {
     return '应用拒绝访问项目文件，请在设置中重新选择文件保存目录';
   }
@@ -994,6 +998,14 @@ function describeMediaPersistenceFailure(error: unknown): string {
     return '媒体超过内存保存上限';
   }
   return '保存过程发生异常，请检查文件保存目录和媒体来源';
+}
+
+/** 只携带固定分类后的原因，供待恢复任务展示；不保留原生异常或 cause。 */
+export class MediaPersistenceError extends Error {
+  constructor(error: unknown) {
+    super(`生成媒体未能写入项目目录：${describeMediaPersistenceFailure(error)}`);
+    this.name = 'MediaPersistenceError';
+  }
 }
 
 /**
@@ -1020,11 +1032,11 @@ export async function persistMediaUrlToProjectData(
     if (isAbortError(error) || options?.signal?.aborted) {
       throw new DOMException('媒体保存已取消', 'AbortError');
     }
-    // eslint-disable-next-line preserve-caught-error -- 原始异常可能包含路径、签名 URL 或凭据，不保留 cause。
-    throw new Error(`生成媒体未能写入项目目录：${describeMediaPersistenceFailure(error)}`);
+    // 仅保留固定分类后的原因，不携带原始路径、链接或凭据。
+    throw new MediaPersistenceError(error);
   }
   if (!saved?.filePath || !saved.assetUrl) {
-    throw new Error('生成媒体未能写入项目目录：项目目录或本地媒体地址不可用');
+    throw new MediaPersistenceError('项目目录或本地媒体地址不可用');
   }
   if (isLocalMediaUrl(url)) {
     return { ...saved, mediaUrl: saved.assetUrl, sourceUrl: saved.assetUrl };
@@ -1104,7 +1116,10 @@ export async function downloadUrlAndSave(
         const destPath = await resolveUniqueDestPath(dataDir, fileName, true);
         return runNativeFileTransfer(
           sourcePath ? 'copy_file_streamed' : 'download_file_streamed',
-          sourcePath ? { sourcePath, destinationPath: destPath } : { url, destinationPath: destPath },
+          sourcePath ? { sourcePath, destinationPath: destPath } : {
+            url, destinationPath: destPath,
+            ...(fallbackPrefix.includes('video') ? { expectedMediaKind: 'video' } : {}),
+          },
           options,
         );
       },

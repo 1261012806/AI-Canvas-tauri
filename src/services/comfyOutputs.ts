@@ -35,7 +35,7 @@ const OUTPUT_KEYS: Record<ComfyOutputKind, string[]> = {
 /** 键名不认识时按扩展名兜底认领 */
 const OUTPUT_EXTENSIONS: Record<ComfyOutputKind, string[]> = {
   image: ['png', 'jpg', 'jpeg', 'webp', 'bmp'],
-  video: ['mp4', 'webm', 'mkv', 'mov', 'm4v', 'avi', 'gif'],
+  video: ['mp4', 'webm', 'mkv', 'mov', 'm4v', 'avi'],
   audio: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus'],
 };
 
@@ -48,16 +48,17 @@ function toOutputFiles(value: unknown): ComfyOutputFile[] {
 }
 
 /** 从单个节点输出里取某类媒体：先认已知键名，认不出再按扩展名扫描其余键 */
-function pickFromNode(node: ComfyOutputNode, kind: ComfyOutputKind): ComfyOutputFile | null {
+function pickFromNode(node: ComfyOutputNode, kind: ComfyOutputKind, outputOnly = false): ComfyOutputFile | null {
+  const extensions = OUTPUT_EXTENSIONS[kind];
+  const hasMatchingExtension = (file: ComfyOutputFile) => extensions.includes(file.filename.split('.').pop()?.toLowerCase() ?? '');
+  const accepts = (file: ComfyOutputFile) => (!outputOnly || !file.type || file.type === 'output')
+    && (kind !== 'video' || hasMatchingExtension(file));
   for (const key of OUTPUT_KEYS[kind]) {
-    const file = toOutputFiles(node[key])[0];
+    const file = toOutputFiles(node[key]).find(accepts);
     if (file) return file;
   }
-  const extensions = OUTPUT_EXTENSIONS[kind];
   for (const value of Object.values(node)) {
-    const file = toOutputFiles(value).find((item) =>
-      extensions.includes(item.filename.split('.').pop()?.toLowerCase() ?? ''),
-    );
+    const file = toOutputFiles(value).find((item) => accepts(item) && hasMatchingExtension(item));
     if (file) return file;
   }
   return null;
@@ -72,10 +73,13 @@ export function findComfyOutputFile(
   kinds: ComfyOutputKind[],
 ): ComfyOutputFile | null {
   for (const kind of kinds) {
-    for (const node of Object.values(outputs)) {
-      if (!node || typeof node !== 'object') continue;
-      const file = pickFromNode(node, kind);
-      if (file) return file;
+    // 视频先找正式输出，再兼容只有临时预览的工作流，避免前置 Preview 抢走成片。
+    for (const outputOnly of kind === 'video' ? [true, false] : [false]) {
+      for (const node of Object.values(outputs)) {
+        if (!node || typeof node !== 'object') continue;
+        const file = pickFromNode(node, kind, outputOnly);
+        if (file) return file;
+      }
     }
   }
   return null;

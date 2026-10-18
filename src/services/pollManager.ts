@@ -11,7 +11,7 @@ import { isPollTimeoutError, pollTask, PollTaskFailedError, PollTimeoutError } f
 import { derivedNodePlacement, generateId, getNextDisplayId } from '../store/store.utils';
 import { corsSafeFetch } from './ai/httpTransport';
 import { useAppStore } from '../store/useAppStore';
-import { persistMediaUrlToProjectData } from './fileService';
+import { MediaPersistenceError, persistMediaUrlToProjectData } from './fileService';
 import { applyImageBatchResults } from './imageBatchService';
 import { mapImageDimensions } from './aiDimensions';
 import { parseMultiPathResponse, splitCommaSeparatedUrls } from './ai/helpers';
@@ -112,6 +112,8 @@ export interface PendingTask {
   submitted: boolean;
   /** 本地查询暂停，重启后等待用户手动继续。 */
   videoRecoveryState?: 'paused';
+  /** 仅保存 MediaPersistenceError 已脱敏的固定原因，不保存底层错误或媒体地址。 */
+  videoRecoveryMessage?: string;
   /** 只保存生成输入标量，不包含参考素材路径、请求正文或凭据。 */
   videoGeneration?: Pick<BaseNodeData, 'prompt' | 'model' | 'provider' | 'seedanceResolution'
     | 'seedanceRatio' | 'seedanceDuration' | 'generateAudio' | 'videoResolution' | 'videoFrames' | 'videoFps'>;
@@ -169,10 +171,13 @@ function guardVideoTaskQuery(task: PendingTask, signal: AbortSignal) {
 }
 
 /** 保留远端身份；旧请求、删除节点和切换后的回调不能改写当前节点。 */
-export function pauseVideoNodeTask(nodeId: string, expectedTaskId?: string): VideoPollingPausedError | undefined {
+export function pauseVideoNodeTask(nodeId: string, expectedTaskId?: string, error?: unknown): VideoPollingPausedError | undefined {
   const task = loadAll().find((item) => item.nodeId === nodeId);
   if (!task || !isRecoverableVideoTask(task) || (expectedTaskId !== undefined && task.taskId !== expectedTaskId)) return undefined;
-  updatePendingTask(nodeId, { videoRecoveryState: 'paused' }, task.taskId);
+  updatePendingTask(nodeId, {
+    videoRecoveryState: 'paused',
+    videoRecoveryMessage: error instanceof MediaPersistenceError ? error.message : undefined,
+  }, task.taskId);
   if (isCurrentVideoTask(task)) {
     useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'idle', error: undefined, videoTaskState: 'paused' });
   }
@@ -448,7 +453,7 @@ async function handleResumeError(
       return;
     }
     if (!(err instanceof PollTaskFailedError)) {
-      pauseVideoNodeTask(task.nodeId, task.taskId);
+      pauseVideoNodeTask(task.nodeId, task.taskId, err);
       return;
     }
   }

@@ -346,7 +346,7 @@ async function executeOneNode(
     return true;
   } catch (err) {
     if (err instanceof VideoPollingPausedError) return false;
-    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId)) return false;
+    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId, err)) return false;
     if (!await isFresh()) return false;
     const msg = err instanceof Error ? err.message : typeof err === 'string' && err.trim() ? err : '生成失败';
     ctx.updateNodeDataTransient(node.id, { status: 'error', error: msg });

@@ -32,6 +32,22 @@ describe('findComfyOutputFile', () => {
       .toBeNull();
   });
 
+  it.each(['videos', 'video', 'gifs'])('does not trust the %s key to identify video content', (key) => {
+    const previews = [file('preview.png'), file('preview.webp'), file('preview.gif')];
+    expect(findComfyOutputFile({ '8': { [key]: previews } }, ['video'])).toBeNull();
+    expect(findComfyOutputFile({ '8': { [key]: [...previews, file('result.MP4')] } }, ['video']))
+      .toEqual(file('result.MP4'));
+  });
+
+  it('prefers the saved video over an earlier temporary video preview', () => {
+    const preview = { ...file('preview.webm'), type: 'temp' };
+    const saved = { ...file('final.mp4'), subfolder: 'video' };
+    expect(findComfyOutputFile({ '1': { videos: [preview] }, '9': { gifs: [saved] } }, ['video']))
+      .toEqual(saved);
+    expect(findComfyOutputFile({ '1': { gifs: [preview, saved] } }, ['video'])).toEqual(saved);
+    expect(findComfyOutputFile({ '1': { videos: [preview] } }, ['video'])).toEqual(preview);
+  });
+
   it('honours the kind priority across nodes', () => {
     const outputs = {
       '8': { images: [file('frame.png')] },

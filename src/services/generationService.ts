@@ -432,7 +432,7 @@ export async function executeGeneration(
     return { success: true };
   } catch (err) {
     if (err instanceof VideoPollingPausedError) return { success: false, message: err.message };
-    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(nodeId, videoTaskId)) {
+    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(nodeId, videoTaskId, err)) {
       return { success: false, message: '视频保存暂未完成，任务已保留，可重试下载' };
     }
     if (lease) {

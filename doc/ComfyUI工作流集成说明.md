@@ -295,7 +295,11 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 1. **按已知键名**：图片 `images`/`image`，视频 `videos`/`video`/`gifs`，音频 `audio`/`audios`；
 2. **按扩展名**：键名认不出时扫描其余键，按 `.mp4`/`.png`/`.mp3` 这类扩展名认领。
 
-找到后拼成 `{baseUrl}/view?filename=…&subfolder=…&type=output`。视频只认视频扩展名；`SaveWEBM`/`SaveVideo` 即使把 `.mp4` / `.webm` 挂在 `images` 下也能识别，但编码前的 `PreviewImage` PNG 不再被当成成片。
+找到后拼成 `{baseUrl}/view?filename=…&subfolder=…&type=output`。视频只认视频扩展名，`videos` / `video` / `gifs` 也必须逐项匹配；PNG、WebP 和 GIF 预览不能当成成片。`SaveWEBM`/`SaveVideo` 即使把 `.mp4` / `.webm` 挂在 `images` 下也能识别。视频先选正式 `output`（兼容缺省 type），只有没有正式视频时才接受 `temp` / `input` 视频预览，实时生成和任务恢复共用相同规则。
+
+2026-10-18 远端视频交付修正已实现，待用户桌面验收：项目视频通过原生流式下载，并在临时文件发布前读取有界容器头，拒绝空文件、错误页和图片预览；完整长度仍由传输层核对，不要求本机解码器支持。普通原生完整下载拒绝未请求的 HTTP 206 分段响应。下载失败保留原任务 ID，暂停卡片持续展示固定分类后的落盘原因，不保存原始异常、路径、正文或凭据；重试只取回原结果。
+
+本次未运行测试，未取得反馈现场的工作流、history 或失败响应，不能据此确认该用户的实际根因。验收以 Mac Tauri 连接 Windows ComfyUI 为主：准备有效项目保存目录和远端视频工作流，完成生成后确认 Mac 项目目录有非空视频、节点可播放且重启后保留；含图片/临时视频预览与正式视频时应取正式成片。下载中断、空内容、HTTP 200 错误页或未请求的 206 应保留重试入口并显示原因，恢复后重试不得新增 `/prompt`。回归项目切换、原本地 Windows 生成及图片/音频下载。回归入口：`comfyOutputs.test.ts`、`comfyTaskRecovery.test.ts`、`fileServiceDownload.test.ts`、`videoTaskStatus.test.tsx` 和 `file_transfer::tests`。Rust 检查由用户在 `src-tauri/` 执行 `cargo test file_transfer::tests`、`cargo check`；回滚撤销本段及对应源码/测试补丁，无数据库或权限迁移。
 
 轮询节奏：**3 秒一次，最多 1200 次（1 小时）**。当 history 带 `status` 时，必须等到 `completed=true` 或 `status_str=success` 才交付输出；没有 `status` 的旧兼容服务仍按已有输出判断。失败信息从 `status.messages` 里倒着找 `exception_message` / `error` / `message`，找不到就报「ComfyUI 执行失败」。执行完成但取不到目标媒体，报「执行完成但未返回目标媒体」。
 

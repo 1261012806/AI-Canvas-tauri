@@ -9,6 +9,7 @@ import {
   cancelComfyUINodeTask, executeComfyUIAudioGenerate, executeComfyUIGenerate, executeComfyUIVideoGenerate,
 } from '../../src/services/comfyWorkflowService';
 import { ComfyPendingError, pollComfyHistory } from '../../src/services/comfyPolling';
+import { MediaPersistenceError } from '../../src/services/fileService';
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), history: vi.fn(), cancel: vi.fn(), persist: vi.fn() }));
 vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mocks.fetch }));
@@ -116,9 +117,11 @@ describe('ComfyUI 任务恢复合同', () => {
   it('视频下载失败保留任务，重试后落盘回填且不重复生成', async () => {
     configureVideo();
     await executeComfyUIVideoGenerate(params);
-    mocks.persist.mockRejectedValueOnce(new Error('系统拒绝写入项目目录'));
+    mocks.persist.mockRejectedValueOnce(new MediaPersistenceError('下载结果不是有效视频 /private/user/video.mp4?token=secret'));
     await resumeVideoNodeTask('n1');
-    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', videoRecoveryState: 'paused' });
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', videoRecoveryState: 'paused',
+      videoRecoveryMessage: '生成媒体未能写入项目目录：下载结果不是有效视频，请检查输出格式或下载服务' });
+    expect(JSON.stringify(pending())).not.toMatch(/\/private|secret/);
     expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'idle', videoTaskState: 'paused', error: undefined });
     expect(useAppStore.getState().nodes[0].data.videoUrl).toBeUndefined();
 
@@ -127,6 +130,31 @@ describe('ComfyUI 任务恢复合同', () => {
     expect(pending()).toEqual([]);
     expect(useAppStore.getState().nodes[0].data).toMatchObject({ videoUrl: 'asset://local.mp4', filePath: 'saved.mp4', status: 'success' });
     expect(promptCalls()).toHaveLength(1);
+  });
+
+  it('实时生成和恢复都跳过图片预览，使用正式视频的远端取件地址', async () => {
+    configureVideo();
+    mocks.history.mockImplementation(async () => json({ 'prompt-1': { status: { completed: true }, outputs: {
+      '1': { gifs: [{ filename: 'preview.webp', type: 'output' }] },
+      '2': { videos: [{ filename: 'preview.webm', type: 'temp' }] },
+      '9': { gifs: [{ filename: 'final.mp4', subfolder: 'video', type: 'output' }] },
+    } } }));
+    const url = `${task.baseUrl}/view?filename=final.mp4&subfolder=video&type=output`;
+    await expect(executeComfyUIVideoGenerate(params)).resolves.toEqual({ url });
+    mocks.persist.mockResolvedValue({ mediaUrl: 'asset://saved.mp4', sourceUrl: url, filePath: 'saved.mp4' });
+    await resumeVideoNodeTask('n1');
+    expect(mocks.persist).toHaveBeenCalledWith(url, 'p1', 'ai-video', 'test');
+    expect(useAppStore.getState().nodes[0].data.videoUrl).toBe('asset://saved.mp4');
+    expect(pending()).toEqual([]);
+    expect(promptCalls()).toHaveLength(1);
+  });
+
+  it('恢复暂停只保留受控的落盘错误，不持久化原生错误或签名地址', async () => {
+    configureVideo();
+    await executeComfyUIVideoGenerate(params);
+    pauseVideoNodeTask('n1', 'prompt-1', new Error('/private/user/video.mp4?token=secret'));
+    expect(pending()[0].videoRecoveryMessage).toBeUndefined();
+    expect(JSON.stringify(pending())).not.toMatch(/\/private|secret/);
   });
 
   it.each(['项目', '画布 revision'])('视频下载期间%s变化时不回填，保留任务供重试', async (change) => {

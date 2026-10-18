@@ -1661,7 +1661,7 @@ export async function executeComfyUIVideoGenerate(
       }
     }
     if (retainPending && params.nodeId && !nodeSignal?.aborted) {
-      const paused = pauseVideoNodeTask(params.nodeId, submittedTaskId);
+      const paused = pauseVideoNodeTask(params.nodeId, submittedTaskId, error);
       if (paused) throw paused;
     }
     if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {

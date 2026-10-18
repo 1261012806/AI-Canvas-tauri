@@ -17,7 +17,7 @@ function VideoTaskStatus({ nodeId }: { nodeId: string }) {
 
   return <div className="ui-card nodrag nopan flex items-center gap-2 p-2" role="status"
     onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-    <span className="min-w-0 flex-1 text-xs text-canvas-text-secondary">{t('查询已暂停，任务已保留')}</span>
+    <span className="min-w-0 flex-1 break-words text-xs text-canvas-text-secondary">{task.videoRecoveryMessage || t('查询已暂停，任务已保留')}</span>
     <button type="button" className="ui-btn ui-btn--sm ui-btn--node-video shrink-0" disabled={busy}
       aria-label={t('重试查询视频任务')}
       onClick={() => {
