@@ -10,6 +10,7 @@ import {
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
 import type { BaseNodeData } from '../../../src/types';
+import { emptyDramaAssetLibrary, type DramaAsset } from '../../../src/types/dramaAssets';
 
 const executeGeneration = vi.hoisted(() => vi.fn(async () => ({ success: true })));
 vi.mock('../../../src/services/generationService', () => ({ executeGeneration }));
@@ -58,6 +59,63 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('prefers exact library images in MCP prompts and avoids their automatic edges while preserving other dependencies', async () => {
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), props: [{
+      id: 'prop-1', kind: 'prop', name: '茶壶', key: '茶壶', summary: '', visualNotes: '',
+      importance: 'supporting', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1, imageNodeId: 'n1',
+    }] } });
+    const mcp = { ...context(), conversationId: 'mcp-control-p1' };
+    const queried = await getAgentTool('canvas_query')!.execute(mcp, { nodeIds: ['n1'], detail: true });
+    expect(JSON.parse(queried.modelContent).nodes[0].preferredMention).toBe('@drama{prop-1:茶壶}');
+    const result = await getAgentTool('canvas_create_nodes')!.execute(mcp, { nodes: [{
+      type: 'ai-video', label: '镜头', prompt: 'Picture 1: @{n1:茶壶}\n说明 @{n2:剧本}',
+    }] });
+    expect(result.status).toBe('success');
+    const video = useAppStore.getState().nodes.at(-1)!;
+    expect(video.data.prompt).toBe('Picture 1: @drama{prop-1:茶壶}\n说明 @{n2:剧本}');
+    expect(useAppStore.getState().edges.filter((edge) => edge.target === video.id).map((edge) => edge.source)).toEqual(['n2']);
+    const update = await getAgentTool('canvas_update_nodes')!.execute(mcp, {
+      nodeIds: [video.id], prompt: 'Picture 1: @{n1:旧节点名}',
+    });
+    expect(update.status).toBe('success');
+    expect(useAppStore.getState().nodes.at(-1)?.data.prompt).toBe('Picture 1: @drama{prop-1:茶壶}');
+    const normal = await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: [video.id], prompt: '@{n1:显式节点}' });
+    expect(normal.status).toBe('success');
+    expect(useAppStore.getState().nodes.at(-1)?.data.prompt).toBe('@{n1:显式节点}');
+    await getAgentTool('canvas_create_nodes')!.execute(mcp, { nodes: [{
+      type: 'source-text', label: '定稿正文', prompt: '保留 @{n1:原始引用}',
+    }] });
+    expect(useAppStore.getState().nodes.at(-1)?.data.output).toBe('保留 @{n1:原始引用}');
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it.each(['scene', 'prop', 'character'] as const)('links new %s reference images to an existing project asset before generation', async (kind) => {
+    const asset = { id: 'asset-1', kind, name: '参考资产', key: '参考资产', summary: '', visualNotes: '',
+      importance: 'supporting' as const, confirmed: true, source: 'manual' as const, createdAt: 1, updatedAt: 1, identity: '' };
+    useAppStore.getState().upsertDramaAsset(asset as DramaAsset);
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [{
+      type: 'ai-image', label: '参考图', prompt: '纯色背景参考图', dramaAssetId: asset.id,
+    }] });
+    expect(result.status).toBe('success');
+    const image = useAppStore.getState().nodes.at(-1)!;
+    expect(image.data).toMatchObject({ dramaAssetId: asset.id, dramaAssetKind: kind, status: 'idle' });
+    useAppStore.getState().updateNodeDataTransient(image.id, { imageUrl: 'generated.png', status: 'success' });
+    useAppStore.getState().syncDramaAssetImageFromNode(image.id, 'generated.png');
+    const library = useAppStore.getState().dramaAssets;
+    expect([...library.characters, ...library.scenes, ...library.props][0]).toMatchObject({ imageNodeId: image.id, imageUrl: 'generated.png' });
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid asset links before writing any nodes in a batch', async () => {
+    const before = useAppStore.getState().nodes;
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '正常图片' },
+      { type: 'ai-image', label: '无效绑定', dramaAssetId: 'missing' },
+    ] });
+    expect(result.status).toBe('error');
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
+
   it('keeps canvas queries usable when an imported AI application is malformed', async () => {
     useAppStore.setState({ nodes: [
       ...useAppStore.getState().nodes,

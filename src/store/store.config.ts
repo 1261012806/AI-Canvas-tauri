@@ -48,6 +48,7 @@ const defaultConfig: AppConfig = {
   nodeToolbarMode: 'icons',
   nodeLabelVisible: true,
   startupView: 'project-library',
+  mcpPort: 27149,
   performanceMode: false,
   // language 不给默认值：未设置时按系统语言判定
 };

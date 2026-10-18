@@ -2,6 +2,11 @@
  * 设置面板：语言与启动 / 画布背景 / 画布交互 / 界面偏好
  */
 const settings = {
+  '天台彩蛋': 'Rooftop Easter egg',
+  '天台见': 'Meet on the rooftop',
+  '我想做个好人。': 'I want to be a good man.',
+  '对不起，我是警察。': 'Sorry. I am a cop.',
+  '致敬《无间道》': 'A tribute to Infernal Affairs',
   'GPT Image 快速适配': 'GPT Image quick setup',
   'Nano Banana 快速适配': 'Nano Banana quick setup',
   'OpenAI 官方 Images': 'Official OpenAI Images',

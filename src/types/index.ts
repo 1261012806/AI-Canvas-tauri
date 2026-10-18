@@ -814,7 +814,7 @@ export interface AppConfig {
   assistantVideoModelId?: string;  // 助手生视频模型 ID：generalModels 中的 video 模型 id
   cloudParseEnabled?: boolean; // 是否启用云端解析，默认 true；关闭后助手仅使用本地规则
   mcpAutoStart?: boolean;     // 启动软件时自动开启 MCP 本地控制会话，默认 false
-  mcpPort?: number;           // MCP 固定端口，1024-65535；未设置时随机分配
+  mcpPort?: number;           // MCP 固定端口，默认 27149；1024-65535 可自定义，0 为显式随机模式
   mcpTransport?: 'stdio' | 'streamable-http'; // 默认 stdio；HTTP 模式监听 0.0.0.0
   mcpToolExposure?: McpToolExposure; // 默认 compact；full 兼容客户端原生工具发现
 }
