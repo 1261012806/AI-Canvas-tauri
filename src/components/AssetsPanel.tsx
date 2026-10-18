@@ -55,6 +55,7 @@ import { loadAssetVideoHistory } from '../services/assetVideoDetails';
 import { getAllAssetMeta, putAssetMeta, deleteAssetMeta, imageHistoryReferenceKey } from '../services/indexedDbService';
 import { startAssetDrag, prepareDragIcon } from '../utils/assetDrag';
 import { isExternalDropCaptured, setExternalDropCaptured } from '../utils/dropCapture';
+import { nativeDropClientPosition } from '../utils/nativeDropPosition';
 import { ALL_CATEGORIES, CATEGORY_ICONS, shortFolderName } from '../utils/assetFormat';
 import AssetThumb from './shared/AssetThumb';
 import PopupCloseButton from './shared/PopupCloseButton';
@@ -590,8 +591,8 @@ export default function AssetsPanel() {
       if (disposed) return;
       const handlers = nativeFolderHandlersRef.current;
       if (payload.type === 'leave') { handlers.highlightFolder(null); releaseDrawer(); return; }
-      const ratio = window.devicePixelRatio || 1;
-      const target = payload.position ? handlers.folderTargetAt(payload.position.x / ratio, payload.position.y / ratio) : null;
+      const point = payload.position ? nativeDropClientPosition(payload.position) : null;
+      const target = point ? handlers.folderTargetAt(point.x, point.y) : null;
       handlers.highlightFolder(target);
       if (isDrawer && target && drawerCapture === null) {
         drawerCapture = isExternalDropCaptured(); setExternalDropCaptured(true);
