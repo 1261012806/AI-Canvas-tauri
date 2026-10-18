@@ -223,6 +223,8 @@ export interface BaseNodeData {
   prompt?: string;           // 提示词
   output?: string;            // 输出结果（文本/URL等）
   status?: 'idle' | 'loading' | 'success' | 'error';
+  /** 当前图片／视频生成等待的开始时间；仅状态切入 loading 时记录，不逐秒写入。 */
+  generationStartedAt?: number;
   /** 已提交的视频任务暂停本地查询，仍可续查或提交新的生成。 */
   videoTaskState?: 'paused';
   model?: string;             // 模型 ID；空字符串表示主动清除，不回填偏好或项目默认模型
