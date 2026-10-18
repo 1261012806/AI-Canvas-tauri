@@ -6,6 +6,13 @@
 /** APIMart 供应商 */
 export const APIMART_BASE_URL = 'https://api.apib.ai/v1';
 
+/** ToAPIs 两站共用账号与 Key；仅按用户选择的站点发送请求。 */
+export const TOAPIS_BASE_URL = 'https://toapis.cn/v1';
+export const TOAPIS_API_SITES = [
+  { id: 'cn', label: '国内站（toapis.cn）', baseUrl: TOAPIS_BASE_URL, consoleUrl: 'https://toapis.cn/login?aff=SnMr' },
+  { id: 'com', label: '国际站（toapis.com）', baseUrl: 'https://toapis.com/v1', consoleUrl: 'https://toapis.com/login?aff=SnMr' },
+] as const;
+
 /** CCC API 中转站（OpenAI 兼容协议） */
 export const CCCAPI_BASE_URL = 'https://cccapi.cn/v1';
 
@@ -47,6 +54,7 @@ export const EXA_SEARCH_BASE_URL = 'https://api.exa.ai';
 /** 默认供应商 base URL 映射（用于 aiService 的 fallback） */
 export const DEFAULT_BASE_URLS: Record<string, string> = {
   apimart: APIMART_BASE_URL,
+  toapis: TOAPIS_BASE_URL,
   cccapi: CCCAPI_BASE_URL,
   volcengine: VOLCENGINE_BASE_URL,
   grsai: GRSAI_BASE_URL,

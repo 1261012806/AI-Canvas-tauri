@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { useT } from '../../../i18n';
 import type { ApiProviderConfig, ChatApiProtocol, ProviderModelSelection } from '../../../types';
 import { CHAT_API_PROTOCOL_LABELS } from '../../../services/ai/chatApiProtocol';
-import { CCCAPI_BASE_URL, RUNNINGHUB_API_SITES } from '../../../constants/api';
+import { CCCAPI_BASE_URL, RUNNINGHUB_API_SITES, TOAPIS_API_SITES } from '../../../constants/api';
 import { normalizeBaseUrl } from '../../../services/ai/providerBaseUrl';
 import { runningHubSiteId } from '../../../services/runninghubSiteCredentials';
 import { CCC_PROVIDER_GROUPS, cccConnectionName, getCccGroupPresetModels } from '../../../services/ai/cccProviderGroups';
@@ -264,7 +264,9 @@ export default function ProviderConnectionForm({
   const isWorkflowApi = definition.kind === 'workflow-api';
   const runningHubBaseUrl = (baseUrl || definition.defaultBaseUrl || '').replace(/\/+$/, '');
   const runningHubSite = RUNNINGHUB_API_SITES.find((site) => site.id === runningHubSiteId(runningHubBaseUrl));
-  const externalUrl = (definition.id === 'runninghub-model' && runningHubSite?.consoleUrl)
+  const toapisSite = TOAPIS_API_SITES.find((site) => site.baseUrl === (baseUrl || definition.defaultBaseUrl || '').replace(/\/+$/, ''));
+  const externalUrl = (definition.id === 'toapis' && toapisSite?.consoleUrl)
+    || (definition.id === 'runninghub-model' && runningHubSite?.consoleUrl)
     || definition.externalUrl || PROVIDER_LINKS[definition.id];
 
   return (
@@ -353,6 +355,13 @@ export default function ProviderConnectionForm({
               {!runningHubSite && runningHubBaseUrl && <option value={runningHubBaseUrl}>{t('已配置地址')} · {runningHubBaseUrl}</option>}
             </Select>
           </label>}
+          {definition.id === 'toapis' && <label className="provider-field">
+            <span>{t('API 站点')}</span>
+            <Select fixedMenu className="min-w-0 w-full" value={toapisSite?.baseUrl || baseUrl} onChange={setBaseUrl}>
+              {TOAPIS_API_SITES.map((site) => <option key={site.id} value={site.baseUrl}>{t(site.label)}</option>)}
+              {!toapisSite && baseUrl && <option value={baseUrl}>{t('已配置地址')} · {baseUrl}</option>}
+            </Select>
+          </label>}
           {definition.credentials.map((field) => {
             const value = field.key === 'apiKey' ? apiKey : baseUrl;
             const baseUrlLocked = field.key === 'baseUrl'
@@ -394,6 +403,9 @@ export default function ProviderConnectionForm({
           )}
           {definition.id === 'runninghub-model' && <p className="ui-hint md:col-span-3">
             {t('国内、国际两套密钥分别保存；切换站点显示对应密钥，未配置时不会借用另一站。模型和工作流 Key 可以只填一项；保存后调用使用当前选中的站点。')}
+          </p>}
+          {definition.id === 'toapis' && <p className="ui-hint md:col-span-3">
+            {t('国内站与国际站共用账号和 API Key；切换保留 Key，模型以当前站点实际返回为准。')}
           </p>}
         </div>
       )}

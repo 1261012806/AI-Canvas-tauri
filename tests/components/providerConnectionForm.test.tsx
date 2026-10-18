@@ -36,6 +36,15 @@ function render(providerId: string, baseUrl = 'https://gateway.example/v1') {
 }
 
 describe('ProviderConnectionForm chat protocol selector', () => {
+  it('ToAPIs 默认国内站，两站共享 Key 而非 RunningHub 的独立密钥', () => {
+    const html = render('toapis', 'https://toapis.cn/v1');
+    expect(html).toContain('国内站（toapis.cn）');
+    expect(html).toContain('国际站（toapis.com）');
+    expect(html).toContain('共用账号和 API Key');
+    expect(html).toContain('切换保留 Key');
+    expect(html).not.toContain('两套密钥分别保存');
+    expect(html).not.toContain('对话协议');
+  });
   it('shows all supported chat protocols for custom connections', () => {
     const html = render('custom-openai');
     expect(html).toContain('对话协议');

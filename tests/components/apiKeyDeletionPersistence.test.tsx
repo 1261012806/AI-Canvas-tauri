@@ -159,6 +159,88 @@ beforeEach(async () => {
   driver.toast.mockClear();
 });
 
+describe('连接卡片快捷切换站点', () => {
+  function siteButton(provider: string, site: string) {
+    return find(render(), (element) => element.props['aria-label'] === `${provider} · ${site}`)!;
+  }
+
+  function addToapis() {
+    driver.state().saveProviderConfig('toapis', { name: 'ToAPIs', catalogId: 'toapis', apiKey: 'shared-fixture',
+      baseUrl: 'https://toapis.cn/v1', selectedModels: [{ id: 'gpt-6.1-sol', name: 'GPT 6.1',
+        category: 'text', provider: 'toapis', executionProfile: { preset: 'openai-chat' } }],
+    });
+  }
+
+  it('ToAPIs 往返切换后保持共享 Key、模型身份和协议，重启恢复所选站点', async () => {
+    driver.native = true;
+    addToapis();
+    const originalModel = driver.state().config.generalModels!.find((model) => model.providerConfigId === 'toapis');
+    expect(siteButton('ToAPIs', '国内站（toapis.cn）').props['aria-pressed']).toBe(true);
+    for (const [label, baseUrl] of [
+      ['国际站（toapis.com）', 'https://toapis.com/v1'],
+      ['国内站（toapis.cn）', 'https://toapis.cn/v1'],
+    ]) {
+      await (siteButton('ToAPIs', label).props.onClick as () => Promise<void>)();
+      expect(siteButton('ToAPIs', label).props['aria-pressed']).toBe(true);
+      expect(driver.state().config.providers.toapis).toMatchObject({ apiKey: 'shared-fixture', baseUrl });
+      expect(driver.state().config.generalModels!.find((model) => model.providerConfigId === 'toapis')).toEqual(originalModel);
+      const fresh = configStore();
+      await fresh.getState().loadConfig();
+      expect(fresh.getState().config.providers.toapis).toMatchObject({ apiKey: 'shared-fixture', baseUrl });
+      expect(JSON.stringify(await loadConfigFromDb())).not.toContain('shared-fixture');
+    }
+    expect(find(render(), (element) => 'onSave' in element.props)!.props.isOpen).toBe(false);
+  });
+
+  it.each(['', 'cn-model-fixture'])('RunningHub 从旧入口切换时保留各站独立凭据，原模型 Key=%s', async (modelKey) => {
+    driver.native = true;
+    if (modelKey) driver.state().saveProviderConfig('runninghub-model', { name: 'RunningHub', catalogId: 'runninghub-model',
+      apiKey: modelKey, baseUrl: 'https://www.runninghub.cn/openapi/v2' });
+    // 无模型连接时使用设置页既有的“仅工作流”卡片。
+    driver.state().saveProviderConfig('runninghub', { name: 'RunningHub 工作流', apiKey: 'cn-workflow-fixture',
+      baseUrl: 'https://www.runninghub.cn/openapi/v2' });
+    await driver.state().saveConfig({ silent: true });
+    await (siteButton('RunningHub', '国际站（runninghub.ai）').props.onClick as () => Promise<void>)();
+    expect(driver.state().config.providers['runninghub-model']).toMatchObject({ apiKey: '', baseUrl: 'https://www.runninghub.ai/openapi/v2' });
+    expect(driver.state().config.providers.runninghub).toMatchObject({ apiKey: '', baseUrl: 'https://www.runninghub.ai/openapi/v2' });
+    expect(siteButton('RunningHub', '国内站（runninghub.cn）')).toBeDefined();
+    expect(siteButton('RunningHub', '国际站（runninghub.ai）').props['aria-pressed']).toBe(true);
+    expect(find(render(), (element) => element.props.children === '0/2 密钥已配置')).toBeDefined();
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.providers['runninghub-model'].apiKey).toBe('');
+    expect(fresh.getState().config.providers.runninghub.apiKey).toBe('');
+    await (siteButton('RunningHub', '国内站（runninghub.cn）').props.onClick as () => Promise<void>)();
+    expect(driver.state().config.providers['runninghub-model'].apiKey).toBe(modelKey);
+    expect(runningHubConnection(driver.state().config.providers, 'runninghub').apiKey).toBe('cn-workflow-fixture');
+    expect(siteButton('RunningHub', '国内站（runninghub.cn）').props['aria-pressed']).toBe(true);
+    expect(JSON.stringify(await loadConfigFromDb())).not.toContain('cn-workflow-fixture');
+  });
+
+  it('保存失败保留待保存站点和 Key，解除按钮锁定后可重试保存', async () => {
+    driver.native = true;
+    addToapis();
+    await driver.state().saveConfig({ silent: true });
+    const originalPut = IDBObjectStore.prototype.put;
+    vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementationOnce(function (this: IDBObjectStore, value, key) {
+      const request = originalPut.call(this, value, key);
+      request.addEventListener('success', () => this.transaction.abort());
+      return request;
+    });
+    driver.toast.mockClear();
+    await (siteButton('ToAPIs', '国际站（toapis.com）').props.onClick as () => Promise<void>)();
+    expect(driver.state()).toMatchObject({ configDirty: true, configSaveStatus: 'error' });
+    expect(driver.state().config.providers.toapis).toMatchObject({ apiKey: 'shared-fixture', baseUrl: 'https://toapis.com/v1' });
+    expect(driver.toast).toHaveBeenCalledWith(expect.any(String), 'error');
+    expect(siteButton('ToAPIs', '国内站（toapis.cn）').props.disabled).toBe(false);
+    expect((await loadConfigFromDb())?.providers?.toapis.baseUrl).toBe('https://toapis.cn/v1');
+    await driver.state().saveConfig({ silent: true });
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.providers.toapis).toMatchObject({ apiKey: 'shared-fixture', baseUrl: 'https://toapis.com/v1' });
+  });
+});
+
 describe('API Key 连接删除持久化', () => {
   it.each(['', 'model-fixture'])('RunningHub 保存工作流密钥时保留国际站点，模型 Key=%s', async (modelKey) => {
     driver.native = true;

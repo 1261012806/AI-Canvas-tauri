@@ -42,7 +42,8 @@ import { queryBillingRuns } from '../../services/billing/volcengineBillingServic
 import { saveAutodlWorkflowTemplate, saveWorkflowApiDrafts } from '../../services/workflowApi/workflowApiConfig';
 import { invoke } from '@tauri-apps/api/core';
 import { useT } from '../../i18n';
-import { buildRunningHubSiteProviders, RUNNINGHUB_CREDENTIAL_IDS } from '../../services/runninghubSiteCredentials';
+import { RUNNINGHUB_API_SITES, TOAPIS_API_SITES } from '../../constants/api';
+import { buildRunningHubSiteProviders, runningHubSiteDrafts, runningHubSiteId, RUNNINGHUB_CREDENTIAL_IDS } from '../../services/runninghubSiteCredentials';
 import type { RunningHubSiteKeyDrafts } from '../../types/runninghub';
 
 interface ProviderListItem {
@@ -77,6 +78,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   const importFileRef = useRef<HTMLInputElement>(null);
   const importBusyRef = useRef(false);
   const [importBusy, setImportBusy] = useState(false);
+  const siteSwitchBusyRef = useRef(false);
+  const [switchingSite, setSwitchingSite] = useState<string | null>(null);
   const unreadSecrets = useAppStore((state) => state.configSecretReadErrors);
   const workflows = useAppStore((state) => state.workflows);
   const {
@@ -556,6 +559,44 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     closeConnectionDialog();
   };
 
+  const handleSwitchProviderSite = async (connectionId: string, baseUrl: string) => {
+    if (siteSwitchBusyRef.current) return;
+    const state = useAppStore.getState();
+    const current = state.config.providers[connectionId]
+      ?? (connectionId === 'runninghub-model' && state.config.providers.runninghub ? {
+        name: 'RunningHub', apiKey: '', catalogId: 'runninghub-model', baseUrl: state.config.providers.runninghub.baseUrl,
+      } : undefined);
+    if (!current) return;
+    const definition = getProviderDefinition(connectionId, current);
+    const sites = definition?.id === 'toapis' ? TOAPIS_API_SITES
+      : definition?.id === 'runninghub-model' ? RUNNINGHUB_API_SITES : undefined;
+    if (!sites?.some((site) => site.baseUrl === baseUrl)) return;
+    const activeUrl = definition?.id === 'runninghub-model'
+      ? RUNNINGHUB_API_SITES.find((site) => site.id === runningHubSiteId(current.baseUrl))?.baseUrl
+      : (current.baseUrl || definition?.defaultBaseUrl || '').replace(/\/+$/, '');
+    if (activeUrl === baseUrl) return;
+
+    siteSwitchBusyRef.current = true;
+    setSwitchingSite(connectionId);
+    try {
+      if (definition?.id === 'runninghub-model') {
+        // 先保留两站各自的凭据，再同时切换模型和工作流入口；空站点不借用另一站 Key。
+        const providers = buildRunningHubSiteProviders(state.config.providers,
+          { ...current, baseUrl, catalogId: 'runninghub-model' }, runningHubSiteDrafts(state.config.providers));
+        state.updateConfig({ providers });
+        state.saveProviderConfig(connectionId, providers['runninghub-model']);
+      } else {
+        state.saveProviderConfig(connectionId, { ...current, baseUrl });
+      }
+      await state.saveConfig({ throwOnError: true });
+    } catch (error) {
+      state.showToast(error instanceof Error ? error.message : t('保存失败'), 'error');
+    } finally {
+      siteSwitchBusyRef.current = false;
+      setSwitchingSite(null);
+    }
+  };
+
   const handleSaveCccGroups = async (connections: Record<string, ApiProviderConfig>) => {
     // 先同步所有组的模型身份，再一次提交配置与凭据；单组失败不提前关闭编辑器。
     for (const [id, providerConfig] of Object.entries(connections)) saveProviderConfig(id, providerConfig);
@@ -677,6 +718,10 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
               const summaryUrl = providerSummaryUrl(item.config, definition.defaultBaseUrl);
               const isDreamina = definition.id === 'dreamina';
               const isRunningHub = definition.id === 'runninghub-model';
+              const siteOptions = definition.id === 'toapis' ? TOAPIS_API_SITES : isRunningHub ? RUNNINGHUB_API_SITES : undefined;
+              const activeSiteUrl = isRunningHub
+                ? RUNNINGHUB_API_SITES.find((site) => site.id === runningHubSiteId(item.config.baseUrl))?.baseUrl
+                : (item.config.baseUrl || definition.defaultBaseUrl || '').replace(/\/+$/, '');
               const isWebSearchProvider = definition.kind === 'web-search';
               const isWorkflowApi = definition.kind === 'workflow-api';
               const isCustomConnection = definition.id === 'custom-openai' || isWorkflowApi;
@@ -708,11 +753,24 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                 <div className={`provider-connection-card${isRunningHub ? ' provider-connection-card--runninghub' : ''}`}>
                   <ProviderBadge providerId={item.id} config={item.config} size="large" />
                   <div className="provider-connection-copy">
-                    <div className="provider-connection-title-row">
+                    <div className={`provider-connection-title-row${siteOptions ? ' flex-wrap' : ''}`}>
                       <strong>{displayName}</strong>
                       <span className={`provider-list-status${isPendingApiKey || (isRunningHub && runningHubKeyCount < 2) || (isCcc && cccKeyCount < cccConnections.length) ? ' is-limited' : ''}`}>
                         {statusLabel}
                       </span>
+                      {siteOptions && <div className="ui-segmented shrink-0" role="group" aria-label={`${displayName} · ${t('API 站点')}`} aria-busy={switchingSite === item.id}>
+                        {siteOptions.map((site) => (
+                          <button key={site.id} type="button"
+                            className={`ui-segmented__item disabled:cursor-wait disabled:opacity-50${activeSiteUrl === site.baseUrl ? ' is-active' : ''}`}
+                            aria-label={`${displayName} · ${t(site.label)}`}
+                            aria-pressed={activeSiteUrl === site.baseUrl}
+                            data-tooltip={t(site.label)}
+                            disabled={switchingSite !== null || pendingDeleteId === item.id}
+                            onClick={() => handleSwitchProviderSite(item.id, site.baseUrl)}>
+                            {t(site.label).replace(/[（(].*$/, '').trim()}
+                          </button>
+                        ))}
+                      </div>}
                       {providerBalances[item.id] && (
                         <span className="shrink-0 text-xs font-medium text-canvas-text-secondary">
                           {providerBalances[item.id]}
