@@ -55,6 +55,7 @@ import CanvasEmptyState from './canvas/CanvasEmptyState';
 import HistoryTimelinePanel from './canvas/HistoryTimelinePanel';
 import SelectedNodeFlowEdge from './canvas/SelectedNodeFlowEdge';
 import CanvasEdgeLayer from './canvas/CanvasEdgeLayer';
+import { CanvasEdgePanePointerContext, useCanvasEdgePanePointer } from '../hooks/useCanvasEdgePanePointer';
 import CanvasRadialMenu, { CanvasLongPressIndicator } from './canvas/CanvasRadialMenu';
 import NodePluginToolDialog from './nodes/shared/toolbar/NodePluginToolDialog';
 import NodeOutputDownloadDialog from './shared/NodeOutputDownloadDialog';
@@ -847,11 +848,6 @@ function CanvasInner({ onReady }: CanvasProps) {
   }, [activeDrawingTool, canvasNoteToolbarVisible, chooseDrawingTool]);
 
   const drawingActive = activeDrawingTool !== 'select';
-  const {
-    position: radialMenuPosition,
-    holdPosition: radialMenuHoldPosition,
-    close: closeRadialMenu,
-  } = useCanvasLongPressRadialMenu(canvasRootRef, !drawingActive);
   const drawingInteraction = useMemo(() => ({
     ...interaction,
     ...(drawingActive ? {
@@ -881,6 +877,12 @@ function CanvasInner({ onReady }: CanvasProps) {
     return localStorage.getItem('canvas-smoothLine') === 'false' ? 'curved' : 'orthogonal';
   });
   const smoothLine = edgeDisplayMode === 'orthogonal';
+  const edgePanePointer = useCanvasEdgePanePointer(!drawingActive && edgeDisplayMode !== 'hidden');
+  const {
+    position: radialMenuPosition,
+    holdPosition: radialMenuHoldPosition,
+    close: closeRadialMenu,
+  } = useCanvasLongPressRadialMenu(canvasRootRef, !drawingActive, edgePanePointer.isEdgeAtPoint);
 
   useEffect(() => { localStorage.setItem('canvas-showGrid', String(showGrid)); }, [showGrid]);
   useEffect(() => { localStorage.setItem('canvas-edgeDisplayMode', edgeDisplayMode); }, [edgeDisplayMode]);
@@ -1603,6 +1605,7 @@ function CanvasInner({ onReady }: CanvasProps) {
   return (
     <CanvasNodeLodContext.Provider value={nodeLodRuntime}>
     <ResizeSnapContext.Provider value={resizeSnapApi}>
+    <CanvasEdgePanePointerContext.Provider value={edgePanePointer.bridge}>
     <div
       ref={canvasRootRef}
       className={`absolute inset-0 canvas-drawing-root is-interaction-${interactionMode} is-tool-${activeDrawingTool}${connectableSelectionCount > 1 ? ' is-multi-selected' : ''}`}
@@ -1638,6 +1641,7 @@ function CanvasInner({ onReady }: CanvasProps) {
         defaultEdgeOptions={defaultEdgeOptions}
         proOptions={PRO_OPTIONS}
         {...drawingInteraction}
+        {...edgePanePointer.handlers}
         zoomOnScroll={!viewportPreferences.locked && interaction.zoomOnScroll}
         zoomOnPinch={!viewportPreferences.locked}
         zoomOnDoubleClick={!viewportPreferences.locked && interactionMode !== 'classic'}
@@ -1857,6 +1861,7 @@ function CanvasInner({ onReady }: CanvasProps) {
       </div>,
       document.body,
     )}
+    </CanvasEdgePanePointerContext.Provider>
     </ResizeSnapContext.Provider>
     </CanvasNodeLodContext.Provider>
   );
