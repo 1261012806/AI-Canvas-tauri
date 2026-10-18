@@ -37,6 +37,9 @@ mod director_desk_runtime;
 mod dreamina;
 #[path = "files/transfer.rs"]
 mod file_transfer;
+#[path = "files/github_fallback.rs"]
+mod github_fallback;
+mod app_update;
 #[path = "files/thumbnail_cache.rs"]
 mod thumbnail_cache;
 #[path = "files/theme_assets.rs"]
@@ -1234,6 +1237,7 @@ pub fn run() {
             file_transfer::copy_asset_file_to_folder,
             file_transfer::finish_asset_file_move,
             file_transfer::download_file_streamed,
+            app_update::download_app_update,
             file_transfer::cancel_file_transfer,
             director_desk_runtime::director_desk_runtime_status,
             director_desk_runtime::install_director_desk_runtime,

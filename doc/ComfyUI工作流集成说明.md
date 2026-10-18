@@ -1,5 +1,7 @@
 # ComfyUI 工作流集成说明
 
+官方安装包、扩展目录和 Git 获取的超时加速见 [共用专项](./plans/2026-10-18-github-download-fallback.md)。Git 只重试 fetch，仓库 origin 保留官方地址；新扩展初始化停用目录后获取默认 HEAD，checkout 只执行一次，不自动安装依赖或运行 install.py。
+
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
 > 最后更新：2026-10-11。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)、[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)和[独立管理窗口](./plans/2026-10-11-comfyui-management.md)。
 

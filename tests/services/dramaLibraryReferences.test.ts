@@ -6,8 +6,8 @@ function character(id = 'character-1'): DramaCharacter {
   return { id, kind: 'character', name: '小绘', key: id, identity: '', summary: '', visualNotes: '',
     importance: 'main', confirmed: true, createdAt: 1, updatedAt: 1, source: 'manual',
     primaryReferenceImageId: 'front', referenceImages: [
-      { id: 'front', kind: 'primary', imageUrl: 'front.png', createdAt: 1 },
-      { id: 'side', kind: 'turnaround', imageUrl: 'side.png', createdAt: 1 },
+      { id: 'front', kind: 'primary', imageUrl: 'front.png', prompt: '', createdAt: 1, updatedAt: 1 },
+      { id: 'side', kind: 'turnaround', imageUrl: 'side.png', prompt: '', createdAt: 1, updatedAt: 1 },
     ] };
 }
 

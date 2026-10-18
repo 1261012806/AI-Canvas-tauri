@@ -44,8 +44,8 @@ function elements(value: unknown): Element[] {
   return [element, ...elements(element.props.children)];
 }
 function render() { driver.scope!.index = 0; tree = ProviderConnectionDialog(props); }
-function form() { return elements(tree).find((element) => element.type === ProviderConnectionForm)!.props as ComponentProps<typeof ProviderConnectionForm>; }
-function section() { return elements(tree).find((element) => element.type === ProviderModelSection)!.props as ComponentProps<typeof ProviderModelSection>; }
+function form() { return elements(tree).find((element) => element.type === ProviderConnectionForm)!.props as unknown as ComponentProps<typeof ProviderConnectionForm>; }
+function section() { return elements(tree).find((element) => element.type === ProviderModelSection)!.props as unknown as ComponentProps<typeof ProviderModelSection>; }
 function click(text: string) {
   const button = elements(tree).find((element) => element.props.children === text && typeof element.props.onClick === 'function')!;
   return (button.props.onClick as () => void)();

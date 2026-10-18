@@ -19,7 +19,6 @@ const CANCELLED: &str = "ComfyUI 安装已取消";
 const MAX_EXPANDED: u64 = 32 * 1024 * 1024 * 1024;
 const RESERVE: u64 = 512 * 1024 * 1024;
 const MAX_ENTRIES: usize = 200_000;
-const MIRROR: &str = "https://gh-proxy.com/";
 
 #[derive(Deserialize)]
 struct Release { version: String, variants: Vec<Variant> }
@@ -200,11 +199,11 @@ pub fn shutdown_installation(app: &AppHandle) {
 
 async fn network<T>(future: impl Future<Output = Result<T, reqwest::Error>>, control: &Control, retryable: &AtomicBool) -> Result<T, String> {
     tokio::pin!(future);
-    let deadline = tokio::time::sleep(Duration::from_secs(30));
+    let deadline = tokio::time::sleep(Duration::from_millis(crate::github_fallback::policy().read_timeout_ms));
     tokio::pin!(deadline);
     loop {
         tokio::select! {
-            result = &mut future => return result.map_err(|_| { retryable.store(true, Ordering::Release); "安装包网络连接或读取失败".into() }),
+            result = &mut future => return result.map_err(|error| { retryable.store(error.is_timeout() || error.is_connect() || error.is_body(), Ordering::Release); "安装包网络连接或读取失败".into() }),
             _ = &mut deadline => { retryable.store(true, Ordering::Release); return Err("安装包网络连接或读取超时".into()); },
             _ = tokio::time::sleep(Duration::from_millis(100)) => control.check()?,
         }
@@ -230,7 +229,7 @@ impl Read for ResponseReader<'_> {
 fn download(app: &AppHandle, target: &Target, archive: &Path, release: &Release, variant: &Variant,
     control: &mut Control, runtime: &tokio::runtime::Handle) -> Result<(), String> {
     let client = reqwest::Client::builder().user_agent("AI-Canvas/ComfyUI-installer")
-        .connect_timeout(Duration::from_secs(15)).https_only(true)
+        .connect_timeout(Duration::from_millis(crate::github_fallback::policy().connect_timeout_ms)).https_only(true)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             let url = attempt.url();
             let allowed = url.host_str().is_some_and(|host| matches!(host, "github.com" | "gh-proxy.com")
@@ -241,7 +240,8 @@ fn download(app: &AppHandle, target: &Target, archive: &Path, release: &Release,
             } else { attempt.follow() }
         })).build().map_err(|_| "无法创建安装下载连接".to_string())?;
     let official = format!("https://github.com/Comfy-Org/ComfyUI/releases/download/{}/{}", release.version, variant.asset);
-    for (source, url) in [("official", official.clone()), ("mirror", format!("{MIRROR}{official}"))] {
+    let mirror = crate::github_fallback::mirror_url(&official).ok_or_else(|| "官方安装包地址无效".to_string())?;
+    for (source, url) in [("official", official.clone()), ("mirror", mirror)] {
         control.source = source;
         control.emit("connecting", 0, Some(variant.bytes))?;
         let retryable = AtomicBool::new(false);
@@ -249,12 +249,11 @@ fn download(app: &AppHandle, target: &Target, archive: &Path, release: &Release,
             checked_path(app, target, archive)?;
             let response = runtime.block_on(network(client.get(&url).send(), control, &retryable))?;
             if !response.status().is_success() {
-                retryable.store(matches!(response.status().as_u16(), 403 | 408 | 429 | 500..=599), Ordering::Release);
+                retryable.store(crate::github_fallback::transient_status(response.status().as_u16()), Ordering::Release);
                 return Err(format!("安装包下载返回 HTTP {}", response.status().as_u16()));
             }
             if response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.contains("text/html")) || response.content_length().is_some_and(|length| length != variant.bytes) {
-                retryable.store(true, Ordering::Release);
                 return Err("下载站点返回了拦截页面或不完整安装包".into());
             }
             let mut reader = ResponseReader { response, pending: Cursor::new(Vec::new()), runtime: runtime.clone(), control, retryable: &retryable };

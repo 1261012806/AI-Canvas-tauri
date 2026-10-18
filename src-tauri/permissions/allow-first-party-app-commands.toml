@@ -2,6 +2,7 @@
 identifier = "allow-first-party-app-commands"
 description = "Allows registered AI Canvas application commands for trusted first-party windows."
 commands.allow = [
+  "download_app_update",
   "store_theme_image",
   "billing_upsert",
   "billing_query",

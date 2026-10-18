@@ -147,7 +147,7 @@ const audioRoles = [{ $forEach: '{{referenceAudioUrls}}', $value: { url: '{{refe
 const videoList = [{ $forEach: '{{referenceVideoUrls}}', $value: { video_url: '{{referenceVideoUrls}}' } }];
 const firstFrame = [{ $whenPresent: '{{firstImage}}', $value: '{{firstImage}}' }];
 const framePair = [...firstFrame, { $whenPresent: '{{lastImage}}', $value: '{{lastImage}}' }];
-const klingImages = [
+const klingImages: ProtocolJsonValue[] = [
   { $forEach: '{{referenceImageUrls}}', $value: { image_url: '{{referenceImageUrls}}' } },
   { $whenPresent: '{{firstImage}}', $value: { image_url: '{{firstImage}}', type: 'first_frame' } },
   { $whenPresent: '{{lastImage}}', $value: { image_url: '{{lastImage}}', type: 'end_frame' } },

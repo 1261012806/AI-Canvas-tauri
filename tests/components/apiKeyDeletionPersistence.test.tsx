@@ -233,7 +233,7 @@ describe('连接卡片快捷切换站点', () => {
     expect(driver.state().config.providers.toapis).toMatchObject({ apiKey: 'shared-fixture', baseUrl: 'https://toapis.com/v1' });
     expect(driver.toast).toHaveBeenCalledWith(expect.any(String), 'error');
     expect(siteButton('ToAPIs', '国内站（toapis.cn）').props.disabled).toBe(false);
-    expect((await loadConfigFromDb())?.providers?.toapis.baseUrl).toBe('https://toapis.cn/v1');
+    expect(await loadConfigFromDb()).toMatchObject({ providers: { toapis: { baseUrl: 'https://toapis.cn/v1' } } });
     await driver.state().saveConfig({ silent: true });
     const fresh = configStore();
     await fresh.getState().loadConfig();
@@ -252,8 +252,10 @@ describe('API Key 连接删除持久化', () => {
       { runninghubSiteKeys: { cn: { modelKey: 'cn-model-fixture', workflowKey: 'cn-workflow-fixture' }, ai: { modelKey, workflowKey: 'workflow-fixture' } } },
     );
     const saved = await loadConfigFromDb();
-    expect(saved?.providers?.runninghub?.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
-    expect(saved?.providers?.['runninghub-model']?.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
+    expect(saved).toMatchObject({ providers: {
+      runninghub: { baseUrl: 'https://www.runninghub.ai/openapi/v2' },
+      'runninghub-model': { baseUrl: 'https://www.runninghub.ai/openapi/v2' },
+    } });
     const fresh = configStore();
     await fresh.getState().loadConfig();
     expect(fresh.getState().config.providers.runninghub.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
