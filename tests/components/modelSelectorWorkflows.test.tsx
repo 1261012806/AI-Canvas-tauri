@@ -46,6 +46,7 @@ vi.mock('../../src/components/nodes/shared/defaultModels', () => ({
   defaultModelGroups: [], getConfiguredModelGroups: () => [], getGeneralModelGroups: () => [],
 }));
 vi.mock('../../src/components/shared/ProviderBadge', () => ({ default: 'badge' }));
+vi.mock('react-dom', () => ({ createPortal: (children: unknown) => children }));
 import ModelSelector from '../../src/components/nodes/shared/ModelSelector';
 
 function all(tree: unknown): Element[] {
@@ -84,7 +85,7 @@ beforeEach(() => {
   driver.resolveUrl.mockReset().mockReturnValue('https://comfy.example.com');
   driver.config.comfyServers = [{ id: 'remote', name: '远程', url: 'https://comfy.example.com' }];
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal('document', { body: {}, addEventListener: vi.fn(), removeEventListener: vi.fn() });
 });
 afterEach(() => {
   driver.effects.forEach((effect) => effect.cleanup?.());
@@ -104,7 +105,7 @@ describe('模型选择器工作流可用性', () => {
     expect(driver.editor).toHaveBeenCalledExactlyOnceWith('https://comfy.example.com', flow);
     const elements = render([flow], flow.id);
     expect(elements.find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')?.props.disabled).toBe(true);
-    expect(elements.some((element) => String(element.props.className).startsWith('model-dropdown'))).toBe(false);
+    expect(elements.some((element) => String(element.props.className).startsWith('ui-model-menu__surface'))).toBe(false);
     complete({ missingNodeClasses: [] });
     await vi.advanceTimersByTimeAsync(0);
     expect(render([flow], flow.id).find((element) => element.props['aria-label'] === '在 ComfyUI 中编辑')?.props.disabled).toBe(false);

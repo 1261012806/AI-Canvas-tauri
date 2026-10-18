@@ -4,6 +4,8 @@
  * 自动检测上下空间，向上或向下弹出
  */
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { calcAnchoredPosition } from '../../../utils/popupPosition';
 import type {
   GeneralModelConfig,
   NodeType,
@@ -168,49 +170,45 @@ export default function ModelSelector({
   const ref = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // 动态计算下拉弹出方向
-  const [dropdownDir, setDropdownDir] = useState<'up' | 'down'>('up');
-  const [dropdownAlignRight, setDropdownAlignRight] = useState(false);
-
+  // 菜单挂到视口，避免被弹窗、滚动面板或画布节点裁切。
   useLayoutEffect(() => {
     if (!open) return;
-    const raf = requestAnimationFrame(() => {
-      const triggerEl = ref.current?.querySelector('.model-selector-trigger');
-      if (!triggerEl) return;
-      const triggerRect = triggerEl.getBoundingClientRect();
-      const vh = window.innerHeight;
-      const vw = window.innerWidth;
-      const PADDING = 8;
-      const DROPDOWN_H = 360;
-      const DROPDOWN_W = dropdownRef.current?.getBoundingClientRect().width ?? 380;
-
-      // 若上方空间不足 360px → 向下弹出
-      const spaceAbove = triggerRect.top - PADDING;
-      if (spaceAbove < DROPDOWN_H) {
-        const spaceBelow = vh - triggerRect.bottom - PADDING;
-        if (spaceBelow >= DROPDOWN_H || spaceBelow > spaceAbove) {
-          setDropdownDir('down');
-        } else {
-          setDropdownDir('up');
-        }
-      } else {
-        setDropdownDir('up');
+    const trigger = ref.current?.querySelector<HTMLButtonElement>('.model-selector-trigger');
+    const dropdown = dropdownRef.current;
+    if (!trigger || !dropdown) return;
+    const update = () => {
+      const rect = trigger.getBoundingClientRect();
+      const availableHeight = Math.max(rect.top - 12, window.innerHeight - rect.bottom - 12, 0);
+      dropdown.style.width = `${Math.min(380, Math.max(0, window.innerWidth - 16))}px`;
+      dropdown.style.maxHeight = `${Math.min(360, availableHeight)}px`;
+      let layer = 300;
+      for (let parent: HTMLElement | null = ref.current; parent; parent = parent.parentElement) {
+        const value = Number.parseInt(window.getComputedStyle(parent).zIndex, 10);
+        if (Number.isFinite(value)) layer = Math.max(layer, value + 1);
       }
-
-      // 右边界溢出 → 右对齐
-      if (triggerRect.left + DROPDOWN_W > vw - PADDING) {
-        setDropdownAlignRight(true);
-      } else {
-        setDropdownAlignRight(false);
-      }
-    });
-    return () => cancelAnimationFrame(raf);
+      dropdown.style.zIndex = String(layer);
+      const position = calcAnchoredPosition(rect, dropdown.offsetWidth, dropdown.offsetHeight, 4, 8);
+      dropdown.style.left = `${position.left}px`;
+      dropdown.style.top = `${position.top}px`;
+      dropdown.dataset.placement = position.placement;
+    };
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(dropdown);
+    observer?.observe(trigger);
+    window.addEventListener('resize', update);
+    document.addEventListener('scroll', update, true);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', update);
+      document.removeEventListener('scroll', update, true);
+    };
   }, [open]);
 
   // 点击外部关闭（捕获阶段避免 React Flow 拦截）
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (ref.current && !ref.current.contains(e.target as Node) && !dropdownRef.current?.contains(e.target as Node)) {
         setOpen(false);
       }
     };
@@ -220,15 +218,23 @@ export default function ModelSelector({
     return () => document.removeEventListener('mousedown', handler, true);
   }, [open]);
 
-  // Escape 键关闭
+  // 先关闭菜单并归还焦点，避免 Escape 同时关闭父弹窗。
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Escape' || (e.key === 'Tab' && dropdownRef.current?.contains(e.target as Node))) {
+        setOpen(false);
+        ref.current?.querySelector<HTMLButtonElement>('.model-selector-trigger')?.focus({ preventScroll: true });
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }
     };
     if (open) {
-      window.addEventListener('keydown', handler);
+      window.addEventListener('keydown', handler, true);
     }
-    return () => window.removeEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler, true);
   }, [open]);
 
   // 筛选当前节点类型下可用的模型分组
@@ -412,12 +418,14 @@ export default function ModelSelector({
       onSelect(model);
       onWorkflowSelect?.(undefined);
       setOpen(false);
+      ref.current?.querySelector<HTMLButtonElement>('.model-selector-trigger')?.focus({ preventScroll: true });
       return;
     }
     const workflow = visibleWorkflows.find((candidate) => `workflow:${candidate.id}` === value);
     if (workflow && onWorkflowSelect) {
       onWorkflowSelect(workflow.id);
       setOpen(false);
+      ref.current?.querySelector<HTMLButtonElement>('.model-selector-trigger')?.focus({ preventScroll: true });
     }
   };
 
@@ -500,10 +508,11 @@ export default function ModelSelector({
         </button>
       )}
 
-      {open && (
+      {open && createPortal(
         <div
           ref={dropdownRef}
-          className={`model-dropdown${dropdownDir === 'down' ? ' drop-down' : ''}${dropdownAlignRight ? ' drop-align-right' : ''}`}
+          className="ui-model-menu__surface nowheel nodrag nopan"
+          data-ui-select-portal=""
         >
           <ModelMenu
             groups={menuGroups}
@@ -519,7 +528,7 @@ export default function ModelSelector({
               else toggleGroup(groupId);
             }}
           />
-        </div>
+        </div>, document.body
       )}
     </div>
   );
