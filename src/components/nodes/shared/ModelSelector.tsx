@@ -25,6 +25,7 @@ import ProviderBadge from '../../shared/ProviderBadge';
 import { ModelMenu, type ModelPickerGroup } from '../../shared/ModelPicker';
 import { resolveAppearanceMode } from '../../../services/appearance/appearanceRuntime';
 import { comfyBaseUrlFor, DEFAULT_COMFY_URL, probeComfyServer } from '../../../services/comfyServers';
+import { getGenerationNodeType } from '../../../utils/nodeGeneration';
 
 const MODEL_PREF_KEY = 'canvas-model-prefs';
 
@@ -103,7 +104,8 @@ export default function ModelSelector({
   const editorOpeningRef = useRef(false);
   const [workflowsCollapsed, setWorkflowsCollapsed] = useState(true);
   const [availableComfyUrls, setAvailableComfyUrls] = useState<Record<string, boolean>>({});
-  const modelNodeType = MODEL_TYPE_FALLBACK[nodeType] ?? nodeType;
+  const generationNodeType = getGenerationNodeType(nodeType);
+  const modelNodeType = MODEL_TYPE_FALLBACK[generationNodeType] ?? generationNodeType;
 
   // 读取配置 — 判断哪些 provider 有 API Key
   const config = useAppStore((s) => s.config);
@@ -253,13 +255,14 @@ export default function ModelSelector({
       // 空字符串表示用户已清除当前节点选择，不再回填历史偏好。
       if (selectedModel === '') return undefined;
       const prefs = loadModelPrefs();
-      const fallbackType = MODEL_TYPE_FALLBACK[nodeType];
+      const fallbackType = MODEL_TYPE_FALLBACK[generationNodeType];
       return selectedModel
+        || prefs[generationNodeType]
         || prefs[nodeType]
         || (fallbackType ? prefs[fallbackType] : undefined)
         || undefined;
     },
-    [selectedModel, nodeType],
+    [selectedModel, nodeType, generationNodeType],
   );
 
   const currentGroup = effectiveModel
@@ -295,7 +298,7 @@ export default function ModelSelector({
   };
 
   // 匹配当前节点类型的工作流
-  const targetCategory = getWorkflowCategory(nodeType);
+  const targetCategory = getWorkflowCategory(generationNodeType);
   const matchingWorkflows = useMemo(
     () => (targetCategory ? workflows.filter((w) => w.category === targetCategory) : []),
     [workflows, targetCategory],
@@ -414,7 +417,7 @@ export default function ModelSelector({
     const group = filteredGroups.find((candidate) => candidate.models.some((model) => model.value === value));
     const model = group?.models.find((candidate) => candidate.value === value);
     if (group && model && isGroupAvailable(group.id)) {
-      saveModelPref(nodeType, model.value);
+      saveModelPref(generationNodeType, model.value);
       onSelect(model);
       onWorkflowSelect?.(undefined);
       setOpen(false);

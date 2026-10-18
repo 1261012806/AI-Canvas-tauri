@@ -35,6 +35,7 @@ import {
   VOLCENGINE_BASE_URL,
 } from '../constants/api';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { getGenerationNodeType } from '../utils/nodeGeneration';
 
 // ═══════════════════════════════════════════
 // AbortController 注册表 — 节点删除时取消轮询
@@ -258,6 +259,7 @@ function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
   const providerConfigId = inferLegacyProviderConfigId(task);
   return {
     ...safeTask,
+    nodeType: getGenerationNodeType(safeTask.nodeType),
     providerConfigId,
     ...(task.taskType === 'comfyui' && legacyBaseUrl ? { baseUrl: legacyBaseUrl } : {}),
   };
@@ -300,6 +302,7 @@ function resolveProviderTaskConfig(
 
 /** 保存一条待续任务（同一 nodeId 会覆盖旧记录） */
 export function savePendingTask(task: PendingTask): void {
+  task = sanitizePendingTask(task);
   const tasks = loadAll().filter((t) => t.nodeId !== task.nodeId);
   tasks.push(task.nodeType === 'ai-video'
     ? { ...task, videoGeneration: task.videoGeneration ?? captureVideoTaskGeneration(task.nodeId) } : task);
@@ -364,7 +367,7 @@ async function applyNodeResult(
   const node = store.nodes.find((n) => n.id === nodeId);
   if (!node) return;
   const data = node.data as BaseNodeData;
-  const nodeType = data.type;
+  const nodeType = getGenerationNodeType(data.type);
   const currentProjectId = store.currentProjectId;
 
   // 下载远程 URL 到本地
@@ -1237,7 +1240,7 @@ async function resumeRunningHubWorkflow(task: PendingTask): Promise<void> {
     const store = useAppStore.getState();
     const node = store.nodes.find((item) => item.id === nodeId)!;
     const kind = ['ai-image', 'ai-animation', 'ai-panorama'].includes(task.nodeType) ? 'image' : task.nodeType === 'ai-video' ? 'video' : task.nodeType === 'ai-audio' ? 'audio' : undefined;
-    if (!kind || node.data.type !== task.nodeType || (task.runninghubWorkflowId && node.data.workflowId !== task.runninghubWorkflowId) || (task.runninghubModelId && node.data.model !== task.runninghubModelId)) throw new Error('节点工作流或输出类型已变化，请在平台核对原任务');
+    if (!kind || getGenerationNodeType(node.data.type) !== task.nodeType || (task.runninghubWorkflowId && node.data.workflowId !== task.runninghubWorkflowId) || (task.runninghubModelId && node.data.model !== task.runninghubModelId)) throw new Error('节点工作流或输出类型已变化，请在平台核对原任务');
     store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined, runninghubStage: '恢复查询' });
     const connection = runningHubConnection(store.config.providers, task.providerConfigId === 'runninghub-model' ? 'runninghub-model' : 'runninghub', task.runninghubSite);
     const outputs = await queryRunningHubPendingTask(task, connection, kind, signal, (runninghubStage) => {
@@ -1332,7 +1335,7 @@ async function resumeWorkflowApi(task: PendingTask): Promise<void> {
     const node = store.nodes.find((item) => item.id === task.nodeId);
     const workflow = store.workflows.find((item) => item.id === descriptor.workflowId);
     const expectedType = descriptor.manifest ? `ai-${descriptor.manifest.outputKind}` : 'ai-video';
-    if ((!messageOnly && (!node || node.data.type !== expectedType || node.data.workflowId !== descriptor.workflowId)) || task.nodeType !== expectedType
+    if ((!messageOnly && (!node || getGenerationNodeType(node.data.type) !== expectedType || node.data.workflowId !== descriptor.workflowId)) || task.nodeType !== expectedType
       || workflow?.adapterType !== 'workflow-api' || workflow.category !== expectedType) throw new Error('节点工作流或输出类型已变化，请在平台核对原任务');
     manifestModule.validateWorkflowApiManifest(workflow.workflowApi);
     if (workflow.workflowApi.workflowId !== descriptor.remoteWorkflowId || workflow.workflowApi.connectionId !== task.providerConfigId) throw new Error('工作流连接或远端定义已变化，请在平台核对原任务');
@@ -1379,7 +1382,7 @@ async function resumeWorkflowApi(task: PendingTask): Promise<void> {
     const current = useAppStore.getState();
     const node = current.nodes.find((item) => item.id === task.nodeId);
     if (!messageOnly && !signal.aborted && current.currentProjectId === task.projectId
-      && node?.data.status === 'loading' && node.data.type === task.nodeType
+      && node?.data.status === 'loading' && getGenerationNodeType(node.data.type) === task.nodeType
       && node.data.workflowId === task.workflowApi?.workflowId
       && !isCurrent()
       && getPendingTasksForProject(task.projectId).some((item) => item.nodeId === task.nodeId

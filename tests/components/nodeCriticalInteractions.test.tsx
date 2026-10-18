@@ -1208,6 +1208,70 @@ describe('critical canvas node interactions', () => {
     });
   });
 
+  it.each([
+    { type: 'source-text', generationType: 'ai-text' },
+    { type: 'ai-markdown', generationType: 'ai-text' },
+    { type: 'source-video', generationType: 'ai-video' },
+    { type: 'source-audio', generationType: 'ai-audio' },
+  ].flatMap((item) => ['dialog', 'toolbar'].map((entry) => ({ ...item, entry }))))('routes $type through $entry while preserving the original node identity', async ({ type, generationType, entry }) => {
+    const store = createStore([{
+      id: 'source-node', type, position: { x: 12, y: 34 },
+      data: { type, label: '原始素材', role: 'source', status: 'success', output: '原始正文',
+        prompt: '参考 @{reference:原始素材} 生成', model: 'old-model', provider: 'general', assetId: 'asset-1' },
+    }], () => 1);
+    store.activeNodeId = 'source-node';
+    const generateText = vi.fn().mockResolvedValue('生成后的文本');
+    const generateVideo = vi.fn().mockResolvedValue({ url: 'https://example.com/result.mp4' });
+    const generateAudio = vi.fn().mockResolvedValue({ url: 'https://example.com/result.mp3' });
+    const generateImage = vi.fn();
+    await installReactHookDriver(); installStoreMock(store);
+    vi.doUnmock('../../src/services/generationService');
+    vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+    vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+    vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({ default: function PromptPanelMock() { return null; } }));
+    vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+    vi.doMock('../../src/services/aiService', () => ({
+      generateText, generateVideo, generateAudio, generateImage, generateImagesBatch: vi.fn(), buildPanoramaPrompt: vi.fn(),
+    }));
+    vi.doMock('../../src/services/fileService', () => ({
+      persistMediaUrlToProjectData: vi.fn(async (url: string) => ({ mediaUrl: url, sourceUrl: url })),
+    }));
+    vi.doMock('../../src/services/ai/generateAudio', () => ({
+      persistAudioGenerationResult: vi.fn(async ({ url }: { url: string }) => ({ mediaUrl: url, sourceUrl: url, outputUrl: url })),
+    }));
+    vi.doMock('../../src/services/projectSettingsService', async () => ({
+      ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
+      resolveProjectGenerationPrompt: ({ prompt }: { prompt: string }) => prompt,
+    }));
+    vi.doMock('../../src/services/pollManager', () => ({
+      getPendingTasksForProject: () => [], prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(),
+    }));
+    const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+    const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
+    expect(panel.props.nodeType).toBe(generationType);
+    expect(typeof panel.props.onPassThrough).toBe(generationType === 'ai-text' ? 'function' : 'undefined');
+    (panel.props.onModelSelect as (model: Record<string, unknown>) => void)({
+      value: 'general/new-model', provider: 'general', label: '模型',
+    });
+    expect(store.nodes[0].data).toMatchObject({ type, role: 'source', output: '原始正文', model: 'general/new-model' });
+    if (entry === 'dialog') await (panel.props.onSubmit as () => Promise<void>)();
+    else {
+      const { executeGeneration } = await import('../../src/services/generationService');
+      expect(await executeGeneration('source-node')).toEqual({ success: true });
+    }
+    const expectedGenerator = generationType === 'ai-text' ? generateText : generationType === 'ai-video' ? generateVideo : generateAudio;
+    expect(expectedGenerator).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: '参考 @{reference:原始素材} 生成', model: 'general/new-model', provider: 'general',
+    }));
+    expect([generateText, generateVideo, generateAudio].filter((generate) => generate.mock.calls.length)).toEqual([expectedGenerator]);
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(store.nodes[0]).toMatchObject({ id: 'source-node', type, position: { x: 12, y: 34 },
+      data: { type, role: 'source', assetId: 'asset-1', status: 'success' } });
+    expect(store.recordOutputHistory).toHaveBeenCalledWith('source-node', expect.objectContaining({ nodeType: generationType }),
+      ...(entry === 'toolbar' && generationType === 'ai-video' ? [true] : []));
+    vi.doUnmock('../../src/services/projectSettingsService');
+  });
+
   it('AINodeDialog submits the latest video parameters and resolved project prompt', async () => {
     const originalData = {
       type: 'ai-video',

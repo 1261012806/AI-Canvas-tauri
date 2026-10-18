@@ -30,6 +30,7 @@ import { completeRunningHubNodeTask } from './ai/providers/runninghubWorkflow';
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from './canvasDerivationGuard';
 import { videoInputFingerprint } from './videoBatchPlanning';
 import { completeVideoNodeTask, getPendingTasksForProject, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from './pollManager';
+import { resolveGenerationNodeData } from '../utils/nodeGeneration';
 
 export interface GenerationResult {
   success: boolean;
@@ -66,10 +67,7 @@ export async function executeGeneration(
     try { await assertLease(); } catch { return { success: false, message: '任务已取消' }; }
   }
   const store = useAppStore.getState();
-  const storedData = passData ?? store.nodes.find((n) => n.id === nodeId)?.data;
-  // MCP、角色库等导入的源图片同样可以生图，持久化类型及原有引用保持不变。
-  const data: BaseNodeData | undefined = storedData?.type === 'source-image'
-    ? { ...storedData, type: 'ai-image' } : storedData;
+  const data = resolveGenerationNodeData(passData ?? store.nodes.find((n) => n.id === nodeId)?.data);
   if (!data) return { success: false, message: '节点不存在' };
 
   const nodeType = data?.type;
