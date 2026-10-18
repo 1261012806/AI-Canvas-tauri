@@ -1173,6 +1173,7 @@ pub fn run() {
         .manage(proxy_http_state)
         .manage(comfyui::management::ManagementState::default())
         .manage(comfyui::runtime_console::ComfyUIRuntimeState::default())
+        .manage(comfyui::installer::ComfyUIInstallerState::default())
         .manage(comfyui::model_dedupe::ModelDedupeState::default())
         .manage(blender_runtime::BlenderRuntimeState::default())
         .manage(blender_runtime::ProjectGrantState::default())
@@ -1262,6 +1263,10 @@ pub fn run() {
             comfyui::runtime_console::get_comfyui_runtime_status,
             comfyui::installation::select_comfyui_installation,
             comfyui::installation::get_comfyui_installation,
+            comfyui::installer::get_comfyui_install_info,
+            comfyui::installer::choose_comfyui_install_target,
+            comfyui::installer::install_comfyui_portable,
+            comfyui::installer::cancel_comfyui_install,
             comfyui::open_comfyui_window,
             comfyui::complete_comfyui_workflow_save,
             comfyui::management::open_comfyui_settings_window,
@@ -1389,6 +1394,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                comfyui::installer::shutdown_installation(app_handle);
                 comfyui::runtime_console::shutdown_runtime(app_handle);
                 plugin_window::revoke_all_sessions();
                 app_handle

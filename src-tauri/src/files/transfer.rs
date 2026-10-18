@@ -104,7 +104,8 @@ fn validate_transfer_size(
     Ok(())
 }
 
-fn stream_to_file<R, C, P, V>(
+/// 流式暂存、校验及独占发布；内部调用方必须先完成目标路径授权。
+pub(crate) fn stream_to_file<R, C, P, V>(
     task_id: &str,
     reader: &mut R,
     destination: &Path,

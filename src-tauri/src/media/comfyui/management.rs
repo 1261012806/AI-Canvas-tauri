@@ -371,7 +371,12 @@ fn run_command(app: &tauri::AppHandle, command: Command, timeout: Duration) -> R
     run_command_with_progress(app, command, timeout, None)
 }
 
-fn run_command_with_progress(app: &tauri::AppHandle, mut command: Command, timeout: Duration, progress: Option<Channel<String>>) -> Result<String, String> {
+fn run_command_with_progress(app: &tauri::AppHandle, command: Command, timeout: Duration, progress: Option<Channel<String>>) -> Result<String, String> {
+    run_scoped_command(command, timeout, progress, || current_session(app).is_ok())
+}
+
+/// 只接收原生构造的命令；调用域负责实际路径授权与活动租约。
+pub(super) fn run_scoped_command(mut command: Command, timeout: Duration, progress: Option<Channel<String>>, active: impl Fn() -> bool) -> Result<String, String> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(super::CREATE_NO_WINDOW);
@@ -399,7 +404,7 @@ fn run_command_with_progress(app: &tauri::AppHandle, mut command: Command, timeo
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline && current_session(app).is_ok() => std::thread::sleep(Duration::from_millis(40)),
+            Ok(None) if Instant::now() < deadline && active() => std::thread::sleep(Duration::from_millis(40)),
             _ => break None,
         }
     };
