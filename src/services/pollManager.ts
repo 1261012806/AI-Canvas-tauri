@@ -91,6 +91,8 @@ export interface PendingTask {
   workflowApi?: import('../types/workflowApi').WorkflowApiTaskDescriptor;
   workflowApiMessage?: import('../types/workflowApi').CloudWorkflowTaskContext;
   runninghubRecoveryState?: 'disconnected' | 'cancel_pending' | 'submit_unknown' | 'save_pending';
+  /** 新任务固定原站点以供续查/取消，不保存密钥；旧记录缺省沿用当前选择。 */
+  runninghubSite?: import('../types/runninghub').RunningHubSiteId;
   runninghubOutputNodeIds?: string[];
   runninghubWorkflowId?: string;
   runninghubMessage?: import('../types/runninghub').RunningHubTaskContext;
@@ -1201,7 +1203,7 @@ async function resumeRunningHubMessageTask(task: PendingTask, savedOutputs?: imp
     useAppStore.getState().updateMessage(context.messageId, { mediaStatus: 'generating', mediaError: undefined });
     let saved = savedOutputs;
     if (!saved) {
-      const connection = runningHubConnection(useAppStore.getState().config.providers, task.providerConfigId === 'runninghub-model' ? 'runninghub-model' : 'runninghub');
+      const connection = runningHubConnection(useAppStore.getState().config.providers, task.providerConfigId === 'runninghub-model' ? 'runninghub-model' : 'runninghub', task.runninghubSite);
       const outputs = await queryRunningHubPendingTask(task, connection, kind, signal);
       if (!fresh()) return;
       updatePendingTask(task.nodeId, { runninghubRecoveryState: 'save_pending' }, task.taskId);
@@ -1232,7 +1234,7 @@ async function resumeRunningHubWorkflow(task: PendingTask): Promise<void> {
     const kind = ['ai-image', 'ai-animation', 'ai-panorama'].includes(task.nodeType) ? 'image' : task.nodeType === 'ai-video' ? 'video' : task.nodeType === 'ai-audio' ? 'audio' : undefined;
     if (!kind || node.data.type !== task.nodeType || (task.runninghubWorkflowId && node.data.workflowId !== task.runninghubWorkflowId) || (task.runninghubModelId && node.data.model !== task.runninghubModelId)) throw new Error('节点工作流或输出类型已变化，请在平台核对原任务');
     store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined, runninghubStage: '恢复查询' });
-    const connection = runningHubConnection(store.config.providers, task.providerConfigId === 'runninghub-model' ? 'runninghub-model' : 'runninghub');
+    const connection = runningHubConnection(store.config.providers, task.providerConfigId === 'runninghub-model' ? 'runninghub-model' : 'runninghub', task.runninghubSite);
     const outputs = await queryRunningHubPendingTask(task, connection, kind, signal, (runninghubStage) => {
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { runninghubStage });
     });

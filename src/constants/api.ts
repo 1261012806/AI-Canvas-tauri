@@ -26,6 +26,12 @@ export const RUNNINGHUB_BASE_URL = 'https://api.runninghub.cn';
 /** RunningHUB 标准模型 API（异步任务协议） */
 export const RUNNINGHUB_MODEL_BASE_URL = 'https://www.runninghub.cn/openapi/v2';
 
+/** 用户显式选择 API 站点；不根据应用链接自动改道或跨站重试。 */
+export const RUNNINGHUB_API_SITES = [
+  { id: 'cn', label: '国内站（runninghub.cn）', baseUrl: RUNNINGHUB_MODEL_BASE_URL, consoleUrl: 'https://www.runninghub.cn?inviteCode=iadc40jt' },
+  { id: 'ai', label: '国际站（runninghub.ai）', baseUrl: 'https://www.runninghub.ai/openapi/v2', consoleUrl: 'https://www.runninghub.ai?inviteCode=17k4ifbi' },
+] as const;
+
 /** Tavily 联网搜索 */
 export const TAVILY_BASE_URL = 'https://api.tavily.com';
 

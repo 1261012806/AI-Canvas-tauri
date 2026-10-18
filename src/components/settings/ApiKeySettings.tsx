@@ -42,6 +42,8 @@ import { queryBillingRuns } from '../../services/billing/volcengineBillingServic
 import { saveAutodlWorkflowTemplate, saveWorkflowApiDrafts } from '../../services/workflowApi/workflowApiConfig';
 import { invoke } from '@tauri-apps/api/core';
 import { useT } from '../../i18n';
+import { buildRunningHubSiteProviders, RUNNINGHUB_CREDENTIAL_IDS } from '../../services/runninghubSiteCredentials';
+import type { RunningHubSiteKeyDrafts } from '../../types/runninghub';
 
 interface ProviderListItem {
   id: string;
@@ -152,7 +154,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   const providerItems = useMemo(() => {
     const items: ProviderListItem[] = [];
     for (const [id, providerConfig] of Object.entries(config.providers)) {
-      if (id === 'runninghub') continue;
+      if (id === 'runninghub' || RUNNINGHUB_CREDENTIAL_IDS.includes(id)) continue;
       const definition = getProviderDefinition(id, providerConfig);
       if (!definition) continue;
       if (definition.kind === 'web-search' && id !== activeWebSearchProviderId) continue;
@@ -162,7 +164,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     if (config.providers.runninghub?.apiKey && !config.providers['runninghub-model']) {
       items.push({
         id: 'runninghub-model',
-        config: { name: 'RunningHub', apiKey: '', catalogId: 'runninghub-model' },
+        config: { name: 'RunningHub', apiKey: '', catalogId: 'runninghub-model', baseUrl: config.providers.runninghub.baseUrl },
       });
     }
     if (dreaminaAuth?.loggedIn && !config.providers.dreamina) {
@@ -526,16 +528,25 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   const handleSaveConnection = async (
     connectionId: string,
     providerConfig: ApiProviderConfig,
-    related?: { runninghubWorkflowApiKey?: string; workflowApiDrafts?: import('../../types/workflowApi').WorkflowApiDraft[] },
+    related?: { runninghubWorkflowApiKey?: string; runninghubSiteKeys?: RunningHubSiteKeyDrafts; workflowApiDrafts?: import('../../types/workflowApi').WorkflowApiDraft[] },
   ) => {
-    saveProviderConfig(connectionId, providerConfig);
     const definition = getProviderDefinition(connectionId, providerConfig);
+    if (definition?.id === 'runninghub-model' && related?.runninghubSiteKeys) {
+      const providers = buildRunningHubSiteProviders(useAppStore.getState().config.providers, providerConfig, related.runninghubSiteKeys);
+      updateConfig({ providers });
+      saveProviderConfig(connectionId, providers['runninghub-model']);
+      await saveConfig({ throwOnError: true });
+      closeConnectionDialog();
+      return;
+    }
+    saveProviderConfig(connectionId, providerConfig);
     if (definition?.kind === 'web-search') {
       updateConfig({ webSearchProviderId: definition.id as WebSearchProviderId });
     } else if (related?.runninghubWorkflowApiKey) {
       setProviderConfig('runninghub', {
         name: 'RunningHub 工作流',
         apiKey: related.runninghubWorkflowApiKey,
+        baseUrl: providerConfig.baseUrl,
       });
     } else if (related && 'runninghubWorkflowApiKey' in related && config.providers.runninghub) {
       await removeProviderConfig('runninghub');
@@ -564,7 +575,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         : definition?.kind === 'web-search'
         ? getWebSearchProviderDefinitions().map((provider) => provider.id)
         : [connectionId];
-      if (connectionId === 'runninghub-model') connectionIds.push('runninghub');
+      if (connectionId === 'runninghub-model') connectionIds.push('runninghub', ...RUNNINGHUB_CREDENTIAL_IDS);
       let cleanupFailed = false;
       for (const id of connectionIds) {
         try {

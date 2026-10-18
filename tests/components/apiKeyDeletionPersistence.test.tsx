@@ -69,6 +69,8 @@ import { createConfigSlice } from '../../src/store/store.config';
 import { loadConfigFromDb, saveConfigToDb } from '../../src/services/indexedDbService';
 import { serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
 import { JsonFileTransferError } from '../../src/services/fs/jsonFileTransfer';
+import type { RunningHubSiteKeyDrafts } from '../../src/types/runninghub';
+import { runningHubConnection } from '../../src/services/workflowExecutionService';
 
 function configStore() {
   return createStore<AppState>()((set, get, api) => ({
@@ -158,6 +160,34 @@ beforeEach(async () => {
 });
 
 describe('API Key 连接删除持久化', () => {
+  it.each(['', 'model-fixture'])('RunningHub 保存工作流密钥时保留国际站点，模型 Key=%s', async (modelKey) => {
+    driver.native = true;
+    const dialog = find(render(), (element) => typeof element.props.onSave === 'function' && 'runninghubWorkflowApiKey' in element.props);
+    expect(dialog).toBeDefined();
+    await (dialog!.props.onSave as (id: string, config: AppState['config']['providers'][string], related: { runninghubSiteKeys: RunningHubSiteKeyDrafts }) => Promise<void>)(
+      'runninghub-model',
+      { name: 'RunningHub', catalogId: 'runninghub-model', apiKey: modelKey, baseUrl: 'https://www.runninghub.ai/openapi/v2' },
+      { runninghubSiteKeys: { cn: { modelKey: 'cn-model-fixture', workflowKey: 'cn-workflow-fixture' }, ai: { modelKey, workflowKey: 'workflow-fixture' } } },
+    );
+    const saved = await loadConfigFromDb();
+    expect(saved?.providers?.runninghub?.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
+    expect(saved?.providers?.['runninghub-model']?.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.providers.runninghub.baseUrl).toBe('https://www.runninghub.ai/openapi/v2');
+    expect(runningHubConnection(fresh.getState().config.providers, 'runninghub').apiKey).toBe('workflow-fixture');
+    if (modelKey) expect(runningHubConnection(fresh.getState().config.providers, 'runninghub-model').apiKey).toBe(modelKey);
+    else expect(() => runningHubConnection(fresh.getState().config.providers, 'runninghub-model')).toThrow('模型');
+    fresh.getState().setProviderConfig('runninghub', { baseUrl: 'https://www.runninghub.cn/openapi/v2' });
+    fresh.getState().setProviderConfig('runninghub-model', { baseUrl: 'https://www.runninghub.cn/openapi/v2' });
+    expect(runningHubConnection(fresh.getState().config.providers, 'runninghub').apiKey).toBe('cn-workflow-fixture');
+    await fresh.getState().saveConfig({ silent: true });
+    const restarted = configStore();
+    await restarted.getState().loadConfig();
+    expect(runningHubConnection(restarted.getState().config.providers, 'runninghub-model').apiKey).toBe('cn-model-fixture');
+    expect(JSON.stringify(await loadConfigFromDb())).not.toContain('cn-model-fixture');
+  });
+
   it.each(['正常清理', '项目列表读取失败', '项目内容读取失败', '当前项目保存失败'])(
     '%s 时删除自定义连接，重新加载不会恢复连接或模型', async (scenario) => {
       if (scenario === '项目列表读取失败') driver.listProjects.mockRejectedValueOnce(new Error('private fixture'));

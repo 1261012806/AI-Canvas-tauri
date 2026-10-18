@@ -525,6 +525,8 @@ export interface ApiProviderConfig {
   apiKey: string;
   /** 凭据在凭据存储中的条目名；由持久化层维护，业务代码不要直接读写。 */
   apiKeyRef?: string;
+  /** RunningHub 当前入口使用独立站点凭据记录；此入口的 apiKey 仅为内存派生值。 */
+  runninghubSiteCredentials?: boolean;
   baseUrl?: string;
   /** 文本/对话请求协议；旧配置缺失时按 openai-compatible 处理。 */
   chatApiProtocol?: ChatApiProtocol;
