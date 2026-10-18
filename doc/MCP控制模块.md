@@ -29,7 +29,7 @@
 
 导演台预演提供 `director_get_previs_schema`、`director_get_previs_scene` 与 `director_set_previs_scene`，仅在 MCP 控制上下文开放。客户端先取得合同和示例，再创建或查询 `ai-director`、选择 `ai-threejs` 并写入 `sceneJson`；读回返回完整场景，未保存时为 `null`。两项读取为 `read`，写入为 `canvas_write`，仍经 Policy 和项目/实例/派生守卫；不执行外部 JS，也不额外调用应用内模型。场景保存后的节点截图由宿主同步，完整合同与验收见[导演模块](./导演台与Blender模块.md)。
 
-`canvas_create_nodes` 与 `canvas_update_nodes` 为视频节点设置 `aspectRatio` 时同步实际视频参数 `seedanceRatio`；`canvas_query(detail=true)` 只报告已显式设置的实际视频比例，旧节点未设时不把画框比例误报为生成比例。多图视频提示词应按 Picture 顺序写入图片节点的 `@{nodeId:label}` 引用；只有连线无法指定参考图顺序。
+`canvas_create_nodes` 与 `canvas_update_nodes` 为视频节点设置 `aspectRatio` 时同步实际视频参数 `seedanceRatio`，固定比例同时联动空视频框；创建省略时先继承项目视频比例再排布，显式参数优先，已有成片和自适应的边界见[画布与项目](./画布与项目模块.md#视频参数与空节点比例)。`canvas_query(detail=true)` 只报告已显式设置或继承项目设置的实际视频比例，旧节点未设时不把画框比例误报为生成比例。多图视频提示词应按 Picture 顺序写入图片节点的 `@{nodeId:label}` 引用；只有连线无法指定参考图顺序。
 
 媒体参数随 MCP 节点创建一起写入：图片支持 `aspectRatio`、`imageSize`、`batchCount`；视频支持 `aspectRatio`、`videoLongSide`（本地工作流长边像素，如 832）、`videoResolution`（API 画质档位，如 720p）、`videoDuration`（分镜小数秒向上取整）；旧调用传数字字符串 `videoResolution: "832"` 时兼容写入长边像素，而不再错误写成 API 档位。音频支持 `audioPurpose`、音色/格式/语速、描述式语音的声音类型/节奏/秒数，以及音乐标题、歌词、BPM、时长与自动歌词开关。三类均可传已配置的 `model` ID；未传的字段才使用项目/模型默认值。`canvas_update_nodes` 对同类字段可更新，`canvas_query(detail=true)` 返回安全的参数摘要；字段传给错误的节点类型或模型 ID 未配置时，在整批写入前拒绝。参考音频通过节点引用/工作流 IO 传入，Qwen 等工作流专属参数仍由工作流配置控制。ComfyUI H3 的帧率由工作流内部 24fps 公式固定，不把通用 `videoFps` 伪装成可独立生效的 MCP 控件。
 

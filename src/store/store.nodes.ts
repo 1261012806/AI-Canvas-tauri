@@ -33,6 +33,7 @@ import { playNodeExit } from '../utils/nodeAnimations';
 import { cancelNodePolling } from '../services/pollManager';
 import { applyProjectDefaultsToNodeData, getImageNodeDimensionsForAspectRatio } from '../services/projectSettingsService';
 import { getCanvasPointerPosition } from '../services/canvasPointerService';
+import { videoNodeDimensionsForAspectRatio } from '../utils/nodeBounds';
 import { resolveDirectorRuntime } from '../services/directorRuntimeRegistry';
 import { copyNodeMedia, needsNodeMediaCopy, discardCopiedNodeMedia } from '../services/nodeMediaCopy';
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
@@ -214,6 +215,13 @@ function hasMaterializedNodeOutput(data: BaseNodeData, nodeType: string | undefi
   return hasValue(data.output);
 }
 
+/** 仅联动待生成的视频框；已有成片及导入素材继续使用真实媒体尺寸。 */
+function alignEmptyVideoNodeDimensions(data: BaseNodeData): BaseNodeData {
+  if (data.type !== 'ai-video' || data.role === 'source' || data.videoUrl || data.output) return data;
+  const dimensions = videoNodeDimensionsForAspectRatio(data.seedanceRatio, data.nodeWidth);
+  return dimensions ? { ...data, aspectRatio: data.seedanceRatio, ...dimensions } : data;
+}
+
 function prepareDirectorNodeDataForInsertion(
   data: BaseNodeData,
   nodeType: string | undefined,
@@ -245,7 +253,7 @@ function prepareNodeForInsertion(
   data: BaseNodeData,
   displayId: number,
 ): Node<BaseNodeData> {
-  const prepared = prepareDirectorNodeDataForInsertion(data, node.type, node.id);
+  const prepared = prepareDirectorNodeDataForInsertion(alignEmptyVideoNodeDimensions(data), node.type, node.id);
   return { ...node, data: { ...prepared, displayId } } as Node<BaseNodeData>;
 }
 
@@ -509,7 +517,7 @@ function mergeNodeData(previous: BaseNodeData, patch: Partial<BaseNodeData>): Ba
     next.assetId = undefined;
     next.relativePath = undefined;
   }
-  return next;
+  return 'seedanceRatio' in patch ? alignEmptyVideoNodeDimensions(next) : next;
 }
 
 /** 在同一次 Store 更新中同步稳定关联的镜头时长，沿用调用方的历史快照。 */

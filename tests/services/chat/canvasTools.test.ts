@@ -375,7 +375,7 @@ describe('canvas agent tools', () => {
     const created = useAppStore.getState().nodes.slice(2);
     expect(created.map((item) => item.data.nodeHeight)).toEqual([
       372, // 3:4 竖构图撑高
-      160, // 16:9 横构图算出 159，被 160 下限兜住
+      158, // 视频框按实际 16:9 比例计算，不套图片框的边框和最小高度
       600, // 30 行正文按行数撑高，封顶 600
       160, // 还没有正文的生成型文本节点保持默认
     ]);
@@ -411,6 +411,86 @@ describe('canvas agent tools', () => {
     expect(nodes.find((item) => item.id === 'n1')?.data.seedanceRatio).toBeUndefined();
     const queriedAfter = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [video.id], detail: true });
     expect(JSON.parse(queriedAfter.modelContent).nodes[0].aspectRatio).toBe('9:16');
+  });
+
+  it.each([
+    ['16:9', 158], ['9:16', 498], ['1:1', 280], ['4:3', 210], ['3:4', 373], ['21:9', 120],
+  ])('creates %s video frames with matching generation controls despite project defaults', async (aspectRatio, height) => {
+    useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
+      settings: { generation: { videoAspectRatio: '1:1' } } }] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), {
+      nodes: [{ type: 'ai-video', label: '空视频', aspectRatio }],
+    });
+    expect(result.status).toBe('success');
+    const video = useAppStore.getState().nodes.at(-1)!;
+    expect(video.data).toMatchObject({ aspectRatio, seedanceRatio: aspectRatio, nodeWidth: 280, nodeHeight: height });
+    const queried = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [video.id], detail: true });
+    expect(JSON.parse(queried.modelContent).nodes[0]).toMatchObject({ aspectRatio, size: { width: 280, height } });
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('lays out inherited portrait video frames using their final size', async () => {
+    useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
+      settings: { generation: { videoAspectRatio: '9:16' } } }] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), {
+      nodes: Array.from({ length: 4 }, (_, index) => ({ type: 'ai-video', label: `镜头${index}` })),
+    });
+    expect(result.status).toBe('success');
+    const created = useAppStore.getState().nodes.slice(2);
+    for (const video of created) {
+      expect(video.data).toMatchObject({ aspectRatio: '9:16', seedanceRatio: '9:16', nodeWidth: 280, nodeHeight: 498 });
+    }
+    expect(created[3].position.y).toBeGreaterThan(created[0].position.y + created[0].data.nodeHeight!);
+  });
+
+  it('repairs legacy video frames on MCP ratio updates and shares the linkage with UI parameter writes', async () => {
+    useAppStore.setState({ nodes: [...useAppStore.getState().nodes,
+      node('legacy-video', { type: 'ai-video', aspectRatio: '1:1', seedanceRatio: '16:9', nodeWidth: 420, nodeHeight: 420 }),
+    ] });
+    const updated = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: ['legacy-video', 'n1'], aspectRatio: '16:9',
+    });
+    expect(updated.status).toBe('success');
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'legacy-video')?.data).toMatchObject({
+      aspectRatio: '16:9', seedanceRatio: '16:9', nodeWidth: 420, nodeHeight: 236,
+    });
+    expect(useAppStore.getState().nodes[0].data.seedanceRatio).toBeUndefined();
+    useAppStore.getState().updateNodeData('legacy-video', { seedanceRatio: '9:16' });
+    expect(useAppStore.getState().nodes.at(-1)?.data).toMatchObject({
+      aspectRatio: '9:16', seedanceRatio: '9:16', nodeWidth: 420, nodeHeight: 747,
+    });
+    // 手动缩放或仅改提示词不能被比例联动反复覆盖。
+    useAppStore.getState().updateNodeDataTransient('legacy-video', { nodeHeight: 500 });
+    useAppStore.getState().updateNodesDataBatch(['legacy-video'], { prompt: '新提示词' });
+    expect(useAppStore.getState().nodes.at(-1)?.data.nodeHeight).toBe(500);
+    const resized = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: ['legacy-video'], width: 560, height: 560, aspectRatio: '16:9',
+    });
+    expect(resized.status).toBe('success');
+    expect(useAppStore.getState().nodes.at(-1)?.data).toMatchObject({ nodeWidth: 560, nodeHeight: 315 });
+  });
+
+  it('does not infer an adaptive frame or resize produced and imported videos', async () => {
+    useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
+      settings: { generation: { videoAspectRatio: '1:1' } } }] });
+    await getAgentTool('canvas_create_nodes')!.execute(context(), {
+      nodes: [{ type: 'ai-video', label: '自适应', aspectRatio: 'adaptive' }],
+    });
+    const adaptive = useAppStore.getState().nodes.at(-1)!;
+    expect(adaptive.data).toMatchObject({ seedanceRatio: 'adaptive', nodeWidth: 280, nodeHeight: 160 });
+    useAppStore.setState({ nodes: [...useAppStore.getState().nodes,
+      node('produced', { type: 'ai-video', videoUrl: 'asset://localhost/movie.mp4', nodeWidth: 320, nodeHeight: 180 }),
+      node('imported', { type: 'ai-video', role: 'source', nodeWidth: 180, nodeHeight: 320 }),
+    ] });
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: [adaptive.id, 'produced', 'imported'], aspectRatio: '9:16',
+    });
+    expect(result.status).toBe('success');
+    expect(useAppStore.getState().nodes.find((item) => item.id === adaptive.id)?.data.nodeHeight).toBe(498);
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'produced')?.data).toMatchObject({ nodeWidth: 320, nodeHeight: 180 });
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'imported')?.data).toMatchObject({ nodeWidth: 180, nodeHeight: 320 });
+    await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: [adaptive.id], aspectRatio: 'adaptive' });
+    expect(useAppStore.getState().nodes.find((item) => item.id === adaptive.id)?.data.nodeHeight).toBe(498);
   });
 
   it('puts finished text in the node body and generation instructions in the prompt', async () => {

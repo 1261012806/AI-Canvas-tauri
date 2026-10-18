@@ -26,7 +26,7 @@ import {
   PROJECT_IMAGE_SIZES,
   PROJECT_VIDEO_ASPECT_RATIOS,
 } from '../../projectSettingsService';
-import { nodeHeightForAspectRatio } from '../../../utils/nodeBounds';
+import { nodeHeightForAspectRatio, videoNodeDimensionsForAspectRatio } from '../../../utils/nodeBounds';
 import { textNodeHeight } from '../../../utils/num';
 import { executeCommand, logOperation } from '../commandRegistry';
 import {
@@ -708,6 +708,12 @@ async function executeCanvasCommand(
  */
 function getNodeDimensions(input: CreateNodeInput): { width: number; height: number } {
   if (input.type === 'ai-shotlist') return { width: 800, height: 400 };
+  if (input.type === 'ai-video') {
+    const dimensions = videoNodeDimensionsForAspectRatio(input.aspectRatio, DEFAULT_NODE_WIDTH);
+    return dimensions
+      ? { width: dimensions.nodeWidth, height: dimensions.nodeHeight }
+      : { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT };
+  }
   if (input.aspectRatio && VISUAL_NODE_TYPES.has(input.type)) {
     return {
       width: DEFAULT_NODE_WIDTH,
@@ -1056,7 +1062,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '直接落进节点正文，建完就能看见、能被下游 @{nodeId:label} 引用，不需要再跑模型；',
         'prompt 是给模型的生成指令（“把这集拆成镜头表”），节点正文会留空，等用户点生成才有内容。',
         '你已经写出成品文字时一律放 content；放进 prompt 只会让节点显示空白，引用它也只能拿到空内容。',
-        '多图视频 prompt 须按 Picture 顺序写入对应图片节点的 @{nodeId:label} 引用；只有连线不能指定 Picture 顺序。视频 aspectRatio 同时设置实际生成比例。',
+        '多图视频 prompt 须按 Picture 顺序写入对应图片节点的 @{nodeId:label} 引用；只有连线不能指定 Picture 顺序。视频 aspectRatio 同时设置实际生成比例和空节点框尺寸，省略时继承项目视频比例；自适应比例不推测尺寸。',
         '视觉节点要按画面内容给 aspectRatio，不要整批用同一个比例：',
         '人物立绘、定妆图用 3:4，场景板、镜头画面、分镜用 16:9，道具、图标、材质用 1:1，竖屏短视频用 9:16，宽银幕气氛图用 21:9；',
         '项目已经定了画幅（如剧本写明 16:9）时，镜头类节点跟随项目画幅，只有人物、道具这类单体参考图才另选比例。',
@@ -1137,8 +1143,13 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const message = `content 只能用于文本类节点，${nonText.length} 个节点不是文本节点`;
           return { status: 'error', summary: message, modelContent: message };
         }
-        const positions = resolveCreateNodePositions(context, input.nodes);
-        const nodes = input.nodes.map((nodeInput, index) => createCanvasNode(
+        const projectRatio = useAppStore.getState().projects
+          .find((project) => project.id === context.projectId)?.settings?.generation?.videoAspectRatio;
+        // 布局与落库共用最终视频比例，不能等插入 Store 后才补项目默认值。
+        const nodeInputs = input.nodes.map((node) => node.type === 'ai-video' && node.aspectRatio === undefined && projectRatio
+          ? { ...node, aspectRatio: projectRatio } : node);
+        const positions = resolveCreateNodePositions(context, nodeInputs);
+        const nodes = nodeInputs.map((nodeInput, index) => createCanvasNode(
           nodeInput,
           index,
           positions[index],
@@ -1173,6 +1184,11 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const explicit = Object.fromEntries(explicitKeys
             .filter((key) => node.data[key] !== undefined)
             .map((key) => [key, node.data[key]])) as Partial<BaseNodeData>;
+          // 显式自适应也要恢复创建时的框，不能遗留项目固定比例产生的中间尺寸。
+          if (node.data.type === 'ai-video') {
+            explicit.nodeWidth = node.data.nodeWidth;
+            explicit.nodeHeight = node.data.nodeHeight;
+          }
           if (Object.keys(explicit).length) store.updateNodeDataTransient(node.id, explicit);
         }
         useAppStore.getState().incrementRevision();
@@ -1224,6 +1240,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
       description: [
         '批量更新匹配节点：名称、提示词、正文内容、位置、尺寸、生成模型和生成参数。',
         'label 同步已有文件名显示别名，但不重命名磁盘文件或改变媒体路径。',
+        '视频 aspectRatio 同步实际生成比例；固定比例按当前宽度重算空节点高度（同时传 width 时使用新宽度，优先于 height），已有成片保持真实视频框，自适应不改框。',
         '视频节点的 videoLongSide 是本地工作流长边像素，videoResolution 是 API 档位（旧版数字字符串会转长边像素）；videoDuration 是实际生成秒数。',
         '音频节点可设置语音音色/格式/速度、描述式语音参数及音乐时长/BPM；工作流专属参数继续由工作流配置管理。',
         'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。',
@@ -1347,7 +1364,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         // updateNodesDataBatch 自带一次 commitToHistory；只移动时才需要单独提交历史
         if (Object.keys(patch).length > 0) store.updateNodesDataBatch(targetIds, patch);
         else store.commitToHistory();
-        // 视频参数面板读取 seedanceRatio，画布框尺寸才读取 aspectRatio。
+        // 视频参数面板读取 seedanceRatio，Store 在同一次写入中联动空视频框。
         // 复用同一次历史快照，且不把视频参数写入混合目标中的图片节点。
         if (input.aspectRatio !== undefined) {
           for (const node of targets) {
