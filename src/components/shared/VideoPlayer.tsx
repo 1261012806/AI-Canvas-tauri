@@ -35,6 +35,17 @@ function timeLabel(seconds: number): string {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
 }
 
+/** 按媒体元素错误分类，不展示可能带有路径或链接的原始 message。 */
+function videoErrorMessage(code?: number): string {
+  switch (code) {
+    case 1: return '视频加载已中止，点击重试';
+    case 2: return '视频读取失败，请检查网络或文件';
+    case 3: return '视频解码失败：编码不兼容或文件损坏';
+    case 4: return '视频格式或编码不兼容';
+    default: return '视频加载失败，点击重试';
+  }
+}
+
 function seekPreview(video: HTMLVideoElement | null, time: number) {
   if (video && video.readyState > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration);
 }
@@ -92,13 +103,23 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   const [hover, setHover] = useState<{ ratio: number; time: number } | null>(null);
   const [fullscreenError, setFullscreenError] = useState(false);
   const [blocked, setBlocked] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState<{ src: string; message: string; code?: number } | null>(null);
+  const failure = failed?.src === src ? failed : null;
   const [dimensions, setDimensions] = useState<{ src: string; width: number; height: number; duration: number } | null>(null);
   const mediaInfo = dimensions?.src === src ? dimensions : null;
   const knownDuration = mediaInfo?.duration ?? durationHint;
   const duration = Number.isFinite(knownDuration) && knownDuration > 0 ? knownDuration : 0;
   const buffered = duration ? Math.min(100, Math.max(time, bufferedEnd) / duration * 100) : 0;
   const silent = muted || volume === 0;
+  const handlePlayFailure = useCallback((video: HTMLVideoElement, source: string, error: unknown) => {
+    if (videoRef.current !== video || video.getAttribute('src') !== source) return;
+    setBlocked(true);
+    if (typeof error === 'object' && error !== null && 'name' in error && error.name === 'NotSupportedError') {
+      const code = video.error?.code ?? 4;
+      setPlaying(false);
+      setFailed({ src: source, code, message: videoErrorMessage(code) });
+    }
+  }, []);
   const changeAudio = (nextVolume: number, nextMuted: boolean) => {
     // 音量设置不依赖媒体实例；封面模式或暂停释放实例后仍可调节，下次挂载再应用。
     preferredAudio.current = { volume: nextVolume, muted: nextMuted };
@@ -120,7 +141,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     if (!active) { onRequestPlayback?.(); return; }
     const video = videoRef.current; if (!video) return;
     if (video.error || !video.getAttribute('src')) { video.src = src; video.load(); }
-    void video.play().catch(() => { if (videoRef.current === video && video.getAttribute('src') === src) setBlocked(true); });
+    void video.play().catch((error: unknown) => handlePlayFailure(video, src, error));
   };
   const fullscreen = () => {
     if (onFullscreen && !document.fullscreenElement) { onFullscreen(); return; }
@@ -140,9 +161,9 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     video.playbackRate = preferredRate.current;
     video.volume = preferredAudio.current.volume;
     video.muted = preferredAudio.current.muted;
-    if (autoPlay) void video.play().catch(() => { if (current) setBlocked(true); });
+    if (autoPlay) void video.play().catch((error: unknown) => { if (current) handlePlayFailure(video, src, error); });
     return () => { current = false; releaseViewportVideoElement(video); };
-  }, [src, autoPlay, active]);
+  }, [src, autoPlay, active, handlePlayFailure]);
 
   // 子播放器先登记释放键处理，避免蒙层把收起菜单或退出原生全屏的 Esc 当成关闭预览。
   useLayoutEffect(() => {
@@ -270,8 +291,15 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
               onVolumeChange?.(video.volume, video.muted);
             }}
             onRateChange={(event) => { preferredRate.current = event.currentTarget.playbackRate; setRate(event.currentTarget.playbackRate); }}
-            onError={() => { setPlaying(false); setFailed(src); setBlocked(true); onError?.(); }} />
-          {(blocked || failed === src) && <button type="button" className="ui-btn ui-video-player__retry" onClick={play}>{failed === src ? '视频加载失败，点击重试' : '点击播放'}</button>}
+            onError={(event) => {
+              const code = event.currentTarget.error?.code;
+              setPlaying(false); setFailed({ src, code, message: videoErrorMessage(code) }); setBlocked(true); onError?.();
+            }} />
+          {(blocked || failure) && <button type="button" className="ui-btn ui-video-player__retry max-w-[calc(100%_-_1rem)]" onClick={play}
+            aria-label={failure ? `${failure.message}，重试播放` : '点击播放'}
+            title={failure?.code === 3 || failure?.code === 4 ? '建议使用 H.264 编码的 MP4；点击重试播放' : undefined}>
+            <span className="whitespace-normal">{failure?.message ?? '点击播放'}</span>
+          </button>}
         </> : src && poster ? <img src={poster} alt="" draggable={false} onError={onPosterError} />
           : <p role="status" className="text-xs text-canvas-text-muted">{unavailable ? '视频不可用' : src && !active ? '点击播放' : '加载视频…'}</p>}
         </div>

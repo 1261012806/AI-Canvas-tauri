@@ -28,7 +28,13 @@ vi.mock('react', async () => ({
     if (old && deps?.length === old.deps?.length && deps?.every((dep, i) => Object.is(dep, old.deps?.[i]))) return;
     scope.pending.push(() => { old?.cleanup?.(); scope.effects[index] = { deps, cleanup: effect() ?? undefined }; });
   },
-  useCallback: <T extends (...args: unknown[]) => unknown>(fn: T) => fn,
+  useCallback: <T extends (...args: unknown[]) => unknown>(fn: T, deps?: readonly unknown[]) => {
+    const scope = driver.current!; const index = scope.refIndex++;
+    const old = scope.refs[index]?.current as { fn: T; deps?: readonly unknown[] } | undefined;
+    if (old && deps && old.deps?.length === deps.length && deps.every((dep, i) => Object.is(dep, old.deps?.[i]))) return old.fn;
+    scope.refs[index] = { current: { fn, deps } };
+    return fn;
+  },
 }));
 import VideoPlayer from '../../src/components/shared/VideoPlayer';
 
@@ -37,7 +43,7 @@ type Props = ComponentProps<typeof VideoPlayer>;
 let scope: Harness; let input: Props; let tree: unknown; let win: EventTarget;
 let video: { src: string; paused: boolean; currentTime: number; muted: boolean; volume: number; playbackRate: number;
   buffered: { length: number; start: (index: number) => number; end: (index: number) => number };
-  videoWidth: number; videoHeight: number; duration: number; readyState: number; error: null; play: ReturnType<typeof vi.fn>;
+  videoWidth: number; videoHeight: number; duration: number; readyState: number; error: { code: number } | null; play: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>; load: ReturnType<typeof vi.fn>; removeAttribute: ReturnType<typeof vi.fn>; getAttribute: ReturnType<typeof vi.fn>; addEventListener: (type: string, cb: (event: unknown) => void) => void; removeEventListener: (type: string, cb: (event: unknown) => void) => void; };
 let doc: { fullscreenElement: unknown; exitFullscreen: ReturnType<typeof vi.fn> };
 let stage: { requestFullscreen: ReturnType<typeof vi.fn>; querySelector: ReturnType<typeof vi.fn>; contains: ReturnType<typeof vi.fn> };
@@ -122,6 +128,38 @@ describe('UI Kit VideoPlayer', () => {
     video.paused = false; event('onPlay'); click(control('暂停视频')); expect(video.pause).toHaveBeenCalled();
     event('onEnded'); expect(input.onEnded).toHaveBeenCalledOnce(); expect(input.onEscape).not.toHaveBeenCalled();
     event('onError'); expect(input.onError).toHaveBeenCalledOnce(); expect(control('视频加载失败，点击重试')).toBeDefined();
+  });
+  it.each([
+    [1, '视频加载已中止，点击重试'],
+    [2, '视频读取失败，请检查网络或文件'],
+    [3, '视频解码失败：编码不兼容或文件损坏'],
+    [4, '视频格式或编码不兼容'],
+  ] as const)('媒体错误码 %i 显示具体原因并保留重试', async (code, message) => {
+    render(); await settle(); video.error = { code }; event('onError');
+    const retry = control(`${message}，重试播放`);
+    expect(retry.type).toBe('button'); expect(control(message)).toBeDefined();
+    expect(input.onError).toHaveBeenCalledOnce();
+    if (code === 3 || code === 4) expect(retry.props.title).toContain('H.264');
+    video.error = null; click(retry); await settle(); event('onPlay');
+    expect(elements(tree).some((el) => el.props.children === message)).toBe(false);
+  });
+  it.each([true, false])('不支持的视频在自动播放=%s 时直接提示格式或编码不兼容', async (autoPlay) => {
+    input = { ...input, autoPlay };
+    video.play.mockRejectedValueOnce(Object.assign(new Error('private media url'), { name: 'NotSupportedError' }));
+    render(); if (!autoPlay) click(control('播放视频')); await settle();
+    expect(control('视频格式或编码不兼容')).toBeDefined();
+    expect(elements(tree).some((el) => String(el.props.children).includes('private media url'))).toBe(false);
+  });
+  it('自动播放权限受限仍提示点击播放，不误报为格式不兼容', async () => {
+    video.play.mockRejectedValueOnce(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
+    render(); await settle(); expect(control('点击播放').type).toBe('button');
+    expect(elements(tree).some((el) => el.props.children === '视频格式或编码不兼容')).toBe(false);
+  });
+  it('换源后不显示上个视频的格式错误', async () => {
+    render(); await settle(); video.error = { code: 4 }; event('onError');
+    expect(control('视频格式或编码不兼容')).toBeDefined();
+    input = { ...input, src: 'https://videos.test/compatible.mp4' }; video.error = null; render();
+    expect(elements(tree).some((el) => el.props.children === '视频格式或编码不兼容')).toBe(false);
   });
   it('底部控件更新进度、速度和静音，原生全屏 Esc 不关闭详情层', async () => {
     render(); await settle(); event('onLoadedMetadata');
@@ -240,7 +278,8 @@ describe('UI Kit VideoPlayer', () => {
     video.play.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; })); render();
     input = { ...input, src: 'https://videos.test/b.mp4' }; render();
     expect(video.removeAttribute).toHaveBeenCalledWith('src'); expect(video.src).toBe(input.src);
-    reject(new Error('old source blocked')); await settle();
-    expect(elements(tree).some((el) => el.props.children === '点击播放')).toBe(false);
+    reject(Object.assign(new Error('old source blocked'), { name: 'NotSupportedError' })); await settle();
+    expect(elements(tree).some((el) => el.props['aria-label'] === '点击播放')).toBe(false);
+    expect(elements(tree).some((el) => el.props.children === '视频格式或编码不兼容')).toBe(false);
   });
 });
