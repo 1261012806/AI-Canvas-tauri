@@ -27,10 +27,11 @@
 }
 
 .appearance-layout__surface {
-  border: 1px solid var(--theme-border);
+  border: 1px solid transparent;
   border-radius: var(--ui-radius-lg);
-  background: var(--layout-panel-image, var(--appearance-surface-image, none)), var(--layout-panel-bg, var(--floating-surface-bg));
+  background: transparent;
   box-shadow: var(--glass-shadow-floating);
+  backdrop-filter: blur(var(--glass-blur-lg));
 }
 
 .appearance-layout__canvas { inset: 0; border-radius: inherit; background: var(--layout-canvas-color); }
@@ -59,16 +60,13 @@
 .appearance-layout__projects,
 .appearance-layout__drawing,
 .appearance-layout__viewport { display: flex; align-items: center; gap: 8px; padding: 8px; }
-.appearance-layout__projects { top: 12px; left: 12px; --layout-panel-bg: var(--appearance-panel-projectBar-bg); --layout-panel-image: var(--appearance-panel-projectBar-image); }
-.appearance-layout__sidebar { --layout-panel-bg: var(--appearance-panel-sidebar-bg); --layout-panel-image: var(--appearance-panel-sidebar-image); }
-.appearance-layout__drawing { --layout-panel-bg: var(--appearance-panel-drawingToolbar-bg); --layout-panel-image: var(--appearance-panel-drawingToolbar-image); }
-.appearance-layout__viewport { --layout-panel-bg: var(--appearance-panel-viewportToolbar-bg); --layout-panel-image: var(--appearance-panel-viewportToolbar-image); }
+.appearance-layout__projects { top: 12px; left: 12px; }
 .appearance-layout__divider { height: 12px; border-left: 1px solid var(--theme-border); }
 .appearance-layout__sidebar { top: 24%; left: 12px; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 12px 8px; }
 .appearance-layout__drawing { bottom: 12px; left: 12px; }
 .appearance-layout__viewport { bottom: 12px; right: 12px; }
 .appearance-layout__minimap { bottom: 56px; right: 12px; width: 22%; height: 21%; padding: 8px; }
-.appearance-layout__minimap-viewport { display: block; width: 100%; height: 100%; border: 2px solid var(--brand); border-radius: var(--ui-radius-sm); background: var(--theme-bg); }
+.appearance-layout__minimap-viewport { display: block; width: 100%; height: 100%; border: 2px solid var(--brand); border-radius: var(--ui-radius-sm); }
 
 .appearance-layout__node {
   top: 55%;

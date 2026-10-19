@@ -112,6 +112,8 @@ export default function StyleGuideWindow() {
         button: resolved.ui.button,
         surfaceImage: resolved.ui.surfaceImage,
         canvasPanels: resolved.ui.canvasPanels,
+        glassOpacity: resolved.ui.glassOpacity,
+        glassBlur: resolved.ui.glassBlur,
       },
     };
   }, [appearance, previewMode, systemMode]);

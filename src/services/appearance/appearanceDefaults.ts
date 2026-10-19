@@ -186,6 +186,10 @@ function normalizeCanvasPanels(input: unknown, fallback: string): AppearanceCanv
       // 保留输入中的十六进制片段，让共用颜色输入框可以逐字编辑；不接受 URL 或 CSS 片段。
       background: /^(?:#|#?[\da-f]{1,8}|transparent|(?:rgb|hsl)a?\([\d\s.,%/+-]+\))$/i.test(color) ? color : fallback,
       backgroundImage: normalizeAppearanceBackgroundImage(value.backgroundImage),
+      opacity: typeof value.opacity === 'number' && Number.isFinite(value.opacity)
+        ? Math.max(0, Math.min(1, value.opacity)) : undefined,
+      blur: typeof value.blur === 'number' && Number.isFinite(value.blur)
+        ? Math.max(0, Math.min(48, value.blur)) : undefined,
     };
   };
   const overrides: AppearanceCanvasPanels['overrides'] = {};
@@ -226,6 +230,10 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
       ...base.ui,
       ...ui,
       surfaceImage: normalizeAppearanceBackgroundImage(ui.surfaceImage),
+      glassOpacity: typeof ui.glassOpacity === 'number' && Number.isFinite(ui.glassOpacity)
+        ? Math.max(0, Math.min(1, ui.glassOpacity)) : base.ui.glassOpacity,
+      glassBlur: typeof ui.glassBlur === 'number' && Number.isFinite(ui.glassBlur)
+        ? Math.max(0, Math.min(48, ui.glassBlur)) : base.ui.glassBlur,
       canvasPanels: normalizeCanvasPanels(ui.canvasPanels, base.ui.surface),
       button: {
         radius: typeof button.radius === 'number' && Number.isFinite(button.radius)

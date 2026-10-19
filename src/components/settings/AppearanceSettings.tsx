@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore } from '../../store/useAppStore';
 import { getNodeTypeConfig, type AppearanceBackgroundImage, type AppearanceCanvasPanelId, type AppearanceTheme, type BaseNodeData } from '../../types';
@@ -528,6 +528,40 @@ function BackgroundImageControls({ label, image, onChange }: {
         <option value="fill">{t('拉伸填满')}</option>
       </Select>
       <p className="ui-hint">{t('PNG / JPG / WebP / SVG，最大 5MB；透明或未铺满的区域沿用底色。')}</p>
+    </div>
+  );
+}
+
+function GlassMaterialControls({ opacity, blur, onOpacityChange, onBlurChange }: {
+  opacity: number;
+  blur: number;
+  onOpacityChange: (value: number) => void;
+  onBlurChange: (value: number) => void;
+}) {
+  const t = useT();
+  const id = useId();
+  const transparency = Math.round((1 - opacity) * 100);
+  return (
+    <div className="ui-card p-3 ui-stack">
+      <div className="ui-field">
+        <div className="ui-row ui-row--between">
+          <label className="ui-label" htmlFor={`${id}-opacity`}>{t('背景透明度')}</label>
+          <NumberStepper value={transparency} min={0} max={100} step={1} unit="%" size="sm"
+            aria-label={t('背景透明度')} onChange={(value) => onOpacityChange((100 - value) / 100)} />
+        </div>
+        <input id={`${id}-opacity`} type="range" className="ui-slider" min={0} max={100} step={1}
+          value={transparency} onChange={(event) => onOpacityChange((100 - Number(event.target.value)) / 100)} />
+      </div>
+      <div className="ui-field">
+        <div className="ui-row ui-row--between">
+          <label className="ui-label" htmlFor={`${id}-blur`}>{t('毛玻璃模糊')}</label>
+          <NumberStepper value={blur} min={0} max={48} step={1} unit="px" size="sm"
+            aria-label={t('毛玻璃模糊')} onChange={onBlurChange} />
+        </div>
+        <input id={`${id}-blur`} type="range" className="ui-slider" min={0} max={48} step={1}
+          value={blur} onChange={(event) => onBlurChange(Number(event.target.value))} />
+      </div>
+      <p className="ui-hint">{t('透明度只影响背景，文字和图标保持清晰；模糊设为 0 可关闭毛玻璃。')}</p>
     </div>
   );
 }
@@ -1102,15 +1136,20 @@ export default function AppearanceSettings() {
       />
     ),
     surface: (
-      <ColorCardInput
-        key={`${active.id}:surface-background`}
-        label={t('窗口 / 弹窗背景')}
-        value={active.ui.surface}
-        image={active.ui.surfaceImage}
-        onImageChange={(surfaceImage) => updateImage((theme) => ({ ...theme, ui: { ...theme.ui, surfaceImage } }))}
-        fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
-        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, surface: value } }))}
-      />
+      <div className="ui-stack">
+        <ColorCardInput
+          key={`${active.id}:surface-background`}
+          label={t('窗口 / 弹窗背景')}
+          value={active.ui.surface}
+          image={active.ui.surfaceImage}
+          onImageChange={(surfaceImage) => updateImage((theme) => ({ ...theme, ui: { ...theme.ui, surfaceImage } }))}
+          fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
+          onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, surface: value } }))}
+        />
+        <GlassMaterialControls opacity={resolved.ui.glassOpacity} blur={resolved.ui.glassBlur}
+          onOpacityChange={(glassOpacity) => update((theme) => ({ ...theme, ui: { ...theme.ui, glassOpacity } }))}
+          onBlurChange={(glassBlur) => update((theme) => ({ ...theme, ui: { ...theme.ui, glassBlur } }))} />
+      </div>
     ),
     card: (
       <ColorCardInput
@@ -1178,6 +1217,9 @@ export default function AppearanceSettings() {
               onChange={(value) => update((theme) => updateAppearancePanelBackground(theme, target, { background: value }))}
               onImageChange={(backgroundImage) => updateImage((theme) => updateAppearancePanelBackground(theme, target, { backgroundImage }))}
             />
+            <GlassMaterialControls opacity={background.opacity} blur={background.blur}
+              onOpacityChange={(opacity) => update((theme) => updateAppearancePanelBackground(theme, target, { opacity }))}
+              onBlurChange={(blur) => update((theme) => updateAppearancePanelBackground(theme, target, { blur }))} />
           </div>
         );
       }

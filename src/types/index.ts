@@ -620,6 +620,10 @@ export type AppearanceCanvasPanelId = 'projectBar' | 'sidebar' | 'drawingToolbar
 export interface AppearancePanelBackground {
   background: string;
   backgroundImage?: AppearanceBackgroundImage;
+  /** 背景层不透明度（0–1），不影响文字与控件；缺省沿用明暗主题厚度。 */
+  opacity?: number;
+  /** 背后画布的模糊半径（px），0 为关闭；缺省沿用主题玻璃参数。 */
+  blur?: number;
 }
 
 /** 未配置 shared 时继承窗口背景；没有独立覆盖的区域保持关联。 */

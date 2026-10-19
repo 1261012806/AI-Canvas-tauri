@@ -188,13 +188,7 @@
   overflow: hidden !important;
   border: 1px solid transparent !important;
   box-shadow: var(--glass-shadow-floating) !important;
-  background:
-    var(--appearance-surface-image, none) padding-box,
-    linear-gradient(
-      color-mix(in srgb, var(--theme-surface) 50%, transparent),
-      color-mix(in srgb, var(--theme-surface) 50%, transparent)
-    ) padding-box,
-    var(--glass-bevel-border) border-box !important;
+  background: transparent !important;
   backdrop-filter: blur(var(--glass-blur-sm));
 }
 

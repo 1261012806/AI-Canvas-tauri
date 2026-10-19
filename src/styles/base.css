@@ -1200,7 +1200,7 @@ select option:disabled {
   }
 }
 
-.session-project-nav {
+.app-header {
   --canvas-panel-bg: var(--appearance-panel-projectBar-bg, var(--floating-surface-bg));
   --canvas-panel-image: var(--appearance-panel-projectBar-image, var(--appearance-surface-image, none));
 }

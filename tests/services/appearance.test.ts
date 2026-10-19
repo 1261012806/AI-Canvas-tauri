@@ -19,7 +19,7 @@ describe('appearance themes', () => {
   it.each(APPEARANCE_CANVAS_PANEL_IDS)('links the four panel backgrounds and isolates %s until relinked', (id) => {
     const base = normalizeAppearanceTheme({ ui: { surfaceImage: BACKGROUND_IMAGE } });
     expect(base.ui.canvasPanels.overrides).toEqual({});
-    const linked = updateAppearancePanelBackground(base, 'projectBar', { background: '#123456' });
+    const linked = updateAppearancePanelBackground(base, 'projectBar', { background: '#123456', opacity: 0.35, blur: 12 });
     expect(linked.ui.surface).toBe(base.ui.surface);
     for (const panel of APPEARANCE_CANVAS_PANEL_IDS) expect(resolveAppearancePanelBackground(linked, panel).background).toBe('#123456');
 
@@ -27,17 +27,21 @@ describe('appearance themes', () => {
     expect(resolveAppearancePanelBackground(detached, id)).toEqual(resolveAppearancePanelBackground(linked, id));
     expect(detached.ui.canvasPanels.overrides[id]?.backgroundImage).not.toBe(linked.ui.canvasPanels.shared?.backgroundImage);
     expect(linked.ui.canvasPanels.overrides[id]).toBeUndefined();
-    const independent = updateAppearancePanelBackground(detached, id, { background: '#654321', backgroundImage: undefined });
+    const independent = updateAppearancePanelBackground(detached, id, { background: '#654321', backgroundImage: undefined, opacity: 0, blur: 0 });
     const other = APPEARANCE_CANVAS_PANEL_IDS.find((panel) => panel !== id)!;
-    const changed = updateAppearancePanelBackground(independent, other, { background: '#aabbcc' });
+    const changed = updateAppearancePanelBackground(independent, other, { background: '#aabbcc', opacity: 1, blur: 48 });
     const restored = normalizeAppearanceTheme(JSON.parse(JSON.stringify(changed)));
-    expect(resolveAppearancePanelBackground(restored, id)).toEqual({ background: '#654321', backgroundImage: undefined });
+    expect(resolveAppearancePanelBackground(restored, id)).toEqual({ background: '#654321', backgroundImage: undefined, opacity: 0, blur: 0 });
     for (const panel of APPEARANCE_CANVAS_PANEL_IDS.filter((panel) => panel !== id)) {
       expect(resolveAppearancePanelBackground(restored, panel).background).toBe('#aabbcc');
+      expect(resolveAppearancePanelBackground(restored, panel).opacity).toBe(1);
+      expect(resolveAppearancePanelBackground(restored, panel).blur).toBe(48);
     }
     const relinked = setAppearancePanelLinked(restored, id, true);
     expect(relinked.ui.canvasPanels.overrides[id]).toBeUndefined();
     expect(resolveAppearancePanelBackground(relinked, id).background).toBe('#aabbcc');
+    expect(resolveAppearancePanelBackground(relinked, id).opacity).toBe(1);
+    expect(resolveAppearancePanelBackground(relinked, id).blur).toBe(48);
   });
 
   it('keeps linked panels on the system palette until customized and preserves detached backgrounds', () => {
@@ -62,36 +66,64 @@ describe('appearance themes', () => {
     const theme = normalizeAppearanceTheme({ ui: { canvasPanels: {
       shared: { background: '#112233' },
       overrides: {
-        sidebar: { background: 'url(https://example.com/image.png)', backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl: 'https://example.com/image.png' } },
+        sidebar: { background: 'url(https://example.com/image.png)', opacity: -2, blur: 999, backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl: 'https://example.com/image.png' } },
         projectBar: [], unknownPanel: { background: '#445566' },
       },
     } } });
     expect(Object.keys(theme.ui.canvasPanels.overrides)).toEqual(['sidebar']);
     expect(theme.ui.canvasPanels.overrides.sidebar?.background).toBe('#14141c');
     expect(theme.ui.canvasPanels.overrides.sidebar?.backgroundImage?.imageDataUrl).toBeUndefined();
+    expect(theme.ui.canvasPanels.overrides.sidebar?.opacity).toBe(0);
+    expect(theme.ui.canvasPanels.overrides.sidebar?.blur).toBe(48);
   });
 
-  it('applies per-panel runtime backgrounds and clears overrides on preset reset', () => {
+  it.each(['dark', 'light'] as const)('preserves floating glass with linked and detached backgrounds in %s mode', (mode) => {
     const values = new Map<string, string>();
+    values.set('--glass-bevel-border', 'linear-gradient(#ffffff, #000000)');
     vi.stubGlobal('document', { documentElement: {
       dataset: {}, setAttribute: vi.fn(),
       style: { setProperty: (name: string, value: string) => values.set(name, value), removeProperty: (name: string) => values.delete(name) },
     } });
     try {
-      const base = createBuiltinAppearanceThemes()[0];
+      const base = createBuiltinAppearanceThemes().find((theme) => theme.mode === mode)!;
+      const opacity = mode === 'light' ? 70 : 60;
       const linked = updateAppearancePanelBackground(base, 'projectBar', { background: '#123456' });
       const detached = setAppearancePanelLinked(linked, 'sidebar', false);
-      const edited = updateAppearancePanelBackground(detached, 'sidebar', { background: '#654321', backgroundImage: BACKGROUND_IMAGE });
+      const edited = updateAppearancePanelBackground(detached, 'sidebar', { background: '#654321', backgroundImage: BACKGROUND_IMAGE, opacity: 0, blur: 0 });
       applyAppearanceTheme(edited);
-      expect(values.get('--appearance-panel-projectBar-bg')).toBe('#123456');
+      for (const id of APPEARANCE_CANVAS_PANEL_IDS.filter((id) => id !== 'sidebar')) {
+        expect(values.get(`--appearance-panel-${id}-bg`)).toBe('#123456');
+        expect(values.get(`--appearance-panel-${id}-opacity`)).toBe(String(opacity / 100));
+        expect(values.get(`--appearance-panel-${id}-blur`)).toBe('24px');
+      }
       expect(values.get('--appearance-panel-sidebar-bg')).toBe('#654321');
+      expect(values.get('--appearance-panel-sidebar-opacity')).toBe('0');
+      expect(values.get('--appearance-panel-sidebar-blur')).toBe('0px');
       expect(values.get('--appearance-panel-sidebar-image')).toContain('data:image/png');
+      expect(values.has('--glass-bevel-border')).toBe(false);
+      expect(values.get('--floating-surface-bg')).toBe(`color-mix(in srgb, ${base.ui.surface} ${opacity}%, transparent)`);
+      applyAppearanceTheme({ ...edited, ui: { ...edited.ui, glassOpacity: 0, glassBlur: 0 } });
+      expect(values.get('--appearance-glass-opacity')).toBe('0');
+      expect(values.get('--appearance-glass-blur')).toBe('0px');
       applyAppearanceTheme(base);
       expect(values.get('--appearance-panel-sidebar-bg')).toBe(base.ui.surface);
+      expect(values.get('--appearance-panel-sidebar-opacity')).toBe(String(opacity / 100));
+      expect(values.get('--appearance-panel-sidebar-blur')).toBe('24px');
       expect(values.get('--appearance-panel-sidebar-image')).toBe('none');
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('rejects non-finite material values and bounds global glass controls', () => {
+    const theme = normalizeAppearanceTheme({ ui: {
+      glassOpacity: 2, glassBlur: -5,
+      canvasPanels: { shared: { background: '#112233', opacity: NaN, blur: Infinity } },
+    } });
+    expect(theme.ui.glassOpacity).toBe(1);
+    expect(theme.ui.glassBlur).toBe(0);
+    expect(theme.ui.canvasPanels.shared?.opacity).toBeUndefined();
+    expect(theme.ui.canvasPanels.shared?.blur).toBeUndefined();
   });
 
   it.each(['https://example.com/image.png', 'file:///private/image.png', 'data:text/html;base64,PHN2Zy8+', 'data:image/png;base64,abc") ; color:red'])('rejects background source %s without changing its color fallback', (imageDataUrl) => {
@@ -111,7 +143,7 @@ describe('appearance themes', () => {
     try {
       const theme = normalizeAppearanceTheme({
         id: 'standard-dark', mode: 'system',
-        ui: { surfaceImage: BACKGROUND_IMAGE, button: { normal: { backgroundImage: BACKGROUND_IMAGE } } },
+        ui: { glassOpacity: 0, glassBlur: 0, surfaceImage: BACKGROUND_IMAGE, button: { normal: { backgroundImage: BACKGROUND_IMAGE } } },
         node: { backgroundImage: BACKGROUND_IMAGE },
         canvas: { kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageFit: 'fill' },
       });
@@ -119,6 +151,8 @@ describe('appearance themes', () => {
       expect(resolved.mode).toBe('light');
       expect(resolved.ui.surface).toBe('#FFFFFF');
       expect(resolved.ui.surfaceImage).toEqual(BACKGROUND_IMAGE);
+      expect(resolved.ui.glassOpacity).toBe(0);
+      expect(resolved.ui.glassBlur).toBe(0);
       expect(resolved.node.backgroundImage).toEqual(BACKGROUND_IMAGE);
       expect(resolved.ui.button.normal.backgroundImage).toEqual(BACKGROUND_IMAGE);
       expect(resolved.canvas).toMatchObject({ kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageFit: 'fill' });

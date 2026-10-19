@@ -108,7 +108,7 @@ export default function ModalOverlay({
           <motion.div
             data-tauri-drag-region
             aria-hidden="true"
-            className={`absolute inset-0 bg-black/50 ${backdropBlur ? 'backdrop-blur-sm' : ''}`}
+            className={`absolute inset-0 bg-black/50 ${backdropBlur ? 'appearance-modal-backdrop' : ''}`}
             initial={quickMotion ? false : { opacity: 0 }}
             animate={quickMotion ? undefined : { opacity: 1 }}
             exit={quickMotion ? undefined : { opacity: 0 }}

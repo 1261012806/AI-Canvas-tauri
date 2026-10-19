@@ -1,0 +1,109 @@
+/* 背景单独成层：颜色与图片一起调整透明度，文字、图标和交互保持原样。 */
+.appearance-modal-backdrop {
+  backdrop-filter: blur(calc(var(--appearance-glass-blur, 16px) * 0.25));
+}
+.app-header {
+  --canvas-panel-opacity: var(--appearance-panel-projectBar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-projectBar-blur);
+}
+.footer-toolbar {
+  --canvas-panel-opacity: var(--appearance-panel-viewportToolbar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-viewportToolbar-blur);
+}
+.sidebar-floating {
+  --canvas-panel-bg: var(--appearance-panel-sidebar-bg);
+  --canvas-panel-image: var(--appearance-panel-sidebar-image);
+  --canvas-panel-opacity: var(--appearance-panel-sidebar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-sidebar-blur);
+}
+.canvas-drawing-toolbar {
+  position: relative;
+  --canvas-panel-bg: var(--appearance-panel-drawingToolbar-bg);
+  --canvas-panel-image: var(--appearance-panel-drawingToolbar-image);
+  --canvas-panel-opacity: var(--appearance-panel-drawingToolbar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-drawingToolbar-blur);
+}
+.episode-workbench { position: relative; }
+
+.appearance-layout__projects {
+  --canvas-panel-bg: var(--appearance-panel-projectBar-bg);
+  --canvas-panel-image: var(--appearance-panel-projectBar-image);
+  --canvas-panel-opacity: var(--appearance-panel-projectBar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-projectBar-blur);
+}
+.appearance-layout__sidebar {
+  --canvas-panel-bg: var(--appearance-panel-sidebar-bg);
+  --canvas-panel-image: var(--appearance-panel-sidebar-image);
+  --canvas-panel-opacity: var(--appearance-panel-sidebar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-sidebar-blur);
+}
+.appearance-layout__drawing {
+  --canvas-panel-bg: var(--appearance-panel-drawingToolbar-bg);
+  --canvas-panel-image: var(--appearance-panel-drawingToolbar-image);
+  --canvas-panel-opacity: var(--appearance-panel-drawingToolbar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-drawingToolbar-blur);
+}
+.appearance-layout__viewport {
+  --canvas-panel-bg: var(--appearance-panel-viewportToolbar-bg);
+  --canvas-panel-image: var(--appearance-panel-viewportToolbar-image);
+  --canvas-panel-opacity: var(--appearance-panel-viewportToolbar-opacity);
+  --canvas-panel-blur: var(--appearance-panel-viewportToolbar-blur);
+}
+
+:is(.app-header, .episode-workbench, .footer-toolbar, .sidebar-floating,
+    .canvas-drawing-toolbar, .react-flow__minimap, .canvas-history-panel,
+    .appearance-layout__surface, .glass-panel, .glass-panel.settings-modal-shell) {
+  isolation: isolate;
+  background: transparent;
+  -webkit-backdrop-filter: blur(var(--canvas-panel-blur, var(--appearance-glass-blur, var(--glass-blur-lg))));
+  backdrop-filter: blur(var(--canvas-panel-blur, var(--appearance-glass-blur, var(--glass-blur-lg))));
+}
+
+:is(.app-header, .episode-workbench, .footer-toolbar, .sidebar-floating,
+    .canvas-drawing-toolbar, .react-flow__minimap, .canvas-history-panel,
+    .appearance-layout__surface, .glass-panel)::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--canvas-panel-image, var(--appearance-surface-image, none)),
+    var(--canvas-panel-bg, var(--theme-surface));
+  opacity: var(--canvas-panel-opacity, var(--appearance-glass-opacity, 0.77));
+}
+
+/* 高光只留在边缘，避免渐变的底层再次盖住透明背景。 */
+:is(.app-header, .episode-workbench, .footer-toolbar, .sidebar-floating,
+    .canvas-drawing-toolbar, .react-flow__minimap, .canvas-history-panel,
+    .appearance-layout__surface, .glass-panel)::after {
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  padding: 1px;
+  content: '';
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--glass-bevel-border);
+  -webkit-mask: linear-gradient(var(--theme-text) 0 0) content-box, linear-gradient(var(--theme-text) 0 0);
+  mask: linear-gradient(var(--theme-text) 0 0) content-box, linear-gradient(var(--theme-text) 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+html[data-performance-mode] :is(.app-header, .episode-workbench, .footer-toolbar,
+    .sidebar-floating, .canvas-drawing-toolbar, .react-flow__minimap,
+    .canvas-history-panel, .appearance-layout__surface, .glass-panel) {
+  --canvas-panel-opacity: 1;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :is(.app-header, .episode-workbench, .footer-toolbar, .sidebar-floating,
+      .canvas-drawing-toolbar, .react-flow__minimap, .canvas-history-panel,
+      .appearance-layout__surface, .glass-panel, .glass-panel.settings-modal-shell,
+      .appearance-modal-backdrop) {
+    --canvas-panel-opacity: 1;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

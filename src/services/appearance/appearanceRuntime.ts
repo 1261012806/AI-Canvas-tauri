@@ -14,7 +14,8 @@ export function resolveAppearanceTheme(theme: AppearanceTheme): AppearanceTheme 
     const systemTheme = getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode('system')}`);
     return {
       ...systemTheme,
-      ui: { ...systemTheme.ui, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage, canvasPanels: normalized.ui.canvasPanels },
+      ui: { ...systemTheme.ui, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage, canvasPanels: normalized.ui.canvasPanels,
+        glassOpacity: normalized.ui.glassOpacity, glassBlur: normalized.ui.glassBlur },
       node: { ...systemTheme.node, backgroundImage: normalized.node.backgroundImage },
       canvas: normalized.canvas.kind === 'image' ? normalized.canvas : systemTheme.canvas,
     };
@@ -22,9 +23,14 @@ export function resolveAppearanceTheme(theme: AppearanceTheme): AppearanceTheme 
   return normalized;
 }
 
-export function resolveAppearancePanelBackground(theme: AppearanceTheme, id: AppearanceCanvasPanelId): AppearancePanelBackground {
-  return theme.ui.canvasPanels.overrides[id] ?? theme.ui.canvasPanels.shared
+export function resolveAppearancePanelBackground(theme: AppearanceTheme, id: AppearanceCanvasPanelId): AppearancePanelBackground & { opacity: number; blur: number } {
+  const panel = theme.ui.canvasPanels.overrides[id] ?? theme.ui.canvasPanels.shared
     ?? { background: theme.ui.surface, backgroundImage: theme.ui.surfaceImage };
+  return {
+    ...panel,
+    opacity: panel.opacity ?? (resolveAppearanceMode(theme.mode) === 'light' ? 0.7 : 0.6),
+    blur: panel.blur ?? Math.min(48, theme.ui.glassBlur * 1.5),
+  };
 }
 
 export function setAppearancePanelLinked(theme: AppearanceTheme, id: AppearanceCanvasPanelId, linked: boolean): AppearanceTheme {
@@ -237,6 +243,8 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
   const glassSurface = solarGlass
     ? `color-mix(in srgb, ${themeSurface} ${Math.round(ui.glassOpacity * 100)}%, transparent)`
     : themeSurface;
+  // 悬浮工具栏沿用 base.css 的玻璃厚度，自定义颜色只替换色调。
+  const floatingOpacity = mode === 'light' ? 70 : 60;
 
   root.setAttribute('data-theme', mode);
   root.setAttribute('data-appearance-id', theme.id);
@@ -330,7 +338,6 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
       ? `color-mix(in srgb, ${themeCard} ${Math.round(ui.glassOpacity * 100)}%, transparent)`
       : themeCard,
     '--glass-bevel-bg': glassSurface,
-    '--glass-bevel-border': `linear-gradient(160deg, color-mix(in srgb, ${themeBorder} 92%, white) 0%, ${themeBorder} 48%, color-mix(in srgb, ${themeBorder} 78%, black) 100%)`,
     '--glass-ring': themeBorder,
     '--glass-ring-strong': `color-mix(in srgb, ${themeBorder} 70%, transparent)`,
     '--glass-blur-sm': `${Math.max(2, Math.round(ui.glassBlur * 0.4))}px`,
@@ -340,17 +347,19 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
     '--scrollbar-thumb-hover': ui.scrollbarHover,
     '--canvas-grid-color': isTransparentColor(resolvedTheme.canvas.gridColor) ? 'transparent' : resolvedTheme.canvas.gridColor,
     '--canvas-grid-size': `${resolvedTheme.canvas.gridSize}px`,
-    '--floating-surface-bg': mode === 'light' ? `color-mix(in srgb, ${themeSurface} 70%, transparent)` : glassSurface,
+    '--floating-surface-bg': `color-mix(in srgb, ${themeSurface} ${floatingOpacity}%, transparent)`,
   };
   for (const id of APPEARANCE_CANVAS_PANEL_IDS) {
     const panel = resolveAppearancePanelBackground(resolvedTheme, id);
     const color = isTransparentColor(panel.background) ? 'transparent' : panel.background;
-    vars[`--appearance-panel-${id}-bg`] = mode === 'light'
-      ? `color-mix(in srgb, ${color} 70%, transparent)`
-      : solarGlass && color === themeSurface ? glassSurface : color;
+    vars[`--appearance-panel-${id}-bg`] = color;
+    vars[`--appearance-panel-${id}-opacity`] = panel.opacity;
+    vars[`--appearance-panel-${id}-blur`] = `${panel.blur}px`;
     vars[`--appearance-panel-${id}-image`] = appearanceImageLayer(panel.backgroundImage, imageUrls.resolve);
   }
   for (const [name, value] of Object.entries(vars)) setVar(root, name, value);
+  // 恢复 base.css 的明暗高光渐变；不透明的 border-box 底层会盖住整块玻璃。
+  root.style.removeProperty('--glass-bevel-border');
   applyAccentScale(root, ui.accent, mode);
   const handleImageUrl = handle.kind === 'image' && handle.imageDataUrl ? imageUrls.resolve(handle.imageDataUrl) : undefined;
   const useHandleImage = Boolean(handleImageUrl);

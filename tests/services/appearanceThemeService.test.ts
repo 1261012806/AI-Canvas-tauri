@@ -29,8 +29,8 @@ const makeTheme = (source: string) => normalizeAppearanceTheme({
   ui: {
     button: { radius: 9, primary: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'contain' } } },
     canvasPanels: {
-      shared: { background: '#112233', backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'cover' } },
-      overrides: { sidebar: { background: '#445566', backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } } },
+      shared: { background: '#112233', opacity: 0.4, blur: 18, backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'cover' } },
+      overrides: { sidebar: { background: '#445566', opacity: 0, blur: 0, backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } } },
     },
   },
 });
