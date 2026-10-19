@@ -26,7 +26,13 @@ const themeFile = (content: unknown) => new File([JSON.stringify(content)], '外
 const makeTheme = (source: string) => normalizeAppearanceTheme({
   id: 'my-theme', mode: 'light', name: '机甲浅色', builtin: false,
   node: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } },
-  ui: { button: { radius: 9, primary: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'contain' } } } },
+  ui: {
+    button: { radius: 9, primary: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'contain' } } },
+    canvasPanels: {
+      shared: { background: '#112233', backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'cover' } },
+      overrides: { sidebar: { background: '#445566', backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } } },
+    },
+  },
 });
 
 describe('appearance theme image persistence and transfer', () => {
@@ -45,6 +51,8 @@ describe('appearance theme image persistence and transfer', () => {
     expect(driver.store).toHaveBeenCalledTimes(1);
     expect(migrated.node.backgroundImage?.imageDataUrl).toBe(reference);
     expect(migrated.ui.button.primary.backgroundImage?.imageDataUrl).toBe(reference);
+    expect(migrated.ui.canvasPanels.shared?.backgroundImage?.imageDataUrl).toBe(reference);
+    expect(migrated.ui.canvasPanels.overrides.sidebar?.backgroundImage?.imageDataUrl).toBe(reference);
     expect(JSON.stringify(migrated)).not.toContain('base64,');
     expect(original.node.backgroundImage?.imageDataUrl).toBe(dataUrl);
     await persistAppearanceImages(migrated);
@@ -68,6 +76,7 @@ describe('appearance theme image persistence and transfer', () => {
     const imported = await importAppearanceTheme(new File([exported], '外观.aicanvas-theme'));
     expect(imported.node.backgroundImage).toEqual(original.node.backgroundImage);
     expect(imported.ui.button).toEqual(original.ui.button);
+    expect(imported.ui.canvasPanels).toEqual(original.ui.canvasPanels);
     expect(imported.id).not.toBe(original.id);
     expect(imported.builtin).toBe(false);
     expect(driver.store).toHaveBeenCalledTimes(1);
@@ -79,6 +88,13 @@ describe('appearance theme image persistence and transfer', () => {
     await expect(importAppearanceTheme(themeFile({ ...document, images: {} }))).rejects.toThrow('缺少背景图片');
     const wrongImage = `data:image/svg+xml;base64,${Buffer.from(svg.replace('white', 'black')).toString('base64')}`;
     await expect(importAppearanceTheme(themeFile({ ...document, images: { [reference]: wrongImage } }))).rejects.toThrow('摘要不匹配');
+    expect(driver.store).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported independent panel image references before storing a preset', async () => {
+    const original = makeTheme(dataUrl);
+    original.ui.canvasPanels.overrides.sidebar!.backgroundImage!.imageDataUrl = 'https://example.com/private.png';
+    await expect(importAppearanceTheme(themeFile(original))).rejects.toThrow('不受支持的图片引用');
     expect(driver.store).not.toHaveBeenCalled();
   });
 

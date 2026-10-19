@@ -1,0 +1,106 @@
+/* 外观编辑使用与主画布一致的位置关系，配色直接读取外观运行时。 */
+.appearance-layout {
+  position: relative;
+  isolation: isolate;
+  min-height: 360px;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--theme-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--theme-bg);
+  color: var(--theme-text-secondary);
+  container-type: inline-size;
+}
+
+.appearance-layout__region {
+  position: absolute;
+  cursor: var(--cursor-pointer, pointer);
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.4;
+  outline-offset: -2px;
+}
+
+.appearance-layout__region:hover,
+.appearance-layout__region:focus-visible {
+  outline: 2px solid var(--brand);
+}
+
+.appearance-layout__surface {
+  border: 1px solid var(--theme-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--layout-panel-image, var(--appearance-surface-image, none)), var(--layout-panel-bg, var(--floating-surface-bg));
+  box-shadow: var(--glass-shadow-floating);
+}
+
+.appearance-layout__canvas { inset: 0; border-radius: inherit; background: var(--layout-canvas-color); }
+.appearance-layout__image { position: absolute; inset: 0; background-repeat: no-repeat; }
+.appearance-layout__canvas > .canvas-bg-frosted-preview { position: absolute; }
+.appearance-layout__grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, var(--layout-grid-color) 0.6px, transparent 0.8px);
+  background-size: var(--layout-grid-size) var(--layout-grid-size);
+}
+
+.appearance-layout__empty {
+  position: absolute;
+  inset: 32% 24% 30%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--theme-text-muted);
+  text-align: center;
+}
+
+.appearance-layout__empty > svg { color: var(--brand); }
+.appearance-layout__projects,
+.appearance-layout__drawing,
+.appearance-layout__viewport { display: flex; align-items: center; gap: 8px; padding: 8px; }
+.appearance-layout__projects { top: 12px; left: 12px; --layout-panel-bg: var(--appearance-panel-projectBar-bg); --layout-panel-image: var(--appearance-panel-projectBar-image); }
+.appearance-layout__sidebar { --layout-panel-bg: var(--appearance-panel-sidebar-bg); --layout-panel-image: var(--appearance-panel-sidebar-image); }
+.appearance-layout__drawing { --layout-panel-bg: var(--appearance-panel-drawingToolbar-bg); --layout-panel-image: var(--appearance-panel-drawingToolbar-image); }
+.appearance-layout__viewport { --layout-panel-bg: var(--appearance-panel-viewportToolbar-bg); --layout-panel-image: var(--appearance-panel-viewportToolbar-image); }
+.appearance-layout__divider { height: 12px; border-left: 1px solid var(--theme-border); }
+.appearance-layout__sidebar { top: 24%; left: 12px; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 12px 8px; }
+.appearance-layout__drawing { bottom: 12px; left: 12px; }
+.appearance-layout__viewport { bottom: 12px; right: 12px; }
+.appearance-layout__minimap { bottom: 56px; right: 12px; width: 22%; height: 21%; padding: 8px; }
+.appearance-layout__minimap-viewport { display: block; width: 100%; height: 100%; border: 2px solid var(--brand); border-radius: var(--ui-radius-sm); background: var(--theme-bg); }
+
+.appearance-layout__node {
+  top: 55%;
+  left: 22%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 30%;
+  max-width: 160px;
+  padding: 8px;
+  border: var(--appearance-node-border-width, 1px) solid var(--appearance-node-border, var(--theme-border));
+  border-radius: var(--appearance-node-radius, var(--ui-radius-lg));
+  background: var(--appearance-node-background, var(--theme-surface));
+  color: var(--appearance-node-text, var(--theme-text));
+  box-shadow: var(--glass-shadow-floating);
+}
+
+.appearance-layout__node-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px dashed var(--theme-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--theme-card);
+  color: var(--theme-text-muted);
+}
+
+@container (max-width: 440px) {
+  .appearance-layout__drawing { gap: 6px; }
+  .appearance-layout__drawing > svg:nth-child(n + 5) { display: none; }
+  .appearance-layout__viewport { gap: 6px; }
+  .appearance-layout__viewport > svg:last-child { display: none; }
+  .appearance-layout__node { left: 20%; width: 34%; }
+}

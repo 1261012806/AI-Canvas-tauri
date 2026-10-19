@@ -615,10 +615,24 @@ export interface AppearanceButtonTokens {
   primary: AppearanceButtonColors;
 }
 
+export type AppearanceCanvasPanelId = 'projectBar' | 'sidebar' | 'drawingToolbar' | 'viewportToolbar';
+
+export interface AppearancePanelBackground {
+  background: string;
+  backgroundImage?: AppearanceBackgroundImage;
+}
+
+/** 未配置 shared 时继承窗口背景；没有独立覆盖的区域保持关联。 */
+export interface AppearanceCanvasPanels {
+  shared?: AppearancePanelBackground;
+  overrides: Partial<Record<AppearanceCanvasPanelId, AppearancePanelBackground>>;
+}
+
 export interface AppearanceUiTokens {
   background: string;
   surface: string;
   surfaceImage?: AppearanceBackgroundImage;
+  canvasPanels: AppearanceCanvasPanels;
   card: string;
   hover: string;
   border: string;

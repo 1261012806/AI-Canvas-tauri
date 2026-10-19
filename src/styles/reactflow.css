@@ -189,6 +189,7 @@
   border: 1px solid transparent !important;
   box-shadow: var(--glass-shadow-floating) !important;
   background:
+    var(--appearance-surface-image, none) padding-box,
     linear-gradient(
       color-mix(in srgb, var(--theme-surface) 50%, transparent),
       color-mix(in srgb, var(--theme-surface) 50%, transparent)
@@ -482,7 +483,7 @@
   transition: opacity var(--transition-base), transform var(--transition-smooth);
   border: 1px solid var(--theme-border);
   border-radius: 12px;
-  background: var(--floating-surface-bg, color-mix(in srgb, var(--theme-surface) 60%, transparent));
+  background: var(--appearance-surface-image, none), var(--floating-surface-bg, color-mix(in srgb, var(--theme-surface) 60%, transparent));
   backdrop-filter: blur(18px);
   overflow: hidden;
   font-size: 11px;

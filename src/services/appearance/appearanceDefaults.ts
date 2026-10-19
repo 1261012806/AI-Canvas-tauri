@@ -1,5 +1,7 @@
-import type { AppearanceTheme, AppearanceMode, AppearanceButtonColors, AppearanceBackgroundImage } from '../../types';
+import type { AppearanceTheme, AppearanceMode, AppearanceButtonColors, AppearanceBackgroundImage, AppearanceCanvasPanels, AppearancePanelBackground } from '../../types';
 import { isEmbeddedThemeImage, isThemeImageReference } from '../fs/themeAssets';
+
+export const APPEARANCE_CANVAS_PANEL_IDS = ['projectBar', 'sidebar', 'drawingToolbar', 'viewportToolbar'] as const;
 
 const BUTTON_UI = {
   radius: 7,
@@ -74,7 +76,7 @@ function completeTheme(
     name,
     builtin: true,
     mode,
-    ui: { ...ui, button: { ...ui.button, normal: { ...ui.button.normal }, primary: { ...ui.button.primary } } },
+    ui: { ...ui, canvasPanels: { overrides: {} }, button: { ...ui.button, normal: { ...ui.button.normal }, primary: { ...ui.button.primary } } },
     canvas,
     // These values intentionally match the pre-appearance baseline node defaults.
     node: {
@@ -175,6 +177,26 @@ function normalizeButtonColors(input: unknown): AppearanceButtonColors {
   };
 }
 
+function normalizeCanvasPanels(input: unknown, fallback: string): AppearanceCanvasPanels {
+  const source = isRecord(input) ? input : {};
+  const normalizeBackground = (value: unknown): AppearancePanelBackground | undefined => {
+    if (!isRecord(value)) return undefined;
+    const color = typeof value.background === 'string' ? value.background.trim() : '';
+    return {
+      // 保留输入中的十六进制片段，让共用颜色输入框可以逐字编辑；不接受 URL 或 CSS 片段。
+      background: /^(?:#|#?[\da-f]{1,8}|transparent|(?:rgb|hsl)a?\([\d\s.,%/+-]+\))$/i.test(color) ? color : fallback,
+      backgroundImage: normalizeAppearanceBackgroundImage(value.backgroundImage),
+    };
+  };
+  const overrides: AppearanceCanvasPanels['overrides'] = {};
+  const rawOverrides = isRecord(source.overrides) ? source.overrides : {};
+  for (const id of APPEARANCE_CANVAS_PANEL_IDS) {
+    const background = normalizeBackground(rawOverrides[id]);
+    if (background) overrides[id] = background;
+  }
+  return { shared: normalizeBackground(source.shared), overrides };
+}
+
 /**
  * 补齐旧版或外部导入的半成品快照。持久化数据是不可信输入，运行时不能只依赖 TS 类型。
  */
@@ -204,6 +226,7 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
       ...base.ui,
       ...ui,
       surfaceImage: normalizeAppearanceBackgroundImage(ui.surfaceImage),
+      canvasPanels: normalizeCanvasPanels(ui.canvasPanels, base.ui.surface),
       button: {
         radius: typeof button.radius === 'number' && Number.isFinite(button.radius)
           ? Math.max(0, Math.min(24, button.radius)) : BUTTON_UI.radius,

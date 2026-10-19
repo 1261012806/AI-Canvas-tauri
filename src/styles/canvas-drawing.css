@@ -15,7 +15,8 @@
   border: 1px solid transparent;
   border-radius: 14px;
   background:
-    linear-gradient(var(--floating-surface-bg), var(--floating-surface-bg)) padding-box,
+    var(--appearance-panel-drawingToolbar-image, var(--appearance-surface-image, none)) padding-box,
+    linear-gradient(var(--appearance-panel-drawingToolbar-bg, var(--floating-surface-bg)), var(--appearance-panel-drawingToolbar-bg, var(--floating-surface-bg))) padding-box,
     var(--glass-bevel-border) border-box;
   box-shadow: var(--glass-shadow-floating);
   backdrop-filter: blur(var(--glass-blur-lg));

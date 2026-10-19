@@ -1,18 +1,20 @@
 import type { AppearanceTheme } from '../../types';
-import { normalizeAppearanceTheme } from './appearanceDefaults';
+import { APPEARANCE_CANVAS_PANEL_IDS, normalizeAppearanceTheme } from './appearanceDefaults';
 import { deleteAppearanceThemeFromDb, getAllAppearanceThemes, saveAppearanceThemeToDb } from '../indexedDb/catalogRepository';
 import { bytePartsToBase64Async, isTauriEnv } from '../fs/core';
 import { isEmbeddedThemeImage, isThemeImageReference, MAX_THEME_IMAGE_BYTES, readThemeImage, storeThemeImage, validateThemeImage } from '../fs/themeAssets';
 import { decodeDataUrlBytesAsync, sha256BytesHex } from '../mediaDataUrl';
 
-// 最多八个图片槽位，每张 5MB；导出内嵌资源编码后的上限。
+// 既有八个槽位 + 关联背景与四个独立区域，每张 5MB；总文件仍限制 64MB。
 export const MAX_APPEARANCE_THEME_BYTES = 64 * 1024 * 1024;
-const MAX_THEME_IMAGES = 8;
+const MAX_THEME_IMAGES = 13;
 
 function imageSlots(theme: AppearanceTheme): { imageDataUrl?: string }[] {
   return [theme.canvas, theme.handle, theme.node.backgroundImage, theme.ui.surfaceImage,
     theme.ui.button.normal.backgroundImage, theme.ui.button.normal.hoverBackgroundImage,
     theme.ui.button.primary.backgroundImage, theme.ui.button.primary.hoverBackgroundImage,
+    theme.ui.canvasPanels.shared?.backgroundImage,
+    ...APPEARANCE_CANVAS_PANEL_IDS.map((id) => theme.ui.canvasPanels.overrides[id]?.backgroundImage),
   ].filter((slot): slot is NonNullable<typeof slot> => Boolean(slot));
 }
 
@@ -110,7 +112,9 @@ export async function importAppearanceTheme(file: File): Promise<AppearanceTheme
   // 运行时规范化可以退回底色；导入不能把不受支持的图片静默丢弃。
   for (const path of ['canvas', 'handle', 'node.backgroundImage', 'ui.surfaceImage',
     'ui.button.normal.backgroundImage', 'ui.button.normal.hoverBackgroundImage',
-    'ui.button.primary.backgroundImage', 'ui.button.primary.hoverBackgroundImage']) {
+    'ui.button.primary.backgroundImage', 'ui.button.primary.hoverBackgroundImage',
+    'ui.canvasPanels.shared.backgroundImage',
+    ...APPEARANCE_CANVAS_PANEL_IDS.map((id) => `ui.canvasPanels.overrides.${id}.backgroundImage`)]) {
     let value: unknown = raw;
     for (const key of path.split('.')) value = isRecord(value) ? value[key] : undefined;
     if (isRecord(value) && value.imageDataUrl != null && !isThemeImageReference(value.imageDataUrl) && !isEmbeddedThemeImage(value.imageDataUrl)) {

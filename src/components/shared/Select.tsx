@@ -45,7 +45,7 @@ interface SelectProps<T extends string = string> extends Pick<ButtonHTMLAttribut
   id?: string;
   title?: string;
   'aria-label'?: string;
-  /** 菜单使用 fixed 定位，可突破父级 overflow:hidden 裁剪 */
+  /** 默认通过 Portal + fixed 定位避开父级裁剪；仅明确需要容器内菜单时设为 false。 */
   fixedMenu?: boolean;
   /** 自定义模式直接在当前控件内编辑，右侧按钮仍可选择预设。 */
   customInput?: {
@@ -108,7 +108,7 @@ export default function Select<T extends string = string>({
   id,
   title,
   'aria-label': ariaLabel,
-  fixedMenu = false,
+  fixedMenu = true,
   customInput,
   autoFocus,
   onFocus,

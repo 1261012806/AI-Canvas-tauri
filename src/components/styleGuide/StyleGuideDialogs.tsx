@@ -1,6 +1,7 @@
 import { useCallback, useState, type FormEvent } from 'react';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
+import Select from '../shared/Select';
 
 const EXAMPLES = [
   { kind: 'basic', label: '普通弹窗', title: '普通弹窗示例' },
@@ -19,6 +20,7 @@ export default function StyleGuideDialogs() {
   const [backdropBlur, setBackdropBlur] = useState(true);
   const [name, setName] = useState('我的示例配置');
   const [description, setDescription] = useState('编辑名称与说明，查看表单、按钮和焦点交互。');
+  const [backgroundKind, setBackgroundKind] = useState('color');
   const [result, setResult] = useState('选择一个样例打开弹窗。');
   const example = EXAMPLES.find((item) => item.kind === kind)!;
   const close = useCallback(() => setIsOpen(false), []);
@@ -107,6 +109,12 @@ export default function StyleGuideDialogs() {
                 <span className="ui-label">说明</span>
                 <textarea className="ui-textarea" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
               </label>
+              <div className="ui-field">
+                <label className="ui-label" htmlFor="sg-dialog-background">背景类型</label>
+                <Select id="sg-dialog-background" value={backgroundKind} onChange={setBackgroundKind}
+                  options={[{ value: 'color', label: '纯色' }, { value: 'image', label: '上传图片' }]} />
+                <span className="ui-hint">菜单可越过滚动区和弹窗边界显示；Esc 先收起菜单，再关闭弹窗。</span>
+              </div>
             </form>
           )}
           {kind === 'confirm' && (

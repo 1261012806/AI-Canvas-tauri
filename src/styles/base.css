@@ -1200,13 +1200,22 @@ select option:disabled {
   }
 }
 
+.session-project-nav {
+  --canvas-panel-bg: var(--appearance-panel-projectBar-bg, var(--floating-surface-bg));
+  --canvas-panel-image: var(--appearance-panel-projectBar-image, var(--appearance-surface-image, none));
+}
+.footer-toolbar {
+  --canvas-panel-bg: var(--appearance-panel-viewportToolbar-bg, var(--floating-surface-bg));
+  --canvas-panel-image: var(--appearance-panel-viewportToolbar-image, var(--appearance-surface-image, none));
+}
 .app-header,
 .episode-workbench,
 .footer-toolbar {
   padding: 4px;
   border-color: transparent;
   background:
-    linear-gradient(var(--floating-surface-bg), var(--floating-surface-bg)) padding-box,
+    var(--canvas-panel-image, var(--appearance-surface-image, none)) padding-box,
+    linear-gradient(var(--canvas-panel-bg, var(--floating-surface-bg)), var(--canvas-panel-bg, var(--floating-surface-bg))) padding-box,
     var(--glass-bevel-border) border-box;
   box-shadow: var(--glass-shadow-floating, var(--tw-shadow));
 }

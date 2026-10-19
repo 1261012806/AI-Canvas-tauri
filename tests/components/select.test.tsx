@@ -109,9 +109,9 @@ describe('共享 Select 迁移语义', () => {
     { left: 40, top: 640, bottom: 672, width: 60, contentWidth: 180 },
     { left: 40, top: 8, bottom: 40, width: 500, contentWidth: 120 },
     { left: 550, top: 300, bottom: 332, width: 80, contentWidth: 900 },
-  ])('菜单越过父容器并高于层级 10000，位置适配视口 $top', (rect) => {
+  ])('默认菜单越过父容器并高于层级 10000，位置适配视口 $top', (rect) => {
     hooks.states = [true, false];
-    const tree = Select({ value: 'chosen', onChange: vi.fn(), fixedMenu: true, options: [{ value: 'chosen', label: '选中' }] });
+    const tree = Select({ value: 'chosen', onChange: vi.fn(), options: [{ value: 'chosen', label: '选中' }] });
     const nodes = elements(tree);
     const menuNode = nodes.find((node) => node.props.role === 'listbox')!;
     expect(menuNode.props['data-ui-select-portal']).toBe('');

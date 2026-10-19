@@ -32,25 +32,6 @@
   background-size: 12px 12px;
 }
 
-@keyframes pulse-ring {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.15); opacity: 0.3; }
-  100% { transform: scale(0.95); opacity: 0.8; }
-}
-.animate-pulse-subtle {
-  animation: pulse-ring 2.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes flow-dash {
-  to {
-    stroke-dashoffset: -24;
-  }
-}
-.animate-flow-dash {
-  stroke-dasharray: 6 6;
-  animation: flow-dash 1.2s linear infinite;
-}
-
 /* ============================================
    Appearance Settings Layout & Theme Compatibility
    ============================================ */
@@ -278,25 +259,6 @@
 [data-theme='light'] .settings-overwrite-btn:hover:not(:disabled) {
   background-color: #f1f5f9;
 }
-
-/* 9. Live Preview Card */
-.settings-preview-card {
-  background-color: color-mix(in srgb, var(--theme-card) 60%, transparent);
-  border: 1px solid var(--theme-border);
-}
-[data-theme='light'] .settings-preview-card {
-  background-color: rgba(248, 250, 252, 0.9);
-  border-color: #e2e8f0;
-}
-.settings-preview-node {
-  background-color: var(--theme-surface);
-  border-color: var(--theme-border);
-}
-[data-theme='light'] .settings-preview-node {
-  background-color: rgba(255, 255, 255, 0.95);
-  border-color: rgba(226, 232, 240, 0.9);
-}
-
 
 /* 11. Sub Card (e.g. ColorCardInput container) */
 .settings-sub-card {

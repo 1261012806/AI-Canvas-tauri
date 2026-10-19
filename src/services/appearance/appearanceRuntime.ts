@@ -1,5 +1,5 @@
-import type { AppearanceBackgroundImage, AppearanceMode, AppearanceTheme } from '../../types';
-import { getBuiltinAppearanceTheme, normalizeAppearanceBackgroundImage, normalizeAppearanceTheme } from './appearanceDefaults';
+import type { AppearanceBackgroundImage, AppearanceCanvasPanelId, AppearanceMode, AppearancePanelBackground, AppearanceTheme } from '../../types';
+import { APPEARANCE_CANVAS_PANEL_IDS, getBuiltinAppearanceTheme, normalizeAppearanceBackgroundImage, normalizeAppearanceTheme } from './appearanceDefaults';
 import { resolveThemeImageSource } from '../fs/themeAssets';
 
 export function resolveAppearanceMode(mode: AppearanceMode | undefined): 'dark' | 'light' {
@@ -14,12 +14,33 @@ export function resolveAppearanceTheme(theme: AppearanceTheme): AppearanceTheme 
     const systemTheme = getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode('system')}`);
     return {
       ...systemTheme,
-      ui: { ...systemTheme.ui, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage },
+      ui: { ...systemTheme.ui, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage, canvasPanels: normalized.ui.canvasPanels },
       node: { ...systemTheme.node, backgroundImage: normalized.node.backgroundImage },
       canvas: normalized.canvas.kind === 'image' ? normalized.canvas : systemTheme.canvas,
     };
   }
   return normalized;
+}
+
+export function resolveAppearancePanelBackground(theme: AppearanceTheme, id: AppearanceCanvasPanelId): AppearancePanelBackground {
+  return theme.ui.canvasPanels.overrides[id] ?? theme.ui.canvasPanels.shared
+    ?? { background: theme.ui.surface, backgroundImage: theme.ui.surfaceImage };
+}
+
+export function setAppearancePanelLinked(theme: AppearanceTheme, id: AppearanceCanvasPanelId, linked: boolean): AppearanceTheme {
+  const overrides = { ...theme.ui.canvasPanels.overrides };
+  if (linked) delete overrides[id];
+  else if (!overrides[id]) overrides[id] = structuredClone(resolveAppearancePanelBackground(resolveAppearanceTheme(theme), id));
+  return { ...theme, ui: { ...theme.ui, canvasPanels: { ...theme.ui.canvasPanels, overrides } } };
+}
+
+export function updateAppearancePanelBackground(theme: AppearanceTheme, id: AppearanceCanvasPanelId, patch: Partial<AppearancePanelBackground>): AppearanceTheme {
+  const panels = theme.ui.canvasPanels;
+  const next = { ...resolveAppearancePanelBackground(resolveAppearanceTheme(theme), id), ...patch };
+  const canvasPanels = panels.overrides[id]
+    ? { ...panels, overrides: { ...panels.overrides, [id]: next } }
+    : { ...panels, shared: next };
+  return { ...theme, ui: { ...theme.ui, canvasPanels } };
 }
 
 export function isTransparentColor(val: string | undefined | null): boolean {
@@ -319,8 +340,16 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
     '--scrollbar-thumb-hover': ui.scrollbarHover,
     '--canvas-grid-color': isTransparentColor(resolvedTheme.canvas.gridColor) ? 'transparent' : resolvedTheme.canvas.gridColor,
     '--canvas-grid-size': `${resolvedTheme.canvas.gridSize}px`,
-    '--floating-surface-bg': mode === 'light' ? 'color-mix(in srgb, #ffffff 70%, transparent)' : glassSurface,
+    '--floating-surface-bg': mode === 'light' ? `color-mix(in srgb, ${themeSurface} 70%, transparent)` : glassSurface,
   };
+  for (const id of APPEARANCE_CANVAS_PANEL_IDS) {
+    const panel = resolveAppearancePanelBackground(resolvedTheme, id);
+    const color = isTransparentColor(panel.background) ? 'transparent' : panel.background;
+    vars[`--appearance-panel-${id}-bg`] = mode === 'light'
+      ? `color-mix(in srgb, ${color} 70%, transparent)`
+      : solarGlass && color === themeSurface ? glassSurface : color;
+    vars[`--appearance-panel-${id}-image`] = appearanceImageLayer(panel.backgroundImage, imageUrls.resolve);
+  }
   for (const [name, value] of Object.entries(vars)) setVar(root, name, value);
   applyAccentScale(root, ui.accent, mode);
   const handleImageUrl = handle.kind === 'image' && handle.imageDataUrl ? imageUrls.resolve(handle.imageDataUrl) : undefined;

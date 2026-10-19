@@ -694,7 +694,7 @@ function CustomSelectDemo() {
   return (
     <div className="ui-field max-w-60">
       <label className="ui-label" htmlFor="sg-select-custom">图像模型</label>
-      <Select fixedMenu id="sg-select-custom" value={value} onChange={setValue}
+      <Select id="sg-select-custom" value={value} onChange={setValue}
         options={[
           { value: 'flux', label: 'FLUX.1 [dev]' },
           { value: 'sdxl', label: 'SDXL 1.0' },
@@ -705,7 +705,7 @@ function CustomSelectDemo() {
         ]} />
       <p className="ui-hint">当前值：{value}</p>
       <label className="ui-label" htmlFor="sg-select-content-width">窄按钮与长选项</label>
-      <Select fixedMenu id="sg-select-content-width" size="sm" className="w-24"
+      <Select id="sg-select-content-width" size="sm" className="w-24"
         value={runtime} onChange={setRuntime}
         options={[
           { value: 'light', label: '轻量导演台' },
@@ -779,9 +779,9 @@ function SelectsSection() {
   return (
     <Section
       id="sg-selects"
-      desc="选择字段统一复用 Select 组件；支持键盘、分组及禁用项，菜单挂到页面顶层以避免父容器裁剪。"
+      desc="选择字段统一复用 Select 组件；支持键盘、分组及禁用项，默认将菜单挂到页面顶层以避免父容器裁剪，无须额外配置。"
     >
-      <Demo label="自定义下拉（视觉与 .ui-menu 一致）" code="ui-select ui-select--custom > ui-select__trigger + ui-select__native + ui-menu">
+      <Demo label="自定义下拉（视觉与 .ui-menu 一致）" code={'<Select value={value} onChange={setValue} options={options} /> // 菜单默认使用 Portal'}>
         <CustomSelectDemo />
       </Demo>
     </Section>

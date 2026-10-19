@@ -82,12 +82,15 @@ describe('UI Kit appearance synchronization', () => {
     const image = { kind: 'image' as const, imageFit: 'cover' as const, imageDataUrl: 'data:image/png;base64,YWJj' };
     const snapshot = createAppearanceUiSnapshot({
       ...base,
-      ui: { ...base.ui, surfaceImage: image, button: { ...base.ui.button, normal: { ...base.ui.button.normal, backgroundImage: image } } },
+      ui: { ...base.ui, surfaceImage: image, button: { ...base.ui.button, normal: { ...base.ui.button.normal, backgroundImage: image } },
+        canvasPanels: { overrides: { sidebar: { background: '#123456', backgroundImage: image } } },
+      },
       canvas: { ...base.canvas, imageDataUrl: 'canvas-only-image' },
       node: { ...base.node, backgroundImage: { ...image, imageDataUrl: 'node-only-image' } },
     });
     expect(snapshot.ui.surfaceImage).toEqual(image);
     expect(snapshot.ui.button.normal.backgroundImage).toEqual(image);
+    expect(snapshot.ui.canvasPanels.overrides.sidebar?.backgroundImage).toEqual(image);
     expect(JSON.stringify(snapshot)).not.toContain('canvas-only-image');
     expect(Object.keys(snapshot).sort()).toEqual(['id', 'mode', 'name', 'ui']);
   });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBuiltinAppearanceThemes, normalizeAppearanceTheme } from '../../src/services/appearance/appearanceDefaults';
+import { APPEARANCE_CANVAS_PANEL_IDS, createBuiltinAppearanceThemes, normalizeAppearanceTheme } from '../../src/services/appearance/appearanceDefaults';
 import { migrateLegacyAppearance } from '../../src/services/appearance/appearanceMigration';
-import { applyAppearanceTheme, resolveAppearanceTheme } from '../../src/services/appearance/appearanceRuntime';
+import { applyAppearanceTheme, resolveAppearancePanelBackground, resolveAppearanceTheme, setAppearancePanelLinked, updateAppearancePanelBackground } from '../../src/services/appearance/appearanceRuntime';
 import type { AppConfig } from '../../src/types';
 
 const BACKGROUND_IMAGE = {
@@ -16,6 +16,84 @@ const SVG_BACKGROUND_IMAGE = {
 };
 
 describe('appearance themes', () => {
+  it.each(APPEARANCE_CANVAS_PANEL_IDS)('links the four panel backgrounds and isolates %s until relinked', (id) => {
+    const base = normalizeAppearanceTheme({ ui: { surfaceImage: BACKGROUND_IMAGE } });
+    expect(base.ui.canvasPanels.overrides).toEqual({});
+    const linked = updateAppearancePanelBackground(base, 'projectBar', { background: '#123456' });
+    expect(linked.ui.surface).toBe(base.ui.surface);
+    for (const panel of APPEARANCE_CANVAS_PANEL_IDS) expect(resolveAppearancePanelBackground(linked, panel).background).toBe('#123456');
+
+    const detached = setAppearancePanelLinked(linked, id, false);
+    expect(resolveAppearancePanelBackground(detached, id)).toEqual(resolveAppearancePanelBackground(linked, id));
+    expect(detached.ui.canvasPanels.overrides[id]?.backgroundImage).not.toBe(linked.ui.canvasPanels.shared?.backgroundImage);
+    expect(linked.ui.canvasPanels.overrides[id]).toBeUndefined();
+    const independent = updateAppearancePanelBackground(detached, id, { background: '#654321', backgroundImage: undefined });
+    const other = APPEARANCE_CANVAS_PANEL_IDS.find((panel) => panel !== id)!;
+    const changed = updateAppearancePanelBackground(independent, other, { background: '#aabbcc' });
+    const restored = normalizeAppearanceTheme(JSON.parse(JSON.stringify(changed)));
+    expect(resolveAppearancePanelBackground(restored, id)).toEqual({ background: '#654321', backgroundImage: undefined });
+    for (const panel of APPEARANCE_CANVAS_PANEL_IDS.filter((panel) => panel !== id)) {
+      expect(resolveAppearancePanelBackground(restored, panel).background).toBe('#aabbcc');
+    }
+    const relinked = setAppearancePanelLinked(restored, id, true);
+    expect(relinked.ui.canvasPanels.overrides[id]).toBeUndefined();
+    expect(resolveAppearancePanelBackground(relinked, id).background).toBe('#aabbcc');
+  });
+
+  it('keeps linked panels on the system palette until customized and preserves detached backgrounds', () => {
+    let light = false;
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: light }) });
+    try {
+      const base = normalizeAppearanceTheme({ id: 'standard-dark', mode: 'system' });
+      const detached = setAppearancePanelLinked(base, 'sidebar', false);
+      light = true;
+      const resolved = resolveAppearanceTheme(detached);
+      expect(resolveAppearancePanelBackground(resolved, 'sidebar').background).toBe('#14141c');
+      expect(resolveAppearancePanelBackground(resolved, 'projectBar').background).toBe('#FFFFFF');
+      const edited = resolveAppearanceTheme(updateAppearancePanelBackground(detached, 'projectBar', { background: '#abcdef' }));
+      expect(resolveAppearancePanelBackground(edited, 'drawingToolbar').background).toBe('#abcdef');
+      expect(resolveAppearancePanelBackground(edited, 'sidebar').background).toBe('#14141c');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('bounds imported panel overrides to known regions, safe colors, and theme images', () => {
+    const theme = normalizeAppearanceTheme({ ui: { canvasPanels: {
+      shared: { background: '#112233' },
+      overrides: {
+        sidebar: { background: 'url(https://example.com/image.png)', backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl: 'https://example.com/image.png' } },
+        projectBar: [], unknownPanel: { background: '#445566' },
+      },
+    } } });
+    expect(Object.keys(theme.ui.canvasPanels.overrides)).toEqual(['sidebar']);
+    expect(theme.ui.canvasPanels.overrides.sidebar?.background).toBe('#14141c');
+    expect(theme.ui.canvasPanels.overrides.sidebar?.backgroundImage?.imageDataUrl).toBeUndefined();
+  });
+
+  it('applies per-panel runtime backgrounds and clears overrides on preset reset', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('document', { documentElement: {
+      dataset: {}, setAttribute: vi.fn(),
+      style: { setProperty: (name: string, value: string) => values.set(name, value), removeProperty: (name: string) => values.delete(name) },
+    } });
+    try {
+      const base = createBuiltinAppearanceThemes()[0];
+      const linked = updateAppearancePanelBackground(base, 'projectBar', { background: '#123456' });
+      const detached = setAppearancePanelLinked(linked, 'sidebar', false);
+      const edited = updateAppearancePanelBackground(detached, 'sidebar', { background: '#654321', backgroundImage: BACKGROUND_IMAGE });
+      applyAppearanceTheme(edited);
+      expect(values.get('--appearance-panel-projectBar-bg')).toBe('#123456');
+      expect(values.get('--appearance-panel-sidebar-bg')).toBe('#654321');
+      expect(values.get('--appearance-panel-sidebar-image')).toContain('data:image/png');
+      applyAppearanceTheme(base);
+      expect(values.get('--appearance-panel-sidebar-bg')).toBe(base.ui.surface);
+      expect(values.get('--appearance-panel-sidebar-image')).toBe('none');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['https://example.com/image.png', 'file:///private/image.png', 'data:text/html;base64,PHN2Zy8+', 'data:image/png;base64,abc") ; color:red'])('rejects background source %s without changing its color fallback', (imageDataUrl) => {
     const theme = normalizeAppearanceTheme({
       ui: { surfaceImage: { ...BACKGROUND_IMAGE, imageDataUrl }, button: { normal: { background: '#123456', backgroundImage: { ...BACKGROUND_IMAGE, imageDataUrl } } } },

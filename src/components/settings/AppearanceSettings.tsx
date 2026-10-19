@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore } from '../../store/useAppStore';
-import { getNodeTypeConfig, type AppearanceBackgroundImage, type AppearanceTheme, type BaseNodeData } from '../../types';
+import { getNodeTypeConfig, type AppearanceBackgroundImage, type AppearanceCanvasPanelId, type AppearanceTheme, type BaseNodeData } from '../../types';
 import type { Node } from '@xyflow/react';
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../../services/appearance/appearanceDefaults';
-import { contrastColor, isTransparentColor, resolveAppearanceBackground, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
+import { contrastColor, isTransparentColor, resolveAppearanceBackground, resolveAppearanceMode, resolveAppearancePanelBackground, resolveAppearanceTheme, setAppearancePanelLinked, updateAppearancePanelBackground } from '../../services/appearance/appearanceRuntime';
 import { exportAppearanceTheme, importAppearanceTheme } from '../../services/appearance/appearanceThemeService';
 import { resolveThemeImageSource, storeThemeImage } from '../../services/fs/themeAssets';
 import { saveBinaryToLocalFile } from '../../services/fileService';
@@ -14,6 +14,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import ModalOverlay from '../shared/ModalOverlay';
 import Select from '../shared/Select';
 import NumberStepper from '../shared/NumberStepper';
+import AppearanceLayoutPreview, { type AppearanceLayoutTarget } from './AppearanceLayoutPreview';
 import { useT } from '../../i18n';
 import mercuryImg from '../../assets/images/bg/1_mercury.png';
 import venusImg from '../../assets/images/bg/2_venus.png';
@@ -558,7 +559,7 @@ function ColorCardInput({
   const stacked = Boolean(followThemeVar || onImageChange);
 
   return (
-    <div className={`p-3 settings-sub-card rounded-xl transition-colors ${stacked ? 'ui-field' : 'flex items-center justify-between'}`}>
+    <div className={`p-3 settings-sub-card rounded-xl transition-colors ${stacked ? 'ui-field' : 'flex flex-wrap items-center justify-between gap-2'}`}>
       <div className="flex items-center justify-between gap-2">
         <span className={`text-xs font-semibold text-canvas-text ${stacked ? 'whitespace-nowrap' : ''}`}>{label}</span>
         {onImageChange && <Select aria-label={`${label}背景类型`} value={imageConfig.kind} className="shrink-0 w-24" size="sm"
@@ -656,7 +657,7 @@ function QuickSwatches({
   title?: string;
 }) {
   return (
-    <div className="flex items-center space-x-3 pt-1" aria-label={title}>
+    <div className="flex flex-wrap items-center gap-3 pt-1" aria-label={title}>
       {colors.map((color) => {
         const isSelected = value.toLowerCase() === color.toLowerCase();
         return (
@@ -856,12 +857,6 @@ export default function AppearanceSettings() {
 
   const resolved = resolveAppearanceTheme(active);
 
-  const canvasStyle = resolved.canvas.kind === 'color'
-    ? { backgroundColor: resolved.canvas.color }
-    : resolved.canvas.kind === 'image'
-      ? imagePreviewStyle(resolved.canvas.imageDataUrl, resolved.canvas.imageFit)
-      : { backgroundColor: resolved.ui.background };
-
   const selectPreset = async (theme: AppearanceTheme) => {
     if (!beginPresetOperation('activate')) return;
     try {
@@ -1018,6 +1013,178 @@ export default function AppearanceSettings() {
     }
   };
 
+  const layoutControls = {
+    canvas: (
+      <div className="p-3 settings-sub-card rounded-xl space-y-3">
+        <div className="flex items-center justify-between pb-1 border-b settings-h-divider">
+          <span className="text-xs font-bold text-canvas-text">{t('画布背景')}</span>
+          <span className="text-[11px] text-canvas-text-muted">{t('背景类型与网格')}</span>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-canvas-text-secondary">{t('背景类型')}</span>
+          <Select
+            fixedMenu
+            size="sm"
+            value={active.canvas.kind}
+            onChange={(val) =>
+              update((theme) => ({
+                ...theme,
+                canvas: { ...theme.canvas, kind: val as AppearanceTheme['canvas']['kind'] },
+              }))
+            }
+          >
+            <option value="color">{t('纯色')}</option>
+            <option value="image">{t('图片')}</option>
+            <option value="solar-system">{t('太阳系')}</option>
+            <option value="frosted-glass">{t('磨砂暖光')}</option>
+          </Select>
+        </div>
+
+        {active.canvas.kind === 'color' && (
+          <div className="space-y-2">
+            <ColorCardInput
+              label={t('画布背景颜色')}
+              value={active.canvas.color}
+              fallbackColor={active.mode === 'light' ? '#F4F6FB' : '#0a0a0f'}
+              onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
+            />
+            <QuickSwatches
+              colors={active.mode === 'light' ? LIGHT_CANVAS_COLOR_SWATCHES : DARK_CANVAS_COLOR_SWATCHES}
+              value={active.canvas.color}
+              onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
+              title={t('画布底色预设')}
+            />
+          </div>
+        )}
+
+        {active.canvas.kind === 'image' && (
+          <div className="p-3 settings-sub-card rounded-lg">
+            <BackgroundImageControls
+              key={`${active.id}:canvas-background`}
+              label={t('画布背景')}
+              image={{ kind: 'image', imageDataUrl: active.canvas.imageDataUrl, imageFit: active.canvas.imageFit }}
+              onChange={({ kind, imageDataUrl, imageFit }) => updateImage((theme) => ({
+                ...theme, canvas: { ...theme.canvas, kind, imageDataUrl, imageFit },
+              }))}
+            />
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 pt-1">
+          <label className="p-3 settings-sub-card rounded-xl flex items-center justify-between cursor-pointer">
+            <span className="text-xs font-semibold text-canvas-text select-none">
+              {t('显示网格')}
+            </span>
+            <input
+              aria-label={t('显示网格')}
+              type="checkbox"
+              checked={active.canvas.gridVisible}
+              onChange={(e) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, gridVisible: e.target.checked } }))}
+              className="w-4 h-4 text-brand rounded border-canvas-border focus:ring-brand cursor-pointer"
+            />
+          </label>
+          <ColorCardInput
+            label={t('网格颜色')}
+            value={active.canvas.gridColor}
+            fallbackColor={active.mode === 'light' ? '#B1B1B7' : '#585868'}
+            onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, gridColor: value } }))}
+          />
+        </div>
+      </div>
+    ),
+    background: (
+      <ColorCardInput
+        label={t('页面背景')}
+        value={active.ui.background}
+        fallbackColor={active.mode === 'light' ? '#F4F6FB' : '#0a0a0f'}
+        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, background: value } }))}
+      />
+    ),
+    surface: (
+      <ColorCardInput
+        key={`${active.id}:surface-background`}
+        label={t('窗口 / 弹窗背景')}
+        value={active.ui.surface}
+        image={active.ui.surfaceImage}
+        onImageChange={(surfaceImage) => updateImage((theme) => ({ ...theme, ui: { ...theme.ui, surfaceImage } }))}
+        fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
+        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, surface: value } }))}
+      />
+    ),
+    card: (
+      <ColorCardInput
+        label={t('组件底色')}
+        value={active.ui.card}
+        fallbackColor={active.mode === 'light' ? '#F8FAFD' : '#1a1a26'}
+        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, card: value } }))}
+      />
+    ),
+    hover: (
+      <ColorCardInput
+        label={t('组件悬浮底色')}
+        value={active.ui.hover}
+        fallbackColor={active.mode === 'light' ? '#EEF1F8' : '#252535'}
+        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, hover: value } }))}
+      />
+    ),
+    border: (
+      <ColorCardInput
+        label={t('组件边框')}
+        value={active.ui.border}
+        fallbackColor={active.mode === 'light' ? '#E4E8F2' : '#2a2a3a'}
+        onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, border: value } }))}
+      />
+    ),
+    node: (
+      <ColorCardInput
+        key={`${active.id}:node-background`}
+        label={t('节点底色')}
+        value={active.node.background}
+        image={active.node.backgroundImage}
+        onImageChange={(backgroundImage) => updateImage((theme) => ({ ...theme, node: { ...theme.node, backgroundImage } }))}
+        fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
+        onChange={(value) => update((theme) => ({ ...theme, node: { ...theme.node, background: value } }))}
+      />
+    ),
+  } satisfies Record<Exclude<AppearanceLayoutTarget, AppearanceCanvasPanelId>, ReactNode>;
+
+  const renderLayoutControls = (target: AppearanceLayoutTarget): ReactNode => {
+    switch (target) {
+      case 'projectBar':
+      case 'sidebar':
+      case 'drawingToolbar':
+      case 'viewportToolbar': {
+        const linked = !active.ui.canvasPanels.overrides[target];
+        const background = resolveAppearancePanelBackground(resolved, target);
+        return (
+          <div className="ui-stack">
+            <div className="settings-sub-card rounded-xl p-3 space-y-2">
+              <div className="ui-row ui-row--between">
+                <span className="text-xs font-semibold text-canvas-text">{t('关联其他区域')}</span>
+                <button type="button" role="switch" className="ui-switch" aria-label={t('关联其他区域')}
+                  aria-checked={linked} onClick={() => update((theme) => setAppearancePanelLinked(theme, target, !linked))} />
+              </div>
+              <p className="ui-hint">{linked
+                ? t('项目栏、左侧工具栏、绘图工具栏和画布控制栏中，仍关联的区域会一起更新背景。')
+                : t('当前背景独立设置；重新关联后将跟随其他关联区域的背景。')}</p>
+            </div>
+            <ColorCardInput
+              key={`${active.id}:${target}:${linked ? 'linked' : 'independent'}`}
+              label={t('区域背景')}
+              value={background.background}
+              image={background.backgroundImage}
+              fallbackColor={resolved.mode === 'light' ? '#FFFFFF' : '#14141c'}
+              onChange={(value) => update((theme) => updateAppearancePanelBackground(theme, target, { background: value }))}
+              onImageChange={(backgroundImage) => updateImage((theme) => updateAppearancePanelBackground(theme, target, { backgroundImage }))}
+            />
+          </div>
+        );
+      }
+      default: return layoutControls[target];
+    }
+  };
+
   return (
     <main className="flex-1 overflow-y-auto px-6 sm:px-6 py-6 settings-appearance-view" data-purpose="appearance-settings-view" aria-busy={presetOperation !== null}>
       <fieldset disabled={presetOperation !== null} className="min-w-0 m-0 border-0 p-0 space-y-6" aria-label={t('外观设置')}>
@@ -1163,144 +1330,6 @@ export default function AppearanceSettings() {
             : t('Web 演示使用内嵌图片；本地图片目录功能请使用桌面端。')}
         </p>
       </div>
-
-      {/* BEGIN: LiveCanvasPreviewCard */}
-      <section className="relative settings-preview-card rounded-2xl p-4 overflow-hidden shadow-xs" data-purpose="interactive-live-preview" style={canvasStyle}>
-        {resolved.canvas.kind === 'solar-system' && (
-          <>
-            <div className="solar-stars opacity-75 pointer-events-none" />
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden" style={{ bottom: '-55%' }}>
-              <img
-                src={SOLAR_SYSTEM_PLANETS[solarPlanetIndex].image}
-                alt={SOLAR_SYSTEM_PLANETS[solarPlanetIndex].name}
-                className="w-72 h-72 object-contain rounded-full opacity-35 filter brightness-95 pointer-events-none select-none"
-              />
-            </div>
-          </>
-        )}
-        {/* Dot Grid Backdrop */}
-        <div
-          className={`absolute inset-0 ${active.mode === 'dark' ? 'bg-dot-pattern-dark' : 'bg-dot-pattern'} ${resolved.canvas.kind === 'solar-system' ? 'opacity-25' : 'opacity-60'}`}
-          style={
-            resolved.canvas.gridColor && !isTransparentColor(resolved.canvas.gridColor)
-              ? { backgroundImage: `radial-gradient(${resolved.canvas.gridColor} 1px, transparent 1px)` }
-              : (isTransparentColor(resolved.canvas.gridColor) ? { backgroundImage: 'none' } : undefined)
-          }
-        />
-        <div className="relative flex items-center justify-between min-h-[96px] px-4">
-          {/* Left: Node representation with input socket */}
-          <div
-            className="w-48 settings-preview-node rounded-xl p-3 shadow-md backdrop-blur transition-all"
-            style={{
-              backgroundColor: isTransparentColor(resolved.node.background) ? 'transparent' : resolved.node.background,
-              borderColor: isTransparentColor(resolved.node.border) ? 'transparent' : resolved.node.border,
-              borderWidth: `${resolved.node.borderWidth}px`,
-              borderRadius: `${resolved.node.radius}px`,
-            }}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-semibold text-canvas-text">{t('节点预览')}</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            </div>
-            {/* 内部输入框：跟随节点圆角 */}
-            <div
-              className="px-2.5 py-1.5 text-[10px] bg-canvas-card border border-canvas-border text-canvas-text-muted flex items-center justify-between transition-all"
-              style={{
-                borderRadius: `${Math.max(0, resolved.node.radius - 4)}px`,
-              }}
-            >
-              <span className="truncate">{t('输入提示词…')}</span>
-              <span className="text-[9px] opacity-40 font-mono shrink-0 ml-1">12字</span>
-            </div>
-            {/* 内部图片/媒体预览：跟随节点圆角 */}
-            <div
-              className="mt-2 h-12 w-full bg-canvas-card border border-canvas-border overflow-hidden relative flex items-center justify-center transition-all"
-              style={{
-                borderRadius: `${Math.max(0, resolved.node.radius - 3)}px`,
-              }}
-            >
-              <div className="absolute inset-0 bg-gradient-to-tr from-brand-500/20 via-transparent to-purple-500/15" />
-              <svg className="w-4 h-4 text-canvas-text-muted opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <rect width="18" height="18" x="3" y="3" rx="2" strokeWidth="1.5" />
-                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
-                <path d="M21 15l-5-5L5 21" strokeWidth="1.5" />
-              </svg>
-              <span className="absolute bottom-1 right-1.5 text-[8px] px-1 py-0.2 rounded bg-black/50 text-white/80 font-mono">IMG / MP4</span>
-            </div>
-          </div>
-
-          {/* Center: Spline wire flow preview */}
-          <div className="flex-1 mx-4 h-12 relative flex items-center justify-center">
-            <svg className="w-full h-12 overflow-visible" preserveAspectRatio="none" viewBox="0 0 300 40">
-              <defs>
-                <linearGradient id="liveSplineGradient" x1="0%" x2="100%" y1="0%" y2="0%">
-                  <stop offset="0%" stopColor={resolved.edge.color} />
-                  <stop offset="50%" stopColor={resolved.edge.flowColor || resolved.ui.accent} />
-                  <stop offset="100%" stopColor={resolved.edge.color} />
-                </linearGradient>
-              </defs>
-              {/* Background wire shadow */}
-              <path
-                d="M 0,20 C 120,20 180,20 300,20"
-                fill="none"
-                stroke={resolved.edge.color}
-                strokeOpacity="0.25"
-                strokeLinecap="round"
-                strokeWidth="7"
-              />
-              {/* Active glowing spline wire */}
-              <path
-                d="M 0,20 C 120,20 180,20 300,20"
-                fill="none"
-                stroke="url(#liveSplineGradient)"
-                strokeLinecap="round"
-                strokeWidth="4.5"
-              />
-              {/* Animated flow particle highlight */}
-              {resolved.edge.animationEnabled && (
-                <path
-                  className="animate-flow-dash"
-                  d="M 0,20 C 120,20 180,20 300,20"
-                  fill="none"
-                  stroke="#ffffff"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                  opacity="0.9"
-                />
-              )}
-            </svg>
-          </div>
-
-          {/* Right: Interactive Port / Socket preview with pulse effect */}
-          <div className="relative flex items-center pl-2">
-            <div className="relative flex items-center justify-center">
-              <span
-                className="absolute w-8 h-8 rounded-full animate-pulse-subtle"
-                style={{ backgroundColor: resolved.handle.color, opacity: 0.25 }}
-              />
-              <span
-                className="w-6 h-6 rounded-full border-2 border-white shadow-md flex items-center justify-center overflow-hidden bg-cover bg-center"
-                style={
-                  resolved.handle.kind === 'image' && resolved.handle.imageDataUrl
-                    ? imagePreviewStyle(resolved.handle.imageDataUrl, resolved.handle.imageFit)
-                    : { backgroundColor: resolved.handle.color, borderColor: '#ffffff' }
-                }
-              >
-                {resolved.handle.kind !== 'image' && <span className="w-2 h-2 rounded-full bg-white" />}
-              </span>
-            </div>
-            <div className="ml-4 text-right">
-              <div className="text-[11px] font-medium text-canvas-text-muted">{t('当前主题')}</div>
-              <div className="text-sm font-bold text-canvas-text">
-                {active.mode === 'dark' ? t('深色') : active.mode === 'light' ? t('浅色') : t('跟随系统')}
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-      {/* END: LiveCanvasPreviewCard */}
-
-      <div className="h-px settings-h-divider my-2" />
 
       {/* BEGIN: PresetsSection */}
       <SectionCard
@@ -1537,8 +1566,8 @@ export default function AppearanceSettings() {
 
       {/* BEGIN: SurfaceHierarchySection */}
       <SectionCard
-        title={t('界面底色')}
-        description={t('分别配置页面、窗口和组件各层底色')}
+        title={t('界面布局与底色')}
+        description={t('按真实画布布局点选区域，调整颜色或背景图片')}
         icon={
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
@@ -1546,41 +1575,22 @@ export default function AppearanceSettings() {
         }
         dataPurpose="surface-background-colors"
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          <ColorCardInput
-            label={t('页面背景')}
-            value={active.ui.background}
-            fallbackColor={active.mode === 'light' ? '#F4F6FB' : '#0a0a0f'}
-            onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, background: value } }))}
-          />
-          <ColorCardInput
-            key={`${active.id}:surface-background`}
-            label={t('窗口 / 弹窗背景')}
-            value={active.ui.surface}
-            image={active.ui.surfaceImage}
-            onImageChange={(surfaceImage) => updateImage((theme) => ({ ...theme, ui: { ...theme.ui, surfaceImage } }))}
-            fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
-            onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, surface: value } }))}
-          />
-          <ColorCardInput
-            label={t('组件底色')}
-            value={active.ui.card}
-            fallbackColor={active.mode === 'light' ? '#F8FAFD' : '#1a1a26'}
-            onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, card: value } }))}
-          />
-          <ColorCardInput
-            label={t('组件悬浮底色')}
-            value={active.ui.hover}
-            fallbackColor={active.mode === 'light' ? '#EEF1F8' : '#252535'}
-            onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, hover: value } }))}
-          />
-          <ColorCardInput
-            label={t('组件边框')}
-            value={active.ui.border}
-            fallbackColor={active.mode === 'light' ? '#E4E8F2' : '#2a2a3a'}
-            onChange={(value) => update((theme) => ({ ...theme, ui: { ...theme.ui, border: value } }))}
-          />
-        </div>
+        <AppearanceLayoutPreview
+          key={`${active.id}:${active.mode}`}
+          theme={active}
+          disabled={presetOperation !== null}
+          renderControls={renderLayoutControls}
+        />
+        <details className="pt-3">
+          <summary className="cursor-pointer text-xs text-canvas-text-secondary">{t('更多界面配色')}</summary>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {layoutControls.background}
+            {layoutControls.surface}
+            {layoutControls.card}
+            {layoutControls.hover}
+            {layoutControls.border}
+          </div>
+        </details>
       </SectionCard>
       {/* END: SurfaceHierarchySection */}
 
@@ -1645,84 +1655,7 @@ export default function AppearanceSettings() {
         dataPurpose="canvas-and-nodes-styling"
       >
         <div className="space-y-4">
-          {/* Canvas Background Settings */}
-          <div className="p-4 settings-sub-card rounded-xl space-y-3">
-            <div className="flex items-center justify-between pb-1 border-b settings-h-divider">
-              <span className="text-xs font-bold text-canvas-text">{t('画布背景')}</span>
-              <span className="text-[11px] text-canvas-text-muted">{t('背景类型与网格')}</span>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-canvas-text-secondary">{t('背景类型')}</span>
-              <Select
-                fixedMenu
-                size="sm"
-                value={active.canvas.kind}
-                onChange={(val) =>
-                  update((theme) => ({
-                    ...theme,
-                    canvas: { ...theme.canvas, kind: val as AppearanceTheme['canvas']['kind'] },
-                  }))
-                }
-              >
-                <option value="color">{t('纯色')}</option>
-                <option value="image">{t('图片')}</option>
-                <option value="solar-system">{t('太阳系')}</option>
-                <option value="frosted-glass">{t('磨砂暖光')}</option>
-              </Select>
-            </div>
-
-            {active.canvas.kind === 'color' && (
-              <div className="space-y-2">
-                <ColorCardInput
-                  label={t('画布背景颜色')}
-                  value={active.canvas.color}
-                  fallbackColor={active.mode === 'light' ? '#F4F6FB' : '#0a0a0f'}
-                  onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
-                />
-                <QuickSwatches
-                  colors={active.mode === 'light' ? LIGHT_CANVAS_COLOR_SWATCHES : DARK_CANVAS_COLOR_SWATCHES}
-                  value={active.canvas.color}
-                  onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
-                  title={t('画布底色预设')}
-                />
-              </div>
-            )}
-
-            {active.canvas.kind === 'image' && (
-              <div className="p-3 settings-sub-card rounded-lg">
-                <BackgroundImageControls
-                  key={`${active.id}:canvas-background`}
-                  label={t('画布背景')}
-                  image={{ kind: 'image', imageDataUrl: active.canvas.imageDataUrl, imageFit: active.canvas.imageFit }}
-                  onChange={({ kind, imageDataUrl, imageFit }) => updateImage((theme) => ({
-                    ...theme, canvas: { ...theme.canvas, kind, imageDataUrl, imageFit },
-                  }))}
-                />
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              <div className="p-3 settings-sub-card rounded-xl flex items-center justify-between">
-                <label className="text-xs font-semibold text-canvas-text cursor-pointer select-none" htmlFor="canvasGridCheckbox">
-                  {t('显示网格')}
-                </label>
-                <input
-                  id="canvasGridCheckbox"
-                  type="checkbox"
-                  checked={active.canvas.gridVisible}
-                  onChange={(e) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, gridVisible: e.target.checked } }))}
-                  className="w-4 h-4 text-brand rounded border-canvas-border focus:ring-brand cursor-pointer"
-                />
-              </div>
-              <ColorCardInput
-                label={t('网格颜色')}
-                value={active.canvas.gridColor}
-                fallbackColor={active.mode === 'light' ? '#B1B1B7' : '#585868'}
-                onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, gridColor: value } }))}
-              />
-            </div>
-          </div>
+          {layoutControls.canvas}
 
           {/* Node Appearance Settings */}
           <div className="p-4 settings-sub-card rounded-xl space-y-3">
@@ -1732,15 +1665,7 @@ export default function AppearanceSettings() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <ColorCardInput
-                key={`${active.id}:node-background`}
-                label={t('节点底色')}
-                value={active.node.background}
-                image={active.node.backgroundImage}
-                onImageChange={(backgroundImage) => updateImage((theme) => ({ ...theme, node: { ...theme.node, backgroundImage } }))}
-                fallbackColor={active.mode === 'light' ? '#FFFFFF' : '#14141c'}
-                onChange={(value) => update((theme) => ({ ...theme, node: { ...theme.node, background: value } }))}
-              />
+              {layoutControls.node}
               <ColorCardInput
                 label={t('节点边框')}
                 value={active.node.border}
