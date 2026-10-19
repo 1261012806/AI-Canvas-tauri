@@ -1054,6 +1054,42 @@ describe('returning to the startup page', () => {
     expect(useAppStore.getState().currentProjectId).toBe('logo-project');
   });
 
+  it.each(['added', 'completed'] as const)('keeps MCP media %s during an in-flight return save', async (change) => {
+    openProject();
+    const showToast = vi.fn();
+    useAppStore.setState({ showToast });
+    const media = {
+      id: 'mcp-image', type: 'source-image', position: { x: 300, y: 0 },
+      data: { label: 'MCP 图片', type: 'source-image', status: 'loading' } as BaseNodeData,
+    };
+    if (change === 'completed') useAppStore.getState().addNodes([media]);
+    let finishSave!: (id: string) => void;
+    fileMocks.saveProject.mockImplementationOnce(() => new Promise<string>((resolve) => { finishSave = resolve; }));
+    const pending = useAppStore.getState().returnToStartPage();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const result: Partial<BaseNodeData> = {
+      status: 'success', filePath: 'project-dir/mcp.png', imageUrl: 'asset://project-dir/mcp.png',
+    };
+    if (change === 'added') useAppStore.getState().addNodes([{ ...media, data: { ...media.data, ...result } }]);
+    else useAppStore.getState().updateNodeDataTransient(media.id, result);
+    finishSave('logo-project');
+
+    expect(await pending).toBe(false);
+    expect(useAppStore.getState()).toMatchObject({
+      currentProjectId: 'logo-project', isReturningToStartPage: false,
+      nodes: expect.arrayContaining([expect.objectContaining({ id: media.id, data: expect.objectContaining(result) })]),
+    });
+    expect(showToast).toHaveBeenCalledWith('保存期间画布有新变化，已保留当前项目，请稍后再返回启动页', 'error');
+
+    expect(await useAppStore.getState().returnToStartPage()).toBe(true);
+    expect(fileMocks.saveProject).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'logo-project',
+      nodes: expect.arrayContaining([expect.objectContaining({ id: media.id, data: expect.objectContaining(result) })]),
+    }));
+    expect(useAppStore.getState().autoSaveFailure).toBeNull();
+  });
+
   it('keeps the current canvas when saving fails', async () => {
     openProject();
     fileMocks.saveProject.mockRejectedValue(new Error('Save unavailable'));

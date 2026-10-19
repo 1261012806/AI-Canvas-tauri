@@ -1403,8 +1403,16 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       // 列表即将出现，复用缩略图捕获；截图失败不妨碍正常保存。
       await get().captureCurrentProjectSnapshot().catch(() => undefined);
       if (get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
-      const savedId = await get().saveCurrentProjectSilent();
+      const savingState = get();
+      const savedId = await savingState.saveCurrentProjectSilent();
       if (savedId !== projectId || get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
+      const latest = get();
+      // 保存期间 MCP 或生成任务仍可回填；卸载前必须确认没有落在这次快照之后的新内容。
+      if (latest.nodes !== savingState.nodes || latest.edges !== savingState.edges
+        || latest.groups !== savingState.groups || latest.dramaAssets !== savingState.dramaAssets) {
+        latest.showToast('保存期间画布有新变化，已保留当前项目，请稍后再返回启动页', 'error');
+        return false;
+      }
       cancelProjectCanvasDerivations(projectId);
       set({
         currentProjectId: null,
