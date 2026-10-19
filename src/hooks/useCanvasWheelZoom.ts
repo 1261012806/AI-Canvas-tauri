@@ -141,7 +141,9 @@ export function bindCanvasWheelZoom(element: HTMLElement, options: WheelZoomOpti
     if (!detail || ![detail.xRatio, detail.yRatio, detail.deltaY, detail.issuedAt].every(value => typeof value === 'number' && Number.isFinite(value))) return;
     const { xRatio, yRatio, deltaY, issuedAt } = detail as NativeMouseWheelDetail;
     if (xRatio < 0 || xRatio >= 1 || yRatio < 0 || yRatio >= 1 || deltaY === 0) return;
-    if (issuedAt <= nativeWheelCancelledAt || Date.now() - issuedAt > 250 || document.hidden || !document.hasFocus()) {
+    // 原生层已确认主窗口激活；页面焦点可能仍在原生控件上，不能据此丢掉新滚轮。
+    // 失焦前的旧输入仍由取消水位拦截，后台页面继续丢弃输入。
+    if (issuedAt <= nativeWheelCancelledAt || Date.now() - issuedAt > 250 || document.hidden) {
       // 确认消费过期输入，但不回放原生事件，防止它平移已切换的画布。
       event.preventDefault();
       return;

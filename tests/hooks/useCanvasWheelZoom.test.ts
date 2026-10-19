@@ -159,14 +159,39 @@ describe('Mac native mouse wheel routing', () => {
     expect(onEnd).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it('drops stale, hidden or unfocused input without replaying it into another view', () => {
+  it('drops stale or hidden input without replaying it into another view', () => {
     expect(nativeWheel(-120, { issuedAt: Date.now() - 300 }).defaultPrevented).toBe(true);
     doc.hidden = true;
     expect(nativeWheel(-120).defaultPrevented).toBe(true);
-    doc.hidden = false;
+    expect(setViewport).not.toHaveBeenCalled();
+  });
+
+  it('accepts native window input when the document has not regained DOM focus', () => {
     Object.assign(doc, { hasFocus: () => false });
     expect(nativeWheel(-120).defaultPrevented).toBe(true);
-    expect(setViewport).not.toHaveBeenCalled();
+    frameAt(70);
+    expect(viewport.zoom).toBeCloseTo(1.08, 8);
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(onEnd).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it('drops input from before blur and accepts fresh input after returning to the window', () => {
+    const issuedAt = Date.now();
+    nativeWheel(-120);
+    timeAt(20);
+    win.dispatchEvent(new Event('blur'));
+    Object.assign(doc, { hasFocus: () => false });
+    timeAt(30);
+    expect(nativeWheel(-120, { issuedAt }).defaultPrevented).toBe(true);
+    frameAt(40);
+    expect(viewport.zoom).toBe(1);
+
+    expect(nativeWheel(-120).defaultPrevented).toBe(true);
+    frameAt(100);
+    expect(viewport.zoom).toBeCloseTo(1.08, 8);
+    expect(onStart).toHaveBeenCalledTimes(2);
+    expect(onEnd).toHaveBeenNthCalledWith(1, true);
+    expect(onEnd).toHaveBeenNthCalledWith(2, false);
   });
 
   it.each([{ xRatio: -1 }, { yRatio: 1 }, { deltaY: Infinity }, { issuedAt: 'bad' }])('rejects invalid native input: %j', extras => {

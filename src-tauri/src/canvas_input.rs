@@ -137,7 +137,7 @@ mod macos {
     use block2::RcBlock;
     use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker};
     use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
-    use objc2_foundation::{NSError, NSNumber, NSProcessInfo, NSString};
+    use objc2_foundation::{NSError, NSNumber, NSString};
     use objc2_web_kit::WKWebView;
     use serde::Serialize;
     use std::{
@@ -258,8 +258,9 @@ mod macos {
             let Ok(wall_time) = SystemTime::now().duration_since(UNIX_EPOCH) else {
                 return false;
             };
-            let age = (NSProcessInfo::processInfo().systemUptime() - event.timestamp()).max(0.0);
-            let issued_at = wall_time.as_secs_f64() * 1000.0 - age * 1000.0;
+            // 从收到事件时开始计算桥接延迟。第三方鼠标驱动的 timestamp 不一定沿用系统时钟，
+            // 用它倒推时间会把刚收到的滚轮一直判成过期，前端也就一直无法缩放。
+            let issued_at = wall_time.as_secs_f64() * 1000.0;
             if !issued_at.is_finite() {
                 return false;
             }
