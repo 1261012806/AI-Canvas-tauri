@@ -256,14 +256,15 @@ export async function listExternalFolderFiles(
   return results.flat();
 }
 
-/** 选择本地文件（可多选）拷贝到全局 file 目录，返回拷贝数量 */
-export async function addAssetFilesToGlobal(): Promise<number> {
+/** 选择本地文件（可多选）拷贝到指定资产目录；未指定时沿用全局 file 根目录。 */
+export async function addAssetFilesToGlobal(
+  selection: AssetFolderSelection = { kind: 'global' }, roots: readonly string[] = [],
+): Promise<number> {
   if (!isTauriEnv()) return 0;
   const selected = await open({ multiple: true, title: '添加文件到资产库' });
   if (!selected) return 0;
   const paths = Array.isArray(selected) ? selected : [selected];
-  const destDir = await ensureGlobalFilesDir();
-  if (!destDir) return 0;
+  const destDir = await resolveAssetFolderDirectory(selection, roots);
 
   let count = 0;
   for (const src of paths) {

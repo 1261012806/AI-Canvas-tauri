@@ -1089,10 +1089,11 @@ export default function AssetsPanel() {
     setAddMenuOpen(false);
     setBusy(true);
     try {
-      const n = await addAssetFilesToGlobal();
+      const target: AssetFolderSelection = folderSelection.kind === 'all' ? { kind: 'global' } : folderSelection;
+      const n = await addAssetFilesToGlobal(target, useAppStore.getState().config.assetFolders ?? []);
       if (n > 0) { toast(`已添加 ${n} 个文件`); if (activeTab === 'permanent') await loadFiles(); }
     } catch { toast('添加失败'); } finally { setBusy(false); }
-  }, [activeTab, loadFiles, toast]);
+  }, [activeTab, folderSelection, loadFiles, toast]);
 
   const handleAddFolder = useCallback(async () => {
     setAddMenuOpen(false);

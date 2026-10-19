@@ -6,18 +6,19 @@ const mocks = vi.hoisted(() => ({
   stat: vi.fn(),
   tauri: true,
   exists: vi.fn(), mkdir: vi.fn(),
+  open: vi.fn(), readFile: vi.fn(), writeFile: vi.fn(), uniquePath: vi.fn(),
 }));
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readDir: mocks.readDir, stat: mocks.stat, exists: mocks.exists,
-  writeFile: vi.fn(), readFile: vi.fn(), mkdir: mocks.mkdir,
+  writeFile: mocks.writeFile, readFile: mocks.readFile, mkdir: mocks.mkdir,
 }));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open }));
 vi.mock('../../src/services/fs/core', () => ({
   isTauriEnv: () => mocks.tauri,
   joinPath: (...parts: string[]) => parts.join('/'),
   getBaseDir: async () => '/global',
   getConvertFileSrc: async () => (path: string) => `asset://${path}`,
-  resolveUniqueDestPath: vi.fn(), listDirectoryFiles: vi.fn(),
+  resolveUniqueDestPath: mocks.uniquePath, listDirectoryFiles: vi.fn(),
   getFileCategory: () => 'image', CATEGORY_EXTENSIONS: { image: ['.png'] },
 }));
 vi.mock('../../src/services/fs/assetIndex', () => ({
@@ -27,7 +28,7 @@ vi.mock('../../src/services/fs/assetIndex', () => ({
 }));
 vi.mock('../../src/services/fs/trash', () => ({ moveToTrash: vi.fn() }));
 
-import { listExternalFolderContents, listExternalFolderFiles, selectAssetFolderFiles, listGlobalFolderContents, createAssetSubfolder, resolveAssetFolderDirectory } from '../../src/services/fs/assetLibrary';
+import { listExternalFolderContents, listExternalFolderFiles, selectAssetFolderFiles, listGlobalFolderContents, createAssetSubfolder, resolveAssetFolderDirectory, addAssetFilesToGlobal } from '../../src/services/fs/assetLibrary';
 import type { AssetFileEntry } from '../../src/services/fs/core';
 
 function directory(path: string, names: string[]) {
@@ -39,6 +40,10 @@ beforeEach(() => {
   mocks.tauri = true;
   mocks.exists.mockReset().mockResolvedValue(true);
   mocks.mkdir.mockReset().mockResolvedValue(undefined);
+  mocks.open.mockReset().mockResolvedValue(['/source/角色.png']);
+  mocks.readFile.mockReset().mockResolvedValue(new Uint8Array([1, 2, 3]));
+  mocks.writeFile.mockReset().mockResolvedValue(undefined);
+  mocks.uniquePath.mockReset().mockImplementation(async (directory: string, name: string) => `${directory}/${name}`);
   mocks.directories.clear();
   mocks.readDir.mockImplementation(async (path: string) => {
     const entries = mocks.directories.get(path);
@@ -53,6 +58,31 @@ beforeEach(() => {
 });
 
 describe('global asset folder browsing', () => {
+  it.each([
+    { selection: undefined, roots: [], destination: '/global/file/角色.png' },
+    { selection: { kind: 'global' as const }, roots: [], destination: '/global/file/角色.png' },
+    { selection: { kind: 'folder' as const, rootPath: '/global/file', relativePath: '人设' }, roots: [], destination: '/global/file/人设/角色.png' },
+    { selection: { kind: 'folder' as const, rootPath: '/library', relativePath: '人物' }, roots: ['/library'], destination: '/library/人物/角色.png' },
+  ])('adds picked files to the selected directory: $destination', async ({ selection, roots, destination }) => {
+    await expect(addAssetFilesToGlobal(selection, roots)).resolves.toBe(1);
+    expect(mocks.writeFile).toHaveBeenCalledExactlyOnceWith(destination, new Uint8Array([1, 2, 3]));
+  });
+
+  it('does not fall back to the import root for removed or invalid target folders', async () => {
+    const selection = { kind: 'folder' as const, rootPath: '/library', relativePath: '人物' };
+    await expect(addAssetFilesToGlobal(selection, [])).rejects.toThrow('已移除');
+    await expect(addAssetFilesToGlobal({ ...selection, relativePath: '../escape' }, ['/library'])).rejects.toThrow('相对路径无效');
+    expect(mocks.readFile).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('does not create files when the file picker is cancelled', async () => {
+    mocks.open.mockResolvedValue(null);
+    await expect(addAssetFilesToGlobal()).resolves.toBe(0);
+    expect(mocks.mkdir).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+  });
+
   it('browses imported subfolders while keeping root selection limited to direct files', async () => {
     directory('/global/file', ['root.png', '人物/']);
     directory('/global/file/人物', ['hero.png']);
