@@ -45,6 +45,9 @@ pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler 
     )
     .entered();
 
+    #[cfg(target_os = "macos")]
+    let response_webview = manager.get_webview(label);
+
     let respond = move |mut response: http::Response<Cow<'static, [u8]>>| {
       response
         .headers_mut()
@@ -53,6 +56,17 @@ pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler 
         ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static(TAURI_RESPONSE_HEADER_NAME),
       );
+      #[cfg(target_os = "macos")]
+      if let Some(webview) = response_webview {
+        // WebKit 在主线程取消请求；把最终响应也排到主线程，避免后台返回撞上取消。
+        if webview
+          .run_on_main_thread(move || responder.respond(response))
+          .is_err()
+        {
+          log::debug!("macOS IPC response dropped: main thread unavailable");
+        }
+      }
+      #[cfg(not(target_os = "macos"))]
       responder.respond(response);
     };
 

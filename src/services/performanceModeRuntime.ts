@@ -30,13 +30,19 @@ const PERFORMANCE_BUDGET = {
   mediaUnloadDelayMs: 2_000,
 } as const;
 
+// Mac 桌面默认也收紧媒体资源，Retina 放大时不自动铺开多张原图。
+const MACOS_BUDGET = { ...PERFORMANCE_BUDGET, imagePreviewMaxEdge: 1024 } as const;
+
 let enabled = false;
 const listeners = new Set<() => void>();
 
 export function getPerformanceModeEnabled(): boolean { return enabled; }
 
 export function getPerformanceModeBudget(performanceMode = enabled) {
-  return performanceMode ? PERFORMANCE_BUDGET : NORMAL_BUDGET;
+  if (performanceMode) return PERFORMANCE_BUDGET;
+  const macDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+    && typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent || '');
+  return macDesktop ? MACOS_BUDGET : NORMAL_BUDGET;
 }
 
 export function subscribePerformanceMode(listener: () => void): () => void {

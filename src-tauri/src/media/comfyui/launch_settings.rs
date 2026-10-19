@@ -90,6 +90,7 @@ impl ComfyUILaunchSettings {
     }
 
     /// 只有全部默认值时，才可使用无法注入参数的旧启动器兜底。
+    #[cfg(any(windows, test))]
     pub(super) fn requires_direct_launch(&self) -> bool {
         self != &Self::default()
     }

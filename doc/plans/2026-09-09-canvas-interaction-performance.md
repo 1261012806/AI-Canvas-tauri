@@ -475,3 +475,24 @@ npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canv
 已执行 `npm test --` 指定 clipping、stroke、model、layer、pointer、构建适配、节点 LOD、显示调度、图片显示与缩放性能共 11 个文件，156 项通过。新增用例含 DPR 1/1.5/2 的连续 10%–500% 扫描，检查提交曲线跨度、原曲率、跨屏连接、透明单次描边、离屏剔除、缓存复用及重裁；这些是几何与生命周期断言，不是桌面 FPS 测试。`npm run typecheck`、`npm run test:typecheck` 均仍被未改动的 `projectTransferService.ts:147`（`styleReference` 类型错误）阻断，不能标记全量类型检查通过。本轮未操作桌面、未运行构建或 Rust 检查。
 
 复查几何与绘制入口（仓库根目录）：`npm test -- tests/utils/canvasEdgeClipping.test.ts tests/components/canvasEdgeStrokeLayer.test.tsx`。若无稳定桌面收益，回退本节涉及的描边接入、裁剪、路径字段及样式即可；用户数据无需恢复或迁移。
+
+## macOS 媒体稳定性收敛（2026-10-19）
+
+状态：已实现，待用户验证。用户反馈 Tahoe 26.4、M 系列设备存在回到项目列表和整个应用退出两种现象；尚无崩溃报告，不能确认根因或宣称已修复闪退。
+
+- `src-tauri/vendor/tauri/src/ipc/protocol.rs`：仅 macOS 将最终 IPC 协议响应交回对应 WebView 的主线程，令 Wry 的请求有效性检查和响应发送与 WebKit 的主线程取消操作串行；保留原有调用方、invoke key、Channel 与 ACL 校验。WebView 已不存在时丢弃响应，主线程派发失败只记录固定诊断信息。此补丁仅覆盖 IPC 响应，不等于完整修复所有 Wry 自定义协议及 WebKit/GPU 进程故障。线索来自 [Wry #1822](https://github.com/tauri-apps/wry/issues/1822) 与 [候选修复 #1856](https://github.com/tauri-apps/wry/pull/1856)，不能将上游报告当作本项目实测结论。
+- `src/services/performanceModeRuntime.ts`：Mac Tauri 桌面普通模式的自动图片预览最高 1024px，媒体准备并发降为 1、每帧提交预算为 2，图片/视频空闲缓存分别沿用性能模式的 8MiB、32/16 项，预加载范围收窄为上下 160px。用户主动开启性能模式后继续使用 512px；其他平台和 Web 演示沿用既有默认预算。只调整资源预算，不修改外观偏好、节点结构 LOD 阈值、生成参数、原文件或持久化 schema。
+- 全屏、图片编辑和生成引用继续使用原图；显式原图回退、动图及不支持派生的资源保持原行为，因此上述预算不是总内存硬上限，也不能单凭预算数值证明已降低实际内存或消除闪退。
+
+用户验收：
+
+1. 前置：在受影响的 Mac 上使用包含本次 Rust 补丁的新 Tauri 构建，保存项目并记录应用版本、芯片、内存、系统版本；先关闭性能模式。用同一份大图片/视频项目和相同视口对照，记录每次故障时间与内存变化。
+2. 冷启动后连续单选、切换和多选图片/视频节点，往返缩放、拖动与跨项目切换；预览应逐步恢复，不能串图或永久空白。普通模式自动预览应停在 1024px 内；打开全屏或编辑仍可查看原图。开启性能模式后预览应收紧到 512px，关闭后恢复 Mac 的 1024px 自动上限，外观设置不被覆盖。
+3. 分别提交单张图片和单条视频生成，覆盖提交、轮询、完成回填、取消以及期间切换节点/项目；保留失败重试、旧结果历史和一次撤销语义。检查已有视频的播放、暂停、全屏、退出全屏及切换来源。
+4. 保存后覆盖睡眠/唤醒、最小化/恢复及关闭独立预览窗口；若仍退出项目或应用，收集同一时间的 AI Canvas、WebKit 或 GPU 相关报告，区分主进程退出与 WebContent 终止后的页面重载。回归 Windows、浏览器演示及普通/性能模式的原有预算和操作。
+
+可选命令由用户执行：仓库根目录运行 `npx vitest run tests/services/performanceModeRuntime.test.ts tests/components/canvasImageDisplay.test.ts tests/components/canvasImagePreviewCache.test.ts tests/components/canvasVideoPreviewCache.test.ts tests/hooks/useViewportMediaSource.test.tsx`；在 `src-tauri/` 运行 `cargo check --lib` 和 `cargo test --lib`。自动化结果不能代替 Tahoe 26.4 实机验收。
+
+本次未运行测试，待用户验收。完成引用、差异和 UTF-8 静态核对；提交阶段由既有钩子执行改动前端文件的定向 ESLint，未运行类型检查、Rust 检查、构建或桌面验证。
+
+回滚：撤销本节对应的 IPC 主线程派发和 Mac 默认资源预算补丁即可；无数据迁移，不改用户项目、媒体或安全配置。
