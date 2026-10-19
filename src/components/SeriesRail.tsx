@@ -185,6 +185,7 @@ export default function SeriesRail() {
         <button
           type="button"
           aria-label={t('展开剧集栏（双击打开项目资产）')}
+          data-onboarding-target="series"
           data-tooltip={t('单击：展开剧集栏｜双击：打开项目资产')}
           onClick={() => {
             // 清除之前的定时器（如果有）
@@ -209,6 +210,7 @@ export default function SeriesRail() {
         />
         <aside
           aria-label={t('剧集')}
+          data-onboarding-target="series-panel"
           aria-hidden={!pinned}
           className={`glass-bevel glass-bevel--panel absolute right-2.5 top-1/2 flex max-h-full
                      w-[min(360px,calc(100vw-32px))] -translate-y-1/2 flex-col overflow-hidden

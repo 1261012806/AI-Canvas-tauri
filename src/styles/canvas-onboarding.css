@@ -1,0 +1,30 @@
+/* 只高亮实际入口，遮罩和说明卡通过 body Portal 避开画布裁剪。 */
+.canvas-entry-guide {
+  position: fixed;
+  z-index: 350;
+  inset: 0;
+  overflow: hidden;
+  border-radius: var(--ui-radius-xl);
+}
+.canvas-entry-guide__shade {
+  position: absolute;
+  background: var(--black-alpha-50);
+}
+.canvas-entry-guide__focus {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--brand);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: 0 0 0 4px var(--brand-alpha-15), 0 0 0 100vmax var(--black-alpha-50);
+}
+.canvas-entry-guide__card {
+  position: absolute;
+  z-index: 1;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--theme-border);
+  border-radius: var(--ui-radius-xl);
+  color: var(--theme-text);
+}

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
+import { useAppStore } from '../store/useAppStore';
 import HelpMentionDemo from './HelpMentionDemo';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
@@ -523,6 +524,8 @@ interface HelpCenterDialogProps {
 }
 
 export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
+  const canShowCanvasGuide = useAppStore((state) => state.currentProjectId !== null
+    && state.projectLoadStatus === 'ready' && !state.settingsOpen);
   const [activeHelpCategory, setActiveHelpCategory] = useState<HelpCategoryId>('getting-started');
   const selectedHelpCategory = HELP_CATEGORIES.find(({ id }) => id === activeHelpCategory)
     ?? HELP_CATEGORIES[0];
@@ -547,7 +550,15 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
                   <p className="mt-0.5 truncate text-xs text-canvas-text-secondary">按场景查找常用操作和注意事项</p>
                 </div>
               </div>
-              <PopupCloseButton ariaLabel="关闭帮助" onClick={() => onClose()} />
+              <div className="flex shrink-0 items-center gap-2">
+                <button type="button" className="ui-btn ui-btn--sm" disabled={!canShowCanvasGuide}
+                  data-tooltip={canShowCanvasGuide ? '重新查看画布入口和文件保存位置' : '进入画布并关闭设置后可查看入口引导'}
+                  onClick={() => {
+                    onClose();
+                    useAppStore.getState().setCanvasGuideOpen(true);
+                  }}>入口引导</button>
+                <PopupCloseButton ariaLabel="关闭帮助" onClick={() => onClose()} />
+              </div>
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col sm:flex-row">

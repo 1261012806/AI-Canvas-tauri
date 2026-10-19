@@ -123,6 +123,7 @@ export default function SessionProjectTabs() {
     >
       <span
         aria-hidden="true"
+        data-onboarding-target="projects"
         className="session-project-hint pointer-events-none absolute left-1/2 top-1 h-0.5 w-8
                    rounded-full bg-canvas-text-muted"
       />

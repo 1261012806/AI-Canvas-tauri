@@ -47,6 +47,8 @@ export interface UISlice {
   projectLibraryOpen: boolean;
   /** 帮助中心弹窗；侧边栏菜单和首次引导都从这里打开 */
   helpOpen: boolean;
+  /** 首次进入画布及帮助中心重看的入口引导；仅当前运行期。 */
+  canvasGuideOpen: boolean;
   activeNodeId: string | null;
   dialogPosition: { x: number; y: number } | null;
   assetsPanelOpen: boolean;
@@ -100,6 +102,7 @@ export interface UISlice {
   closeAvatarMenu: () => void;
   setProjectLibraryOpen: (open: boolean) => void;
   setHelpOpen: (open: boolean) => void;
+  setCanvasGuideOpen: (open: boolean) => void;
   openNodeDialog: (nodeId: string, position?: { x: number; y: number }) => void;
   closeNodeDialog: () => void;
   setAssetsPanelOpen: (open: boolean, mode?: UISlice['assetsPanelMode'], request?: UISlice['assetsPanelRequest']) => void;
@@ -148,6 +151,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
   avatarMenuOpen: false,
   projectLibraryOpen: false,
   helpOpen: false,
+  canvasGuideOpen: false,
   activeNodeId: null,
   dialogPosition: null,
   assetsPanelOpen: false,
@@ -200,6 +204,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
   closeAvatarMenu: () => set({ avatarMenuOpen: false }),
   setProjectLibraryOpen: (open) => set({ projectLibraryOpen: open }),
   setHelpOpen: (open) => set({ helpOpen: open }),
+  setCanvasGuideOpen: (open) => set({ canvasGuideOpen: open }),
   openNodeDialog: (nodeId, position) => set((state) => {
     const node = state.nodes.find((item) => item.id === nodeId);
     // 点击、空格和其他入口共用此边界：宫格只使用自身的分格/取图交互。

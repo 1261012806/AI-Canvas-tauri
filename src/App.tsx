@@ -68,11 +68,12 @@ const ReversePromptDialog = lazy(() => import('./components/nodes/shared/Reverse
 const DirectorDeskRuntimeManager = lazy(() => import('./components/director/DirectorDeskRuntimeManager'));
 const FreeDistributionNoticeDialog = lazy(() => import('./components/FreeDistributionNoticeDialog'));
 const OnboardingDialog = lazy(() => import('./components/OnboardingDialog'));
+const CanvasEntryGuide = lazy(() => import('./components/OnboardingDialog').then((module) => ({ default: module.CanvasEntryGuide })));
 
 /** 免费发行提醒独立记忆；升级后的现有用户也会看到一次。 */
 const FREE_DISTRIBUTION_NOTICE_SEEN_KEY = 'ai-canvas-free-distribution-notice-seen-v1';
-/** 首次启动引导只弹一次；关掉后写入本地标记。 */
-const ONBOARDING_SEEN_KEY = 'ai-canvas-onboarding-seen';
+/** 画布入口引导独立于旧欢迎说明，首次进入画布时展示一次。 */
+const ONBOARDING_SEEN_KEY = 'ai-canvas-canvas-guide-seen-v1';
 
 let cachedMascotNodes: AppState['nodes'] | undefined;
 let cachedMascotLoading = false;
@@ -118,6 +119,7 @@ export default function App() {
   const featureVisibility = useAppStore(
     useShallow((state) => ({
       settings: state.settingsOpen,
+      help: state.helpOpen,
       nodeDialog: state.activeNodeId !== null,
       nodeDialogResetKey: JSON.stringify([state.currentProjectId, state.activeNodeId]),
       workflows: state.workflowPanelOpen,
@@ -152,13 +154,20 @@ export default function App() {
     localStorage.setItem(FREE_DISTRIBUTION_NOTICE_SEEN_KEY, 'true');
     setFreeDistributionNoticeOpen(false);
   }, []);
-  // 首次启动引导（开屏动画结束后才弹）
+  // 等待真实画布首帧就绪，启动页不弹入口引导。
   const [onboardingOpen, setOnboardingOpen] = useState(
-    () => localStorage.getItem(ONBOARDING_SEEN_KEY) !== 'true',
+    () => {
+      try { return localStorage.getItem(ONBOARDING_SEEN_KEY) !== 'true'; }
+      catch { return true; }
+    },
   );
+  const canvasGuideOpen = useAppStore((state) => state.canvasGuideOpen);
+  const [onboardingTipsOpen, setOnboardingTipsOpen] = useState(false);
   const closeOnboarding = useCallback(() => {
-    localStorage.setItem(ONBOARDING_SEEN_KEY, 'true');
+    try { localStorage.setItem(ONBOARDING_SEEN_KEY, 'true'); }
+    catch { /* 本地标记不可写时，仍可关闭当前引导。 */ }
     setOnboardingOpen(false);
+    useAppStore.getState().setCanvasGuideOpen(false);
   }, []);
   // 下载弹窗出现时，右下角吉祥物缩小消失
   const [mascotShrink, setMascotShrink] = useState(false);
@@ -194,6 +203,16 @@ export default function App() {
     setSplashDone(true);
     setRevealedProjectId(currentProjectId);
   }, [currentProjectId]);
+  const canvasGuideBlocked = featureVisibility.settings || featureVisibility.help || featureVisibility.nodeDialog
+    || featureVisibility.assets || featureVisibility.characters || featureVisibility.history || featureVisibility.workflows
+    || featureVisibility.presetManager || featureVisibility.presetRunner || featureVisibility.reversePrompt;
+  useEffect(() => {
+    if (!onboardingOpen || canvasGuideOpen || !showCanvas || showProjectSplash
+      || projectLoadStatus !== 'ready' || freeDistributionNoticeOpen
+      || canvasGuideBlocked) return;
+    useAppStore.getState().setCanvasGuideOpen(true);
+  }, [onboardingOpen, canvasGuideOpen, showCanvas, showProjectSplash, projectLoadStatus,
+    freeDistributionNoticeOpen, canvasGuideBlocked]);
   const mcpAutoStart = useAppStore((state) => state.config.mcpAutoStart === true);
 
   // 开屏动画结束后后台静默检查更新
@@ -801,12 +820,21 @@ export default function App() {
         </Suspense>
       )}
 
-      {splashDone && !freeDistributionNoticeOpen && onboardingOpen && (
+      {showCanvas && projectLoadStatus === 'ready' && !showProjectSplash && !freeDistributionNoticeOpen && canvasGuideOpen && (
+        <Suspense fallback={null}>
+          <CanvasEntryGuide onClose={closeOnboarding} onOpenTips={() => {
+            closeOnboarding();
+            setOnboardingTipsOpen(true);
+          }} />
+        </Suspense>
+      )}
+
+      {showCanvas && !showProjectSplash && onboardingTipsOpen && (
         <Suspense fallback={null}>
           <OnboardingDialog
-            onClose={closeOnboarding}
+            onClose={() => setOnboardingTipsOpen(false)}
             onOpenHelp={() => {
-              closeOnboarding();
+              setOnboardingTipsOpen(false);
               useAppStore.getState().setHelpOpen(true);
             }}
           />

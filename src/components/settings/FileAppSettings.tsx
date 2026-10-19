@@ -212,7 +212,7 @@ export default function FileAppSettings({ active }: { active: boolean }) {
 
   return (
     <div className="space-y-4">
-      <div>
+      <div data-onboarding-target="storage">
         <h3 className="text-sm font-medium text-canvas-text mb-2">{t('文件保存位置')}</h3>
         <div className="bg-canvas-card border border-canvas-border rounded-lg p-2">
           <div className="mb-3">

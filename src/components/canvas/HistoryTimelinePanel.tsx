@@ -107,6 +107,7 @@ export default function HistoryTimelinePanel() {
   return (
     <div
       ref={panelWrapRef}
+      data-onboarding-target="history"
       className="canvas-history-wrap relative h-12 w-4 select-none"
       data-pinned={pinned ? 'true' : 'false'}
       data-open={panelOpen ? 'true' : 'false'}

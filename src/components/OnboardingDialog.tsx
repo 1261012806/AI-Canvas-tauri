@@ -1,11 +1,32 @@
 /**
- * 首次启动引导 — 提醒悬停查看说明，并列出容易被忽略的隐藏操作，最后引导打开帮助中心。
+ * 入口引导后的可选操作技巧，内容与帮助中心集中维护。
  */
 import { Icon } from '@iconify/react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import { useAppStore } from '../store/useAppStore';
+import { getCanvasGuideLayout } from '../utils/canvasGuideLayout';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
 import AnimatedButton from './shared/AnimatedButton';
 import { useT } from '../i18n';
+
+/** 入口说明集中维护；实际高亮与交互由 CanvasEntryGuide 复用真实界面。 */
+const CANVAS_ENTRY_GUIDE_STEPS = [
+  { id: 'projects', side: 'bottom', icon: 'lucide:panels-top-left', title: '顶部项目与设置',
+    description: '把鼠标移到顶部中央的短线上，可以展开最近打开的项目；点击项目名称切换，齿轮按钮打开当前项目设置。',
+    hint: '常用入口平时收起，让画布保留更多空间。' },
+  { id: 'history', side: 'left', icon: 'lucide:history', title: '右上角操作记录',
+    description: '鼠标移到右上方的短竖线，可查看操作记录、撤销和重做。点击图钉可以让面板保持显示。',
+    hint: '误操作时也可以使用 Ctrl/⌘ + Z 撤销。' },
+  { id: 'series', side: 'left', icon: 'lucide:clapperboard', title: '右侧剧集与项目资产',
+    description: '单击右侧中间的短竖线展开剧集栏，可编辑剧本、管理分集；双击这条线打开项目资产。',
+    hint: '左上角加号也可以创建分集，创建时可填写名称。' },
+  { id: 'storage', side: 'bottom', icon: 'lucide:folder-cog', title: '先确认文件保存位置',
+    description: '这里可以选择文件保存根目录，并查看当前项目目录。未设置时使用系统默认目录；生成和导入素材前，可以先确认保存位置。',
+    hint: '引导不会更改路径。点击“开始设置”后，再由你选择文件夹。' },
+] as const;
 
 /** 每条都带 tooltip：正文只写动作，前提和限制放到悬停里，顺带让用户习惯悬停看说明。 */
 const HIDDEN_TIPS = [
@@ -171,7 +192,7 @@ export default function OnboardingDialog({ onClose, onOpenHelp }: OnboardingDial
           <Icon icon="mdi:information-outline" width="16" height="16" className="mt-0.5 shrink-0" aria-hidden="true" />
           <p>
             {t('开始生成前，记得先在“设置 > API Key”配置好模型服务，否则节点里的模型会是不可用状态。')}
-            {t('本引导只在首次启动时出现，之后可从侧边栏头像菜单的「帮助」再次查看完整说明。')}
+            {t('之后可从侧边栏头像菜单的「帮助」查看完整说明，也可以重新查看画布入口引导。')}
           </p>
         </div>
       </div>
@@ -195,5 +216,129 @@ export default function OnboardingDialog({ onClose, onOpenHelp }: OnboardingDial
         </AnimatedButton>
       </footer>
     </ModalOverlay>
+  );
+}
+
+export function CanvasEntryGuide({ onClose, onOpenTips }: {
+  onClose: () => void;
+  onOpenTips: () => void;
+}) {
+  const t = useT();
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const ownsSettings = useRef(false);
+  const setSettingsOpen = useAppStore((state) => state.setSettingsOpen);
+  const [index, setIndex] = useState(0);
+  const step = CANVAS_ENTRY_GUIDE_STEPS[index];
+  const last = index === CANVAS_ENTRY_GUIDE_STEPS.length - 1;
+  const [layout, setLayout] = useState<ReturnType<typeof getCanvasGuideLayout> | null>(null);
+
+  const closeOwnedSettings = () => {
+    if (!ownsSettings.current) return;
+    ownsSettings.current = false;
+    setSettingsOpen(false);
+  };
+  const finish = (keepSettings = false) => {
+    if (keepSettings) ownsSettings.current = false;
+    else closeOwnedSettings();
+    onClose();
+  };
+  const changeStep = (next: number) => {
+    closeOwnedSettings();
+    if (CANVAS_ENTRY_GUIDE_STEPS[next].id === 'storage') {
+      ownsSettings.current = !useAppStore.getState().settingsOpen;
+      setSettingsOpen(true, 'files');
+    }
+    setIndex(next);
+  };
+  useDialogFocus(layout !== null, panelRef, () => finish(), { zIndex: 350 });
+  useEffect(() => () => {
+    if (ownsSettings.current) setSettingsOpen(false);
+  }, [setSettingsOpen]);
+
+  useLayoutEffect(() => {
+    let frame = 0;
+    let disposed = false;
+    let scrolled = false;
+    let observed: HTMLElement | null = null;
+    // 设置弹窗有入场动画；只在最后一步短暂跟随其位置，不常驻逐帧扫描。
+    let settleUntil = 0;
+    function schedule() { if (!disposed && !frame) frame = requestAnimationFrame(measure); }
+    const resize = new ResizeObserver(schedule);
+    const discovery = new MutationObserver(schedule);
+    function measure() {
+      frame = 0;
+      if (disposed) return;
+      const selector = step.id === 'series'
+        ? '[data-onboarding-target="series"], [data-onboarding-target="series-panel"]'
+        : `[data-onboarding-target="${step.id}"]`;
+      const target = Array.from(document.querySelectorAll<HTMLElement>(selector)).find((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+      }) ?? null;
+      if (target !== observed) {
+        if (observed) resize.unobserve(observed);
+        if (target) resize.observe(target);
+        observed = target;
+      }
+      if (target) {
+        discovery.disconnect();
+        if (step.id === 'storage' && !scrolled) {
+          scrolled = true;
+          settleUntil = performance.now() + 450;
+          target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+      }
+      const next = getCanvasGuideLayout(target?.getBoundingClientRect() ?? null,
+        { width: window.innerWidth, height: window.innerHeight },
+        { width: 360, height: panelRef.current?.getBoundingClientRect().height ?? 250 }, step.side);
+      setLayout((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+      if (performance.now() < settleUntil) schedule();
+    }
+    if (panelRef.current) resize.observe(panelRef.current);
+    discovery.observe(document.body, { childList: true, subtree: true });
+    schedule();
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scroll', schedule, true);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      discovery.disconnect();
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', schedule, true);
+    };
+  }, [step]);
+
+  return createPortal(
+    <div className="canvas-entry-guide" onKeyDown={(event) => event.stopPropagation()}>
+      {!layout?.focus && <div className="canvas-entry-guide__shade absolute inset-0" aria-hidden="true" />}
+      {layout?.focus && <div className="canvas-entry-guide__focus" style={layout.focus} aria-hidden="true" />}
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        className={`canvas-entry-guide__card glass-panel ui-stack p-3 ${layout ? '' : 'invisible'}`} style={layout?.card}>
+        <div className="ui-row ui-row--between">
+          <span className="ui-badge ui-badge--outline">{t('画布入口引导')} · {index + 1}/{CANVAS_ENTRY_GUIDE_STEPS.length}</span>
+          <PopupCloseButton ariaLabel={t('关闭入口引导')} onClick={() => finish()} />
+        </div>
+        <div role="status" aria-live="polite" className="ui-row">
+          <Icon icon={step.icon} width="20" className="shrink-0 text-brand" aria-hidden="true" />
+          <h2 id={titleId} className="text-sm font-semibold text-canvas-text">{t(step.title)}</h2>
+        </div>
+        <p className="text-xs leading-6 text-canvas-text-secondary">{t(step.description)}</p>
+        <p className="ui-hint">{t(step.hint)}</p>
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-canvas-border pt-3">
+          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm mr-auto" onClick={() => {
+            closeOwnedSettings();
+            onOpenTips();
+          }}>{t('更多操作技巧')}</button>
+          {index > 0 && <button type="button" className="ui-btn ui-btn--sm" onClick={() => changeStep(index - 1)}>{t('上一步')}</button>}
+          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => finish()}>{last ? t('稍后设置') : t('跳过')}</button>
+          <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => last ? finish(true) : changeStep(index + 1)}>
+            {last ? t('开始设置') : index === 2 ? t('查看保存位置') : t('下一步')}
+          </button>
+        </footer>
+      </div>
+    </div>, document.body,
   );
 }
