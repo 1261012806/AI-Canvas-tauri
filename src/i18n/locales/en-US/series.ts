@@ -94,7 +94,6 @@ const series = {
   '未填写，点击编辑': 'Not filled, click to edit',
   '分集': 'Episodes',
   '分集名称': 'Episode name',
-  '{name}（双击改名）': '{name} (double-click to rename)',
   '把 {name} 上移': 'Move {name} up',
   '把 {name} 下移': 'Move {name} down',
   '确认删除 {name}': 'Confirm delete {name}',

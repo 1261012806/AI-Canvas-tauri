@@ -106,7 +106,7 @@ describe('UI Kit VideoPlayer', () => {
     expect(progress.style.setProperty).toHaveBeenLastCalledWith('--video-played', '0.32%'); expect(progress.value).toBe('0.016');
     video.playbackRate = 2; video.currentTime = 0.048; frame();
     expect(Number.parseFloat(progress.style.setProperty.mock.lastCall![1])).toBeCloseTo(0.96); expect(frames.size).toBe(1);
-    video.paused = true; event('onPause'); expect(frames.size).toBe(0);
+    video.paused = true; event('onPause'); native('pause'); expect(frames.size).toBe(0);
     video.currentTime = 3; event('onSeeked'); native('seeked');
     expect(progress.style.setProperty).toHaveBeenLastCalledWith('--video-played', '60%');
     video.paused = false; event('onPlay'); video.currentTime = 5; event('onEnded'); native('ended'); expect(frames.size).toBe(0);

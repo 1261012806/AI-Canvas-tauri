@@ -129,13 +129,13 @@ function TitlebarInner({
         aria-label={isWindowExpanded ? t('还原') : t('最大化')}
       >
         {isWindowExpanded ? (
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <rect x="2" y="0" width="8" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
-            <rect x="0" y="2" width="8" height="8" rx="1" fill="currentColor" />
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+            <path d="M4 2.5V2a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-.5" />
+            <rect x="1" y="4" width="7" height="7" rx="1.25" />
           </svg>
         ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <rect x="0" y="0" width="10" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+            <rect x="1" y="1" width="10" height="10" rx="1.5" />
           </svg>
         )}
       </AnimatedButton>

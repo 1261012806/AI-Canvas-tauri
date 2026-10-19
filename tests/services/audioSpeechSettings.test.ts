@@ -17,11 +17,25 @@ import { qwenFieldValue, QWEN_VOICE_PRESETS } from '../../src/services/ai/qwenSp
 import { batchExecuteNodes } from '../../src/utils/batchExecute';
 import { executeGeneration } from '../../src/services/generationService';
 
-// 展开参数弹层进行服务端结构检查；不模拟浏览器布局或真实合成。
-vi.mock('react', async () => ({
-  ...await vi.importActual<typeof import('react')>('react'),
-  useState: () => [true, vi.fn()],
-}));
+// 只展开最外层参数面板；Select 等子控件保留真实初始状态，避免 SSR 创建 Portal。
+const panelRender = vi.hoisted(() => ({ expandNext: false }));
+vi.mock('react', async () => {
+  const react = await vi.importActual<typeof import('react')>('react');
+  return {
+    ...react,
+    useState: (initial: unknown) => {
+      const expand = panelRender.expandNext;
+      panelRender.expandNext = false;
+      return react.useState(expand ? true : initial);
+    },
+  };
+});
+
+function renderOpenPanel(element: Parameters<typeof renderToStaticMarkup>[0]): string {
+  panelRender.expandNext = true;
+  try { return renderToStaticMarkup(element); }
+  finally { panelRender.expandNext = false; }
+}
 
 function workflow(reference = false): WorkflowDefinition {
   const graph = {
@@ -128,7 +142,7 @@ describe('音频参数与引用状态', () => {
 describe('参数面板状态', () => {
   it.each(['dark', 'light'])('%s 主题使用公用控件，参考状态隐藏声音按钮，移除后恢复选择', (theme) => {
     const props = { purpose: 'speech' as const, speechControls: resolveAudioSpeechWorkflow(workflow())!, speechSettings: { voiceStyle: 'boy' as const }, onChangeSpeechSettings: vi.fn() };
-    const render = (references: ReturnType<typeof collectAudioSpeechReferences>) => renderToStaticMarkup(createElement('div', { 'data-theme': theme }, createElement(AudioParamSelector, { ...props, references })));
+    const render = (references: ReturnType<typeof collectAudioSpeechReferences>) => renderOpenPanel(createElement('div', { 'data-theme': theme }, createElement(AudioParamSelector, { ...props, references })));
     const pure = render([]);
     expect(pure).toContain('data-audio-speech-mode="text"');
     expect(pure).toContain('声音类型');
@@ -277,7 +291,7 @@ describe('Qwen 语音面板和字段能力', () => {
     const wf = qwenWorkflow(id);
     const controls = resolveAudioSpeechWorkflow(wf)!;
     for (const theme of ['light', 'dark']) {
-      const html = renderToStaticMarkup(createElement('div', { 'data-theme': theme }, createElement(AudioParamSelector, {
+      const html = renderOpenPanel(createElement('div', { 'data-theme': theme }, createElement(AudioParamSelector, {
         purpose: 'speech', speechControls: controls, references: controls.referenceInputId ? [{ key: 'voice', label: '角色声音', url: 'voice.wav' }] : [],
       })));
       expect(html).toContain('data-qwen-speech-mode');

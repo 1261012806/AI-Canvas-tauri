@@ -34,6 +34,12 @@ vi.mock('../../../src/services/chat/tools', () => ({
   ensureAgentToolsRegistered: vi.fn(),
 }));
 
+// 本组验证调度与响应状态；历史读取固定为空，避免相同会话 ID 的异步落盘污染后续用例。
+vi.mock('../../../src/services/chat/chatHistoryService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../src/services/chat/chatHistoryService')>(),
+  loadMessages: vi.fn(async () => ({ messages: [], total: 0 })),
+}));
+
 import {
   resumeAgentTaskExecution,
   submitConversationMessage,

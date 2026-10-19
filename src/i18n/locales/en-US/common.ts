@@ -25,7 +25,6 @@ const common = {
   // ── Header ──
   '新项目': 'New Project',
   '新建画布': 'New canvas',
-  '正在新建画布': 'Creating canvas…',
 
   // ── 节点菜单 / 节点选择器 ──
   '添加节点': 'Add node',

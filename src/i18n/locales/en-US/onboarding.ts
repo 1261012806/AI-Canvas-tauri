@@ -86,8 +86,6 @@ const onboarding = {
     'There are zoom controls at the bottom-right of the canvas for fine-tuning the display scale.',
   '开始生成前，记得先在“设置 > API Key”配置好模型服务，否则节点里的模型会是不可用状态。':
     'Before generating, remember to configure your model providers in Settings > API Key, otherwise the models in nodes will be unavailable.',
-  '本引导只在首次启动时出现，之后可从侧边栏头像菜单的「帮助」再次查看完整说明。':
-    'This onboarding only appears on first launch. You can revisit the full guide later via "Help" in the sidebar avatar menu.',
   '先自己逛逛': 'Explore on my own',
   '按场景整理的完整说明：画布导航、节点连线、AI 生成、快捷指令、资产与设置':
     'Complete guide organized by scenario: canvas navigation, node connections, AI generation, quick commands, assets and settings.',

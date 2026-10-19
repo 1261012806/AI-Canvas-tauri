@@ -122,8 +122,6 @@ const chat = {
   '引用画布节点或媒体模型': 'Reference canvas nodes or media models',
   '调用 Skill': 'Invoke a Skill',
   '授权当前对话读取本地文件': 'Authorize this conversation to read local files',
-  '选择文本文件；授权仅在当前对话和本次运行期间有效':
-    'Choose text files; the grant is valid only for this conversation and this run',
   '调整当前任务': 'Adjust the current task',
   '在下一个安全步骤调整当前任务': 'Adjust the current task at the next safe step',
   '将消息加入队列': 'Queue this message',
@@ -185,8 +183,6 @@ const chat = {
   '无法重新规划该任务': 'Cannot replan this task',
   '已回退该任务的画布修改': 'Canvas changes from this task have been rolled back',
   '无法回退任务': 'Cannot roll back the task',
-  '已授权 {count} 个文件': 'Authorized {count} file(s)',
-  '未新增文件授权': 'No new file grants',
   '文件授权失败': 'File authorization failed',
   '引用的节点已不存在': 'The referenced node no longer exists',
   '独立窗口功能需要 Tauri 环境': 'The detach window feature requires the Tauri environment',
