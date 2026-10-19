@@ -14,6 +14,7 @@ export interface AssetFolderNavigationProps {
   onRemove: (rootPath: string) => void;
   globalRootPath: string | null;
   onCreate: (selection: AssetFolderSelection, name: string) => Promise<void>;
+  onOpen: (selection: AssetFolderSelection) => void;
   onCopy: (selection: AssetFolderSelection) => void;
   onPaste: (selection: AssetFolderSelection) => void;
   dropTarget?: AssetFolderSelection | null;
@@ -28,7 +29,7 @@ const folderDropClass = ' outline outline-1 outline-dashed outline-brand -outlin
 
 export default function AssetFolderNavigation({
   folders, selection, totalCount, globalCount, compact, loading, onSelect, onRemove,
-  globalRootPath, onCreate, onCopy, onPaste, dropTarget,
+  globalRootPath, onCreate, onOpen, onCopy, onPaste, dropTarget,
 }: AssetFolderNavigationProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ selection: AssetFolderSelection; label: string; x: number; y: number } | null>(null);
@@ -64,7 +65,7 @@ export default function AssetFolderNavigation({
     if (loading || target.kind === 'all') return;
     triggerRef.current = event.currentTarget;
     setMenu({ selection: target, label, x: Math.max(4, Math.min(event.clientX, (window.innerWidth || 1280) - 188)),
-      y: Math.max(4, Math.min(event.clientY, (window.innerHeight || 720) - 136)) });
+      y: Math.max(4, Math.min(event.clientY, (window.innerHeight || 720) - 176)) });
   };
   const children = useMemo(() => {
     const map = new Map<string, AssetFolderEntry[]>();
@@ -185,7 +186,8 @@ export default function AssetFolderNavigation({
             event.preventDefault(); buttons[(index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length]?.focus();
           } else if (event.key === 'Tab') closeMenu();
         }}>
-        <button type="button" role="menuitem" autoFocus className="ui-menu__item" onClick={() => {
+        <button type="button" role="menuitem" autoFocus className="ui-menu__item" onClick={() => { onOpen(menu.selection); closeMenu(); }}><Icon icon="lucide:folder-open" aria-hidden="true" />打开文件夹位置</button>
+        <button type="button" role="menuitem" className="ui-menu__item" onClick={() => {
           setCreating({ selection: menu.selection, label: menu.label }); setName('新建文件夹'); setError(''); closeMenu();
         }}><Icon icon="lucide:folder-plus" aria-hidden="true" />新建子文件夹</button>
         <button type="button" role="menuitem" className="ui-menu__item" onClick={() => { onCopy(menu.selection); closeMenu(); }}><Icon icon="lucide:copy" aria-hidden="true" />复制文件夹</button>

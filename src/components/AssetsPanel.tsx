@@ -41,6 +41,7 @@ import {
   saveAssetToPermanent,
   deletePermanentFile,
   revealFileInFolder,
+  openDirectoryInFileManager,
   isTauriEnv,
   extractFilesFromNodeData,
   CATEGORY_LABELS,
@@ -435,6 +436,15 @@ export default function AssetsPanel() {
       if (!controller.signal.aborted) { await loadFiles(); toast('文件夹已创建'); }
     } finally {
       if (folderOperationRef.current === controller) { folderOperationRef.current = null; setBusy(false); }
+    }
+  };
+
+  const handleOpenFolder = async (selection: AssetFolderSelection) => {
+    try {
+      const directory = await resolveAssetFolderDirectory(selection, useAppStore.getState().config.assetFolders ?? []);
+      await openDirectoryInFileManager(directory);
+    } catch {
+      toast('打开目录失败，请检查文件夹位置和权限');
     }
   };
 
@@ -1397,6 +1407,7 @@ export default function AssetsPanel() {
                       globalCount={permanentFiles.filter((file) => file.source === 'global').length}
                       compact={isDrawer} loading={loading || busy} onSelect={handleSelectFolder} globalRootPath={globalRootPath}
                       onCreate={handleCreateSubfolder}
+                      onOpen={(selection) => { void handleOpenFolder(selection); }}
                       dropTarget={folderDropTarget}
                       onCopy={(selection) => { void handleFolderClipboard(selection, 'copy'); }}
                       onPaste={(selection) => { void handleFolderClipboard(selection, 'paste'); }}
