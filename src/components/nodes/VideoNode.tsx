@@ -1024,27 +1024,29 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         title={(data.label as string) || t('视频预览')}
         className="fullscreen-overlay--image-preview"
       >
-        {isFullscreen && (data.videoUrl ? (
-          <div className="h-[92vh] w-[92vw] min-h-0 min-w-0 rounded bg-canvas-bg">
-            <VideoPlayer
-              mediaRef={setFullscreenVideoElement}
-              src={data.videoUrl}
-              poster={initialCoverUrl ?? undefined}
-              name={displayLabel}
-              className="pt-3"
-              autoPlay
-              crossOrigin="anonymous"
-              onLoadedMetadata={handleFullscreenLoadedMetadata}
-              onEscape={handleCloseFullscreen}
+        <div className="flex h-full w-full items-center justify-center bg-canvas-bg">
+          {isFullscreen && (data.videoUrl ? (
+            <div className="h-[92vh] w-[92vw] min-h-0 min-w-0 rounded bg-canvas-bg">
+              <VideoPlayer
+                mediaRef={setFullscreenVideoElement}
+                src={data.videoUrl}
+                poster={initialCoverUrl ?? undefined}
+                name={displayLabel}
+                className="pt-3"
+                autoPlay
+                crossOrigin="anonymous"
+                onLoadedMetadata={handleFullscreenLoadedMetadata}
+                onEscape={handleCloseFullscreen}
+              />
+            </div>
+          ) : data.thumbnailUrl ? (
+            <img
+              src={data.thumbnailUrl}
+              alt="Video thumbnail"
+              className="fullscreen-img-view"
             />
-          </div>
-        ) : data.thumbnailUrl ? (
-          <img
-            src={data.thumbnailUrl}
-            alt="Video thumbnail"
-            className="fullscreen-img-view"
-          />
-        ) : null)}
+          ) : null)}
+        </div>
       </FullscreenOverlay>
     </div>
   );
