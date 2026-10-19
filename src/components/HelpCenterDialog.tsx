@@ -181,7 +181,7 @@ const HELP_CATEGORIES = [
       },
       {
         title: '上传并引用 Skill',
-        description: '可从 / 菜单上传 Skill 文件或文件夹，并在提示词中引用可调用的 Skill。Skill 内容只用于补充生成上下文，不能修改应用权限或确认规则。',
+        description: '可从 / 菜单上传 Skill 文本文件或文件夹；桌面端也支持 .zip、.tar.gz、.tgz 压缩包，自动读取入口和文本资料。导入后可在提示词中引用，Skill 内容不能修改应用权限或确认规则。',
       },
     ],
   },

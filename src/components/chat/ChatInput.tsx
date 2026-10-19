@@ -729,8 +729,8 @@ export default function ChatInput({
                 <span className="flex items-center gap-2">
                   <span>{filteredSkills.length}</span>
                   {allowSkillUpload && ([
-                    { source: 'folder', label: '上传 Skill 文件夹', icon: 'mdi:folder-plus-outline' },
-                    { source: 'file', label: '上传 Skill 文件', icon: 'mdi:file-plus-outline' },
+                    { source: 'folder', label: '上传 Skill 文件夹', title: '上传 Skill 文件夹', icon: 'mdi:folder-plus-outline' },
+                    { source: 'file', label: '上传 Skill 文件', title: '上传 Skill 文件（支持 .zip / .tar.gz / .tgz）', icon: 'mdi:file-plus-outline' },
                   ] as const).map((upload) => (
                     <button
                       key={upload.source}
@@ -741,7 +741,7 @@ export default function ChatInput({
                         void handleUploadSkill(upload.source);
                       }}
                       aria-label={t(upload.label)}
-                      title={t(upload.label)}
+                      title={t(upload.title)}
                       className="ui-btn ui-btn--ghost ui-btn--sm"
                     >
                       <Icon icon={skillUploading ? 'mdi:loading' : upload.icon} width="15" className={skillUploading ? 'animate-spin' : ''} />

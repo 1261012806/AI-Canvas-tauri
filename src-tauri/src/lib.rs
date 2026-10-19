@@ -160,6 +160,8 @@ mod plugin_ui;
 mod plugin_window;
 #[path = "files/project_archive.rs"]
 mod project_archive;
+#[path = "files/skill_archive.rs"]
+mod skill_archive;
 #[path = "agent/provider_docs.rs"]
 mod provider_docs;
 mod secret_store;
@@ -1230,6 +1232,7 @@ pub fn run() {
             agent_package::agent_source_read_text,
             project_archive::pack_project_archive,
             project_archive::unpack_project_archive,
+            skill_archive::read_skill_archive,
             thumbnail_cache::prepare_project_thumbnail,
             thumbnail_cache::write_project_thumbnail,
             file_transfer::copy_file_streamed,

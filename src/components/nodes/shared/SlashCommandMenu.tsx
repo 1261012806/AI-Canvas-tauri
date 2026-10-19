@@ -436,7 +436,7 @@ export default function SlashCommandMenu({
           >
             <div className="slash-command-text">
               <span className="slash-command-title">上传 Skill 文件</span>
-              <span className="slash-command-desc">选择 .md / .txt / .json 文件</span>
+              <span className="slash-command-desc">支持文本文件及 .zip / .tar.gz / .tgz 压缩包</span>
             </div>
           </div>
         </div>

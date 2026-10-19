@@ -1,9 +1,10 @@
 /**
  * fs/skillFiles — Skill 资料文件的上传、读取与落盘。
- * 从文件或文件夹导入 Skill 文本资料（md/txt/json）到应用数据目录，
+ * 从文件、压缩包或文件夹导入 Skill 文本资料（md/txt/json）到应用数据目录，
  * 校验相对路径、生成唯一目标路径并支持上传确认。
  */
-import { exists, mkdir, readDir, readFile, writeFile } from '@tauri-apps/plugin-fs';
+import { exists, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { appDataDir } from '@tauri-apps/api/path';
 import {
@@ -31,6 +32,8 @@ interface SkillFileEntry {
 }
 
 const SKILL_TEXT_EXTENSIONS = new Set(['md', 'txt', 'json']);
+const SKILL_ARCHIVE_PATTERN = /\.(?:zip|tar\.gz|tgz)$/i;
+const SKILL_FILE_EXTENSIONS = ['md', 'txt', 'json', 'zip', 'tar.gz', 'tgz'];
 const SKILL_RESOURCE_PATH_ERROR = 'Skill 资料路径无效，只能使用 Skill 内相对路径';
 
 function decodeUtf8Text(bytes: Uint8Array): string {
@@ -108,7 +111,7 @@ async function collectSkillFiles(dirPath: string, baseDir = dirPath): Promise<Sk
   return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, undefined, { numeric: true }));
 }
 
-function pickSkillEntry(files: SkillFileEntry[]): SkillFileEntry | null {
+function pickSkillEntry<T extends SkillFileEntry>(files: T[]): T | null {
   return files.find((file) => file.name.toLowerCase() === 'skill.md')
     ?? files.find((file) => file.relativePath.toLowerCase().endsWith('/skill.md'))
     ?? files.find((file) => file.name.toLowerCase().endsWith('.md'))
@@ -165,13 +168,14 @@ async function uploadSingleSkillFile(): Promise<UploadedSkillFile | null> {
   const filePath = await open({
     multiple: false,
     title: '上传 Skill 文件',
-    filters: [{ name: 'Skill 文本文件', extensions: ['md', 'txt', 'json'] }],
+    filters: [{ name: 'Skill 文件或压缩包', extensions: SKILL_FILE_EXTENSIONS }],
   });
   if (!filePath || Array.isArray(filePath)) return null;
 
   const fileName = filePath.split(/[\\/]/).pop() || 'skill.txt';
+  if (SKILL_ARCHIVE_PATTERN.test(fileName)) return uploadSkillArchive(filePath, fileName);
   if (!isSkillTextFile(fileName)) {
-    throw new Error('Skill 文件只支持 .md / .txt / .json');
+    throw new Error('Skill 文件只支持 .md / .txt / .json / .zip / .tar.gz / .tgz');
   }
 
   const bytes = await readFile(filePath);
@@ -189,7 +193,65 @@ async function uploadSingleSkillFile(): Promise<UploadedSkillFile | null> {
   };
 }
 
-/** 上传只读 Skill 文件或文件夹，读取为 UTF-8 文本内容。 */
+async function uploadSkillArchive(filePath: string, fileName: string): Promise<UploadedSkillFile> {
+  const texts = await invoke<Array<{ relativePath: string; content: string }>>('read_skill_archive', {
+    archivePath: filePath,
+  }).catch((error: unknown) => {
+    // 此专用原生命令只返回脱敏错误，不透传 fs 插件的原始路径错误。
+    throw new Error(typeof error === 'string' ? error : 'Skill 压缩包读取失败');
+  });
+  const files = texts.map((file) => ({
+    ...file,
+    relativePath: assertSafeSkillRelativePath(file.relativePath),
+    name: file.relativePath.split('/').pop() || '',
+    path: '',
+  })).sort((a, b) => a.relativePath.split('/').length - b.relativePath.split('/').length
+    || a.relativePath.localeCompare(b.relativePath, undefined, { numeric: true }));
+  const entry = pickSkillEntry(files);
+  if (!entry) throw new Error('Skill 压缩包中没有可调用入口文件');
+
+  // 去掉打包时的外层目录，使 references 等资料仍相对于 SKILL.md 所在目录读取。
+  const prefix = entry.relativePath.slice(0, entry.relativePath.lastIndexOf('/') + 1);
+  if (files.some((file) => file.name.toLowerCase() === 'skill.md' && !file.relativePath.startsWith(prefix))) {
+    throw new Error('压缩包包含多个独立 Skill，请分别打包上传');
+  }
+  const resources = files.filter((file) => file.relativePath.startsWith(prefix)).map((file) => ({
+    relativePath: assertSafeSkillRelativePath(file.relativePath.slice(prefix.length)),
+    content: file.content,
+  }));
+  const paths = new Set(resources.map((file) => file.relativePath.toLowerCase()));
+  if (paths.size !== resources.length || resources.some((file) => {
+    const parts = file.relativePath.toLowerCase().split('/');
+    return parts.slice(0, -1).some((_, index) => paths.has(parts.slice(0, index + 1).join('/')));
+  })) {
+    throw new Error('Skill 压缩包包含重复或冲突的资料路径');
+  }
+
+  const folderName = fileName.replace(SKILL_ARCHIVE_PATTERN, '') || 'skill';
+  const rootDir = await ensureSkillRootDir();
+  const destDir = await resolveUniqueDestPath(rootDir, sanitizeFolderName(folderName));
+  await mkdir(destDir);
+  try {
+    for (const file of resources) {
+      const destPath = joinPath(destDir, file.relativePath);
+      const parentDir = destPath.slice(0, destPath.lastIndexOf('/'));
+      if (!(await exists(parentDir))) await mkdir(parentDir, { recursive: true });
+      await writeFile(destPath, new TextEncoder().encode(file.content));
+    }
+  } catch {
+    await remove(destDir, { recursive: true }).catch(() => undefined);
+    throw new Error('Skill 压缩包保存失败，请检查存储空间和写入权限后重试');
+  }
+  return {
+    fileName: folderName,
+    content: entry.content,
+    sourceType: 'folder',
+    storagePath: destDir,
+    entryFileName: entry.relativePath.slice(prefix.length),
+  };
+}
+
+/** 上传只读 Skill 文件、压缩包或文件夹，读取为 UTF-8 文本内容。 */
 export async function uploadSkillFile(source: SkillUploadSource = 'folder'): Promise<UploadedSkillFile | null> {
   try {
     if (isTauriEnv()) {
@@ -198,8 +260,10 @@ export async function uploadSkillFile(source: SkillUploadSource = 'folder'): Pro
         : await uploadSkillFolder();
     }
 
-    const file = await browserOpenFile('.md,.txt,.json');
+    const file = await browserOpenFile(SKILL_FILE_EXTENSIONS.map((extension) => `.${extension}`).join(','));
     if (!file) return null;
+    if (SKILL_ARCHIVE_PATTERN.test(file.name)) throw new Error('Skill 压缩包导入请使用 Tauri 桌面端');
+    if (!isSkillTextFile(file.name)) throw new Error('Skill 文件类型不受支持');
     return { fileName: file.name, content: await file.text(), sourceType: 'file', entryFileName: file.name };
   } catch (error) {
     // Tauri 错误可能是带绝对路径的字符串，不直接写入日志或展示。
