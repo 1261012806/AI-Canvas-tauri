@@ -1,10 +1,12 @@
 ﻿/**
  * Header 顶部栏 — Logo、项目名编辑、侧边栏切换、设置入口、窗口拖拽区域
  */
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/useAppStore';
 import { useT } from '../i18n';
+import EpisodeNameDialog from './shared/EpisodeNameDialog';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
 const isMacOS = typeof navigator !== 'undefined'
@@ -12,17 +14,21 @@ const isMacOS = typeof navigator !== 'undefined'
 
 export default function Header() {
   const t = useT();
-  const { projectName, setProjectName, createProject, isCreatingProject, returnToStartPage, isReturningToStartPage, switchingProjectName } = useAppStore(
+  const { projectName, setProjectName, isCreatingProject, returnToStartPage, isReturningToStartPage, switchingProjectName, currentProjectId, projectLoadStatus } = useAppStore(
     useShallow((s) => ({
       projectName: s.projectName,
       setProjectName: s.setProjectName,
-      createProject: s.createProject,
       isCreatingProject: s.isCreatingProject,
       returnToStartPage: s.returnToStartPage,
       isReturningToStartPage: s.isReturningToStartPage,
       switchingProjectName: s.switchingProjectName,
+      currentProjectId: s.currentProjectId,
+      projectLoadStatus: s.projectLoadStatus,
     })),
   );
+  const [episodeNameOpen, setEpisodeNameOpen] = useState(false);
+  const canCreateEpisode = !!currentProjectId && projectLoadStatus === 'ready'
+    && !isCreatingProject && !isReturningToStartPage && switchingProjectName === null;
   // 当前画布是一集时，名字前面挂上剧集名：「项目 4-第 1 集」。可编辑的仍然只有集名。
   const seriesName = useAppStore((s) => {
     const current = s.projects.find((project) => project.id === s.currentProjectId);
@@ -47,7 +53,7 @@ export default function Header() {
           type="button"
           aria-label={isReturningToStartPage ? t('正在返回启动页') : t('返回启动页')}
           data-tooltip={isReturningToStartPage ? t('正在保存项目…') : t('返回启动页')}
-          disabled={isReturningToStartPage || isCreatingProject || switchingProjectName !== null}
+          disabled={isReturningToStartPage || isCreatingProject || episodeNameOpen || switchingProjectName !== null}
           onClick={() => void returnToStartPage()}
           className="ui-btn ui-btn--ghost ui-btn--sm w-7 shrink-0 p-0 focus-visible:ring-2 focus-visible:ring-indigo-400"
         >
@@ -128,28 +134,22 @@ export default function Header() {
       {/* Actions */}
       <motion.button
         type="button"
-        aria-label={isCreatingProject ? t('正在新建画布') : t('新建画布')}
-        onClick={() => void createProject()}
-        disabled={isCreatingProject || isReturningToStartPage}
+        aria-label={t('创建分集')}
+        onClick={() => setEpisodeNameOpen(true)}
+        disabled={!canCreateEpisode || episodeNameOpen}
         className="w-7 h-7 rounded-lg hover:bg-canvas-hover flex items-center justify-center
                    text-canvas-text-secondary hover:text-canvas-text disabled:cursor-not-allowed disabled:opacity-50"
-        data-tooltip={isCreatingProject ? t('正在新建画布') : t('新建画布')}
-        whileHover={isCreatingProject ? undefined : { scale: 1.1 }}
-        whileTap={isCreatingProject ? undefined : { scale: 0.92 }}
+        data-tooltip={t('创建分集')}
+        whileHover={canCreateEpisode && !episodeNameOpen ? { scale: 1.1 } : undefined}
+        whileTap={canCreateEpisode && !episodeNameOpen ? { scale: 0.92 } : undefined}
         transition={{ type: 'spring', stiffness: 400, damping: 17 }}
       >
-        {isCreatingProject ? (
-          <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.2" opacity="0.25" />
-            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-          </svg>
-        ) : (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        )}
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
       </motion.button>
+      {episodeNameOpen && <EpisodeNameDialog onClose={() => setEpisodeNameOpen(false)} />}
     </header>
   );
 }

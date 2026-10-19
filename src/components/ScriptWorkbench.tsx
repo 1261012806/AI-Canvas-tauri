@@ -15,6 +15,7 @@ import {
 import { useT } from '../i18n';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
+import EpisodeNameDialog from './shared/EpisodeNameDialog';
 import Select from './shared/Select';
 import { createEpisodeShotlist } from '../services/shotlistService';
 import SeriesSourceBrowser from './SeriesSourceBrowser';
@@ -275,6 +276,7 @@ export default function ScriptWorkbench({
   );
   const [targetEpisodeCount, setTargetEpisodeCount] = useState('24');
   const [sourceOpen, setSourceOpen] = useState(false);
+  const [renamingEpisodeId, setRenamingEpisodeId] = useState<string | null>(null);
   const [targetDurationSec, setTargetDurationSec] = useState('90');
   const [extractingAssetKind, setExtractingAssetKind] = useState<DramaAssetKind | null>(null);
   const extractingAssetKindRef = useRef<DramaAssetKind | null>(null);
@@ -590,25 +592,41 @@ export default function ScriptWorkbench({
               {episodes.map((episode) => {
                 const active = episode.id === currentEpisode?.id;
                 return (
-                  <button
+                  <div
                     key={episode.id}
-                    type="button"
-                    onClick={() => requestEpisodeSwitch(episode.id)}
-                    className={`min-w-32 rounded-lg border px-2.5 py-2 text-left transition-colors lg:min-w-0 ${
+                    className={`flex w-44 shrink-0 items-center gap-1 rounded-lg border p-2 text-left transition-colors lg:w-auto ${
                       active
                         ? 'border-indigo-400/40 bg-indigo-500/10'
                         : 'border-transparent hover:border-canvas-border hover:bg-canvas-hover'
                     }`}
                   >
-                    <span className="block truncate text-[11px] font-medium text-canvas-text">{episode.name}</span>
-                    <span className="mt-1 block truncate text-[10px] text-canvas-text-muted">
-                      {episode.episodeScript?.trim()
-                        ? t('正文 {count} 字', { count: episode.episodeScript.length })
-                        : episode.episodeOutline?.trim()
-                          ? t('已有大纲')
-                          : t('尚未创作')}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => requestEpisodeSwitch(episode.id)}
+                      aria-current={active}
+                      data-tooltip={episode.name}
+                      className="min-w-0 flex-1 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--border-focus)]"
+                    >
+                      <span className="block truncate text-[11px] font-medium text-canvas-text">{episode.name}</span>
+                      <span className="mt-1 block truncate text-[10px] text-canvas-text-muted">
+                        {episode.episodeScript?.trim()
+                          ? t('正文 {count} 字', { count: episode.episodeScript.length })
+                          : episode.episodeOutline?.trim()
+                            ? t('已有大纲')
+                            : t('尚未创作')}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={projectLoadStatus !== 'ready' || isSaving}
+                      onClick={() => setRenamingEpisodeId(episode.id)}
+                      aria-label={t('修改 {name} 的名称', { name: episode.name })}
+                      data-tooltip={t('修改分集名称')}
+                      className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost"
+                    >
+                      <Icon icon="lucide:pencil" className="h-3 w-3" />
+                    </button>
+                  </div>
                 );
               })}
               {episodes.length === 0 ? (
@@ -877,6 +895,9 @@ export default function ScriptWorkbench({
           </aside>
         </main>
       </div>
+      {isOpen && renamingEpisodeId && (
+        <EpisodeNameDialog episodeId={renamingEpisodeId} onClose={() => setRenamingEpisodeId(null)} />
+      )}
       {sourceOpen && <SeriesSourceBrowser initialPart={splitSource} onClose={() => setSourceOpen(false)}
         beforeAssistant={async () => {
           if (isDirty && !await saveDraft()) return false;

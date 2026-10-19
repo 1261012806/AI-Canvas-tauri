@@ -11,6 +11,7 @@ import { listEpisodes, seriesOwnerId } from '../store/store.utils';
 import { getProjectDataDir, uploadSourceFileToProject } from '../services/fileService';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
+import EpisodeNameDialog from './shared/EpisodeNameDialog';
 import ProjectAssetsOverlay from './ProjectAssetsOverlay';
 import ScriptWorkbench from './ScriptWorkbench';
 import SeriesSourceBrowser from './SeriesSourceBrowser';
@@ -103,17 +104,15 @@ export default function SeriesRail() {
   const t = useT();
   const {
     projects, currentProjectId, projectLoadStatus,
-    switchProject, addEpisode, updateSeriesInfo,
-    moveEpisode, renameProject, deleteProject, showToast,
+    switchProject, updateSeriesInfo,
+    moveEpisode, deleteProject, showToast,
   } = useAppStore(useShallow((state) => ({
     projects: state.projects,
     currentProjectId: state.currentProjectId,
     projectLoadStatus: state.projectLoadStatus,
     switchProject: state.switchProject,
-    addEpisode: state.addEpisode,
     updateSeriesInfo: state.updateSeriesInfo,
     moveEpisode: state.moveEpisode,
-    renameProject: state.renameProject,
     deleteProject: state.deleteProject,
     showToast: state.showToast,
   })));
@@ -129,9 +128,7 @@ export default function SeriesRail() {
   // 打开编辑器时就把草稿装好，弹窗内部不用再和外部值同步
   const [editorDraft, setEditorDraft] = useState<string | null>(null);
   const [workbenchMode, setWorkbenchMode] = useState<'editor' | 'split' | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState('');
-  // 这两个都按分集 id 存：切到别的剧集后对不上任何一行，自然失效
+  const [episodeNameDialog, setEpisodeNameDialog] = useState<{ episodeId?: string } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const seriesId = currentProjectId ? seriesOwnerId(projects, currentProjectId) : null;
@@ -178,14 +175,6 @@ export default function SeriesRail() {
     // 只解除引用，文件留在项目目录里，避免误删用户的原稿。
     await updateSeriesInfo({ originalWork: undefined });
   });
-
-  const submitRename = async () => {
-    const target = renamingId;
-    const name = renameDraft.trim();
-    setRenamingId(null);
-    if (!target || !name) return;
-    await renameProject(target, name);
-  };
 
   return (
     <>
@@ -339,7 +328,6 @@ export default function SeriesRail() {
 
               {episodes.map((episode, index) => {
                 const isCurrent = episode.id === currentProjectId;
-                const isRenaming = renamingId === episode.id;
 
                 return (
                   <div
@@ -354,38 +342,28 @@ export default function SeriesRail() {
                         isCurrent ? 'bg-indigo-400 shadow-sm shadow-indigo-500/50' : 'bg-canvas-text-muted/30'
                       }`}
                     />
-                    {isRenaming ? (
-                      <input
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(event) => setRenameDraft(event.target.value)}
-                        onBlur={() => { void submitRename(); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') event.currentTarget.blur();
-                          if (event.key === 'Escape') setRenamingId(null);
-                        }}
-                        aria-label={t('分集名称')}
-                        className="min-w-0 flex-1 h-full rounded-md bg-canvas-bg/60 px-1.5 text-[11px] leading-none
-                                   text-canvas-text outline-none ring-1 ring-inset ring-indigo-400/50"
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={busy !== null}
-                        onClick={() => { if (!isCurrent) void switchProject(episode.id); }}
-                        onDoubleClick={() => {
-                          setRenamingId(episode.id);
-                          setRenameDraft(episode.name);
-                        }}
-                        aria-current={isCurrent}
-                        data-tooltip={t('{name}（双击改名）', { name: episode.name })}
-                        className={`min-w-0 flex-1 truncate px-1 text-left text-[11px] leading-none transition-colors ${
-                          isCurrent ? 'text-canvas-text' : 'text-canvas-text-muted hover:text-canvas-text-secondary'
-                        }`}
-                      >
-                        {episode.name}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => { if (!isCurrent) void switchProject(episode.id); }}
+                      aria-current={isCurrent}
+                      data-tooltip={episode.name}
+                      className={`min-w-0 flex-1 truncate px-1 text-left text-[11px] leading-none transition-colors ${
+                        isCurrent ? 'text-canvas-text' : 'text-canvas-text-muted hover:text-canvas-text-secondary'
+                      }`}
+                    >
+                      {episode.name}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!ready || busy !== null}
+                      onClick={() => setEpisodeNameDialog({ episodeId: episode.id })}
+                      aria-label={t('修改 {name} 的名称', { name: episode.name })}
+                      data-tooltip={t('修改分集名称')}
+                      className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost"
+                    >
+                      <Icon icon="lucide:pencil" className="h-3 w-3" />
+                    </button>
 
                     <div className="flex shrink-0 items-center opacity-0 transition-opacity
                                     group-hover/episode:opacity-100 group-focus-within/episode:opacity-100">
@@ -443,15 +421,13 @@ export default function SeriesRail() {
               <button
                 type="button"
                 disabled={!ready || busy !== null}
-                onClick={() => { void runBusy('add', () => addEpisode()); }}
+                onClick={() => setEpisodeNameDialog({})}
                 className="mt-1 flex items-center justify-center gap-1.5 rounded-lg border border-dashed
                            border-canvas-border py-1.5 text-[11px] text-canvas-text-muted transition-colors
                            hover:border-indigo-400/50 hover:text-canvas-text-secondary
                            disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <Icon icon={busy === 'add' ? 'lucide:loader-2' : 'lucide:plus'}
-                  className={`h-3.5 w-3.5 ${busy === 'add' ? 'animate-spin motion-reduce:animate-none' : ''}`}
-                />
+                <Icon icon="lucide:plus" className="h-3.5 w-3.5" />
                 {episodes.length > 0 ? t('新增分集') : t('转为剧集并新增分集')}
               </button>
 
@@ -507,6 +483,12 @@ export default function SeriesRail() {
         onClose={() => setEditorDraft(null)}
         onSave={(next) => updateSeriesInfo({ script: next })}
       />
+      {episodeNameDialog && (
+        <EpisodeNameDialog
+          episodeId={episodeNameDialog.episodeId}
+          onClose={() => setEpisodeNameDialog(null)}
+        />
+      )}
       {sourceOpen && <SeriesSourceBrowser onClose={() => setSourceOpen(false)} />}
       {workbenchMode ? (
         <ScriptWorkbench
