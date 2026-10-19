@@ -265,7 +265,6 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
   const commitToHistory = useAppStore((s) => s.commitToHistory);
   const openNodeDialog = useAppStore((s) => s.openNodeDialog);
   const isSingleSelection = useAppStore((s) => s.selectedNodeIds.length <= 1);
-  const isSoleSelectedNode = useAppStore((s) => s.selectedNodeIds.length === 1 && s.selectedNodeIds[0] === id);
   const projectId = useAppStore((s) => s.currentProjectId);
   const isSource = data.role === 'source';
   const fallbackDimensions = computeVideoNodeDimensions(data.videoWidth ?? 0, data.videoHeight ?? 0);
@@ -280,14 +279,14 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     setGeneratedCover(null);
   }
   const shouldMountPlayer = !!source && !isFullscreen
-    && ((!!selected && isSoleSelectedNode) || activatedSource === source || playingSource === source);
+    && (activatedSource === source || playingSource === source);
   // 既有生成结果会把视频本身写入 thumbnailUrl，不能把它当作图片封面。
   const suppliedCover = typeof data.thumbnailUrl === 'string'
     && data.thumbnailUrl !== source && data.thumbnailUrl !== data.sourceUrl
     && data.thumbnailUrl !== failedCover ? data.thumbnailUrl : null;
 
   useEffect(() => {
-    if (!source || suppliedCover || isFullscreen) return;
+    if (!source || suppliedCover || isFullscreen || shouldMountPlayer) return;
     const controller = new AbortController();
     const derivation = registerCanvasDerivation(useAppStore.getState(), id);
     let current = true;
@@ -323,7 +322,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
       controller.abort();
       if (derivation) cancelCanvasDerivation(derivation);
     };
-  }, [source, suppliedCover, projectId, isFullscreen, id]);
+  }, [source, suppliedCover, projectId, isFullscreen, shouldMountPlayer, id]);
 
   useEffect(() => () => {
     if (generatedCover) {
@@ -832,6 +831,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     } finally {
       pendingVideoOperations.current.delete(controller);
       cancelCanvasDerivation(derivation);
+      if (pendingVideoOperations.current.size === 0 && videoRef.current === video && video.paused) setActivatedSource(null);
     }
   }, [activateCompactVideo, data.sourceUrl, data.videoUrl, displayLabel, id, nodeWidth, t]);
 
@@ -889,6 +889,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
       pendingVideoOperations.current.delete(controller);
       completeCanvasDerivation(derivation);
       setIsReversingPrompt(false);
+      if (pendingVideoOperations.current.size === 0 && videoRef.current === video && video.paused) setActivatedSource(null);
     }
   }, [activateCompactVideo, data.videoUrl, id, t]);
 

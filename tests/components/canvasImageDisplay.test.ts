@@ -60,13 +60,20 @@ describe('canvas image preparation', () => {
     expect(complete).toHaveBeenCalledWith(lease); expect(lease.release).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('releases a failed thumbnail and decodes the original fallback', async () => {
+  it('releases a failed thumbnail without decoding the original fallback', async () => {
     const pending = images(); const release = vi.fn(); acquire.mockResolvedValue({ src: 'blob:bad', release });
     const result = prepareCanvasImage('asset://source', 512, new AbortController().signal);
+    const rejected = expect(result).rejects.toThrow('Image preparation failed');
     await vi.advanceTimersByTimeAsync(0); pending[0].onerror?.(); await vi.advanceTimersByTimeAsync(0);
-    expect(release).toHaveBeenCalledOnce(); expect(pending[1].src).toBe('asset://source');
-    pending[1].onload?.(); expect((await result).src).toBe('asset://source');
-    expect(pending[1].decode).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+    await rejected;
+    expect(release).toHaveBeenCalledOnce(); expect(pending).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not start image decoding when the preview is unavailable or over budget', async () => {
+    const pending = images();
+    acquire.mockResolvedValue(null);
+    await expect(prepareCanvasImage('asset://huge', 512, new AbortController().signal)).rejects.toThrow('预览暂不可用');
+    expect(pending).toHaveLength(0);
   });
   it('cancels a pending decode and returns its thumbnail lease', async () => {
     const pending = images(); const release = vi.fn(); acquire.mockResolvedValue({ src: 'blob:pending', release });
@@ -77,10 +84,11 @@ describe('canvas image preparation', () => {
     expect(release).toHaveBeenCalledOnce(); expect(pending[0].removeAttribute).toHaveBeenCalledWith('src');
     expect(vi.getTimerCount()).toBe(0);
   });
-  it('bounds a stalled original and lets the actual image expose its error or retry UI', async () => {
+  it('bounds a stalled original without scheduling a second decode', async () => {
     images(); const result = prepareCanvasImage('asset://stalled', 0, new AbortController().signal);
+    const rejected = expect(result).rejects.toThrow('Image preparation timed out');
     await vi.advanceTimersByTimeAsync(15_000);
-    expect((await result).src).toBe('asset://stalled'); expect(acquire).not.toHaveBeenCalled();
+    await rejected; expect(acquire).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

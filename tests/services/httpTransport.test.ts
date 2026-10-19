@@ -49,6 +49,54 @@ beforeEach(() => {
 });
 
 describe('CORS-safe AI HTTP transport', () => {
+  it('rejects oversized blobs before reading their bytes and releases the request slot', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const body = new Blob(['small fixture']);
+    Object.defineProperty(body, 'size', { value: 65 * 1024 * 1024 + 1 });
+    const read = vi.spyOn(body, 'arrayBuffer');
+    await expect(corsSafeFetch('https://gateway.example/upload', { method: 'POST', body })).rejects.toThrow('65 MiB');
+    expect(read).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+    mockNativeStream([Buffer.from('ok')]);
+    expect(await (await corsSafeFetch('https://gateway.example/upload', { method: 'POST', body: 'next' })).text()).toBe('ok');
+  });
+
+  it('preserves UTF-8 replacement semantics without Base64-encoding text requests', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    mockNativeStream([]);
+    await corsSafeFetch('https://gateway.example/text', { method: 'POST', body: '中文🙂\uD800' });
+    expect(invokeMock.mock.calls[0][1].req).toMatchObject({ body: null, textBody: '中文🙂\uFFFD' });
+  });
+
+  it('limits body submissions, permits cancellation while queued, and releases slots at response headers', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const channels: MockNativeStreamChannel[] = [];
+    const finish: Array<() => void> = [];
+    invokeMock.mockImplementation((_command: string, args?: MockNativeInvokeArgs) => {
+      channels.push(args!.onEvent!);
+      return new Promise<void>((resolve) => finish.push(resolve));
+    });
+    const first = corsSafeFetch('https://gateway.example/first', { method: 'POST', body: 'first' });
+    const second = corsSafeFetch('https://gateway.example/second', { method: 'POST', body: 'second' });
+    const abort = new AbortController();
+    const cancelled = corsSafeFetch('https://gateway.example/cancelled', { method: 'POST', body: 'cancelled', signal: abort.signal });
+    const rejected = expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(channels).toHaveLength(2));
+    abort.abort();
+    await rejected;
+    const third = corsSafeFetch('https://gateway.example/third', { method: 'POST', body: 'third' });
+    expect(channels).toHaveLength(2);
+    channels[0].onmessage({ event: 'meta', status: 200, headers: [] });
+    await first;
+    await vi.waitFor(() => expect(channels).toHaveLength(3));
+    channels[1].onmessage({ event: 'meta', status: 200, headers: [] });
+    channels[2].onmessage({ event: 'meta', status: 200, headers: [] });
+    channels.forEach((channel) => channel.onmessage({ event: 'done' }));
+    finish.forEach((resolve) => resolve());
+    await Promise.all([second, third]);
+    expect(invokeMock.mock.calls.map(([, args]) => args.req.url)).not.toContain('https://gateway.example/cancelled');
+  });
+
   it('logs native error bodies without consuming them or exposing echoed credentials', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -255,14 +303,16 @@ describe('CORS-safe AI HTTP transport', () => {
 
     const requestCall = invokeMock.mock.calls.find(([command]) => command === 'proxy_stream_fetch');
     const request = requestCall?.[1]?.req as {
-      body: string;
+      body: null;
+      textBody: string;
       headers: [string, string][];
       method: string;
       url: string;
     };
     expect(request.url).toBe('https://gateway.example/v1/render');
     expect(request.method).toBe('POST');
-    expect(Buffer.from(request.body, 'base64').toString('utf8')).toBe(JSON.stringify({
+    expect(request.body).toBeNull();
+    expect(request.textBody).toBe(JSON.stringify({
       prompt: '亚洲美女跳舞',
     }));
     expect(request.headers).toEqual(expect.arrayContaining([

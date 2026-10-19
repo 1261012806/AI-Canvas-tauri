@@ -2,6 +2,7 @@ import { readRasterImageDimensions } from '../../../../services/rasterImageDimen
 import { prepareProjectThumbnail } from '../../../../services/fs/thumbnailCache';
 import { assertEditorSourceBudget } from './imageResourceBudget';
 import { getPerformanceModeBudget, subscribePerformanceMode } from '../../../../services/performanceModeRuntime';
+import { isTauriAssetUrl } from '../../../../utils/mediaUrl';
 
 const MAX_ENCODED_BYTES = 32 * 1024 * 1024;
 const INTERACTION_POLL_MS = 80;
@@ -79,7 +80,7 @@ function discard(entry: Entry): void {
     unsubscribePerformanceMode = undefined;
   }
   entry.controller.abort();
-  if (entry.preview) URL.revokeObjectURL(entry.preview.src);
+  if (entry.preview && entry.preview.src !== entry.source) URL.revokeObjectURL(entry.preview.src);
   entry.preview = undefined;
 }
 
@@ -141,6 +142,14 @@ async function isStaticRaster(blob: Blob): Promise<boolean> {
 }
 
 async function readBoundedBlob(source: string, signal: AbortSignal): Promise<Blob> {
+  if (isTauriAssetUrl(source)) {
+    // asset 的非 Range GET 会在原生侧整文件读取，先用 HEAD 挡住明显超限的本地文件。
+    const head = await fetch(source, { method: 'HEAD', signal });
+    if (!head.ok) throw new Error('Preview source unavailable');
+    if (Number(head.headers.get('content-length')) > MAX_ENCODED_BYTES) {
+      throw new RangeError('Preview source exceeds byte budget');
+    }
+  }
   const response = await fetch(source, { signal });
   if (!response.ok) throw new Error('Preview source unavailable');
   const declaredSize = Number(response.headers.get('content-length'));
@@ -182,8 +191,7 @@ async function derive(entry: Entry): Promise<Preview | null> {
   const signal = entry.controller.signal;
   const timeout = setTimeout(() => {
     entry.controller.abort();
-    // Decode/encode have no abort API: let consumers fall back now, but keep the
-    // serial worker occupied until late graphics can be disposed in finally.
+    // 解码/编码无法中止：先结束等待，串行槽仍等 finally 回收资源，不能另开原图解码。
     for (const client of [...entry.clients]) client.release();
   }, DERIVATION_TIMEOUT_MS);
   try {
@@ -194,12 +202,14 @@ async function derive(entry: Entry): Promise<Preview | null> {
       return { src: URL.createObjectURL(blob), rgbaBytes: width * height * 4 };
     }
     const blob = await readBoundedBlob(entry.source, signal);
-    if (!await isStaticRaster(blob)) return null;
     const dimensions = await readRasterImageDimensions(blob);
     if (!dimensions) return null;
-    assertEditorSourceBudget(dimensions.width, dimensions.height, '画布预览');
+    const estimate = assertEditorSourceBudget(dimensions.width, dimensions.height, '画布预览');
     const edge = Math.max(dimensions.width, dimensions.height);
-    if (edge <= entry.maxEdge) return null;
+    // 小图和动图也先检查编码大小及像素预算；只有确认安全后才允许直接显示。
+    if (edge <= entry.maxEdge || !await isStaticRaster(blob)) {
+      return { src: entry.source, rgbaBytes: estimate.bytes };
+    }
     const width = Math.max(1, Math.round(dimensions.width * entry.maxEdge / edge));
     const height = Math.max(1, Math.round(dimensions.height * entry.maxEdge / edge));
     signal.throwIfAborted();

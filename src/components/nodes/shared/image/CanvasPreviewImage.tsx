@@ -17,6 +17,7 @@ function CanvasPreviewImage({ src, nodeWidth, nodeHeight, nodeId, projectId, onE
   const runtime = useContext(CanvasNodeLodContext);
   const flow = useStoreApi();
   const controller = useRef<ReturnType<typeof createCanvasImageDisplay> | null>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const geometry = useRef({ width: nodeWidth, height: nodeHeight });
   const [preview, setPreview] = useState<{ source: string; projectId?: string | null; lease: DisplayImageLease }>();
 
@@ -37,6 +38,7 @@ function CanvasPreviewImage({ src, nodeWidth, nodeHeight, nodeId, projectId, onE
           ? runtime.prepareDisplay(key, work, nodeId, delay) : fallback!.prepare(key, work, undefined, delay),
       },
       publish: (lease) => setPreview({ source: src, projectId, lease }),
+      onError: () => imageRef.current?.dispatchEvent(new Event('error')),
     });
     controller.current = display;
     let lastZoom: number | undefined;
@@ -74,10 +76,7 @@ function CanvasPreviewImage({ src, nodeWidth, nodeHeight, nodeId, projectId, onE
   }, [preview]);
 
   const resolved = preview && preview.source === src && preview.projectId === projectId ? preview.lease.src : undefined;
-  return <img {...imageProps} src={resolved} decoding="async" onError={(event) => {
-    if (resolved && resolved !== src) controller.current?.original();
-    else if (resolved) onError?.(event);
-  }} />;
+  return <img {...imageProps} ref={imageRef} src={resolved} decoding="async" onError={onError} />;
 }
 
 export default memo(CanvasPreviewImage);

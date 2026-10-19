@@ -42,7 +42,7 @@ export default function ViewportImage({
   const retainedSize = imageSize?.source === src ? imageSize : undefined;
   const wantsPreview = typeof previewMaxEdge === 'number' && Number.isFinite(previewMaxEdge) && previewMaxEdge > 0;
   const [preview, setPreview] = useState<{
-    source: string; edge: number; projectId?: string | null; src: string; request: AbortController;
+    source: string; edge: number; projectId?: string | null; src?: string; request: AbortController;
     release: () => void;
   }>();
 
@@ -55,10 +55,13 @@ export default function ViewportImage({
       if (request.signal.aborted) { result?.release(); return; }
       lease = result;
       setPreview({ source: mountedSrc, edge: previewMaxEdge, projectId,
-        src: result?.src ?? mountedSrc, request, release });
+        src: result?.src, request, release });
+      if (!result) imageRef.current?.dispatchEvent(new Event('error'));
     }, () => {
-      if (!request.signal.aborted) setPreview({ source: mountedSrc, edge: previewMaxEdge, projectId,
-        src: mountedSrc, request, release });
+      if (!request.signal.aborted) {
+        setPreview({ source: mountedSrc, edge: previewMaxEdge, projectId, request, release });
+        imageRef.current?.dispatchEvent(new Event('error'));
+      }
     });
     return () => { request.abort(); release(); };
   }, [mountedSrc, wantsPreview, previewMaxEdge, projectId]);
@@ -86,10 +89,11 @@ export default function ViewportImage({
         onLoad?.(event);
       }}
       onError={(event) => {
-        if (currentPreview && displayedSrc !== mountedSrc && mountedSrc) {
+        if (currentPreview) {
           currentPreview.release();
-          setPreview({ ...currentPreview, src: mountedSrc });
-        } else onError?.(event);
+          setPreview({ ...currentPreview, src: undefined });
+        }
+        onError?.(event);
       }}
       loading={loading}
       decoding={decoding}

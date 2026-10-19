@@ -482,7 +482,7 @@ npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canv
 
 - `src-tauri/vendor/tauri/src/ipc/protocol.rs`：仅 macOS 将最终 IPC 协议响应交回对应 WebView 的主线程，令 Wry 的请求有效性检查和响应发送与 WebKit 的主线程取消操作串行；保留原有调用方、invoke key、Channel 与 ACL 校验。WebView 已不存在时丢弃响应，主线程派发失败只记录固定诊断信息。此补丁仅覆盖 IPC 响应，不等于完整修复所有 Wry 自定义协议及 WebKit/GPU 进程故障。线索来自 [Wry #1822](https://github.com/tauri-apps/wry/issues/1822) 与 [候选修复 #1856](https://github.com/tauri-apps/wry/pull/1856)，不能将上游报告当作本项目实测结论。
 - `src/services/performanceModeRuntime.ts`：Mac Tauri 桌面普通模式的自动图片预览最高 1024px，媒体准备并发降为 1、每帧提交预算为 2，图片/视频空闲缓存分别沿用性能模式的 8MiB、32/16 项，预加载范围收窄为上下 160px。用户主动开启性能模式后继续使用 512px；其他平台和 Web 演示沿用既有默认预算。只调整资源预算，不修改外观偏好、节点结构 LOD 阈值、生成参数、原文件或持久化 schema。
-- 全屏、图片编辑和生成引用继续使用原图；显式原图回退、动图及不支持派生的资源保持原行为，因此上述预算不是总内存硬上限，也不能单凭预算数值证明已降低实际内存或消除闪退。
+- 全屏、图片编辑和生成引用继续使用原图。下述第二轮已收紧自动原图回退；经过预算检查的小图、动图仍可使用原来源，因此预览档位不是总内存硬上限，也不能单凭预算数值证明已降低实际内存或消除闪退。
 
 用户验收：
 
@@ -496,3 +496,29 @@ npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canv
 本次未运行测试，待用户验收。完成引用、差异和 UTF-8 静态核对；提交阶段由既有钩子执行改动前端文件的定向 ESLint，未运行类型检查、Rust 检查、构建或桌面验证。
 
 回滚：撤销本节对应的 IPC 主线程派发和 Mac 默认资源预算补丁即可；无数据迁移，不改用户项目、媒体或安全配置。
+
+### 第二轮：预览、请求与异常恢复（2026-10-19）
+
+状态：六项优化已实现，待用户验证。本轮未运行测试、类型检查、Rust 检查、构建或实机验收，已完成调用方、差异与 UTF-8 静态核对。提交阶段由既有钩子执行本次暂存 TS/TSX 文件的定向 ESLint；上一轮检查结果不作为本轮通过证据。
+
+- 图片：`canvasImagePreviewCache.ts` 对本地 asset 先用 HEAD 检查体积，避免明显超限文件先触发原生整文件读取；对小图、动图和 SVG 同样先检查编码体积与像素预算，确认安全后才返回原来源租约；缓存只撤销自身创建的 Object URL。无法读取尺寸、预算拒绝、派生超时或解码失败时，`canvasImageDisplay.ts`、`CanvasPreviewImage.tsx`、`ViewportImage.tsx` 和 `CanvasNodeCardContent.tsx` 不再自动解码原图，使用既有错误／重试或占位入口。主动全屏、编辑和生成引用仍保留原文件；不能从安全头部确认尺寸的格式可能需要主动查看或先转换格式。此改动覆盖共享缩略图消费者，不代表所有直接使用原图的业务入口已有总预算。
+- HTTP：`httpTransport.ts` 与 Rust `lib.rs` 的通用代理按完整请求体限制为 65 MiB，为既有 64 MiB 视频兼容上传保留 multipart 头部空间。共享传输的请求体准备／提交最多并发 2 个，排队可取消，收到响应头或失败后释放；Rust 同样在解码／提交前限制并发。GET 轮询不占请求体槽，已经建立的响应流继续读取。JSON 等文本不再额外转 Base64，保留 UTF-8 和孤立代理项替换语义；multipart 按块读取并检查累计体积，保留字段顺序与边界，编码后不再由响应回调持有大请求。既有图床上传的独立串行隔离与取消路径保留，Rust 接受旧 Base64 请求。超限在发送前明确失败，不自动重试付费提交；上限不等于进程总内存上限。
+- 视频：`VideoNode.tsx` 单击选中仍显示封面，播放、截帧或反推才按需挂载媒体。播放期间停止额外封面派生，临时帧操作结束后释放未播放的实例；全屏前后仍保存位置、音量和原播放状态。`VideoPlayer.tsx` 只恢复缺失或变化的 `src`，使用 metadata 预加载，避免相同来源重复启动加载。
+- WebContent 恢复：`native_rendering.rs` 在 macOS 主窗口页面进程终止时，向应用日志目录的 `last-webview-termination.json` 覆盖写入最近一次事件、时间、版本和架构，不记录项目名、路径、URL、凭据或模型内容。恢复导航带固定标记；`store.projects.ts` 据此先显示项目列表，`App.tsx` 就绪后由 `webviewRecoveryService.ts` 提示打开最近保存的项目或留在列表。沿用 `switchProject`，不重投生成；等待期间已切换／创建项目则放弃迟到恢复，StrictMode 不重复弹窗。普通冷启动仍遵循用户启动偏好。这个钩子只能观测 WebContent 终止，不能捕获整个应用的 SIGABRT、系统强杀或保证恢复未保存内容。
+- 剪贴板：`files/clipboard.rs` 将文件复制放入 blocking worker；macOS `osascript` 与文件夹读取共用有界输出和 5 秒期限，超时、读取失败或输出超限均终止并回收直接子进程，错误不透出原始 stderr。`clipboard_read.rs` 继续保留目录调用方、授权和数量校验。
+- 文本：`services/fs/core.ts` 仍只读取默认 2 KiB 的预览片段；局部读取失败时返回空预览，不再整文件读取。资源正文编辑／保存不变。
+
+用户桌面验收（先保存项目，使用包含 Rust 修改的新 Tauri 构建；M 系列／Tahoe 26.4 优先）：
+
+1. 在普通与性能模式下，分别查看正常 PNG/JPEG、小图、动图、SVG，以及超过 8192px／像素预算的大图；缩放画布、打开资源侧栏与角色／历史列表。正常预览应显示；超限、不可读或断网时应出现占位／既有重试界面，不能因此自动加载原图。主动全屏和编辑入口仍可使用原文件，跨项目和外部覆盖图片后不串图。
+2. 选中多个视频、快速切换单选，选中本身不应启动播放器。检查播放、暂停后卸载、再次播放的位置与音量、截帧、反推、全屏进出；播放期间不并行派生封面，切换项目／来源后旧帧不能落入新项目。
+3. 使用受控连接检查普通文本／JSON、多个有序参考图 multipart、既有图床图片／视频上传；再同时提交三个请求，取消排队中的一个，确认其未发出、后续请求能继续。检查超出 65 MiB 的完整请求有明确提示、未发出；正常请求的失败状态、流式响应、取消和 GET 轮询不受影响。不要用真实付费模型反复提交超限验收。
+4. 普通重启分别检查“项目列表／上次项目”偏好。保存后在活动监视器中结束本应用对应的 WebContent 进程：主进程应保留、恢复到项目列表并只提示一次；取消留在列表，确认后从最近保存内容打开项目。检查最近项目已删除、读取失败、确认期间主动切换项目的情况；日志仅有固定诊断字段。整个应用退出仍需另收集对应 `.ips` 报告。
+5. 在 Finder 与应用间复制文件、粘贴已授权文件夹，检查中文／空格路径、空剪贴板、未授权目录和工具超时后的再次操作；应用仍可交互，失败不会扩大目录授权。资源侧栏查看大文本，局部读取失败只显示文件占位，正文仍能按原入口打开。
+
+可选自动化命令（供用户执行，尚未运行）：
+
+- 仓库根目录：`npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canvasImagePreviewCache.test.ts tests/components/canvasPreviewImage.test.tsx tests/hooks/useViewportMediaSource.test.tsx tests/components/assetNodeConnection.test.tsx tests/components/videoNodePreviewLifecycle.test.tsx tests/components/videoPlayer.test.tsx tests/components/assetTextPreview.test.tsx tests/services/httpTransport.test.ts tests/services/uploadServiceMemory.test.ts tests/services/webviewRecoveryService.test.ts tests/store/projects.test.ts`。
+- `src-tauri/`：`cargo check --lib`、`cargo test --lib clipboard::tests`、`cargo test --lib proxy_http_tests`。剪贴板超时用例会等待约 5 秒；自动化不能代替 macOS 原生窗口、进程和媒体解码验收。
+
+回滚：按上述六条独立撤销对应源文件与接入，恢复原预览回退／选中加载策略和 HTTP 传输即可；恢复流程只增加诊断文件，没有项目 schema 迁移。保留上一轮 IPC 主线程补丁与 Mac 预览预算也可独立运行。

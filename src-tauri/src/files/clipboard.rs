@@ -10,6 +10,67 @@ use std::path::Path;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 
+/// 固定用途的剪贴板工具最多等 5 秒，超时或输出超限时终止并回收进程。
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn run_clipboard_command(command: &mut Command, max_bytes: u64) -> Result<Vec<u8>, String> {
+    use std::{
+        io::Read,
+        process::Stdio,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "无法启动系统剪贴板工具")?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("无法读取系统剪贴板输出".into());
+    };
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let reader = std::thread::Builder::new()
+        .name("clipboard-output".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stdout.take(max_bytes + 1).read_to_end(&mut bytes).map(|_| bytes);
+            let _ = sender.send(result);
+        });
+    if reader.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("无法读取系统剪贴板输出".into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let result = (|| {
+        let bytes = receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => "系统剪贴板读取超时，请稍后重试",
+                mpsc::RecvTimeoutError::Disconnected => "系统剪贴板读取失败",
+            })?
+            .map_err(|_| "系统剪贴板读取失败")?;
+        if bytes.len() as u64 > max_bytes {
+            return Err("系统剪贴板输出超过上限");
+        }
+        loop {
+            match child.try_wait().map_err(|_| "无法读取剪贴板工具状态")? {
+                Some(status) if status.success() => return Ok(bytes),
+                Some(_) => return Err("系统剪贴板操作失败，请检查剪贴板内容后重试"),
+                None if Instant::now() >= deadline => return Err("系统剪贴板操作超时，请稍后重试"),
+                None => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result.map_err(str::to_string)
+}
+
 /// Windows CF_HDROP 常量。
 #[cfg(target_os = "windows")]
 const CF_HDROP: u32 = 15;
@@ -109,7 +170,7 @@ fn copy_files_impl(paths: &[String]) -> Result<(), String> {
         }
         aliases.push_str(&format!(
             "(POSIX file \"{}\") as alias",
-            abs_str.replace('"', "\\\"")
+            abs_str.replace('\\', "\\\\").replace('"', "\\\"")
         ));
     }
 
@@ -119,18 +180,8 @@ fn copy_files_impl(paths: &[String]) -> Result<(), String> {
         format!("set the clipboard to {{{}}}", aliases)
     };
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .map_err(|e| format!("执行 osascript 失败: {e}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("osascript 错误: {}", stderr.trim()))
-    }
+    run_clipboard_command(Command::new("osascript").arg("-e").arg(&script), 4096)?;
+    Ok(())
 }
 
 // ── Linux 实现：xclip (X11) / wl-copy (Wayland) ──
@@ -239,12 +290,32 @@ pub async fn copy_files_to_clipboard(
 
     #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
-        copy_files_impl(&paths)
+        tauri::async_runtime::spawn_blocking(move || copy_files_impl(&paths))
+            .await
+            .map_err(|_| "复制文件到系统剪贴板失败".to_string())?
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = paths;
         Err("当前平台不支持复制文件到剪贴板".to_string())
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_output_is_bounded_and_nonzero_exit_is_rejected() {
+        assert_eq!(run_clipboard_command(Command::new("sh").args(["-c", "printf 1234"]), 4).unwrap(), b"1234");
+        assert!(run_clipboard_command(Command::new("sh").args(["-c", "printf 12345"]), 4).is_err());
+        assert!(run_clipboard_command(Command::new("sh").args(["-c", "exit 1"]), 4).is_err());
+    }
+
+    #[test]
+    fn stalled_command_is_terminated_instead_of_waiting_forever() {
+        let error = run_clipboard_command(Command::new("sh").args(["-c", "exec sleep 30"]), 4).unwrap_err();
+        assert!(error.contains("超时"));
     }
 }

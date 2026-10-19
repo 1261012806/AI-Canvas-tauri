@@ -12,6 +12,8 @@ interface Harness {
 }
 
 const driver = vi.hoisted(() => ({ current: null as Harness | null }));
+const fs = vi.hoisted(() => ({ open: vi.fn(), readFile: vi.fn() }));
+vi.mock('@tauri-apps/plugin-fs', async (original) => ({ ...await original<object>(), open: fs.open, readFile: fs.readFile }));
 
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
@@ -87,6 +89,7 @@ function findByClassName(root: unknown, className: string): Element | undefined 
 describe('AssetThumb - 文本预览 (Text Preview)', () => {
   beforeEach(() => {
     clearTextPreviewCache();
+    fs.open.mockReset(); fs.readFile.mockReset();
     vi.stubGlobal('window', new EventTarget());
     scope = { states: [], refs: [], effects: [], pending: [], stateIndex: 0, refIndex: 0, effectIndex: 0 };
   });
@@ -100,6 +103,16 @@ describe('AssetThumb - 文本预览 (Text Preview)', () => {
     const text = await readTextFilePreview('/test/empty.txt', 0);
     expect(text).toBe('');
     expect(getCachedTextPreview('/test/empty.txt', 0)).toBe('');
+  });
+
+  it.each(['open', 'read'])('大文件的 %s 失败时停止预览，不回退整文件读取', async (failure) => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const close = vi.fn(async () => undefined);
+    if (failure === 'open') fs.open.mockRejectedValue(new Error('unavailable'));
+    else fs.open.mockResolvedValue({ read: vi.fn(async () => { throw new Error('unavailable'); }), close });
+    expect(await readTextFilePreview('/test/large.txt', 200 * 1024 * 1024)).toBe('');
+    expect(fs.readFile).not.toHaveBeenCalled();
+    if (failure === 'read') expect(close).toHaveBeenCalledOnce();
   });
 
   it('当 category === "text" 且传入有效 textPreview 时，渲染 .assets-card-text-wrap 与小字内容', () => {

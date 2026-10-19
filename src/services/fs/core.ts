@@ -211,28 +211,21 @@ export async function readTextFilePreview(
   try {
     let bytes: Uint8Array | null = null;
     if (typeof fsOpen === 'function') {
+      const file = await fsOpen(filePath, { read: true });
       try {
-        const file = await fsOpen(filePath, { read: true });
-        try {
-          const buf = new Uint8Array(maxBytes);
-          const n = await file.read(buf);
-          if (n && n > 0) {
-            bytes = buf.subarray(0, n);
-          } else {
-            bytes = new Uint8Array(0);
-          }
-        } finally {
-          await file.close();
+        const buf = new Uint8Array(maxBytes);
+        const n = await file.read(buf);
+        if (n && n > 0) {
+          bytes = buf.subarray(0, n);
+        } else {
+          bytes = new Uint8Array(0);
         }
-      } catch {
-        // 若 fs.open 失败，降级到 readFile
+      } finally {
+        await file.close();
       }
     }
 
-    if (!bytes) {
-      const allBytes = await readFile(filePath);
-      bytes = allBytes.subarray(0, maxBytes);
-    }
+    // 局部读取失败就停止预览，不能为了几 KB 摘要把整个大文件搬进 WebView。
 
     if (!bytes || bytes.length === 0) {
       setPreviewCache(cacheKey, '');

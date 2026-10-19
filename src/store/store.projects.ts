@@ -35,6 +35,7 @@ import {
 } from '../services/indexedDbService';
 import { describeStorageError, type StorageFailureKind } from '../services/storageQuota';
 import { relocateMediaReferences } from '../services/indexedDb/mediaRelocations';
+import { isWebviewRecovery } from '../services/webviewRecoveryService';
 
 type ProjectLoadStatus = 'loading' | 'ready' | 'error';
 let activeProjectMetadataWrite: Promise<void> = Promise.resolve();
@@ -1574,7 +1575,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       })));
       fileService.registerProjectFolders(mapped);
       mapped.sort((a, b) => b.updatedAt - a.updatedAt);
-      if (get().config.startupView === 'project-library') {
+      if (get().config.startupView === 'project-library' || isWebviewRecovery()) {
         // 启动页只读摘要；选定项目后才通过既有切换流程加载画布及项目域数据。
         set({
           projects: mapped,

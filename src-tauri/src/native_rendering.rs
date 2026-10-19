@@ -1,10 +1,52 @@
-//! 性能模式的原生启动配置。只保存布尔开关，不接受 Renderer 提交路径或浏览器参数。
+//! 图形启动配置与 WebContent 异常恢复，不接受 Renderer 提交路径或浏览器参数。
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
 };
 use tauri::{Manager, Webview};
+
+/// WebContent 终止与整个应用退出分开记录；主窗口回到安全启动页后再由用户选择恢复。
+#[cfg(target_os = "macos")]
+pub fn recover_web_content(webview: &Webview) {
+    if webview.label() != "main" {
+        let _ = webview.reload();
+        return;
+    }
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // 只覆盖最近一条固定诊断，不记录项目名、文件路径、页面地址或模型输入。
+        if let Ok(directory) = app.path().app_log_dir() {
+            if std::fs::create_dir_all(&directory).is_ok() {
+                let record = serde_json::json!({
+                    "event": "main_web_content_terminated",
+                    "timeMs": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default().as_millis(),
+                    "version": app.package_info().version.to_string(),
+                    "arch": std::env::consts::ARCH,
+                });
+                let _ = std::fs::write(
+                    directory.join("last-webview-termination.json"), record.to_string(),
+                );
+            }
+        }
+    });
+    let recovered = webview.url().and_then(|mut url| {
+        let mut pairs: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "__canvas_webview_recovery")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        pairs.push(("__canvas_webview_recovery".into(), "1".into()));
+        url.query_pairs_mut().clear().extend_pairs(pairs);
+        webview.navigate(url)
+    });
+    if recovered.is_err() {
+        eprintln!("[webview] main WebContent recovery navigation failed");
+        let _ = webview.reload();
+    }
+}
 
 #[derive(Default)]
 pub struct NativeRenderingState {

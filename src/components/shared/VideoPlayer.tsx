@@ -56,7 +56,7 @@ function VideoSeekPreview({ src, time }: { src: string; time: number }) {
   useEffect(() => { seekPreview(videoRef.current, time); }, [time, src]);
   useEffect(() => {
     const video = videoRef.current;
-    if (video) video.src = src;
+    if (video && video.getAttribute('src') !== src) video.src = src;
     return () => releaseViewportVideoElement(video);
   }, [src]);
   return <div className="ui-video-player__seek-preview" aria-hidden="true">
@@ -157,7 +157,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     if (!video || !src) return;
     let current = true;
     // 清理移除 src，StrictMode 重放时必须重新恢复。
-    video.src = src;
+    if (video.getAttribute('src') !== src) video.src = src;
     video.playbackRate = preferredRate.current;
     video.volume = preferredAudio.current.volume;
     video.muted = preferredAudio.current.muted;
@@ -269,7 +269,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     <div ref={stageRef} className={`ui-video-player${compact ? ' ui-video-player--compact' : ''} ${className}`} aria-label={`${name} 视频播放器`}>
         <div className="ui-video-player__view">
         {src && active ? <>
-          <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="auto" aria-label={`${name} 视频播放`}
+          <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="metadata" aria-label={`${name} 视频播放`}
             onLoadedMetadata={(event) => {
               const video = event.currentTarget;
               setDimensions({ src, width: video.videoWidth, height: video.videoHeight, duration: video.duration });

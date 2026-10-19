@@ -14,6 +14,7 @@ let acquireCached: typeof import('../../src/components/nodes/shared/image/canvas
 let mode: typeof import('../../src/services/performanceModeRuntime');
 let interacting = false;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+let headMock: ReturnType<typeof vi.fn<typeof fetch>>;
 let bitmapMock: ReturnType<typeof vi.fn<typeof createImageBitmap>>;
 let createUrl: MockInstance;
 let revokeUrl: MockInstance;
@@ -66,8 +67,11 @@ beforeEach(async () => {
   disk.prepare.mockReset().mockResolvedValue(null);
   canvases = [];
   fetchMock = vi.fn<typeof fetch>(async () => new Response(png()));
+  headMock = vi.fn<typeof fetch>(async () => new Response(null, { headers: { 'content-length': '100' } }));
   bitmapMock = vi.fn<typeof createImageBitmap>(async () => ({ close: vi.fn() }) as unknown as ImageBitmap);
-  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('fetch', (source: RequestInfo | URL, options?: RequestInit) => (
+    options?.method === 'HEAD' ? headMock(source, options) : fetchMock(source, options)
+  ));
   vi.stubGlobal('createImageBitmap', bitmapMock);
   vi.stubGlobal('document', {
     documentElement: { classList: { contains: () => interacting } },
@@ -426,12 +430,13 @@ describe('canvas image preview cache', () => {
     ['SVG', () => new Blob(['<svg width="4000" height="2000"/>'], { type: 'image/svg+xml' })],
     ['APNG', () => png(true)],
     ['animated WebP', () => webp(true)],
-    ['unknown bytes', () => new Blob(['not an image'], { type: 'image/png' })],
   ])('keeps %s on the original source without creating a static thumbnail', async (_, source) => {
     fetchMock.mockImplementation(async () => new Response(source()));
     const item = request();
     await flush();
-    expect(await item.promise).toBeNull();
+    const result = await item.promise;
+    expect(result?.src).toBe('asset://localhost/image.png');
+    result?.release();
     expect(bitmapMock).not.toHaveBeenCalled();
   });
 
@@ -443,16 +448,33 @@ describe('canvas image preview cache', () => {
     (await lease()).release();
   });
 
-  it('skips small images and rejects over-budget source dimensions before decode', async () => {
+  it('validates small images and rejects over-budget source dimensions before decode', async () => {
     dimensions.width = 200;
     dimensions.height = 100;
     const small = request();
     await flush();
-    expect(await small.promise).toBeNull();
+    const safe = await small.promise;
+    expect(safe?.src).toBe('asset://localhost/image.png');
+    safe?.release();
     dimensions.width = 10_000;
-    const huge = request();
+    const huge = request('asset://localhost/huge.png');
     await flush();
     expect(await huge.promise).toBeNull();
+    expect(bitmapMock).not.toHaveBeenCalled();
+  });
+
+  it('does not decode unknown dimensions and does not revoke a caller-owned original URL', async () => {
+    const { readRasterImageDimensions } = await import('../../src/services/rasterImageDimensions');
+    vi.mocked(readRasterImageDimensions).mockResolvedValueOnce(null);
+    const unknown = request('blob:unknown');
+    await flush();
+    expect(await unknown.promise).toBeNull();
+    dimensions.width = 200; dimensions.height = 100;
+    const small = await lease('blob:caller-owned');
+    expect(small.src).toBe('blob:caller-owned');
+    small.release();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(revokeUrl).not.toHaveBeenCalledWith('blob:caller-owned');
     expect(bitmapMock).not.toHaveBeenCalled();
   });
 
@@ -497,6 +519,16 @@ describe('canvas image preview cache', () => {
     await flush();
     expect(await streamed.promise).toBeNull();
     expect(cancel).toHaveBeenCalledOnce();
+    expect(bitmapMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized local files with HEAD before the asset protocol reads their full bodies', async () => {
+    headMock.mockResolvedValueOnce(new Response(null, { headers: { 'content-length': String(33 * 1024 * 1024) } }));
+    const item = request();
+    await flush();
+    expect(await item.promise).toBeNull();
+    expect(headMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(bitmapMock).not.toHaveBeenCalled();
   });
 

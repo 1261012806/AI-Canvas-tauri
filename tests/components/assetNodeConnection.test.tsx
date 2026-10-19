@@ -232,12 +232,18 @@ describe('节点内容卡片', () => {
     expect(releaseNew).toHaveBeenCalledTimes(1);
   });
   it('不需派生缩略图的小图仍显示原图，原图加载失败后显示占位', async () => {
+    driver.image.mockResolvedValueOnce({ src: 'small.png', release: vi.fn() });
     const data = node('a', { imageUrl: 'small.png' }).data;
     render(data); await Promise.resolve();
     const image = elements(render(data), 'img')[0];
     expect(image.props.src).toBe('small.png');
     expect(image.props.loading).toBe('lazy');
     (image.props.onError as () => void)();
+    expect(elements(render(data), 'img')).toHaveLength(0);
+  });
+  it('预算拒绝或派生失败时保留占位，不自动解码原图', async () => {
+    const data = node('a', { imageUrl: 'huge.png' }).data;
+    render(data); await Promise.resolve();
     expect(elements(render(data), 'img')).toHaveLength(0);
   });
   it('视频委托共享资源预览，传递封面并保留真实端口', () => {

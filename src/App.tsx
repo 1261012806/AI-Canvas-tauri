@@ -48,6 +48,7 @@ import { applyAppearanceTheme, installSystemAppearanceListener, resolveAppearanc
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from './services/appearance/appearanceDefaults';
 import { getAppearanceForConfig } from './services/appearance/appearanceMigration';
 import { installStyleGuideAppearanceSource } from './services/appearance/appearanceWindowSync';
+import { restoreAfterWebviewTermination } from './services/webviewRecoveryService';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
 
@@ -232,6 +233,11 @@ export default function App() {
   useEffect(() => {
     void initFromDb().then(() => setProjectBootReady(true));
   }, [initFromDb]);
+  useEffect(() => {
+    if (projectBootReady && splashDone && projectLoadStatus === 'ready') {
+      void restoreAfterWebviewTermination();
+    }
+  }, [projectBootReady, projectLoadStatus, splashDone]);
   useEffect(() => {
     if (projectBootReady && currentProjectId && projectLoadStatus === 'ready') {
       void migrateHistoryAndLoad();

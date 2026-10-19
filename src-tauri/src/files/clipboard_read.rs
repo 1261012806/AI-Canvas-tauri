@@ -248,8 +248,7 @@ fn read_folder_paths() -> Result<Vec<String>, String> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn read_folder_paths() -> Result<Vec<String>, String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut cmd = Command::new("osascript");
@@ -272,26 +271,7 @@ fn read_folder_paths() -> Result<Vec<String>, String> {
         ]);
         cmd
     };
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "无法读取系统文件剪贴板，请检查系统剪贴板工具")?;
-    let mut bytes = Vec::new();
-    let read_result = child
-        .stdout
-        .take()
-        .ok_or("无法读取剪贴板")?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut bytes);
-    if read_result.is_err() || bytes.len() > 1024 * 1024 {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("剪贴板读取失败或超过上限".into());
-    }
-    if !child.wait().map_err(|_| "剪贴板读取失败")?.success() {
-        return Err("剪贴板中没有可粘贴的文件夹".into());
-    }
+    let bytes = crate::clipboard::run_clipboard_command(&mut command, 1024 * 1024)?;
     let text = String::from_utf8(bytes).map_err(|_| "剪贴板路径编码无效")?;
     let mut paths = Vec::new();
     for line in text.lines().filter(|line| !line.is_empty()) {

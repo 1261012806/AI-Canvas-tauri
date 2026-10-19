@@ -104,11 +104,11 @@ describe('canvas preview image integration', () => {
     expect(image.props.src).toBeUndefined(); expect(driver.create).not.toHaveBeenCalled();
     for (const key of ['nodeId', 'nodeWidth', 'nodeHeight', 'projectId']) expect(image.props).not.toHaveProperty(key);
   });
-  it('queues original fallback and preserves original error callbacks', () => {
+  it('reports failed previews without automatically requesting the original', () => {
     const onError = vi.fn(); const props = { ...base, onError }; render(props);
     const event = {} as Parameters<NonNullable<ImgHTMLAttributes<HTMLImageElement>['onError']>>[0];
     publish({ src: 'blob:bad', release: vi.fn() }); render(props).props.onError?.(event);
-    expect(active.original).toHaveBeenCalledOnce(); expect(onError).not.toHaveBeenCalled();
+    expect(active.original).not.toHaveBeenCalled(); expect(onError).toHaveBeenCalledWith(event);
     publish({ src: base.src!, release: vi.fn() }); render(props).props.onError?.(event);
     expect(onError).toHaveBeenCalledWith(event);
   });

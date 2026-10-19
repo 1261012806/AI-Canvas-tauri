@@ -92,7 +92,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   hooks.values = []; hooks.refs = []; hooks.effects = [];
   FakeObserver.instances = [];
-  element = {} as Element;
+  element = { dispatchEvent: vi.fn() } as unknown as Element;
   reference = { current: element };
   acquire.mockReset();
   vi.stubGlobal('IntersectionObserver', FakeObserver);
@@ -245,12 +245,25 @@ describe('viewport-gated shared image previews', () => {
     expect(acquire).toHaveBeenCalledTimes(3);
   });
 
-  it('preserves normal original images and unsupported-format fallback', async () => {
+  it('preserves explicit original images but never bypasses an unavailable preview', async () => {
     renderImage(); latestObserver().emit(element, true);
     expect(renderImage().props.src).toBe('asset://image.png');
     expect(acquire).not.toHaveBeenCalled();
     acquire.mockResolvedValueOnce(null);
     renderImage(undefined, 512); await Promise.resolve();
-    expect(renderImage(undefined, 512).props.src).toBe('asset://image.png');
+    expect(renderImage(undefined, 512).props.src).toBeUndefined();
+    expect(element.dispatchEvent).toHaveBeenCalled();
+  });
+
+  it('reports a failed thumbnail without switching its src back to the original', async () => {
+    const release = vi.fn();
+    acquire.mockResolvedValueOnce({ src: 'blob:bad', release });
+    renderImage(undefined, 512); latestObserver().emit(element, true); renderImage(undefined, 512);
+    await Promise.resolve();
+    const image = renderImage(undefined, 512);
+    expect(image.props.src).toBe('blob:bad');
+    image.props.onError?.({} as Parameters<NonNullable<typeof image.props.onError>>[0]);
+    expect(release).toHaveBeenCalledOnce();
+    expect(renderImage(undefined, 512).props.src).toBeUndefined();
   });
 });

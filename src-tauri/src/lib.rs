@@ -183,6 +183,8 @@ const PROXY_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const PROXY_HTTP_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const PROXY_HTTP_MAX_IDLE_PER_HOST: usize = 8;
 const PROXY_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+// 兼容既有 64 MiB 视频素材，并给 multipart 头部留出空间。
+const PROXY_REQUEST_MAX_BYTES: usize = 65 * 1024 * 1024;
 const REMOTE_IMAGE_MAX_BYTES: usize = 25 * 1024 * 1024;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -398,7 +400,7 @@ const DREAMINA_LOGIN_WATCHER: &str = r#"
 "#;
 
 /// 通用 HTTP 代理：前端通过 invoke 调用，由 Rust 端发起 HTTP 请求，彻底绕过浏览器 CORS 限制。
-/// 请求体和响应体均使用 base64 编码传输，支持 GET/POST 等任意方法。
+/// 文本请求直接传 UTF-8，二进制请求和响应分块仍兼容 base64。
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyFetchRequest {
@@ -407,6 +409,7 @@ struct ProxyFetchRequest {
     method: String,
     headers: Vec<(String, String)>,
     body: Option<String>, // base64 编码的请求体
+    text_body: Option<String>,
 }
 
 type ProxyFetchCancellations = Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>;
@@ -414,6 +417,7 @@ type ProxyFetchCancellations = Mutex<HashMap<String, tokio::sync::oneshot::Sende
 struct ProxyHttpState {
     client: reqwest::Client,
     cancellations: ProxyFetchCancellations,
+    body_slots: tokio::sync::Semaphore,
 }
 
 impl ProxyHttpState {
@@ -429,6 +433,7 @@ impl ProxyHttpState {
         Ok(Self {
             client,
             cancellations: Mutex::new(HashMap::new()),
+            body_slots: tokio::sync::Semaphore::new(2),
         })
     }
 }
@@ -529,19 +534,41 @@ fn proxy_transport_error(error: reqwest::Error) -> String {
 
 async fn send_proxy_request(
     client: &reqwest::Client,
-    req: &ProxyFetchRequest,
+    body_slots: &tokio::sync::Semaphore,
+    req: ProxyFetchRequest,
 ) -> Result<reqwest::Response, String> {
+    if req.body.is_some() && req.text_body.is_some() {
+        return Err("请求体格式重复".into());
+    }
+    let has_body = req.body.is_some() || req.text_body.is_some();
+    if req.text_body.as_ref().is_some_and(|body| body.len() > PROXY_REQUEST_MAX_BYTES)
+        || req.body.as_ref().is_some_and(|body| {
+            body.len() > PROXY_REQUEST_MAX_BYTES.div_ceil(3) * 4
+        })
+    {
+        return Err("请求内容超过 65 MiB，请减少参考素材后重试".into());
+    }
+    let _body_slot = if has_body {
+        Some(body_slots.acquire().await.map_err(|_| "请求队列已关闭")?)
+    } else {
+        None
+    };
     let method = reqwest::Method::from_bytes(req.method.as_bytes())
         .map_err(|e| format!("无效的 HTTP 方法: {e}"))?;
     let mut request = client.request(method, &req.url);
-    for (key, value) in &req.headers {
-        request = request.header(key.as_str(), value.as_str());
+    for (key, value) in req.headers {
+        request = request.header(key, value);
     }
-    if let Some(body) = &req.body {
+    if let Some(body) = req.text_body {
+        request = request.body(body);
+    } else if let Some(body) = req.body {
         if !body.is_empty() {
             let bytes = base64::engine::general_purpose::STANDARD
-                .decode(body)
+                .decode(&body)
                 .map_err(|e| format!("请求体 base64 解码失败: {e}"))?;
+            if bytes.len() > PROXY_REQUEST_MAX_BYTES {
+                return Err("请求内容超过 65 MiB，请减少参考素材后重试".into());
+            }
             request = request.body(bytes);
         }
     }
@@ -625,7 +652,7 @@ async fn proxy_fetch(
     )?;
 
     let request = async {
-        let response = send_proxy_request(&state.client, &req).await?;
+        let response = send_proxy_request(&state.client, &state.body_slots, req).await?;
 
         let status = response.status().as_u16();
         let res_headers: Vec<(String, String)> = response
@@ -669,7 +696,7 @@ async fn proxy_stream_fetch(
     )?;
 
     let request = async {
-        let mut response = send_proxy_request(&state.client, &req).await?;
+        let mut response = send_proxy_request(&state.client, &state.body_slots, req).await?;
         ensure_content_length_within_limit(&response, PROXY_RESPONSE_MAX_BYTES, "代理响应体")?;
         let status = response.status().as_u16();
         let headers = response
@@ -768,6 +795,31 @@ async fn fetch_image_data_url(
 #[cfg(test)]
 mod proxy_http_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn duplicate_bodies_are_rejected_before_waiting_for_a_slot() {
+        let req: ProxyFetchRequest = serde_json::from_value(serde_json::json!({
+            "url": "http://127.0.0.1:1/", "method": "POST", "headers": [],
+            "body": "YQ==", "textBody": "文本"
+        })).unwrap();
+        let slots = tokio::sync::Semaphore::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_millis(200), send_proxy_request(&reqwest::Client::new(), &slots, req),
+        ).await.expect("格式错误不应排队或发送");
+        assert!(result.unwrap_err().contains("格式重复"));
+    }
+
+    #[tokio::test]
+    async fn invalid_legacy_base64_releases_its_slot_without_sending() {
+        let req: ProxyFetchRequest = serde_json::from_value(serde_json::json!({
+            "url": "http://127.0.0.1:1/", "method": "POST", "headers": [], "body": "invalid!"
+        })).unwrap();
+        assert!(req.text_body.is_none());
+        let slots = tokio::sync::Semaphore::new(1);
+        let result = send_proxy_request(&reqwest::Client::new(), &slots, req).await;
+        assert!(result.unwrap_err().contains("base64"));
+        assert_eq!(slots.available_permits(), 1);
+    }
 
     #[tokio::test]
     async fn transport_errors_do_not_expose_request_url_or_credentials() {
@@ -1173,7 +1225,11 @@ pub fn run() {
 
     let proxy_http_state = ProxyHttpState::new().expect("初始化代理 HTTP 客户端失败");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(native_rendering::recover_web_content);
+
+    builder
         .manage(native_rendering::NativeRenderingState::default())
         .manage(proxy_http_state)
         .manage(comfyui::management::ManagementState::default())

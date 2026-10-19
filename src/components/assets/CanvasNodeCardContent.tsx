@@ -46,10 +46,10 @@ function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpa
     void acquisition.then((result) => {
       if (request.signal.aborted) { result?.release(); return; }
       lease = result;
-      // 与画布图片一致：小图或无法派生缩略图时使用原图，仍由视口控制加载。
-      setPreview({ source: visibleMedia, projectId, src: result?.src ?? (image ? visibleMedia : undefined) });
+      // 共享缓存已经检查过小图预算；失败时保留占位，不能越过预算再加载原图。
+      setPreview({ source: visibleMedia, projectId, src: result?.src });
     }, () => {
-      if (!request.signal.aborted) setPreview({ source: visibleMedia, projectId, src: image ? visibleMedia : undefined });
+      if (!request.signal.aborted) setPreview({ source: visibleMedia, projectId });
     });
     return () => { request.abort(); lease?.release(); };
   }, [visibleMedia, image, projectId]);

@@ -195,6 +195,7 @@ describe('video node demand loading', () => {
     driver.acquire.mockReturnValue(pending.promise);
     selected = path === 'player';
     render();
+    if (path === 'player') (named('VideoPlayer').props.onRequestPlayback as () => void)();
     // 拖拽已更新 Store，但媒体回调仍来自上一轮渲染。
     (named('ResizeHandle').props.onResize as (width: number, height: number) => void)(540, 304);
     store.nodes[0].data = { ...store.nodes[0].data, ...store.updateNodeDataTransient.mock.calls[0][1] };
@@ -218,6 +219,7 @@ describe('video node demand loading', () => {
     driver.acquire.mockReturnValue(pending.promise);
     selected = path === 'player';
     render();
+    if (path === 'player') (named('VideoPlayer').props.onRequestPlayback as () => void)();
     if (path === 'poster') {
       pending.resolve({ src: 'blob:cover', release: vi.fn(), width: 640, height: 360,
         videoWidth: 1920, videoHeight: 1080, duration: 10 });
@@ -236,6 +238,7 @@ describe('video node demand loading', () => {
       ...store.nodes[0].data, videoWidth: 832, videoHeight: 1472, nodeWidth: 400, nodeHeight: 225,
     };
     render();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     compact!.videoWidth = 832;
     compact!.videoHeight = 1472;
     const onLoadedMetadata = find((element) => element.type === 'VideoPlayer' && element.props.active !== false).props.onLoadedMetadata as (event: unknown) => void;
@@ -311,15 +314,15 @@ describe('video node demand loading', () => {
     expect(compact?.muted).toBe(true);
   });
 
-  it('loads on selection and releases the paused player when selection moves away', () => {
+  it('keeps a single selected node on its cover until playback is explicitly requested', () => {
     selected = true;
     render();
-    expect(all(tree, (element) => element.type === 'VideoPlayer' && element.props.active !== false)).toHaveLength(1);
-    const oldVideo = compact!;
+    expect(all(tree, (element) => element.type === 'VideoPlayer' && element.props.active !== false)).toHaveLength(0);
+    expect(compact).toBeUndefined();
     selected = false;
     render();
     expect(all(tree, (element) => element.type === 'VideoPlayer' && element.props.active !== false)).toHaveLength(0);
-    expect(oldVideo.load).toHaveBeenCalled();
+    expect(compact).toBeUndefined();
   });
 
   it('does not activate players merely because many nodes are selected, but preserves explicit playback', () => {
@@ -340,18 +343,23 @@ describe('video node demand loading', () => {
     expect(all(tree, (element) => element.type === 'VideoPlayer' && element.props.active !== false)).toHaveLength(0);
   });
 
-  it('unloads a paused player when an existing single selection expands into a multiple selection', () => {
+  it('keeps paused playback unloaded when selection changes and restores it only after another play request', () => {
     selected = true;
     store.selectedNodeIds = ['video'];
     render();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     const oldVideo = compact!;
     oldVideo.currentTime = 5;
+    (named('VideoPlayer').props.onPause as () => void)();
+    render();
     store.selectedNodeIds = ['video', 'other-video'];
     render();
     expect(all(tree, (element) => element.type === 'VideoPlayer' && element.props.active !== false)).toHaveLength(0);
     expect(oldVideo.removeAttribute).toHaveBeenCalledWith('src');
     store.selectedNodeIds = ['video'];
     render();
+    expect(compact).toBeUndefined();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     const player = find((element) => element.type === 'VideoPlayer' && element.props.active !== false);
     (player.props.onLoadedMetadata as (event: unknown) => void)({ currentTarget: compact });
     expect(compact?.currentTime).toBe(5);
@@ -433,7 +441,7 @@ describe('video node demand loading', () => {
     expect(store.addNode.mock.calls[0][0].data.imageUrl).toBe('data:image/jpeg;base64,frame');
   });
 
-  it('continues tracking a capture after readiness and discards its frame when the paused player is unloaded', async () => {
+  it('continues tracking a capture after readiness and discards its frame when the player is paused and unloaded', async () => {
     const seek = deferred<void>();
     driver.seek.mockReturnValue(seek.promise);
     selected = true;
@@ -442,6 +450,7 @@ describe('video node demand loading', () => {
     await Promise.resolve();
     expect(driver.seek).toHaveBeenCalled();
     const signal = driver.ready.mock.calls[0][1] as AbortSignal;
+    (named('VideoPlayer').props.onPause as () => void)();
     selected = false;
     store.selectedNodeIds = [];
     render();
@@ -457,12 +466,14 @@ describe('video node demand loading', () => {
     driver.seek.mockReturnValue(seek.promise);
     selected = true;
     render();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     compact!.currentTime = 4;
     const completion = (named('VideoNodeToolbar').props.onCaptureFrame as () => Promise<void>)();
     await Promise.resolve();
     expect(driver.seek).toHaveBeenCalled();
     store.nodes[0].data = { ...store.nodes[0].data, videoUrl: 'asset://new.mp4' };
     render();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     compact!.currentTime = 1;
     compact!.readyState = 2;
     seek.reject(new Error('视频定位超时'));
@@ -488,6 +499,7 @@ describe('video node demand loading', () => {
   it('keeps only one attached player through fullscreen and restores prior playback time', () => {
     selected = true;
     render();
+    (named('VideoPlayer').props.onRequestPlayback as () => void)();
     compact!.currentTime = 3;
     compact!.paused = false;
     (named('VideoNodeToolbar').props.onFullscreen as () => void)();

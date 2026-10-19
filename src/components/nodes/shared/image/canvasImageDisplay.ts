@@ -49,19 +49,17 @@ function decodeImage(src: string, signal: AbortSignal) {
 }
 
 export async function prepareCanvasImage(source: string, edge: number, signal: AbortSignal, projectId?: string | null): Promise<DisplayImageLease> {
-  const lease = edge > 0 ? await acquireCanvasImagePreview(source, edge, signal, projectId).catch(() => null) : null;
+  const lease = edge > 0 ? await acquireCanvasImagePreview(source, edge, signal, projectId) : null;
   try {
     signal.throwIfAborted();
+    if (edge > 0 && !lease) throw new Error('图片预览暂不可用，请重试或主动打开原图');
     await decodeImage(lease?.src ?? source, signal);
     return lease ?? { src: source, release: () => {} };
-  } catch {
+  } catch (error) {
     lease?.release();
     signal.throwIfAborted();
-    // 原图失败仍交由真实 img 的 onError 展示原节点错误，保留其重试入口。
-    if (lease) {
-      try { await decodeImage(source, signal); } catch { signal.throwIfAborted(); }
-    }
-    return { src: source, release: () => {} };
+    // 预览失败不能自动改解码原图，否则预算拒绝和超时都会失效。
+    throw error;
   }
 }
 
@@ -71,6 +69,7 @@ export function createCanvasImageDisplay(options: {
   projectId?: string | null;
   queue: DisplayQueue;
   publish: (lease: DisplayImageLease) => void;
+  onError?: (error: unknown) => void;
   prepare?: typeof prepareCanvasImage;
 }) {
   const prepareKey = {};
@@ -126,7 +125,9 @@ export function createCanvasImageDisplay(options: {
           displayed = { edge, lease };
           options.publish(lease);
         });
-      } catch { /* 取消或过期的准备任务不改变现有显示。 */ }
+      } catch (error) {
+        if (!stale() && !displayed) options.onError?.(error);
+      }
     }, delay);
     abort = () => {
       if (!transferred) controller.abort();
@@ -141,7 +142,7 @@ export function createCanvasImageDisplay(options: {
     viewport(zoom: number, width: number, height: number, pixelRatio: number, performanceMode = false) {
       if (!Number.isFinite(zoom) || zoom <= 0) return;
       const tier = canvasImageTier(Math.max(width, height) * zoom * pixelRatio, target);
-      // 只限制画布预览的自动档位；原图查看和加载失败回退仍保留。
+      // 只限制画布预览的自动档位；主动查看原图仍走独立入口。
       const cap = getPerformanceModeBudget(performanceMode).imagePreviewMaxEdge;
       request(cap > 0 ? (tier === 0 ? cap : Math.min(tier, cap)) : tier);
     },
