@@ -281,6 +281,7 @@ export function useTooltipAutoPlacement() {
     document.addEventListener('focusin', handleFocusIn);
     document.addEventListener('focusout', handleFocusOut);
     document.addEventListener('click', handleClick, true);
+    document.addEventListener('contextmenu', hideTooltip, true);
     window.addEventListener('resize', refreshActiveTooltip);
     window.addEventListener('scroll', refreshActiveTooltip, true);
 
@@ -294,6 +295,7 @@ export function useTooltipAutoPlacement() {
       document.removeEventListener('focusin', handleFocusIn);
       document.removeEventListener('focusout', handleFocusOut);
       document.removeEventListener('click', handleClick, true);
+      document.removeEventListener('contextmenu', hideTooltip, true);
       window.removeEventListener('resize', refreshActiveTooltip);
       window.removeEventListener('scroll', refreshActiveTooltip, true);
       tooltip.remove();
