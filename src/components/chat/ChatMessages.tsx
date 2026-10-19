@@ -16,6 +16,7 @@ import { useT } from '../../i18n';
 
 interface ChatMessagesProps extends ChatReferenceHandlers {
   messages: ChatMessage[];
+  imagePreviewUrls?: Record<string, string>;
   agentTasks?: AgentTask[];
   showEmptyState: boolean;
   /** 独立窗口初始化标记 */
@@ -75,6 +76,7 @@ function mapChatMessageRows<T>(
 
 export default function ChatMessages({
   messages,
+  imagePreviewUrls,
   agentTasks = EMPTY_AGENT_TASKS,
   showEmptyState,
   detachedInitialized,
@@ -151,6 +153,7 @@ export default function ChatMessages({
       <MessageBubble
         key={message.id}
         message={message}
+        imagePreviewUrls={imagePreviewUrls}
         agentTask={message.agentTaskId ? agentTaskById.get(message.agentTaskId) : undefined}
         onAddToCanvas={onAddMediaToCanvas}
         onRetryMediaSave={onRetryMediaSave}
@@ -175,6 +178,7 @@ export default function ChatMessages({
       onNodeHover,
       onRegenerateMessage,
       visibleMessages,
+      imagePreviewUrls,
     ],
   );
 

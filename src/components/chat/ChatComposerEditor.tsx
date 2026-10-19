@@ -16,6 +16,7 @@ export type ChatComposerReference =
   | { kind: 'node'; id: string; label: string; displayId?: number }
   | { kind: 'model'; id: string; label: string }
   | { kind: 'skill'; id: string; label: string }
+  | { kind: 'image'; id: string; label: string }
   /** 资产库人物/场景/道具；发送时由 promptResolver 展开为设定正文或参考图 */
   | { kind: 'drama'; id: string; label: string };
 
@@ -28,6 +29,7 @@ interface ChatComposerEditorProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  canSubmitEmpty?: boolean;
   submitShortcut?: PromptSubmitShortcut;
   nodeDisplayIds: ReadonlyMap<string, number | undefined>;
   onMentionQueryChange: (query: string | null) => void;
@@ -48,8 +50,8 @@ interface ChatComposerEditorProps {
 type ParsedReference = ChatComposerReference & { raw: string };
 
 const ZWSP = '\u200B';
-const REFERENCE_PATTERN = /@\{([^:}\r\n]+):([^}\r\n]+)\}|@model\{([^|}\r\n]+)\|([^}\r\n]*)\}|@skill\{([^|}\r\n]+)\|([^}\r\n]*)\}|@drama\{([^:}\r\n]+):([^}\r\n]+)\}/g;
-const REFERENCE_TEXT_PATTERN = /@\{[^:}\r\n]+:[^}\r\n]+\}|@model\{[^|}\r\n]+\|[^}\r\n]*\}|@skill\{[^|}\r\n]+\|[^}\r\n]*\}|@drama\{[^:}\r\n]+:[^}\r\n]+\}/;
+const REFERENCE_PATTERN = /@\{([^:}\r\n]+):([^}\r\n]+)\}|@model\{([^|}\r\n]+)\|([^}\r\n]*)\}|@skill\{([^|}\r\n]+)\|([^}\r\n]*)\}|@drama\{([^:}\r\n]+):([^}\r\n]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
+const REFERENCE_TEXT_PATTERN = /@\{[^:}\r\n]+:[^}\r\n]+\}|@model\{[^|}\r\n]+\|[^}\r\n]*\}|@skill\{[^|}\r\n]+\|[^}\r\n]*\}|@drama\{[^:}\r\n]+:[^}\r\n]+\}|@image\{chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp)\|[^}\r\n]*\}/;
 
 /** 芯片配色：边框 / 底色 / 文字 / 竖条 */
 const REFERENCE_STYLES: Record<ChatComposerReference['kind'], { chip: string; accent: string }> = {
@@ -57,12 +59,14 @@ const REFERENCE_STYLES: Record<ChatComposerReference['kind'], { chip: string; ac
   model: { chip: 'border-sky-400/25 bg-sky-400/10 text-sky-100', accent: 'bg-sky-300/70' },
   skill: { chip: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100', accent: 'bg-emerald-300/70' },
   drama: { chip: 'border-violet-400/25 bg-violet-400/10 text-violet-100', accent: 'bg-violet-300/70' },
+  image: { chip: 'border-canvas-border bg-canvas-hover text-canvas-text', accent: 'bg-canvas-text-secondary' },
 };
 const REFERENCE_ARIA_PREFIX: Record<ChatComposerReference['kind'], string> = {
   node: '节点',
   model: '模型',
   skill: 'Skill',
   drama: '资产',
+  image: '参考图',
 };
 
 function decodeLabel(value: string): string {
@@ -87,6 +91,7 @@ function serializeReference(reference: ChatComposerReference): string {
   if (reference.kind === 'drama') {
     return `@drama{${reference.id}:${sanitizeLabel(reference.label) || '资产'}}`;
   }
+  if (reference.kind === 'image') return `@image{${reference.id}|${encodeURIComponent(reference.label)}}`;
   return `@skill{${reference.id}|${encodeURIComponent(reference.label)}}`;
 }
 
@@ -117,6 +122,7 @@ function parseReference(match: RegExpExecArray, nodeDisplayIds: ReadonlyMap<stri
       raw,
     };
   }
+  if (match[9] !== undefined) return { kind: 'image', id: match[9], label: decodeLabel(match[10]) || '参考图', raw };
   return {
     kind: 'drama',
     id: match[7],
@@ -265,6 +271,7 @@ const ChatComposerEditor = forwardRef<ChatComposerEditorHandle, ChatComposerEdit
   value,
   onChange,
   onSubmit,
+  canSubmitEmpty = false,
   submitShortcut = 'enter',
   nodeDisplayIds,
   onMentionQueryChange,
@@ -431,7 +438,7 @@ const ChatComposerEditor = forwardRef<ChatComposerEditorHandle, ChatComposerEdit
     const action = resolvePromptEnterAction(event.nativeEvent, submitShortcut);
     if (action === 'submit') {
       event.preventDefault();
-      if (!disabled && value.trim()) onSubmit();
+      if (!disabled && (value.trim() || canSubmitEmpty)) onSubmit();
       return;
     }
     if (event.key === 'Enter') {
@@ -454,7 +461,7 @@ const ChatComposerEditor = forwardRef<ChatComposerEditorHandle, ChatComposerEdit
     }
     if (event.key === 'Backspace' && removeAdjacentReference('before')) event.preventDefault();
     if (event.key === 'Delete' && removeAdjacentReference('after')) event.preventDefault();
-  }, [disabled, emitValue, onSubmit, onSuggestionKeyDown, removeAdjacentReference, submitShortcut, value]);
+  }, [disabled, emitValue, onSubmit, canSubmitEmpty, onSuggestionKeyDown, removeAdjacentReference, submitShortcut, value]);
 
   const handlePaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
     event.preventDefault();

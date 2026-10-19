@@ -16,9 +16,12 @@ import ReasoningPanel from './ReasoningPanel';
 import { useT } from '../../i18n';
 import ViewportImage from '../shared/ViewportImage';
 import ViewportVideo from '../shared/ViewportVideo';
+import ChatImageAttachments from './ChatImageAttachments';
+import { parseChatImageReferences, stripChatImageReferences } from '../../services/chat/chatImageReferenceService';
 
 interface MessageBubbleProps extends ChatReferenceHandlers {
   message: ChatMessage;
+  imagePreviewUrls?: Record<string, string>;
   agentTask?: AgentTask;
   onAddToCanvas?: (messageId: string) => void;
   /** 产物落盘失败时重试保存；未传入则不展示重试入口。 */
@@ -37,6 +40,7 @@ function formatMessageTime(timestamp: number): string {
 
 function MessageBubble({
   message,
+  imagePreviewUrls,
   agentTask,
   onAddToCanvas,
   onRetryMediaSave,
@@ -145,10 +149,11 @@ function MessageBubble({
         {!isUser && message.reasoning && <ReasoningPanel content={message.reasoning} truncated={message.reasoningTruncated} />}
         {!isUser && message.activity === 'compressing' && !showTimeline && <p role="status" className="py-2 text-xs text-canvas-text-secondary">{t('正在压缩上下文')}</p>}
         {!isUser && message.responseError && <div role="alert" className="ui-alert ui-alert--danger mb-2 break-words">{message.responseError}</div>}
+        {isUser && <ChatImageAttachments images={parseChatImageReferences(message.content)} previews={imagePreviewUrls} />}
         {message.content && (isUser ? (
           <div className="whitespace-pre-wrap break-words">
             <ChatReferenceText
-              value={message.content}
+              value={stripChatImageReferences(message.content)}
               compact
               onNodeActivate={onNodeActivate}
               onNodeHover={onNodeHover}

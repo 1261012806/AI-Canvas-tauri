@@ -20,6 +20,7 @@ import { formatShotRowBrief, isShotRowBlank, readShotFrameSource } from '../../t
 import type { BaseNodeData, ImageAnnotationLayer, ShotRow, StoryboardCellOverride } from '../../types';
 import type { MediaReference } from '../../types/aiTypes';
 import { mergeMediaReferences, toLegacyReferenceMedia, getMediaReferenceUrls } from './connectedReferenceMedia';
+import { parseChatImageReferences, readChatImageReference } from '../chat/chatImageReferenceService';
 
 interface PromptImageEntry {
   url: string;
@@ -157,14 +158,14 @@ export function resolveShotlistMention(
  *  - 含图片引用时返回多模态数组 [{type:"text",text:...}, {type:"image_url",image_url:{url:...}}]
  *  同时返回纯文本版本 textContent，用于空值校验和系统提示拼接
  *  图片节点有蒙版/标注时自动合并到原图 */
-export async function resolvePromptToChatContent(rawPrompt: string): Promise<{
+export async function resolvePromptToChatContent(rawPrompt: string, options?: { projectId?: string | null; signal?: AbortSignal }): Promise<{
   content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   textContent: string;
 }> {
   const store = useAppStore.getState();
   const { nodes } = store;
   // groups: 1=@asset  2,3=@drama  4,5=@node
-  const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}/g;
+  const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
   const imageEntries: PromptImageEntry[] = [];
   const imageKeyToIndex = new Map<string, number>();
   const parts: string[] = [];
@@ -174,6 +175,23 @@ export async function resolvePromptToChatContent(rawPrompt: string): Promise<{
   while ((match = chipRegex.exec(rawPrompt)) !== null) {
     if (match.index > lastIndex) {
       parts.push(rawPrompt.slice(lastIndex, match.index));
+    }
+
+    if (match[6] !== undefined) {
+      const key = `chat-image:${match[6]}`;
+      let idx = imageKeyToIndex.get(key);
+      if (idx === undefined) {
+        const projectId = options?.projectId === undefined ? store.currentProjectId : options.projectId;
+        if (!projectId) throw new Error('缺少参考图所属项目');
+        const dataUrl = await readChatImageReference(projectId, match[6], options?.signal);
+        idx = imageEntries.length + 1;
+        imageKeyToIndex.set(key, idx);
+        imageEntries.push({ url: dataUrl });
+      }
+      // 保留无路径引用，助手调用媒体工具时可以原样传递同一张参考图。
+      parts.push(`图片${idx}（参考图引用：${match[0]}）`);
+      lastIndex = chipRegex.lastIndex;
+      continue;
     }
 
     if (match[1] !== undefined) {
@@ -496,7 +514,14 @@ async function resolvePromptReferences(
   const imageEntries: PromptImageEntry[] = [];
   const mediaReferences: MediaReference[] = [];
   // groups: 1=@asset  2,3=@drama  4,5=@node
-  const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}/g;
+  const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
+
+  const chatImages = new Map<string, string>();
+  for (const image of parseChatImageReferences(rawPrompt)) {
+    if (chatImages.has(image.fileName)) continue;
+    if (!store.currentProjectId) throw new Error('缺少参考图所属项目');
+    chatImages.set(image.fileName, await readChatImageReference(store.currentProjectId, image.fileName));
+  }
 
   const assetImageMap = new Map<string, string>();
   for (const m of rawPrompt.matchAll(/@asset\{([^}]+)\}/g)) {
@@ -571,7 +596,14 @@ async function resolvePromptReferences(
       dramaId: string | undefined,
       dramaName: string | undefined,
       rawNodeId: string | undefined,
+      _nodeName: string | undefined,
+      chatImageFileName: string | undefined,
     ) => {
+    if (chatImageFileName !== undefined) {
+      const url = chatImages.get(chatImageFileName);
+      if (!url) throw new Error('参考图已不可用，请重新上传');
+      return mediaLabel('image', addImage(`chat-image:${chatImageFileName}`, { url }));
+    }
     if (assetEnc !== undefined) {
       const dataUrl = assetImageMap.get(assetEnc);
       if (!dataUrl) return '';

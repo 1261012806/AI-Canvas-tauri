@@ -11,7 +11,7 @@ import { resolvePromptToChatContent } from '../ai/promptResolver';
 import { resolveChatContentImageDataUrls } from '../ai/imageUtils';
 import { getOrCreateVisualDescription } from './visualDescriptionService';
 
-const REFERENCE_MARKER = /@asset\{|@drama\{|@\{[^}]+\}/;
+const REFERENCE_MARKER = /@image\{|@asset\{|@drama\{|@\{[^}]+\}/;
 
 function imageUrls(content: AssistantModelContent): string[] {
   if (typeof content === 'string') return [];
@@ -45,7 +45,7 @@ export async function prepareAssistantVisualMessages(params: {
       prepared.push(message);
       continue;
     }
-    const resolved = await resolvePromptToChatContent(message.content);
+    const resolved = await resolvePromptToChatContent(message.content, { projectId: params.projectId, signal: params.signal });
     if (typeof resolved.content === 'string') {
       prepared.push(message);
       continue;

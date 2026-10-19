@@ -252,6 +252,13 @@ export type ChatMessageStatus =
 // 聊天消息
 // ============================================
 
+/** 待发送参考图仅保存项目内文件名和展示信息，原图不进入消息或任务。 */
+export interface ChatImageReference {
+  fileName: string;
+  label: string;
+  size: number;
+}
+
 export interface ChatMessage {
   /** Bounded, sanitized provider-returned reasoning; transient, excluded from model history. */
   reasoning?: string;

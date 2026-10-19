@@ -24,7 +24,7 @@ import {
   validateTaskResumable,
   type AgentResumeValidation,
 } from './agentRuntime';
-import { enqueueAgentInterjection } from './agentInterjection';
+import { enqueueAgentInterjection, MAX_INTERJECTION_CHARS } from './agentInterjection';
 import {
   getActiveConversationAgentTaskId,
   scheduleConversationAgentExecution,
@@ -41,6 +41,7 @@ import {
   SKILL_CONTENT_LIMITS,
 } from '../skillPromptService';
 import { useAppStore } from '../../store/useAppStore';
+import { formatChatImageReference, parseChatImageReferences, MAX_CHAT_IMAGES } from './chatImageReferenceService';
 import type { ChatMessage } from '../../types/chat';
 import {
   type AgentApprovalResolution,
@@ -67,6 +68,7 @@ interface StreamingMessageBuffer {
 
 export interface SubmitConversationMessageOptions {
   content: string;
+  imageFileNames?: string[];
   conversationId: string;
   projectId?: string;
   mode?: AgentMode;
@@ -192,24 +194,40 @@ export function resolveConversationAgentApproval(
 
 export function submitConversationMessage({
   content,
+  imageFileNames = [],
   conversationId,
   projectId,
   mode,
   dispatchMode = 'queue',
   onProgress,
 }: SubmitConversationMessageOptions): SubmitConversationMessageResult {
-  const text = content.trim();
+  const store = useAppStore.getState();
+  const pending = store.chatImageDrafts[conversationId] ?? [];
+  const images = pending.filter((image) => imageFileNames.includes(image.fileName));
+  if (imageFileNames.some((fileName) => !images.some((image) => image.fileName === fileName))) {
+    store.showToast('参考图已移除或不属于当前对话，请重新检查附件', 'error');
+    return { status: 'ignored' };
+  }
+  const text = [content.trim(), ...images.map(formatChatImageReference)].filter(Boolean).join('\n');
   if (!text || !conversationId) return { status: 'ignored' };
+  if (new Set(parseChatImageReferences(text).map((image) => image.fileName)).size > MAX_CHAT_IMAGES) {
+    store.showToast(`每条消息最多添加 ${MAX_CHAT_IMAGES} 张参考图`, 'error');
+    return { status: 'ignored' };
+  }
+  if (dispatchMode === 'interject' && parseChatImageReferences(text).length > 0 && text.length > MAX_INTERJECTION_CHARS) {
+    store.showToast('文字与参考图引用超过当前任务追加上限，请缩短文字或使用排队发送', 'error');
+    return { status: 'ignored' };
+  }
 
   const interjectedTaskId = dispatchMode === 'interject'
     ? tryInterjectConversationMessage(conversationId, text)
     : undefined;
   if (interjectedTaskId) {
+    store.removeChatImageDrafts(conversationId, images.map((image) => image.fileName));
     onProgress?.();
     return { status: 'interjected', taskId: interjectedTaskId };
   }
 
-  const store = useAppStore.getState();
   const conversation = store.conversations.find((item) => item.id === conversationId);
   const executionProjectId = projectId ?? conversation?.projectId ?? store.currentProjectId ?? '';
   const userMessage: ChatMessage = {
@@ -221,6 +239,7 @@ export function submitConversationMessage({
     status: 'done',
   };
   store.addMessage(userMessage);
+  store.removeChatImageDrafts(conversationId, images.map((image) => image.fileName));
 
   const assistantMessage: ChatMessage = {
     id: createMessageId(),

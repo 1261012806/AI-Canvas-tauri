@@ -7,6 +7,7 @@ import type { StateCreator } from 'zustand';
 import type { AppState } from './useAppStore';
 import type {
   ChatConversation,
+  ChatImageReference,
   ChatMessage,
   ChatPanelView,
   OperationLog,
@@ -79,6 +80,9 @@ export interface ChatSlice {
   chatComposerLiveDraft: string;
   /** 只在运行期间保存，换窗口和换会话都从这里接续。 */
   chatComposerDrafts: Record<string, string>;
+  chatImageDrafts: Record<string, ChatImageReference[]>;
+  addChatImageDraft: (conversationId: string, image: ChatImageReference) => void;
+  removeChatImageDrafts: (conversationId: string, fileNames: string[]) => void;
   chatPanelView: ChatPanelView;
 
   // ── 会话状态 ──
@@ -240,6 +244,16 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (set, 
   chatComposerDraft: null,
   chatComposerLiveDraft: '',
   chatComposerDrafts: {},
+  chatImageDrafts: {},
+  addChatImageDraft: (conversationId, image) => set((state) => ({
+    chatImageDrafts: { ...state.chatImageDrafts, [conversationId]: [
+      ...(state.chatImageDrafts[conversationId] ?? []).filter((item) => item.fileName !== image.fileName), image,
+    ] },
+  })),
+  removeChatImageDrafts: (conversationId, fileNames) => set((state) => ({
+    chatImageDrafts: { ...state.chatImageDrafts,
+      [conversationId]: (state.chatImageDrafts[conversationId] ?? []).filter((item) => !fileNames.includes(item.fileName)) },
+  })),
   chatPanelView: 'chat',
 
   // ── 会话初始状态 ──
@@ -349,6 +363,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (set, 
       return {
         conversations: s.conversations.filter((c) => c.id !== id),
         chatComposerDrafts: Object.fromEntries(Object.entries(s.chatComposerDrafts).filter(([key]) => key !== id)),
+        chatImageDrafts: Object.fromEntries(Object.entries(s.chatImageDrafts).filter(([key]) => key !== id)),
         chatComposerLiveDraft: s.activeConversationId === id ? '' : s.chatComposerLiveDraft,
         activeConversationId:
           s.activeConversationId === id ? null : s.activeConversationId,

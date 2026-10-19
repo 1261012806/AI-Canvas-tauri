@@ -3,6 +3,7 @@
  */
 import type { Node } from '@xyflow/react';
 import { useAppStore } from '../../store/useAppStore';
+import { seriesOwnerId } from '../../store/store.utils';
 import type {
   ApiProviderConfig,
   BaseNodeData,
@@ -33,7 +34,6 @@ import {
   submitConversationMessage,
 } from './conversationExecutionController';
 import {
-  authorizeConversationFiles,
   clearConversationFileGrants,
   listConversationFileGrants,
   revokeFileGrant,
@@ -52,6 +52,10 @@ import {
 import { getAssistantTextModelCandidates } from '../projectSettingsService';
 import { projectSkillPickerOptions } from './skillCatalog';
 import { normalizePromptSubmitShortcut, PROMPT_SUBMIT_SHORTCUT_OPTIONS } from '../../utils/promptSubmitShortcut';
+import {
+  attachConversationFiles, getChatImagePreviews, parseChatImageReferences,
+  prepareChatImagePreviews, subscribeChatImagePreviews,
+} from './chatImageReferenceService';
 
 const DEFAULT_SYNC_INTERVAL_MS = 150;
 const MAX_SYNC_RETRY_DELAY_MS = 5_000;
@@ -92,6 +96,7 @@ interface DetachedSnapshotSource {
   agentPackageSkills: AppState['agentPackageSkills'];
   chatComposerLiveDraft: string;
   chatComposerDrafts: AppState['chatComposerDrafts'];
+  chatImageDrafts: AppState['chatImageDrafts'];
   chatPanelView: AppState['chatPanelView'];
   workflows: AppState['workflows'];
 }
@@ -252,6 +257,14 @@ export function buildChatModelCatalog(state: Pick<AppState, 'config' | 'workflow
 }
 
 export function buildDetachedChatSnapshot(state: AppState): ChatStateSnapshot {
+  const imageDrafts = state.activeConversationId ? state.chatImageDrafts[state.activeConversationId] ?? [] : [];
+  const imageFileNames = [
+    ...imageDrafts.map((image) => image.fileName),
+    ...state.messages.filter((message) => message.conversationId === state.activeConversationId)
+      .flatMap((message) => parseChatImageReferences(message.content).map((image) => image.fileName)),
+    ...parseChatImageReferences(state.chatComposerLiveDraft).map((image) => image.fileName),
+  ];
+  void prepareChatImagePreviews(state.currentProjectId, imageFileNames);
   const project = state.projects.find((item) => item.id === state.currentProjectId);
   return {
     conversations: state.conversations,
@@ -271,6 +284,8 @@ export function buildDetachedChatSnapshot(state: AppState): ChatStateSnapshot {
     localFileGrants: state.activeConversationId
       ? listConversationFileGrants(state.activeConversationId)
       : [],
+    imageDrafts,
+    imagePreviewUrls: getChatImagePreviews(state.currentProjectId, imageFileNames),
     nodes: projectChatNodes(state.nodes),
     dramaAssets: state.dramaAssets,
     skillOptions: projectSkillPickerOptions(state.userSkills, state.agentPackageSkills),
@@ -300,6 +315,7 @@ function detachedSnapshotSourceChanged(
     || current.agentPackageSkills !== previous.agentPackageSkills
     || current.chatComposerLiveDraft !== previous.chatComposerLiveDraft
     || current.chatComposerDrafts !== previous.chatComposerDrafts
+    || current.chatImageDrafts !== previous.chatImageDrafts
     || current.chatPanelView !== previous.chatPanelView
     || current.workflows !== previous.workflows;
 }
@@ -318,13 +334,19 @@ export function handleDetachedChatAction(
       const conversation = store.conversations.find(
         (item) => item.id === action.conversationId,
       );
-      submitConversationMessage({
+      const submitted = submitConversationMessage({
         content: action.content,
-        projectId: conversation?.projectId ?? store.currentProjectId ?? '',
+        ...(action.imageFileNames !== undefined ? { imageFileNames: action.imageFileNames } : {}),
+        projectId: store.currentProjectId && conversation?.projectId === seriesOwnerId(store.projects, store.currentProjectId)
+          ? store.currentProjectId : conversation?.projectId ?? store.currentProjectId ?? '',
         conversationId: action.conversationId,
         mode: conversation?.agentMode ?? 'collaborative',
         dispatchMode: action.dispatchMode,
       });
+      if (action.imageFileNames?.length) {
+        store.setChatComposerLiveDraft(submitted?.status === 'ignored' ? action.content : '', action.conversationId);
+        requestSync(true);
+      }
       break;
     }
 
@@ -365,10 +387,10 @@ export function handleDetachedChatAction(
       break;
 
     case 'authorize_local_files':
-      void authorizeConversationFiles(action.conversationId)
+      void attachConversationFiles(action.conversationId)
         .then((created) => {
           store.showToast(
-            created.length > 0 ? `已授权 ${created.length} 个文件` : '未新增文件授权',
+            `已添加 ${created.images} 张参考图，授权 ${created.texts} 个文本文件${created.failed ? '；部分图片未添加，请检查格式、大小或数量上限' : ''}`,
             'info',
           );
         })
@@ -376,6 +398,10 @@ export function handleDetachedChatAction(
           error instanceof Error ? error.message : '文件授权失败',
           'error',
         ));
+      break;
+
+    case 'remove_image_attachment':
+      store.removeChatImageDrafts(action.conversationId, [action.fileName]);
       break;
 
     case 'revoke_local_file':
@@ -535,6 +561,7 @@ export function createDetachedChatSyncController(
   let cleanupListener: (() => void) | undefined;
   let unsubscribeStore: (() => void) | undefined;
   let unsubscribeFileGrants: (() => void) | undefined;
+  let unsubscribeImagePreviews: (() => void) | undefined;
 
   const resetSyncState = () => {
     generation += 1;
@@ -663,6 +690,7 @@ export function createDetachedChatSyncController(
       sync(justDetached, justDetached);
     });
     unsubscribeFileGrants = subscribeFileGrants(() => sync());
+    unsubscribeImagePreviews = subscribeChatImagePreviews(() => sync());
 
     const listenerCleanup = await initListener(
       (action) => handleDetachedChatAction(action, sync),
@@ -689,6 +717,8 @@ export function createDetachedChatSyncController(
     unsubscribeStore = undefined;
     unsubscribeFileGrants?.();
     unsubscribeFileGrants = undefined;
+    unsubscribeImagePreviews?.();
+    unsubscribeImagePreviews = undefined;
     cleanupListener?.();
     cleanupListener = undefined;
   };

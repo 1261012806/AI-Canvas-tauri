@@ -65,6 +65,38 @@ beforeEach(() => {
 });
 
 describe('detached chat sync controller', () => {
+  it('keeps an image request bound to the active episode when its conversation belongs to the series', () => {
+    useAppStore.setState({ currentProjectId: 'episode-1', projects: [
+      ...useAppStore.getState().projects,
+      { id: 'episode-1', parentId: 'project-1', episodeNo: 1, name: 'Episode', createdAt: 1, updatedAt: 1 },
+    ] });
+    handleDetachedChatAction({ type: 'send_message', conversationId: 'conversation-1', content: '看看', imageFileNames: [] }, vi.fn());
+    expect(conversationControllerMocks.submit).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'episode-1' }));
+  });
+
+  it('retains detached text when image validation rejects the submission', () => {
+    conversationControllerMocks.submit.mockReturnValueOnce({ status: 'ignored' });
+    handleDetachedChatAction({ type: 'send_message', content: '保留我的输入', conversationId: 'conversation-1',
+      imageFileNames: ['chat-ref-11111111-1111-4111-8111-111111111111.png'] }, vi.fn());
+    expect(useAppStore.getState().chatComposerDrafts['conversation-1']).toBe('保留我的输入');
+  });
+
+  it('synchronizes pending image metadata through snapshots and patches and routes removal to the main store', () => {
+    const fileName = 'chat-ref-11111111-1111-4111-8111-111111111111.png';
+    const before = buildDetachedChatSnapshot(useAppStore.getState());
+    useAppStore.getState().addChatImageDraft('conversation-1', { fileName, label: '参考图.png', size: 4 });
+    const withImage = buildDetachedChatSnapshot(useAppStore.getState());
+    const patched = applyChatStatePatch(before, createChatStatePatch(before, withImage));
+    expect(patched.imageDrafts).toEqual([{ fileName, label: '参考图.png', size: 4 }]);
+    handleDetachedChatAction({ type: 'send_message', conversationId: 'conversation-1', content: '', imageFileNames: [fileName] }, vi.fn());
+    expect(conversationControllerMocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'conversation-1', content: '', imageFileNames: [fileName],
+    }));
+    handleDetachedChatAction({ type: 'remove_image_attachment', conversationId: 'conversation-1', fileName }, vi.fn());
+    const removed = buildDetachedChatSnapshot(useAppStore.getState());
+    expect(applyChatStatePatch(patched, createChatStatePatch(withImage, removed)).imageDrafts).toEqual([]);
+  });
+
   it('synchronizes submit shortcuts after config hydration and saves detached changes in the main store', async () => {
     const saveConfig = vi.fn(async () => undefined);
     useAppStore.setState((state) => ({

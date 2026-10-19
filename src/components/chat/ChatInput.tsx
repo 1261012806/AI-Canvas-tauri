@@ -12,6 +12,9 @@ import SendShortcutMenu from '../shared/SendShortcutMenu';
 import ModelSelector from '../nodes/shared/ModelSelector';
 import ContextUsageIndicator from './ContextUsageIndicator';
 import ChatComposerEditor, { type ChatComposerEditorHandle } from './ChatComposerEditor';
+import ChatImageAttachments from './ChatImageAttachments';
+import type { ChatImageReference } from '../../types/chat';
+import { parseChatImageReferences } from '../../services/chat/chatImageReferenceService';
 import MentionPicker, { type MentionPickerItem } from '../shared/MentionPicker';
 import { resolveDramaMentionItems } from '../nodes/shared/mentionEditorSources';
 import { bestNodeThumb } from '../nodes/shared/mentionEditorDom';
@@ -174,6 +177,9 @@ interface ChatInputProps {
   hasActiveTask?: boolean;
   onInterject?: () => void;
   localFileGrants?: LocalFileGrantSummary[];
+  imageDrafts?: ChatImageReference[];
+  imagePreviewUrls?: Record<string, string>;
+  onRemoveImage?: (fileName: string) => void;
   onAuthorizeLocalFiles?: () => void;
   onRevokeLocalFile?: (grantId: string) => void;
   /** 当前会话上下文占用（估算）；无会话时为 null */
@@ -201,6 +207,9 @@ export default function ChatInput({
   hasActiveTask = false,
   onInterject,
   localFileGrants = [],
+  imageDrafts = [],
+  imagePreviewUrls,
+  onRemoveImage,
   onAuthorizeLocalFiles,
   onRevokeLocalFile,
   contextUsage,
@@ -589,7 +598,9 @@ export default function ChatInput({
     return () => window.removeEventListener('chat-open-reference-menu', openModelReferences);
   }, []);
 
-  const sendDisabled = !inputValue.trim() || disabled;
+  const inputImages = parseChatImageReferences(inputValue);
+  const images = [...new Map([...inputImages, ...imageDrafts].map((image) => [image.fileName, image])).values()];
+  const sendDisabled = (!inputValue.trim() && !images.length) || disabled;
   const sendButton = (
     <button type="button" disabled={sendDisabled} onClick={onSend}
       className="ui-ai-input__icon-btn ui-ai-input__submit chat-panel-send-btn"
@@ -604,6 +615,12 @@ export default function ChatInput({
     <div className="chat-panel-input-area flex-shrink-0 px-3 pt-2">
       <div className="ui-ai-input chat-panel-input-box">
         <div className="ui-ai-input__body">
+          <ChatImageAttachments images={images} previews={imagePreviewUrls} onRemove={(fileName) => {
+            const nextValue = inputImages.filter((image) => image.fileName === fileName)
+              .reduce((text, image) => text.replaceAll(image.raw, ''), inputValue);
+            if (nextValue !== inputValue) onInputChange(nextValue);
+            onRemoveImage?.(fileName);
+          }} />
           {localFileGrants.length > 0 && (
             <div className="mb-2 flex max-h-16 flex-wrap gap-1.5 overflow-y-auto">
               {localFileGrants.map((grant) => (
@@ -635,6 +652,7 @@ export default function ChatInput({
             value={inputValue}
             onChange={onInputChange}
             onSubmit={onSend}
+            canSubmitEmpty={imageDrafts.length > 0}
             submitShortcut={submitShortcut}
             nodeDisplayIds={nodeDisplayIds}
             onMentionQueryChange={(query) => {
@@ -844,8 +862,9 @@ export default function ChatInput({
                 <button
                   type="button"
                   onClick={onAuthorizeLocalFiles}
-                  aria-label={t('授权当前对话读取本地文件')}
-                  title={t('选择文本文件；授权仅在当前对话和本次运行期间有效')}
+                  disabled={disabled}
+                  aria-label={t('添加图片或文本附件')}
+                  title={t('添加参考图（PNG/JPEG/WebP，单图最多 8 MB、每条消息最多 6 张），或授权读取文本文件')}
                   className="ui-ai-input__icon-btn"
                 >
                   <Icon icon="mdi:paperclip" width="14" />
@@ -861,7 +880,7 @@ export default function ChatInput({
               <ContextUsageIndicator usage={contextUsage ?? null} />
             </div>
 
-            {hasActiveTask && onInterject && inputValue.trim() && !disabled && (
+            {hasActiveTask && onInterject && (inputValue.trim() || images.length > 0) && !disabled && (
               <button
                 type="button"
                 onClick={onInterject}

@@ -21,6 +21,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
@@ -68,13 +69,16 @@ import {
   buildChatModelCatalog,
 } from '../../services/chat/detachedChatSyncController';
 import type { AgentApprovalResolution, AgentMode } from '../../types/agent';
-import type { ChatPanelView } from '../../types/chat';
+import type { ChatImageReference, ChatPanelView } from '../../types/chat';
 import {
-  authorizeConversationFiles,
   listConversationFileGrants,
   revokeFileGrant,
   subscribeFileGrants,
 } from '../../services/chat/fileGrantService';
+import {
+  attachConversationFiles, getChatImagePreviews, getChatImagePreviewVersion, parseChatImageReferences,
+  prepareChatImagePreviews, subscribeChatImagePreviews,
+} from '../../services/chat/chatImageReferenceService';
 import { getAssistantTextModelCandidates } from '../../services/projectSettingsService';
 import { useT } from '../../i18n';
 import type { PromptSubmitShortcut } from '../../types';
@@ -100,6 +104,8 @@ interface ChatPanelProps {
   detachedHeaderActions?: ReactNode;
   onComposerDraftChange?: (draft: ChatComposerHandoff) => void;
 }
+
+const EMPTY_IMAGE_DRAFTS: ChatImageReference[] = [];
 
 export default function ChatPanel({
   detached = false,
@@ -181,7 +187,10 @@ export default function ChatPanel({
   // ── detached 模式数据 ──
   const effectiveConversations = detached ? (detachedSnapshot?.conversations ?? []) : conversations;
   const effectiveActiveConversationId = detached ? (detachedSnapshot?.activeConversationId ?? null) : activeConversationId;
-  const effectiveMessages = detached ? (detachedSnapshot?.messages ?? []) : messages;
+  const effectiveMessages = useMemo(
+    () => detached ? (detachedSnapshot?.messages ?? []) : messages,
+    [detached, detachedSnapshot?.messages, messages],
+  );
   const effectiveAgentTasks = detached ? (detachedSnapshot?.agentTasks ?? []) : agentTasks;
   const effectiveProjectId = detached ? (detachedSnapshot?.projectId ?? null) : currentProjectId;
   const effectiveProjectName = detached ? detachedSnapshot?.projectName : undefined;
@@ -229,6 +238,24 @@ export default function ChatPanel({
   );
 
   const [inputValue, setInputValue] = useState('');
+  const imageDrafts = useAppStore((state) => state.chatImageDrafts);
+  const effectiveImageDrafts = detached ? (detachedSnapshot?.imageDrafts ?? EMPTY_IMAGE_DRAFTS)
+    : effectiveActiveConversationId ? imageDrafts[effectiveActiveConversationId] ?? EMPTY_IMAGE_DRAFTS : EMPTY_IMAGE_DRAFTS;
+  const imagePreviewVersion = useSyncExternalStore(subscribeChatImagePreviews, getChatImagePreviewVersion, getChatImagePreviewVersion);
+  const imageFileNames = useMemo(() => [
+    ...effectiveMessages.filter((message) => message.conversationId === effectiveActiveConversationId)
+      .flatMap((message) => parseChatImageReferences(message.content).map((image) => image.fileName)),
+    ...parseChatImageReferences(inputValue).map((image) => image.fileName),
+    ...effectiveImageDrafts.map((image) => image.fileName),
+  ], [effectiveMessages, effectiveActiveConversationId, inputValue, effectiveImageDrafts]);
+  useEffect(() => {
+    if (!detached) void prepareChatImagePreviews(effectiveProjectId, imageFileNames);
+  }, [detached, effectiveProjectId, imageFileNames]);
+  const imageFileKey = [...new Set(imageFileNames)].join('|');
+  const imagePreviewUrls = useMemo(() => {
+    if (detached) return detachedSnapshot?.imagePreviewUrls;
+    return imagePreviewVersion === 0 ? {} : getChatImagePreviews(effectiveProjectId, imageFileKey ? imageFileKey.split('|') : []);
+  }, [detached, detachedSnapshot?.imagePreviewUrls, effectiveProjectId, imageFileKey, imagePreviewVersion]);
   const pendingDraftsRef = useRef(new Map<string | null, string>());
   const pendingConversationDraftRef = useRef<string | null>(null);
   const effectivePanelView = detached ? detachedSnapshot?.panelView ?? 'chat' : chatPanelView;
@@ -426,7 +453,7 @@ export default function ChatPanel({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [canonicalDraft, effectiveActiveConversationId, ownsComposer, updateInputDraft]);
+  }, [canonicalDraft, effectiveActiveConversationId, effectiveImageDrafts, ownsComposer, updateInputDraft]);
 
   const handleTextModelChange = useCallback((modelId?: string) => {
     if (detached) {
@@ -689,10 +716,10 @@ export default function ChatPanel({
       });
       return;
     }
-    void authorizeConversationFiles(effectiveActiveConversationId)
+    void attachConversationFiles(effectiveActiveConversationId)
       .then((created) => {
         showToast(
-          created.length > 0 ? t('已授权 {count} 个文件', { count: created.length }) : t('未新增文件授权'),
+          `已添加 ${created.images} 张参考图，授权 ${created.texts} 个文本文件${created.failed ? '；部分图片未添加，请检查格式、大小或数量上限' : ''}`,
           'info',
         );
       })
@@ -715,30 +742,48 @@ export default function ChatPanel({
     revokeFileGrant(effectiveActiveConversationId, grantId);
   }, [detached, effectiveActiveConversationId]);
 
+  const handleRemoveImage = useCallback((fileName: string) => {
+    if (!effectiveActiveConversationId) return;
+    if (detached) void emitAction({ type: 'remove_image_attachment', conversationId: effectiveActiveConversationId, fileName });
+    else useAppStore.getState().removeChatImageDrafts(effectiveActiveConversationId, [fileName]);
+  }, [detached, effectiveActiveConversationId]);
+
   // ── 发送消息 ──
-  const sendMessageText = useCallback((content: string, dispatchMode: 'queue' | 'interject' = 'queue') => {
+  const sendMessageText = useCallback((content: string, dispatchMode: 'queue' | 'interject' = 'queue', includePendingImages = true) => {
     const text = content.trim();
-    if (!text || !effectiveActiveConversationId || settingsConversation) return;
+    const imageFileNames = includePendingImages ? effectiveImageDrafts.map((image) => image.fileName) : [];
+    if ((!text && !imageFileNames.length) || !effectiveActiveConversationId || settingsConversation) return;
 
     if (detached) {
+      if (imageFileNames.length) {
+        // 图片提交由主窗口消费成功后清空；本地不提前丢掉可能被校验拒绝的文字。
+        const pending = draftSyncRef.current;
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.timer = null;
+        pending.value = null;
+        pendingDraftsRef.current.delete(effectiveActiveConversationId);
+      }
       void emitAction({
         type: 'send_message',
         content: text,
+        imageFileNames,
         conversationId: effectiveActiveConversationId,
         dispatchMode,
       });
-      updateInputDraft('');
+      if (!imageFileNames.length) updateInputDraft('');
       return;
     }
 
-    submitConversationMessage({
+    const submitted = submitConversationMessage({
       content: text,
+      imageFileNames,
       projectId: effectiveProjectId ?? '',
       conversationId: effectiveActiveConversationId,
       mode: effectiveAgentMode,
       dispatchMode,
       onProgress: scrollToBottom,
     });
+    if (submitted.status === 'ignored') return;
     updateInputDraft('');
     scrollToBottom();
   }, [
@@ -746,6 +791,7 @@ export default function ChatPanel({
     effectiveActiveConversationId,
     effectiveAgentMode,
     effectiveProjectId,
+    effectiveImageDrafts,
     settingsConversation,
     scrollToBottom,
     updateInputDraft,
@@ -765,7 +811,7 @@ export default function ChatPanel({
   }, [updateInputDraft]);
 
   const handleRegenerateMessage = useCallback((content: string) => {
-    sendMessageText(content);
+    sendMessageText(content, 'queue', false);
   }, [sendMessageText]);
 
   const handleNodeActivate = useCallback((nodeId: string) => {
@@ -965,6 +1011,7 @@ export default function ChatPanel({
                   {/* Messages */}
                   <ChatMessages
                     messages={conversationMessages}
+                    imagePreviewUrls={imagePreviewUrls}
                     agentTasks={effectiveAgentTasks}
                     showEmptyState={showEmptyState}
                     detachedInitialized={detachedInitialized}
@@ -1000,6 +1047,9 @@ export default function ChatPanel({
                       hasActiveTask={hasActiveConversationTask}
                       onInterject={handleInterject}
                       localFileGrants={effectiveLocalFileGrants}
+                      imageDrafts={effectiveImageDrafts}
+                      imagePreviewUrls={imagePreviewUrls}
+                      onRemoveImage={handleRemoveImage}
                       onAuthorizeLocalFiles={handleAuthorizeLocalFiles}
                       onRevokeLocalFile={handleRevokeLocalFile}
                       contextUsage={contextUsage}

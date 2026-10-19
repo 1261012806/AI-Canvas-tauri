@@ -4,6 +4,7 @@
 import {
   readAgentAuthorizedTextFile,
   selectAgentTextFiles,
+  type AgentTextFileSelection,
 } from '../fileService';
 
 const MAX_FILES_PER_CONVERSATION = 10;
@@ -61,12 +62,13 @@ export function listConversationFileGrants(
 
 export async function authorizeConversationFiles(
   conversationId: string,
+  selectedFiles?: AgentTextFileSelection[],
 ): Promise<LocalFileGrantSummary[]> {
   if (!conversationId) throw new Error('没有活动对话，无法授权文件');
   const existing = listConversationFileGrants(conversationId);
   const remaining = MAX_FILES_PER_CONVERSATION - existing.length;
   if (remaining <= 0) throw new Error(`每个对话最多授权 ${MAX_FILES_PER_CONVERSATION} 个文件`);
-  const selected = await selectAgentTextFiles();
+  const selected = selectedFiles ?? await selectAgentTextFiles();
   const created: LocalFileGrantSummary[] = [];
   for (const file of selected.slice(0, remaining)) {
     if (file.size > MAX_FILE_BYTES) continue;

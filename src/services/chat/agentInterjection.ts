@@ -7,7 +7,7 @@ export interface AgentInterjection {
   createdAt: number;
 }
 
-const MAX_INTERJECTION_CHARS = 8_000;
+export const MAX_INTERJECTION_CHARS = 8_000;
 const activeBuffers = new Map<string, AgentInterjection[]>();
 
 export function openAgentInterjectionBuffer(taskId: string): void {

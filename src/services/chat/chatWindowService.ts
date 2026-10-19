@@ -17,7 +17,7 @@
  */
 
 import type { Node } from '@xyflow/react';
-import type { ChatConversation, ChatMessage, ChatPanelView } from '../../types/chat';
+import type { ChatConversation, ChatImageReference, ChatMessage, ChatPanelView } from '../../types/chat';
 import type { MediaModelOption } from '../../components/nodes/shared/defaultModels';
 import type { BaseNodeData, GeneralModelConfig, ModelGroup, PromptSubmitShortcut } from '../../types';
 import type { SkillPickerOption } from '../../types/agentPackage';
@@ -54,6 +54,8 @@ export interface ChatStateSnapshot {
   assistantVideoModelId?: string;
   mediaModelAvailability?: Record<string, boolean>;
   localFileGrants?: LocalFileGrantSummary[];
+  imageDrafts?: ChatImageReference[];
+  imagePreviewUrls?: Record<string, string>;
   /** 画布节点精简投影，供 @ 引用与调用详情渲染；不含提示词/坐标等正文 */
   nodes: Node<BaseNodeData>[];
   dramaAssets: DramaAssetLibrary;
@@ -89,6 +91,8 @@ export interface ChatStatePatch {
     assistantVideoModelId: string | null;
     mediaModelAvailability: Record<string, boolean> | null;
     localFileGrants: LocalFileGrantSummary[] | null;
+    imageDrafts: ChatImageReference[] | null;
+    imagePreviewUrls: Record<string, string> | null;
     nodes: Node<BaseNodeData>[];
     dramaAssets: DramaAssetLibrary;
     skillOptions: SkillPickerOption[];
@@ -200,6 +204,8 @@ export function createChatStatePatch(
     next.mediaModelAvailability,
   );
   setChangedField(fields, 'localFileGrants', previous.localFileGrants, next.localFileGrants);
+  setChangedField(fields, 'imageDrafts', previous.imageDrafts, next.imageDrafts);
+  setChangedField(fields, 'imagePreviewUrls', previous.imagePreviewUrls, next.imagePreviewUrls);
   setChangedField(fields, 'nodes', previous.nodes, next.nodes);
   setChangedField(fields, 'dramaAssets', previous.dramaAssets, next.dramaAssets);
   setChangedField(fields, 'skillOptions', previous.skillOptions, next.skillOptions);
@@ -249,6 +255,8 @@ export function applyChatStatePatch(
     localFileGrants: fields.localFileGrants === null
       ? undefined
       : (fields.localFileGrants ?? current.localFileGrants),
+    imageDrafts: fields.imageDrafts === null ? undefined : (fields.imageDrafts ?? current.imageDrafts),
+    imagePreviewUrls: fields.imagePreviewUrls === null ? undefined : (fields.imagePreviewUrls ?? current.imagePreviewUrls),
     assistantModelGroups: fields.assistantModelGroups ?? current.assistantModelGroups,
     nodes: fields.nodes ?? current.nodes,
     dramaAssets: fields.dramaAssets ?? current.dramaAssets,
@@ -271,6 +279,7 @@ export type ChatAction =
   | {
       type: 'send_message';
       content: string;
+      imageFileNames?: string[];
       conversationId: string;
       dispatchMode?: 'queue' | 'interject';
     }
@@ -294,6 +303,7 @@ export type ChatAction =
   | { type: 'rewind_agent_task'; taskId: string }
   | { type: 'authorize_local_files'; conversationId: string }
   | { type: 'revoke_local_file'; conversationId: string; grantId: string }
+  | { type: 'remove_image_attachment'; conversationId: string; fileName: string }
   | { type: 'select_model'; modelId?: string; category?: 'text' | 'image' | 'video' }
   | { type: 'focus_node'; nodeId: string }
   | { type: 'set_hovered_node'; nodeId: string | null }

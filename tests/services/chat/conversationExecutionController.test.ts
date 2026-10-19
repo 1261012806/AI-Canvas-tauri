@@ -81,6 +81,41 @@ beforeEach(() => {
 });
 
 describe('conversation execution controller', () => {
+  it('retains image drafts when a long interjection would truncate the image reference', () => {
+    const fileName = 'chat-ref-11111111-1111-4111-8111-111111111111.png';
+    useAppStore.getState().addChatImageDraft('conversation-1', { fileName, label: '图', size: 4 });
+    expect(submitConversationMessage({ content: 'x'.repeat(8_000), conversationId: 'conversation-1',
+      imageFileNames: [fileName], dispatchMode: 'interject' })).toEqual({ status: 'ignored' });
+    expect(useAppStore.getState().chatImageDrafts['conversation-1']).toHaveLength(1);
+    expect(interjectionMocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('submits an image-only message with a durable reference and consumes only its own pending images', () => {
+    const fileName = 'chat-ref-11111111-1111-4111-8111-111111111111.png';
+    const otherFile = 'chat-ref-22222222-2222-4222-8222-222222222222.jpg';
+    useAppStore.getState().addChatImageDraft('conversation-1', { fileName, label: '角色.png', size: 4 });
+    useAppStore.getState().addChatImageDraft('conversation-other', { fileName: otherFile, label: 'Other', size: 4 });
+    const result = submitConversationMessage({ content: '', conversationId: 'conversation-1', imageFileNames: [fileName] });
+    expect(result.status).toBe('started');
+    const state = useAppStore.getState();
+    expect(state.messages[0].content).toBe(`@image{${fileName}|${encodeURIComponent('角色.png')}}`);
+    expect(state.agentTasks[0].goal).toBe(state.messages[0].content);
+    expect(state.chatImageDrafts['conversation-1']).toEqual([]);
+    expect(state.chatImageDrafts['conversation-other']).toHaveLength(1);
+    expect(JSON.stringify([state.messages, state.agentTasks])).not.toContain('base64');
+    expect(schedulerMocks.schedule).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an attachment from another conversation before creating messages or tasks', () => {
+    const fileName = 'chat-ref-22222222-2222-4222-8222-222222222222.jpg';
+    useAppStore.getState().addChatImageDraft('conversation-other', { fileName, label: 'Other', size: 4 });
+    expect(submitConversationMessage({ content: '看看', conversationId: 'conversation-1', imageFileNames: [fileName] }))
+      .toEqual({ status: 'ignored' });
+    expect(useAppStore.getState().messages).toEqual([]);
+    expect(schedulerMocks.schedule).not.toHaveBeenCalled();
+    expect(useAppStore.getState().chatImageDrafts['conversation-other']).toHaveLength(1);
+  });
+
   it.each([
     { body: 'data: [DONE]\n\n', contentType: 'text/event-stream', status: 'failed', messageStatus: 'error', text: '未返回' },
     { body: 'data: {"error":{"message":"Provider unavailable"}}\n\n', contentType: 'text/event-stream', status: 'failed', messageStatus: 'error', text: 'Provider unavailable' },
