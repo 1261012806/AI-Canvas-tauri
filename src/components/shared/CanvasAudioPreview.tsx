@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAudioSpectrum } from '../../hooks/useAudioSpectrum';
@@ -85,6 +85,12 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playButtonRef = useRef<HTMLButtonElement | null>(null);
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  const scrubPointerRef = useRef<{ pointerId: number; value: number } | null>(null);
+  const finishScrub = useCallback(() => {
+    scrubPointerRef.current = null;
+    progressRef.current?.classList.remove('is-scrubbing', 'is-scrubbing-forward', 'is-scrubbing-backward');
+  }, []);
   const lifetime = useRef(0);
   const initialApplied = useRef(false);
   const playIntent = useRef(autoPlay);
@@ -92,8 +98,11 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(initialTime);
   const [duration, setDuration] = useState(0);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
   const [error, setError] = useState('');
   const prepare = useAudioSpectrum(audioRef, canvasRef, analysis);
+  const played = duration ? Math.min(100, Math.max(0, time / duration * 100)) : 0;
+  const buffered = duration ? Math.min(100, Math.max(time, bufferedEnd) / duration * 100) : 0;
 
   const play = useCallback(async () => {
     const audio = audioRef.current;
@@ -149,6 +158,7 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   useEffect(() => {
     if (audioRef.current) { audioRef.current.volume = volume; audioRef.current.muted = muted; }
   }, [volume, muted]);
+  useEffect(() => () => finishScrub(), [finishScrub]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       // Consume canvas shortcuts at window capture, but preserve native slider/button defaults.
@@ -183,6 +193,15 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
     const value = audioRef.current?.duration ?? 0;
     setDuration(Number.isFinite(value) && value > 0 ? value : 0);
   };
+  const updateBuffer = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    let end = audio.currentTime;
+    for (let index = 0; index < audio.buffered.length; index += 1) {
+      if (audio.buffered.start(index) <= audio.currentTime && audio.buffered.end(index) >= audio.currentTime) end = audio.buffered.end(index);
+    }
+    setBufferedEnd(end);
+  };
   return (
     <>
       <div className="rounded-2xl border border-canvas-border bg-canvas-surface p-4 sm:p-6">
@@ -208,7 +227,8 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
           if (autoPlay) void play();
         }}
         onDurationChange={updateDuration}
-        onTimeUpdate={() => setTime(audioRef.current?.currentTime ?? 0)}
+        onTimeUpdate={() => { setTime(audioRef.current?.currentTime ?? 0); updateBuffer(); }}
+        onProgress={updateBuffer}
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); if (hasNext) onNavigate(1, true); }}
         onError={() => {
@@ -216,28 +236,51 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
           else { setPlaying(false); setError(t('音频加载失败，请检查文件或链接')); }
         }}
       />
-      <div className="space-y-3">
-        <input
-          type="range" className="ui-slider w-full" aria-label={t('播放进度')}
-          min={0} max={duration || 1} step={0.1} value={Math.min(time, duration || 0)} disabled={!duration}
-          aria-valuetext={`${formatTime(time)} / ${formatTime(duration)}`}
-          onChange={(event) => {
-            const value = Math.min(duration, Math.max(0, Number(event.target.value)));
-            if (audioRef.current && duration) { audioRef.current.currentTime = value; setTime(value); }
-          }}
-        />
-        <div className="flex justify-between text-xs tabular-nums text-canvas-text-secondary"><span>{formatTime(time)}</span><span>{formatTime(duration)}</span></div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-5">
-        <div className="flex items-center gap-3">
-          <button className="ui-btn ui-btn--secondary ui-btn--lg" aria-label={t('上一曲')} title={`${t('上一曲')} (↑ / ←)`} disabled={!hasPrevious} onClick={() => onNavigate(-1, playing)}><SkipBack size={20} /></button>
-          <button ref={playButtonRef} className="ui-btn ui-btn--primary ui-btn--lg" aria-label={t(playing ? '暂停' : '播放')} onClick={toggle}>{playing ? <Pause size={22} /> : <Play size={22} />}{t(playing ? '暂停' : '播放')}</button>
-          <button className="ui-btn ui-btn--secondary ui-btn--lg" aria-label={t('下一曲')} title={`${t('下一曲')} (↓ / →)`} disabled={!hasNext} onClick={() => onNavigate(1, playing)}><SkipForward size={20} /></button>
+      <div className="ui-video-player__controls p-3">
+        <div ref={progressRef} className="ui-video-player__progress" style={{ '--video-played': `${played}%`, '--video-buffered': `${buffered}%` } as CSSProperties}>
+          <div className="ui-video-player__progress-track" aria-hidden="true"><span className="ui-video-player__progress-empty" /><span className="ui-video-player__progress-buffer" /><span className="ui-video-player__progress-played" /></div>
+          {duration > 0 && <span className="ui-video-player__progress-marker" aria-hidden="true" />}
+          <input
+            type="range" data-native-range className="ui-video-player__range-hit" aria-label={t('播放进度')}
+            min={0} max={duration || 1} step={0.01} value={Math.min(time, duration || 0)} disabled={!duration}
+            aria-valuetext={`${formatTime(time)} / ${formatTime(duration)}`}
+            onPointerDown={(event) => {
+              if (event.button !== 0 || event.currentTarget.disabled || scrubPointerRef.current) return;
+              scrubPointerRef.current = { pointerId: event.pointerId, value: Number(event.currentTarget.value) };
+              progressRef.current?.classList.add('is-scrubbing');
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerUp={(event) => { if (scrubPointerRef.current?.pointerId === event.pointerId) finishScrub(); }}
+            onPointerCancel={finishScrub} onLostPointerCapture={finishScrub} onBlur={finishScrub}
+            onChange={(event) => {
+              const value = Math.min(duration, Math.max(0, Number(event.target.value)));
+              const scrub = scrubPointerRef.current;
+              if (scrub && value !== scrub.value) {
+                progressRef.current?.classList.toggle('is-scrubbing-forward', value > scrub.value);
+                progressRef.current?.classList.toggle('is-scrubbing-backward', value < scrub.value);
+                scrub.value = value;
+              }
+              if (audioRef.current && duration) { audioRef.current.currentTime = value; setTime(value); }
+            }}
+          />
         </div>
-        <div className="flex items-center gap-3">
-          <button className="ui-btn ui-btn--ghost" aria-label={t(muted ? '取消静音' : '静音')} onClick={() => onMuted(!muted)}>{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
-          <input type="range" className="ui-slider w-28" aria-label={t('音量')} min={0} max={1} step={0.01} value={muted ? 0 : volume} onChange={(event) => { onVolume(Number(event.target.value)); onMuted(false); }} />
-          <span className="w-10 text-xs tabular-nums text-canvas-text-muted">{Math.round((muted ? 0 : volume) * 100)}%</span>
+        <div className="ui-video-player__control-row">
+          <div className="ui-video-player__control-left">
+            <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={t('上一曲')} title={`${t('上一曲')} (↑ / ←)`} disabled={!hasPrevious} onClick={() => onNavigate(-1, playing)}><SkipBack size={20} /></button>
+            <button type="button" ref={playButtonRef} className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={t(playing ? '暂停' : '播放')} title={t(playing ? '暂停' : '播放')} onClick={toggle}>{playing ? <Pause className="ui-video-player__play-icon" /> : <Play className="ui-video-player__play-icon" />}</button>
+            <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={t('下一曲')} title={`${t('下一曲')} (↓ / →)`} disabled={!hasNext} onClick={() => onNavigate(1, playing)}><SkipForward size={20} /></button>
+          </div>
+          <div className="ui-video-player__time-format">
+            <time className="text-sm font-medium tabular-nums text-canvas-text">{formatTime(time)} / {formatTime(duration)}</time>
+          </div>
+          <div className="flex justify-end">
+            <div className="ui-video-player__volume">
+              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={t(muted ? '取消静音' : '静音')} onClick={() => onMuted(!muted)}>{muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}</button>
+              <input type="range" className="ui-slider ui-video-player__volume-track" aria-label={t('音量')} min={0} max={1} step={0.01} value={muted ? 0 : volume}
+                style={{ '--range-progress': `${muted ? 0 : volume * 100}%` } as CSSProperties}
+                onChange={(event) => { onVolume(Number(event.target.value)); onMuted(false); }} />
+            </div>
+          </div>
         </div>
       </div>
       {error && <p role="alert" className="text-sm text-canvas-text-secondary">{error}</p>}

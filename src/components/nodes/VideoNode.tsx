@@ -1031,6 +1031,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               src={data.videoUrl}
               poster={initialCoverUrl ?? undefined}
               name={displayLabel}
+              className="pt-3"
               autoPlay
               crossOrigin="anonymous"
               onLoadedMetadata={handleFullscreenLoadedMetadata}
