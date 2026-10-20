@@ -110,7 +110,7 @@ AuK 资源来自提供的 `AuK-文生语音.json` 和 `AuK-参考音频与声音
 
 Qwen 克隆台词使用精确字段 `target_text`，默认输入与显式 @ 均支持，保持 `ref_text` 转写连线。02、03 的声音设计节点在编辑图中设置了 `randomize`，默认每次提交换种子；01 的克隆种子、03 的克隆与 SeedVC 种子默认固定。语音面板可独立切换两条 TTS 链路的固定／抽卡模式。种子连线不被覆盖；无有效编辑图或旁路设置时默认固定，不改写持久化图。
 
-Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 和 `comfyWorkflowAudioIO.test.ts`，覆盖增量播种、API/UI 连线、参数映射、默认与显式引用、模拟音频结果、参数保存和抽卡种子；范围与回滚见[三项音频工作流接入](./plans/2026-09-15-qwen-audio-workflows/task_plan.md)。未启动 ComfyUI 或进行真实生成；第 03 项 SeedVC 节点的安装、执行和听感仍需目标环境验收。
+Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 和 `comfyWorkflowAudioIO.test.ts`，覆盖增量播种、API/UI 连线、参数映射、默认与显式引用、模拟音频结果、参数保存和抽卡种子；范围与回滚见[三项音频工作流接入](./plans/2026-09-15-qwen-audio-workflows.md)。未启动 ComfyUI 或进行真实生成；第 03 项 SeedVC 节点的安装、执行和听感仍需目标环境验收。
 
 播种按 id **逐个记账**在 `localStorage` 的 `aicanvas.builtinWorkflows.seededIds`：
 

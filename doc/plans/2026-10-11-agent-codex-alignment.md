@@ -137,7 +137,7 @@ interface SkillReadPage {
 | `doc/对话助手-Agent能力实施方案.md` | 简短能力说明与实际验证状态 |
 | `doc/文档导航.md` | 当前专项与新发布记录入口 |
 | 本文件 | 阶段状态、验收缺口与回滚 |
-| 新增 `doc/plans/2026-10-11-release-0.10.5.md` | 发布门禁和远程产物证据 |
+| 新增 `doc/发布记录.md` | 发布门禁和远程产物证据 |
 | `package.json`、`package-lock.json` | 应用版本，不改变依赖解析 |
 | `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` | 应用包版本，不改变依赖解析 |
 | `src-tauri/tauri.conf.json` | 仅应用版本 |

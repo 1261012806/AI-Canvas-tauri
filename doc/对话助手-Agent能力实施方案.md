@@ -8,7 +8,7 @@
 
 2026-10-12 已实现 Skill 按当前上下文分页读取、关键词检索、游标失效和去重重置；公开推理字段与回答正文分开，采用有界脱敏的临时展示，不保存正文到推理元数据或回传模型。流式失败保留已收到回答，压缩显示独立活动与耗时，折叠步骤后仍可恢复任务。权限、成功写操作去重、原生来源授权和最近完整轮次的边界保持由宿主控制。
 
-范围、回滚与桌面验收步骤见[Codex 对照专项](./plans/2026-10-11-agent-codex-alignment.md)。定向检查与发布门禁的实际结果见[0.10.5 发布专项](./plans/2026-10-11-release-0.10.5.md)；真实模型、Tauri 文件来源与双窗口实机项待用户验收。
+范围、回滚与桌面验收步骤见[Codex 对照专项](./plans/2026-10-11-agent-codex-alignment.md)。定向检查与发布门禁的实际结果见[0.10.5 发布专项](./发布记录.md)；真实模型、Tauri 文件来源与双窗口实机项待用户验收。
 
 ## 职责与边界
 
@@ -83,12 +83,12 @@ Agent 在结束纯文本轮次前再次接收执行中补充要求；每轮由 [
 | 阶段 / 能力 | 状态 | 后续与历史依据 |
 |---|---|---|
 | P3 基础 Agent | 已完成；早期 P3-C1 联网方案曾移除 | [P3 记录](./history/2026-09-07-跨模块实施记录归档.md#agent-p3)，当前联网实现看 P5-D |
-| P4 调度、恢复、上下文、只读子智能体 | 已完成 | [P4 记录](./history/2026-09-07-跨模块实施记录归档.md#agent-p4)、[Runtime 演进计划](./plans/2026-07-21-agent-runtime-evolution.md) |
+| P4 调度、恢复、上下文、只读子智能体 | 已完成 | [P4 记录](./history/2026-09-07-跨模块实施记录归档.md#agent-p4)、[Runtime 架构决策](./adr/0002-agent-runtime-evolution.md) |
 | P5-A / B / D 文档读取、配置草稿、联网检索 | 已完成 | [P5 记录](./history/2026-09-07-跨模块实施记录归档.md#agent-p5)、[只读联网计划](./plans/2026-07-23-read-only-web-research.md) |
 | P5-C 端到端安全回归与验收 | 待实施 / 未闭环 | [原进度表](./history/2026-09-07-跨模块实施记录归档.md#agent-progress)；开始前重新明确当前范围与验收矩阵 |
 | P5-F 核心编排收敛 | 已有实施记录 | [编排职责记录](./history/2026-09-07-跨模块实施记录归档.md#agent-orchestration) |
-| Skill 渐进披露、显式绑定、领域子智能体 | 已完成已记录阶段 | [Skill 计划](./plans/2026-07-28-assistant-skill-progressive-disclosure.md)、[显式绑定计划](./plans/2026-08-12-explicit-skill-bindings.md)、[子智能体计划](./plans/2026-07-29-domain-sub-agents.md) |
-| 工具详情、执行依据、项目模型路由与视觉上下文 | 已有实施记录 | [工具可观测性](./plans/2026-08-12-agent-tool-observability.md)、[执行依据](./plans/2026-08-13-agent-execution-rationale.md)、[项目上下文记录](./history/2026-09-07-跨模块实施记录归档.md#agent-project-context) |
+| Skill 渐进披露、显式绑定、领域子智能体 | 已完成已记录阶段 | [Skill 计划](./plans/2026-07-28-assistant-skill-progressive-disclosure.md)、[显式绑定记录](./history/2026-09-07-跨模块实施记录归档.md#821-显式-skill-任务级确定性注入)、[子智能体计划](./plans/2026-07-29-domain-sub-agents.md) |
+| 工具详情、执行依据、项目模型路由与视觉上下文 | 已有实施记录 | [工具可观测性](./history/2026-09-07-跨模块实施记录归档.md#820-agent-工具调用结构化详情)、[执行依据](./history/2026-09-07-跨模块实施记录归档.md#822-可折叠实时执行依据)、[项目上下文记录](./history/2026-09-07-跨模块实施记录归档.md#agent-project-context) |
 | Agent Package 首批接入、任务 Skill 与 MCP 只读兼容 | 首批已完成，后续未完成 | 项目覆盖和后台表面接入待实施；见[Agent Package 记录](./history/2026-09-07-跨模块实施记录归档.md#agent-packages) |
 | 助手可靠性、网页与厂商配置 A–D 优化 | 实现与定向检查已完成，实机验收有缺口 | [可靠性记录](./history/2026-09-07-跨模块实施记录归档.md#agent-reliability)、[A–D 联合复核](./history/2026-09-07-跨模块实施记录归档.md#agent-web-validation) |
 | 项目记忆外部后端评估 | 已取消 | [取消记录](./history/2026-09-07-跨模块实施记录归档.md#agent-memory-cancelled)，不作为待实现项继续推进 |
