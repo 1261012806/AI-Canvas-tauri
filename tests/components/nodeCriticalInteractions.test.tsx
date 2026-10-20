@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryRecord } from '../../src/services/indexedDbService';
+import type { ComfyNodeProgress } from '../../src/types/comfyProgress';
 
 interface ElementLike {
   type: unknown;
@@ -25,17 +26,7 @@ interface TestStore {
   customStyles: Array<Record<string, unknown>>;
   workflows: unknown[];
   selectedNodeIds: string[];
-  comfyNodeProgress: Record<string, {
-    projectId: string;
-    nodeId: string;
-    requestId: string;
-    clientId: string;
-    stage: string;
-    value?: number;
-    max?: number;
-    percent?: number;
-    updatedAt: number;
-  }>;
+  comfyNodeProgress: Record<string, ComfyNodeProgress>;
   getCurrentRevision: () => number;
   setNodes: (nodes: TestNode[]) => void;
   addNode: ReturnType<typeof vi.fn>;
@@ -740,6 +731,9 @@ describe('critical canvas node interactions', () => {
       value: 6,
       max: 12,
       percent: 50,
+      executingNodeId: '12',
+      executingNodeLabel: '视频采样',
+      cachedNodeCount: 8,
       updatedAt: 1,
     };
     installStoreMock(store);
@@ -750,7 +744,66 @@ describe('critical canvas node interactions', () => {
     const detail = findElement(rendered, (element) => element.props.children === '6 / 12 · 50%');
 
     expect(progressbar.props['aria-valuenow']).toBe(50);
+    expect(progressbar.props['aria-label']).toBe('ComfyUI 当前节点进度');
     expect(detail).toBeTruthy();
+    expect(findElement(rendered, (element) => element.props.children === '#12 · 视频采样')).toBeTruthy();
+    expect(findElement(rendered, (element) => element.props.title === '已复用 8 个缓存节点')).toBeTruthy();
+  });
+
+  it('ComfyUI waiting and finalizing never display a stale node percentage', async () => {
+    await installReactHookDriver();
+    const store = createStore([], () => 1);
+    store.comfyNodeProgress['node-1'] = {
+      projectId: 'project-a', nodeId: 'node-1', requestId: 'request', clientId: 'client',
+      stage: 'queued', queuePosition: 3, value: 12, max: 12, percent: 100, updatedAt: 1,
+    };
+    installStoreMock(store);
+    const { default: NodeGenerationProgress } = await import('../../src/components/nodes/shared/NodeGenerationProgress');
+    const waiting = NodeGenerationProgress({ nodeId: 'node-1', fallbackLabel: '生成视频中...', overlay: true });
+    expect(findElement(waiting, (element) => element.props.children === '等待队列第 3 位')).toBeTruthy();
+    expect(findElement(waiting, (element) => element.props.role === 'progressbar').props['aria-valuenow']).toBeUndefined();
+    expect(waiting.props.className).toBe('generation-progress-overlay');
+
+    store.comfyNodeProgress['node-1'].stage = 'finalizing';
+    const finalizing = NodeGenerationProgress({ nodeId: 'node-1', fallbackLabel: '生成视频中...' });
+    expect(findElement(finalizing, (element) => element.props.children === '执行已结束，等待结果回传')).toBeTruthy();
+    expect(findElement(finalizing, (element) => element.props.role === 'progressbar').props['aria-valuenow']).toBeUndefined();
+  });
+
+  it('ComfyUI fallback explains unavailable step progress and does not leak another project status', async () => {
+    await installReactHookDriver();
+    const store = createStore([], () => 1);
+    store.comfyNodeProgress['node-1'] = {
+      projectId: 'project-a', nodeId: 'node-1', requestId: 'request', clientId: 'client',
+      stage: 'running', transport: 'polling', updatedAt: 1,
+    };
+    installStoreMock(store);
+    const { default: NodeGenerationProgress } = await import('../../src/components/nodes/shared/NodeGenerationProgress');
+    const render = () => NodeGenerationProgress({ nodeId: 'node-1', fallbackLabel: '生成视频中...' });
+    expect(findElement(render(), (element) => element.props.children === '正在查询任务状态').props.title)
+      .toBe('正在查询任务状态，步骤进度暂不可用');
+    store.comfyNodeProgress['node-1'].connectionIssue = 'forbidden';
+    expect(findElement(render(), (element) => element.props.children === '进度访问被拒绝（403），仍在查询结果').props.title)
+      .toContain('请检查 ComfyUI 服务或网关的访问权限');
+    store.comfyNodeProgress['node-1'].projectId = 'other-project';
+    expect(() => findElement(render(), (element) => element.props.role === 'progressbar')).toThrow('Element not found');
+  });
+
+  it('generation timing keeps total elapsed time while measuring the current ComfyUI node separately', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    await installReactHookDriver();
+    const store = createStore([{ id: 'video', type: 'ai-video', position: { x: 0, y: 0 },
+      data: { type: 'ai-video', status: 'loading', generationStartedAt: 880_000 } }], () => 1);
+    installStoreMock(store);
+    const { GenerationWaitTime } = await import('../../src/components/nodes/shared/NodeGenerationProgress');
+    const timing = GenerationWaitTime({ nodeId: 'video', nodeStartedAt: 990_000 });
+    expect(findElement(timing, (element) => element.props.children === '已等待 02:00')).toBeTruthy();
+    expect(findElement(timing, (element) => element.props.children === '本节点 00:10')).toBeTruthy();
+    expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
+    store.nodes[0].data.videoTaskState = 'paused';
+    store.nodes[0].data.status = 'idle';
+    now.mockReturnValue(1_060_000);
+    expect(findElement(GenerationWaitTime({ nodeId: 'video' }), (element) => element.props.children === '已等待 03:00')).toBeTruthy();
   });
 
   it('NodeContextMenu exposes character capture only when the callback is available', async () => {

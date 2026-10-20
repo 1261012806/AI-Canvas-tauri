@@ -327,10 +327,17 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 
 正常生成的实时进度保存在非持久化 UI Store，图片、动画、视频和音频节点共用 `NodeGenerationProgress`。WebSocket 失效时继续 HTTP 轮询，恢复任务当前仍以 HTTP 续查为主。
 
-- 本地默认端口 8188 在 Vite 开发环境（含 Tauri dev）通过同源 `/api/comfyui/ws` 代理读取进度，保留原始 Host/Origin 供 ComfyUI 校验，避免页面来源为 `localhost:1420` 时直连被拒绝。生产环境及其他服务器仍按原地址连接。
-- 百分比来自 ComfyUI 当前执行节点的 `value/max`；切换节点或任务收尾会清除旧数值，不能把单节点的 100% 当作成片完成。提交响应前收到的事件按 promptId 暂存并在绑定后匹配。
-- 连接超时或断线后复用同一 clientId，最多重连三次，只恢复进度读取，不重提生成；取消或结束时清理连接、计时器及进度。
-- 回归入口：[时长显示](../tests/components/videoParamSelectorProtocol.test.ts)、[H3 请求参数](../tests/services/builtinWorkflows.test.ts)、[实时进度与代理握手](../tests/services/comfyProgress.test.ts)。代理测试覆盖真实 WebSocket 握手、采样事件透传和跨站来源 403；实际模型执行不属于该自动化测试。
+- Tauri 开发与打包端统一通过 [Rust 原生 WebSocket](../src-tauri/src/media/comfyui/progress.rs) 读取进度，使用正常 TLS 校验，不携带浏览器 Origin/Cookie/来源头，从连接层避免 WebView 的 CORS、混合内容及 ComfyUI 默认浏览器来源 403。本机、其他端口与远程 HTTP(S) 服务沿用同一路径，不再为 Windows 本机服务牺牲采样步数。原生通道只接收六类进度事件的白名单字段，不传完整工作流、输出媒体或异常正文。
+- 纯 Web 开发时，本机 HTTP 默认端口 8188 通过同源 `/api/comfyui/ws` 读取进度；HTTP 与 WebSocket 代理均保留原始 Host/Origin，由 ComfyUI 继续拒绝跨站来源。HTTP 同时支持 `localhost` 与 `127.0.0.1`，不将其他端口、HTTPS 或生产 Web 错转到固定本机 8188。纯 Web 连接其他跨源服务仍须服务自身允许对应来源或配置受信同源代理；本轮未开放通用转发，也未放宽 CSP/CORS。
+- 浮层显示连接、排队、执行、读取结果四种阶段，以及当前节点 ID、名称（工作流标题优先，回退节点类型）、真实 `value/max` 与当前节点百分比。切换实际节点或任务收尾会清除旧数值，不能把单节点的 100% 当作成片完成。`progress_state` 仅包含已上报节点，全部显示 finished 可能只是节点切换间隙；仅明确的执行结束事件进入读取结果阶段。
+- 总等待时间沿用本轮生成的时间锚点；本节点耗时从首次收到该实际节点执行事件开始计时，同节点后续进度不重置。缓存徽标表示 `execution_cached` 上报并去重的节点数，不推算整个工作流完成比例。运行时仅保存有界的节点名称和类型，不复制工作流输入或模型路径，不持久化这些进度。
+- 排队时通过 `/queue` 确认本次 prompt，并依优先值计算等待队列位置；队列序号不包含正在执行的任务。提交响应前的执行与缓存事件按 promptId 累积，绑定后仅使用匹配任务的数据。
+- 连接超时或断线后复用同一 clientId、每次连接使用独立 requestId，最多重连三次，只恢复进度读取，不重提生成；取消或结束时清理连接、计时器及进度。原生握手确认的 401/403 视为服务或网关实际拒绝，显示访问权限提示并停止盲目重连，HTTP 结果查询继续；不能承诺绕过上游鉴权。实时连接不可用时退回状态查询，不展示旧步数，也不估算采样进度或剩余时长。
+- 回归入口：[时长显示](../tests/components/videoParamSelectorProtocol.test.ts)、[H3 请求参数](../tests/services/builtinWorkflows.test.ts)、[实时进度与代理握手](../tests/services/comfyProgress.test.ts)、[原生 Channel 生命周期](../tests/services/comfyProgressTransport.test.ts)、[HTTP 连接选路](../tests/services/comfyConnectionRouting.test.ts)。代理测试源码覆盖 HTTP/WebSocket 同源握手、采样事件透传和跨站来源 403；实际模型执行不属于该自动化测试。
+
+2026-10-20 实时进度信息增强已实现，待用户桌面验收，本次未运行测试、类型检查或构建；提交时通过既有钩子执行改动文件的定向 ESLint。验收时在 Tauri 提交多节点视频或图片工作流，确认排队序号、节点名称及步数随执行变化，节点切换重置本节点耗时但总等待继续，缓存命中显示数量，采样 100% 后仍等服务结束与结果回填；断开再恢复进度连接应显示降级/重连且不重提任务。回归音频节点、小尺寸预览、暗浅主题、项目切换及已有视频上的暂停重试计时。展示回归用例补充在 `tests/components/nodeCriticalInteractions.test.tsx`，服务事件边界仍由 `comfyProgress.test.ts` 覆盖。
+
+本轮原生通道与选路修复同样待用户验收，仅更新所需依赖锁，未运行测试或构建。需重新启动包含新命令的 Tauri 开发进程或使用新打包版本，前端热更新无法新增 Rust 命令。准备默认来源校验开启的 ComfyUI，分别使用本机 `localhost`/`127.0.0.1`、非 8188 端口与带前缀的远程 HTTPS 服务生成，确认桌面端能读取真实节点步数，且不存在来源不匹配引发的 403；断网重连仍查询原任务，真实 401/403 应显示权限原因并降级。取消生成或关闭应用后进度读取应释放；非主窗口、远程来源、带凭据/查询的 URL 和重复连接 ID 应拒绝。Rust 定向入口由用户在 `src-tauri/` 执行 `cargo test comfyui::progress::tests`、`cargo check --locked --lib`；前端在仓库根目录执行 `npx vitest run tests/services/comfyProgress.test.ts tests/services/comfyProgressTransport.test.ts tests/services/comfyConnectionRouting.test.ts`。这些命令尚未执行，不代表验收通过。
 
 ## 11. ComfyUI 编辑窗口与回写
 

@@ -1514,7 +1514,7 @@ export async function executeComfyUIGenerate(
     const dimensionInjection = await injectDimensionsIntoWorkflow(baseUrl, workflowObj, imageSize, aspectRatio);
 
     if (params.nodeId && projectId) {
-      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal });
+      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal, workflow: workflowObj });
     }
 
     // 提交工作流
@@ -1631,7 +1631,7 @@ export async function executeComfyUIVideoGenerate(
     );
 
     if (params.nodeId && projectId) {
-      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal });
+      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal, workflow: workflowObj });
     }
 
     // 提交工作流
@@ -1727,7 +1727,7 @@ export async function executeComfyUIAudioGenerate(
     const { baseUrl, workflowObj } = await submitComfyUIWorkflow(workflowId!, workflowInputs, prompt, signal, referenceAudioUrls, promptMedia, { settings: params.audioSpeechSettings });
 
     if (params.nodeId && projectId) {
-      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal });
+      progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal, workflow: workflowObj });
     }
 
     // 提交工作流

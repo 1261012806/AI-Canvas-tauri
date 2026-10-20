@@ -8,17 +8,28 @@ import { corsSafeFetch } from './ai/httpTransport';
 import { pollTask } from './pollTask';
 import type { ComfyOutputs } from './comfyOutputs';
 
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-
 /**
  * 将 ComfyUI 直连地址替换为当前环境可访问的地址：
  * - Tauri 模式：保留原地址（走 Rust proxy_fetch）
- * - 浏览器开发模式：替换为 Vite 代理路径 /api/comfyui
+ * - 浏览器开发模式：仅本机 HTTP 8188 使用固定的 Vite 代理
+ * - 其他服务与生产 Web：保留原地址，不误转到另一台 ComfyUI
  */
 export function normalizeComfyUrl(url: string): string {
-  if (isTauri) return url;
-  // Vite dev proxy: http://127.0.0.1:8188/xxx → /api/comfyui/xxx
-  return url.replace(/^https?:\/\/127\.0\.0\.1:\d+/, '/api/comfyui');
+  if (typeof window === 'undefined'
+    || '__TAURI_INTERNALS__' in window
+    || '__TAURI__' in window
+    || !import.meta.env.DEV) return url;
+
+  try {
+    const target = new URL(url);
+    if (target.protocol !== 'http:'
+      || !['127.0.0.1', 'localhost'].includes(target.hostname)
+      || target.port !== '8188'
+      || target.username || target.password) return url;
+    return `/api/comfyui${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return url;
+  }
 }
 
 /**

@@ -1236,6 +1236,7 @@ pub fn run() {
         .manage(proxy_http_state)
         .manage(comfyui::management::ManagementState::default())
         .manage(comfyui::runtime_console::ComfyUIRuntimeState::default())
+        .manage(comfyui::progress::ComfyProgressState::default())
         .manage(comfyui::installer::ComfyUIInstallerState::default())
         .manage(comfyui::model_dedupe::ModelDedupeState::default())
         .manage(blender_runtime::BlenderRuntimeState::default())
@@ -1326,6 +1327,8 @@ pub fn run() {
             native_rendering::sync_native_performance_mode,
             sync_authorized_directories,
             comfyui::launch_comfyui,
+            comfyui::progress::stream_comfyui_progress,
+            comfyui::progress::cancel_comfyui_progress,
             comfyui::runtime_console::get_comfyui_runtime_status,
             comfyui::installation::select_comfyui_installation,
             comfyui::installation::get_comfyui_installation,
@@ -1402,6 +1405,7 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             plugin_window::on_window_event(window, event);
+            comfyui::progress::on_window_event(window, event);
             // 用户把文件拖进自有窗口 = 一次显式授权，登记后复制/读取命令才放行。
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 if window.label() == "main" || window.label() == "chat-assistant" {
@@ -1463,6 +1467,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                comfyui::progress::shutdown_progress(app_handle);
                 comfyui::installer::shutdown_installation(app_handle);
                 comfyui::runtime_console::shutdown_runtime(app_handle);
                 plugin_window::revoke_all_sessions();

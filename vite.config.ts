@@ -30,7 +30,8 @@ export default defineConfig({
       },
       '/api/comfyui': {
         target: 'http://127.0.0.1:8188',
-        changeOrigin: true,
+        // HTTP 与 WebSocket 一致，保留同源 Host/Origin，兼容 ComfyUI 默认来源校验。
+        changeOrigin: false,
         rewrite: (path) => path.replace(/^\/api\/comfyui/, ''),
       },
     },

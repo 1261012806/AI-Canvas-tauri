@@ -7,25 +7,12 @@ import type { ReversePromptRequest } from '../types';
 import type { AssetFileEntry, AssetFolderSelection, FileTransferOptions, NodeOutputDownloadProgress } from '../services/fileService';
 import type { AssetImageRecord, AssetImageSaveInput } from '../types/assetImage';
 import type { AppUpdateProgress } from '../services/updateService';
+import type { ComfyNodeProgress } from '../types/comfyProgress';
+
+export type { ComfyNodeProgress, ComfyNodeProgressStage } from '../types/comfyProgress';
 
 export type SettingsTab = 'general' | 'appearance' | 'files' | 'api' | 'shortcuts' | 'comfyui' | 'storage' | 'plugins' | 'mcp';
 export const NEW_API_KEY_CONNECTION_ID = '__new__';
-
-export type ComfyNodeProgressStage = 'connecting' | 'queued' | 'running' | 'finalizing';
-
-export interface ComfyNodeProgress {
-  projectId: string;
-  nodeId: string;
-  requestId: string;
-  clientId: string;
-  promptId?: string;
-  stage: ComfyNodeProgressStage;
-  value?: number;
-  max?: number;
-  percent?: number;
-  executingNodeId?: string;
-  updatedAt: number;
-}
 
 export interface UISlice {
   recentAssetsRevision: number;

@@ -20,6 +20,7 @@ pub mod model_dedupe;
 pub mod model_dedupe_links;
 pub mod model_dedupe_history;
 pub mod runtime_console;
+pub mod progress;
 
 use launch_settings::ComfyUILaunchSettings;
 use serde::{Deserialize, Serialize};
