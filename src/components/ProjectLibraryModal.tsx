@@ -358,7 +358,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
   );
 
   const content = (
-      <div className="relative flex min-h-0 flex-1 flex-col" aria-busy={projectBusy}>
+      <div className="relative flex min-h-0 flex-1 select-none flex-col" aria-busy={projectBusy}>
         <header
           inert={deleteTarget ? true : undefined}
           aria-hidden={deleteTarget ? true : undefined}
@@ -406,7 +406,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={focusFirstProject}
                 placeholder={t('搜索项目')}
-                className="ui-input ui-input--sm"
+                className="ui-input ui-input--sm select-text"
               />
             </label>
 
@@ -499,7 +499,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
                       onChange={(event) => setNewProjectName(event.target.value)}
                       placeholder={t('输入项目名称')}
                       disabled={projectBusy}
-                      className="h-9 w-full rounded-md border border-canvas-border bg-canvas-card px-3 text-center text-sm text-canvas-text outline-none placeholder:text-canvas-text-muted focus:border-indigo-400/70 focus:ring-2 focus:ring-indigo-500/15 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="h-9 w-full select-text rounded-md border border-canvas-border bg-canvas-card px-3 text-center text-sm text-canvas-text outline-none placeholder:text-canvas-text-muted focus:border-indigo-400/70 focus:ring-2 focus:ring-indigo-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </label>
                 </div>
@@ -589,7 +589,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
                             }
                           }}
                           disabled={isRenaming}
-                          className="h-8 w-full rounded-md border border-indigo-400/60 bg-canvas-card px-2 text-xs text-canvas-text outline-none focus:ring-2 focus:ring-indigo-500/15 disabled:opacity-60"
+                          className="h-8 w-full select-text rounded-md border border-indigo-400/60 bg-canvas-card px-2 text-xs text-canvas-text outline-none focus:ring-2 focus:ring-indigo-500/15 disabled:opacity-60"
                         />
                       </label>
                       <button
@@ -726,7 +726,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
               aria-label={t('项目操作')}
               style={calcFixedPosition(contextMenu.x, contextMenu.y, PROJECT_MENU_WIDTH, PROJECT_MENU_HEIGHT)}
               onMouseDown={(event) => event.stopPropagation()}
-              className="fixed w-40 overflow-hidden rounded-lg border border-canvas-border bg-canvas-card py-1 shadow-xl"
+              className="fixed w-40 select-none overflow-hidden rounded-lg border border-canvas-border bg-canvas-card py-1 shadow-xl"
             >
               <ProjectMenuItem
                 icon="mdi:folder-open-outline"
@@ -845,7 +845,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
       <section
         aria-label={t('启动页')}
         hidden={resourcePageOpen}
-        className={`absolute inset-0 ${resourcePageOpen ? 'hidden' : 'flex'} flex-col bg-canvas-bg px-2 pb-3`}
+        className={`absolute inset-0 ${resourcePageOpen ? 'hidden' : 'flex'} select-none flex-col bg-canvas-bg px-2 pb-3`}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && !event.defaultPrevented) requestClose();
         }}
