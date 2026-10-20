@@ -1229,7 +1229,9 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.on_web_content_process_terminate(native_rendering::recover_web_content);
+    let builder = builder
+        .on_page_load(native_rendering::record_main_page_load)
+        .on_web_content_process_terminate(native_rendering::recover_web_content);
 
     builder
         .manage(native_rendering::NativeRenderingState::default())
@@ -1447,6 +1449,8 @@ pub fn run() {
             }
         })
         .setup(move |_app| {
+            #[cfg(target_os = "macos")]
+            native_rendering::record_app_started(_app.handle());
             // 凭据目录只允许本进程的 secret_* 命令访问：从 fs 与 asset scope 中拒掉，
             // 否则 Renderer 能绕过命令直接读走整份凭据文件
             secret_store::deny_secret_dir_access(_app.handle());
