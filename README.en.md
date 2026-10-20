@@ -1,10 +1,14 @@
 # AI Canvas Tauri — AI Canvas, Short Drama & Asset Management
 
-[简体中文](README.md) · **English** · [日本語](README.ja.md) · [한국어](README.ko.md)
+![AI Canvas Tauri — From idea to storyboard to video](doc/images/github-social-preview.jpg)
 
-<p align="center">
-  <img src="public/icons.svg" alt="AI Canvas Tauri Icon" width="140" height="140" />
-</p>
+**Bring ideas, characters, storyboards and videos onto one canvas, with ComfyUI, AI agents and MCP.**
+
+[![GitHub Stars](https://img.shields.io/github/stars/Tenney95/AI-Canvas-tauri?style=flat&label=Star%20on%20GitHub)](https://github.com/Tenney95/AI-Canvas-tauri/stargazers)
+
+**[Live demo](https://tenney95.github.io/AI-Canvas-tauri/) · [Download desktop app](https://github.com/Tenney95/AI-Canvas-tauri/releases) · [Share your work](https://github.com/Tenney95/AI-Canvas-tauri/discussions)**
+
+[简体中文](README.md) · **English** · [日本語](README.ja.md) · [한국어](README.ko.md)
 
 > A local-first AI canvas and visual workflow desktop app for **AI short drama creation, AI asset management, image/video generation and storyboarding**, with **ComfyUI, conversational AI agents and MCP**, built on **Tauri 2 + React 19 + React Flow 12**.
 
