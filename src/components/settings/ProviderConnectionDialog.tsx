@@ -668,7 +668,7 @@ export default function ProviderConnectionDialog({
       isOpen={isOpen}
       onClose={closeDialog}
       ariaLabel={editing ? t('编辑 API 厂商') : t('添加 API 厂商')}
-      className={`provider-dialog${definition?.id === 'custom-openai' ? ' settings-modal-shell ui-dialog-surface' : ''}`}
+      className="provider-dialog settings-modal-shell ui-dialog-surface"
       closeOnBackdrop={false}
       zIndex={260}
     >

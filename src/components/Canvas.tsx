@@ -810,7 +810,8 @@ function CanvasInner({ onReady }: CanvasProps) {
   useCanvasWheelZoom({
     rootRef: canvasRootRef,
     cancelRef: wheelZoomCancelRef,
-    enabled: interactionMode === 'default' && !viewportPreferences.locked,
+    // Mac 隐藏模式设置，旧经典模式配置也应让普通鼠标滚轮直接缩放。
+    enabled: (shouldUseMacTrackpadPan || interactionMode === 'default') && !viewportPreferences.locked,
     nativeMouseWheel: shouldUseMacTrackpadPan,
     projectId: currentProjectId,
     getViewport: reactFlowInstance.getViewport,

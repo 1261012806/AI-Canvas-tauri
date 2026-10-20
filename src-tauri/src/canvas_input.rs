@@ -1,4 +1,4 @@
-//! Mac 普通滚轮接入画布；精确滚动、手势和其他窗口保留 AppKit/WebKit 原事件。
+//! Mac 普通滚轮接入画布；触控板手势、惯性和其他窗口保留 AppKit/WebKit 原事件。
 
 use tauri::{plugin::TauriPlugin, Runtime};
 
@@ -49,9 +49,8 @@ mod routing {
 
     impl WheelFacts {
         pub fn zoom_delta(&self) -> Option<f64> {
-            // 不用整数、步幅或事件频率猜设备；任意触摸板阶段（含结束）均原样放行。
-            if self.precise
-                || self.phase != 0
+            // 精确增量也可能来自鼠标；任意触控板/惯性阶段（含结束）均原样放行。
+            if self.phase != 0
                 || self.momentum_phase != 0
                 || self.modified
                 || self.buttons != 0
@@ -61,8 +60,9 @@ mod routing {
             {
                 return None;
             }
-            // AppKit 非精确 scrollingDelta 为行单位，沿用前端 DOM_DELTA_LINE 的 40 倍归一化。
-            let delta = -self.delta_y * 40.0;
+            // 精确增量为像素；非精确增量为行，沿用前端 DOM_DELTA_LINE 的 40 倍归一化。
+            let units = if self.precise { 1.0 } else { 40.0 };
+            let delta = -self.delta_y * units;
             delta.is_finite().then_some(delta)
         }
     }
@@ -406,10 +406,32 @@ mod tests {
     }
 
     #[test]
-    fn precise_gestures_momentum_and_modified_inputs_are_never_routed() {
+    fn precise_mouse_wheel_keeps_pixel_delta_and_direction() {
+        for value in [120.0, -120.0, 0.25, 240.0] {
+            assert_eq!(
+                WheelFacts {
+                    precise: true,
+                    delta_y: value,
+                    ..Default::default()
+                }
+                .zoom_delta(),
+                Some(-value)
+            );
+        }
+    }
+
+    #[test]
+    fn gestures_momentum_and_modified_inputs_are_never_routed() {
         let cases = [
             WheelFacts {
                 precise: true,
+                phase: 2,
+                delta_y: 3.0,
+                ..Default::default()
+            },
+            WheelFacts {
+                precise: true,
+                momentum_phase: 1,
                 delta_y: 3.0,
                 ..Default::default()
             },
