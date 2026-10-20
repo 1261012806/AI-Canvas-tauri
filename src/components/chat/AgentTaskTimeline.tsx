@@ -19,6 +19,7 @@ import { getAgentRecoveryHint } from '../../services/chat/agentErrorCodes';
 import AgentStepCard from './AgentStepCard';
 import AgentApprovalCard from './AgentApprovalCard';
 import AgentExecutionRationale from './AgentExecutionRationale';
+import { AssistantActivityMark } from './AssistantActivity';
 import type { MediaModelOption } from '../nodes/shared/defaultModels';
 import { useT } from '../../i18n';
 
@@ -38,6 +39,7 @@ interface AgentTaskTimelineProps extends AgentTaskControls {
   task: AgentTask;
   activity?: string;
   activityStartedAt?: number;
+  animateActivity?: boolean;
 }
 
 const STATUS_META: Record<AgentTaskStatus, { label: string; icon: string; className: string; spin?: boolean }> = {
@@ -76,6 +78,10 @@ const TOOL_ACTIVITY_LABELS: Record<string, string> = {
   provider_docs_read: '正在读取接口文档',
   skill_load: '正在加载 Skill',
   skill_read_file: '正在读取 Skill 资料',
+  mcp_tools_search: '正在发现外部 MCP 工具',
+  mcp_tools_describe: '正在读取外部 MCP 参数',
+  mcp_read_tool: '正在查询外部 MCP',
+  mcp_call_tool: '正在执行外部 MCP 操作',
 };
 
 function findActiveStep(task: AgentTask): AgentStep | undefined {
@@ -98,7 +104,8 @@ function getActivityLabel(task: AgentTask, step: AgentStep | undefined, t: (k: s
   }
   if (step?.status === 'pending') return t('准备{title}', { title: step.title });
   if (step?.status === 'running') {
-    return TOOL_ACTIVITY_LABELS[step.toolCall?.toolId ?? ''] ?? t('正在{title}', { title: step.title });
+    const label = TOOL_ACTIVITY_LABELS[step.toolCall?.toolId ?? ''];
+    return label ? t(label) : t('正在{title}', { title: step.title });
   }
   if (task.status === 'queued') return t('正在等待执行');
   if (task.status === 'planning') {
@@ -162,6 +169,7 @@ export default function AgentTaskTimeline({
   task,
   activity,
   activityStartedAt: overrideStartedAt,
+  animateActivity = true,
   onResolveApproval,
   mediaModelOptions,
   mediaModelAvailability,
@@ -214,11 +222,11 @@ export default function AgentTaskTimeline({
         aria-expanded={expanded}
         className="flex min-h-7 w-full items-center gap-1.5 rounded-md px-0.5 text-left transition-colors hover:bg-canvas-hover/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
       >
-        <Icon
-          icon={meta.icon}
-          width="14"
-          className={`shrink-0 ${isActive ? 'text-canvas-text-muted' : meta.className} ${meta.spin ? 'animate-spin motion-reduce:animate-none' : ''}`}
-        />
+        {meta.spin ? (
+          <AssistantActivityMark active={animateActivity} />
+        ) : (
+          <Icon icon={meta.icon} width="14" className={`shrink-0 ${meta.className}`} aria-hidden="true" />
+        )}
         <span className="min-w-0 truncate text-[12px] font-medium text-canvas-text-secondary">
           {isActive ? activityLabel : terminalLabel}
         </span>
@@ -282,19 +290,8 @@ export default function AgentTaskTimeline({
           {task.steps.length > 0 && (
             <div className="mt-1 space-y-0.5">
               {task.steps.map((step) => (
-                <AgentStepCard key={step.id} step={step} />
+                <AgentStepCard key={step.id} step={step} animateActivity={animateActivity && isActive && task.status !== 'waiting_approval'} />
               ))}
-            </div>
-          )}
-
-          {/* 规划 / 整理阶段没有进行中的步骤卡片，这里补一行在下方明确显示助手当前在做什么 */}
-          {isActive && !activeStep && task.status !== 'waiting_approval' && (
-            <div className="mt-0.5 flex items-center gap-1.5 rounded-md bg-canvas-hover/25 px-2 py-1.5">
-              <Icon icon="mdi:loading" width="14" className="shrink-0 animate-spin motion-reduce:animate-none text-brand-light" />
-              <span className="min-w-0 truncate text-[12px] text-canvas-text-secondary">{activityLabel}</span>
-              <span className="ml-auto shrink-0 text-[10px] tabular-nums text-canvas-text-muted">
-                {formatElapsed(activityStartedAt, now)}
-              </span>
             </div>
           )}
 

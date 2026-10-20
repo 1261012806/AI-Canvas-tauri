@@ -33,6 +33,8 @@ interface ChatHeaderProps {
   onOpenAgents?: () => void;
   onOpenTasks?: () => void;
   activeTaskCount?: number;
+  /** 本会话的外部 MCP 连接选择入口。 */
+  mcpConnectionPicker?: ReactNode;
   /** 分离模式下由外部传入的 header 操作按钮 */
   detachedHeaderActions?: ReactNode;
 }
@@ -53,13 +55,14 @@ export default function ChatHeader({
   onOpenAgents,
   onOpenTasks,
   activeTaskCount = 0,
+  mcpConnectionPicker,
   detachedHeaderActions,
 }: ChatHeaderProps) {
   const t = useT();
   return (
     <div
       data-tauri-drag-region={detached ? true : undefined}
-      className="chat-panel-header flex items-center justify-between gap-2 px-3.5 py-2.5
+      className="chat-panel-header flex items-center justify-between gap-2 px-3.5 py-2
                  flex-shrink-0 select-none"
     >
       <div className="chat-panel-header-brand flex items-center gap-1.5 min-w-0">
@@ -112,6 +115,8 @@ export default function ChatHeader({
             <Icon icon="lucide:bot" width="16" height="16" />
           </button>
         )}
+
+        {mcpConnectionPicker}
 
         {onOpenTasks && (
           <button

@@ -7,15 +7,17 @@
 import { Icon } from '@iconify/react';
 import type { AgentStep, AgentStepStatus } from '../../types/agent';
 import AgentToolDetails from './AgentToolDetails';
+import { AssistantActivityMark } from './AssistantActivity';
 import { useT } from '../../i18n';
 
 interface AgentStepCardProps {
   step: AgentStep;
+  animateActivity?: boolean;
 }
 
 const STATUS_META: Record<AgentStepStatus, { icon: string; label: string; className: string; iconBg: string; spin?: boolean }> = {
   pending: { icon: 'mdi:clock-outline', label: '等待', className: 'text-canvas-text-muted', iconBg: 'bg-canvas-hover/60' },
-  running: { icon: 'mdi:loading', label: '执行中', className: 'text-indigo-400', iconBg: 'bg-indigo-500/10', spin: true },
+  running: { icon: 'mdi:loading', label: '执行中', className: 'text-canvas-text-secondary', iconBg: 'bg-canvas-hover/60', spin: true },
   waiting_approval: { icon: 'mdi:shield-alert-outline', label: '待确认', className: 'text-amber-400', iconBg: 'bg-amber-500/10' },
   succeeded: { icon: 'mdi:check', label: '完成', className: 'text-emerald-400', iconBg: 'bg-emerald-500/10' },
   failed: { icon: 'mdi:alert-outline', label: '失败', className: 'text-red-400', iconBg: 'bg-red-500/10' },
@@ -32,7 +34,7 @@ function formatDuration(step: AgentStep): string | null {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export default function AgentStepCard({ step }: AgentStepCardProps) {
+export default function AgentStepCard({ step, animateActivity = true }: AgentStepCardProps) {
   const t = useT();
   const meta = STATUS_META[step.status];
   const duration = formatDuration(step);
@@ -42,11 +44,11 @@ export default function AgentStepCard({ step }: AgentStepCardProps) {
   return (
     <div className="agent-step-card flex gap-2 rounded-md px-0.5 py-1.5 transition-colors hover:bg-canvas-hover/25">
       <span className={`mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${meta.iconBg}`}>
-        <Icon
-          icon={meta.icon}
-          width="12"
-          className={`${meta.className} ${meta.spin ? 'animate-spin motion-reduce:animate-none' : ''}`}
-        />
+        {meta.spin ? (
+          <AssistantActivityMark active={animateActivity} />
+        ) : (
+          <Icon icon={meta.icon} width="12" className={meta.className} aria-hidden="true" />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-h-5 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-[17px]">

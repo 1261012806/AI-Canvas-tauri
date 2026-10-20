@@ -36,6 +36,7 @@ import ConversationList from './ConversationList';
 import ChatHeader from './ChatHeader';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import McpConnectionPicker from './McpConnectionPicker';
 import { getMcpClientOptions } from '../../services/mcp/mcpClientService';
 import { MCP_SETTINGS_CONVERSATION_ID, MCP_SETTINGS_SCOPE_ID } from '../../services/mcp/mcpSettingsScope';
 import ProjectMemoryPanel from './ProjectMemoryPanel';
@@ -667,9 +668,11 @@ export default function ChatPanel({
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
-      document.querySelector('.chat-panel-messages')?.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
+      // 只滚动本面板的消息区，避免 scrollIntoView 连带移动外层窗口与面板。
+      const messages = chatPanelRef.current?.querySelector<HTMLElement>('.chat-panel-messages');
+      messages?.scrollTo({ top: messages.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
     }, 100);
-  }, []);
+  }, [reduceMotion]);
 
   const agentControls = useMemo(() => ({
     onResolveApproval: handleResolveApproval,
@@ -950,6 +953,14 @@ export default function ChatPanel({
               agentMode={effectiveAgentMode}
               onAgentModeChange={handleAgentModeChange}
               agentModeDisabled={!effectiveActiveConversationId || settingsConversation}
+              mcpConnectionPicker={viewMode === 'chat' && !showTaskCenter && !settingsConversation ? (
+                <McpConnectionPicker
+                  options={mcpOptions}
+                  selected={effectiveActiveConversation?.mcpServerIds ?? []}
+                  onToggle={handleMcpToggle}
+                  onSettings={handleMcpSettings}
+                />
+              ) : undefined}
               onOpenMemory={!detached && effectiveProjectId
                 ? () => {
                     setShowAgentCenter(false);
@@ -1084,10 +1095,6 @@ export default function ChatPanel({
                       onRemoveImage={handleRemoveImage}
                       onAuthorizeLocalFiles={handleAuthorizeLocalFiles}
                       onRevokeLocalFile={handleRevokeLocalFile}
-                      mcpOptions={mcpOptions}
-                      mcpServerIds={effectiveActiveConversation?.mcpServerIds}
-                      onMcpToggle={handleMcpToggle}
-                      onMcpSettings={handleMcpSettings}
                       contextUsage={contextUsage}
                       allowSkillUpload={!detached}
                       skillOptions={detached ? (detachedSnapshot?.skillOptions ?? []) : undefined}

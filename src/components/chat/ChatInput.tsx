@@ -11,8 +11,6 @@ import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import SendShortcutMenu from '../shared/SendShortcutMenu';
 import ModelSelector from '../nodes/shared/ModelSelector';
 import ContextUsageIndicator from './ContextUsageIndicator';
-import McpConnectionPicker from './McpConnectionPicker';
-import type { McpClientOption } from '../../types/mcpClient';
 import ChatComposerEditor, { type ChatComposerEditorHandle } from './ChatComposerEditor';
 import ChatImageAttachments from './ChatImageAttachments';
 import type { ChatImageReference } from '../../types/chat';
@@ -31,7 +29,7 @@ import {
 } from '../nodes/shared/defaultModels';
 import type { LocalFileGrantSummary } from '../../services/chat/fileGrantService';
 import { getPerformanceModeEnabled, subscribePerformanceMode } from '../../services/performanceModeRuntime';
-import { getPromptSubmitShortcutHint, PROMPT_SUBMIT_SHORTCUT_OPTIONS } from '../../utils/promptSubmitShortcut';
+import { getPromptSubmitShortcutHint } from '../../utils/promptSubmitShortcut';
 
 const MetalFx = lazy(() => import('../nodes/shared/PolishMetalFx'));
 // 独立窗口的外观由窗口运行时投影到 DOM，不从本窗口默认 Store 配置推断。
@@ -184,10 +182,6 @@ interface ChatInputProps {
   onRemoveImage?: (fileName: string) => void;
   onAuthorizeLocalFiles?: () => void;
   onRevokeLocalFile?: (grantId: string) => void;
-  mcpOptions?: McpClientOption[];
-  mcpServerIds?: string[];
-  onMcpToggle?: (id: string, enabled: boolean) => void;
-  onMcpSettings?: () => void;
   /** 当前会话上下文占用（估算）；无会话时为 null */
   contextUsage?: ContextUsageStat | null;
   disabled?: boolean;
@@ -218,10 +212,6 @@ export default function ChatInput({
   onRemoveImage,
   onAuthorizeLocalFiles,
   onRevokeLocalFile,
-  mcpOptions = [],
-  mcpServerIds = [],
-  onMcpToggle,
-  onMcpSettings,
   contextUsage,
   disabled = false,
   allowSkillUpload = true,
@@ -234,7 +224,6 @@ export default function ChatInput({
   const appearanceMode = useSyncExternalStore(subscribeInputTheme, getInputTheme, getInputTheme);
   const [shortcutMenuAnchor, setShortcutMenuAnchor] = useState<HTMLElement | null>(null);
   const closeShortcutMenu = useCallback(() => setShortcutMenuAnchor(null), []);
-  const shortcutLabel = PROMPT_SUBMIT_SHORTCUT_OPTIONS.find((option) => option.value === submitShortcut)?.label;
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState('');
   const [pickerTab, setPickerTab] = useState<PickerTab>('nodes');
@@ -616,13 +605,13 @@ export default function ChatInput({
       className="ui-ai-input__icon-btn ui-ai-input__submit chat-panel-send-btn"
       aria-haspopup="menu" aria-expanded={!!shortcutMenuAnchor}
       aria-label={hasActiveTask ? t('将消息加入队列') : t('发送消息')}
-      title={`${hasActiveTask ? t('当前任务完成后发送') : t('发送消息')} · ${t('右键设置发送快捷键')}`}>
+      title={`${hasActiveTask ? t('当前任务完成后发送') : t('发送消息')} · ${getPromptSubmitShortcutHint(submitShortcut)} · ${t('右键设置发送快捷键')}`}>
       <Icon icon={hasActiveTask ? 'mdi:playlist-plus' : 'lucide:arrow-up'} width={16} height={16} aria-hidden="true" />
     </button>
   );
 
   return (
-    <div className="chat-panel-input-area flex-shrink-0 px-3 pt-2">
+    <div className="chat-panel-input-area flex-shrink-0 px-3 py-2">
       <div className="ui-ai-input chat-panel-input-box">
         <div className="ui-ai-input__body">
           <ChatImageAttachments images={images} previews={imagePreviewUrls} onRemove={(fileName) => {
@@ -869,7 +858,6 @@ export default function ChatInput({
               >
                 <Icon icon="mdi:slash-forward" width="14" />
               </button>
-              {onMcpToggle && onMcpSettings && <McpConnectionPicker options={mcpOptions} selected={mcpServerIds} onToggle={onMcpToggle} onSettings={onMcpSettings} disabled={disabled} />}
               {onAuthorizeLocalFiles && (
                 <button
                   type="button"
@@ -883,11 +871,6 @@ export default function ChatInput({
                 </button>
               )}
             </div>
-            {inputValue.trim() && !disabled && (
-              <span className="ui-ai-input__shortcut-hint hidden sm:inline text-[11px] text-canvas-text-muted/60 tabular-nums select-none">
-                {shortcutLabel}
-              </span>
-            )}
             <div className="flex h-7 w-7 items-center justify-center">
               <ContextUsageIndicator usage={contextUsage ?? null} />
             </div>
@@ -928,15 +911,9 @@ export default function ChatInput({
         </div>
       </div>
 
-      {/* Disclaimer */}
       {shortcutMenuAnchor && <SendShortcutMenu anchor={shortcutMenuAnchor} value={submitShortcut}
         onChange={(shortcut) => onSubmitShortcutChange?.(shortcut)} onClose={closeShortcutMenu}
         disabled={shortcutSettingsDisabled || !onSubmitShortcutChange} />}
-      <div className="flex min-h-5 items-center justify-center">
-        <p className="chat-panel-disclaimer text-[11px] text-canvas-text-muted/75">
-          {t('重要操作执行前会请求确认')}
-        </p>
-      </div>
     </div>
   );
 }

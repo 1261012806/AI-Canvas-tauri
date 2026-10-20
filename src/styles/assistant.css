@@ -11,8 +11,87 @@
   margin-inline: auto;
 }
 
-.chat-reasoning[open] > summary {
-  margin-bottom: 8px;
+.chat-message-answer {
+  overflow-wrap: anywhere;
+}
+
+/* 活动只表达真实等待；复用现有旋转和呼吸节奏，不随文字分片重新挂载。 */
+.assistant-activity-mark {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--theme-text-secondary);
+}
+
+.assistant-activity-orbit {
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 50%;
+}
+
+.assistant-activity-dot {
+  position: absolute;
+  top: -1px;
+  left: 5px;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.assistant-activity-core {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.assistant-activity-mark:not(.is-active) {
+  opacity: 0.65;
+}
+
+.chat-reasoning-summary {
+  list-style: none;
+  transition: color var(--transition-base);
+}
+
+.chat-reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-reasoning[open] .chat-reasoning-chevron {
+  transform: rotate(90deg);
+}
+
+.chat-reasoning-body {
+  border-left: 1px solid var(--separator-color);
+  margin-left: 6px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chat-reasoning-summary:hover {
+    color: var(--theme-text);
+  }
+}
+
+html[data-performance-mode] .assistant-activity-core,
+html[data-performance-mode] .chat-message-status-streaming {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-activity-orbit,
+  .assistant-activity-core,
+  .chat-message-status-streaming {
+    animation: none;
+  }
+
+  .chat-reasoning-summary {
+    transition: none;
+  }
 }
 
 @container chat-panel (max-width: 400px) {

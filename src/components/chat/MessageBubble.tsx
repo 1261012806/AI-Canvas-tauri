@@ -13,6 +13,7 @@ import ChatReferenceText, { type ChatReferenceHandlers } from './ChatReferenceTe
 import ChatMarkdown from './ChatMarkdown';
 import SourceList from './SourceList';
 import ReasoningPanel from './ReasoningPanel';
+import AssistantActivity from './AssistantActivity';
 import { useT } from '../../i18n';
 import ViewportImage from '../shared/ViewportImage';
 import ViewportVideo from '../shared/ViewportVideo';
@@ -79,12 +80,18 @@ function MessageBubble({
   const showTimeline = !!agentTask
     && !!agentControls
     && (agentTask.steps.length > 0 || agentTask.status !== 'completed');
+  const taskCanWork = !agentTask || ['queued', 'planning', 'running', 'waiting_tool'].includes(agentTask.status);
+  const isActive = taskCanWork && ['queued', 'parsing', 'streaming'].includes(message.status);
+  const isReasoningActive = isActive && !!message.reasoning && message.status === 'streaming' && message.activity === 'planning';
+  const isCompressing = !isUser && isActive && message.activity === 'compressing';
   // 助手正在响应但任务时间线尚未建立时，先给出明确的活动状态。
   const isThinking = !isUser
     && !message.content
     && !showTimeline
     && !isGenerating
-    && ['queued', 'parsing', 'streaming'].includes(message.status);
+    && !isReasoningActive
+    && !isCompressing
+    && isActive;
   const canRegenerate = !isUser
     && !!message.content
     && !!regeneratePrompt
@@ -112,10 +119,10 @@ function MessageBubble({
   };
 
   return (
-    <div className={`chat-message-bubble group flex items-end gap-1.5 ${isUser ? 'justify-end chat-message-user' : 'justify-start chat-message-assistant'}`}>
+    <div className={`chat-message-bubble group flex items-start gap-2 ${isUser ? 'justify-end chat-message-user' : 'justify-start chat-message-assistant'}`}>
       {/* Assistant avatar */}
       {!isUser && (
-        <MascotAvatar size={20} className="chat-message-avatar chat-message-avatar-assistant shrink-0 mb-0.5" />
+        <MascotAvatar size={20} className="chat-message-avatar chat-message-avatar-assistant mt-1.5 shrink-0" />
       )}
 
       {/* 悬停时间戳（用户消息在左侧） */}
@@ -126,29 +133,18 @@ function MessageBubble({
       )}
 
       <div
-        className={`chat-message-content max-w-[88%] text-[13px] leading-relaxed
+        className={`chat-message-content min-w-0 text-[13px] leading-relaxed
                     ${isUser
-                      ? 'rounded-2xl rounded-br-sm bg-indigo-500/15 px-3.5 py-2 text-canvas-text'
-                      : 'min-w-0 px-1 py-1 text-canvas-text'
+                      ? 'max-w-[88%] rounded-2xl rounded-br-sm bg-canvas-hover/60 px-3 py-2 text-canvas-text'
+                      : 'flex-1 py-1 text-canvas-text'
                     }`}
       >
         {isThinking && (
-          <div
-            className="flex min-h-8 w-fit items-center gap-2 px-1 py-1.5 text-[12px] text-canvas-text-secondary"
-            role="status"
-            aria-live="polite"
-          >
-            <Icon
-              icon="mdi:loading"
-              width="15"
-              className="shrink-0 animate-spin text-canvas-text-muted motion-reduce:animate-none"
-            />
-            <span>{t(message.activity === 'connecting' ? '正在连接模型' : '正在分析请求')}</span>
-          </div>
+          <AssistantActivity label={t(message.activity === 'connecting' ? '正在连接模型' : '正在分析请求')} />
         )}
         {!isUser && message.reasoning && <ReasoningPanel content={message.reasoning} truncated={message.reasoningTruncated}
-          active={message.status === 'streaming' && message.activity === 'planning'} />}
-        {!isUser && message.activity === 'compressing' && !showTimeline && <p role="status" className="py-2 text-xs text-canvas-text-secondary">{t('正在压缩上下文')}</p>}
+          active={isReasoningActive} />}
+        {isCompressing && !showTimeline && <AssistantActivity label={t('正在压缩上下文')} />}
         {!isUser && message.responseError && <div role="alert" className="ui-alert ui-alert--danger mb-2 break-words">{message.responseError}</div>}
         {isUser && <ChatImageAttachments images={parseChatImageReferences(message.content)} previews={imagePreviewUrls} />}
         {message.content && (isUser ? (
@@ -162,26 +158,26 @@ function MessageBubble({
             />
           </div>
         ) : (
-          <div className="rounded-2xl rounded-bl-sm border border-canvas-border/80 bg-canvas-card/80 px-3.5 py-2.5 text-canvas-text shadow-sm shadow-black/10 backdrop-blur-sm">
+          <div className="chat-message-answer min-w-0 text-canvas-text">
             <ChatMarkdown
               value={message.content}
               onNodeActivate={onNodeActivate}
               onNodeHover={onNodeHover}
               onModelActivate={onModelActivate}
             />
+            {isActive && message.status === 'streaming' && (!message.activity || message.activity === 'responding') && (
+              <span className="chat-message-status chat-message-status-streaming ml-1 inline-block h-3.5 w-1.5 animate-pulse rounded-full bg-canvas-text-secondary align-text-bottom motion-reduce:animate-none" aria-hidden="true" data-performance-motion="essential" />
+            )}
           </div>
         ))}
 
         {showTimeline && agentTask && agentControls && (
-          <AgentTaskTimeline task={agentTask} {...agentControls} activity={message.activity} activityStartedAt={message.activityStartedAt} />
+          <AgentTaskTimeline task={agentTask} {...agentControls} activity={message.activity} activityStartedAt={message.activityStartedAt} animateActivity={!isReasoningActive} />
         )}
 
         {/* ── 生成中状态 ── */}
         {isGenerating && (
-          <div className="chat-message-media-generating flex items-center gap-2 mt-2 text-[11px] text-canvas-text-muted">
-            <span className="inline-block w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-            {t('正在生成媒体内容...')}
-          </div>
+          <AssistantActivity className="chat-message-media-generating mt-2" label={t('正在生成媒体内容...')} active={taskCanWork && !showTimeline} />
         )}
 
         {/* ── 图片结果 ── */}
@@ -301,9 +297,6 @@ function MessageBubble({
         )}
 
         {/* Status indicator */}
-        {message.status === 'streaming' && !!message.content && (
-          <span className="chat-message-status chat-message-status-streaming inline-block w-1.5 h-3.5 bg-indigo-400/80 animate-pulse ml-1 align-text-bottom rounded-full" />
-        )}
         {message.status === 'error' && (
           <div className="chat-message-status chat-message-status-error flex items-center gap-1 mt-1 text-[11px] text-red-400">
             <Icon icon="mdi:alert-circle" width="12" height="12" />
