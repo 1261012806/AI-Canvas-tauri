@@ -29,6 +29,22 @@ interface UseImageViewportGestureOptions {
   panButtons?: number[];
 }
 
+interface ImageViewport {
+  scale: number;
+  tx: number;
+  ty: number;
+}
+
+function zoomViewport(previous: ImageViewport, nextScale: number, cx: number, cy: number,
+  limits: { minScale: number; maxScale: number; panScale: number }): ImageViewport {
+  if (![nextScale, cx, cy].every(Number.isFinite)) return previous;
+  const scale = clamp(nextScale, limits.minScale, limits.maxScale);
+  if (scale <= limits.panScale) return { scale, tx: 0, ty: 0 };
+  if (scale === previous.scale) return previous;
+  const ratio = scale / previous.scale;
+  return { scale, tx: cx - ratio * (cx - previous.tx), ty: cy - ratio * (cy - previous.ty) };
+}
+
 export function useImageViewportGesture({
   initialScale,
   minScale = 1,
@@ -41,9 +57,8 @@ export function useImageViewportGesture({
   const containerEl = useRef<HTMLDivElement | null>(null);
   const defaultScale = clamp(initialScale ?? minScale, minScale, maxScale);
   const panScale = defaultScale;
-  const [scale, setScale] = useState(defaultScale);
-  const [tx, setTx] = useState(0);
-  const [ty, setTy] = useState(0);
+  // 倍率和位移一起更新；React 重放更新函数时，不再额外触发其他状态更新。
+  const [{ scale, tx, ty }, setViewport] = useState<ImageViewport>({ scale: defaultScale, tx: 0, ty: 0 });
   const [dragging, setDragging] = useState(false);
   const [gesturing, setGesturing] = useState(false);
   const scaleRef = useRef(scale);
@@ -62,25 +77,16 @@ export function useImageViewportGesture({
   }, [scale]);
 
   const reset = useCallback(() => {
-    setScale(defaultScale);
-    setTx(0);
-    setTy(0);
+    dragStart.current = null;
+    setDragging(false);
+    if (gestureEndTimer.current) clearTimeout(gestureEndTimer.current);
+    setGesturing(false);
+    setViewport({ scale: defaultScale, tx: 0, ty: 0 });
   }, [defaultScale]);
 
   const zoomTo = useCallback((nextScale: number, cx = 0, cy = 0) => {
-    setScale((prev) => {
-      const cfg = cfgRef.current;
-      const next = clamp(nextScale, cfg.minScale, cfg.maxScale);
-      if (next <= cfg.panScale) {
-        setTx(0);
-        setTy(0);
-        return next;
-      }
-      const ratio = next / prev;
-      setTx((previous) => cx - ratio * (cx - previous));
-      setTy((previous) => cy - ratio * (cy - previous));
-      return next;
-    });
+    const cfg = cfgRef.current;
+    setViewport((previous) => zoomViewport(previous, nextScale, cx, cy, cfg));
   }, []);
 
   const markGesturing = useCallback(() => {
@@ -94,6 +100,7 @@ export function useImageViewportGesture({
     (element: HTMLDivElement) => {
       const onWheel = (event: WheelEvent) => {
         event.preventDefault();
+        if (![event.deltaX, event.deltaY].every(Number.isFinite)) return;
         const cfg = cfgRef.current;
         // 缩放条件：ctrl+wheel（mac 捏合 / 任意平台 ctrl+滚轮），或非 mac 的普通滚轮
         const wantZoom = event.ctrlKey || !IS_MAC;
@@ -103,8 +110,9 @@ export function useImageViewportGesture({
           if (!cfg.enableWheelPan || scaleRef.current <= cfg.panScale) return;
           const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
           markGesturing();
-          setTx((previous) => previous - event.deltaX * unit);
-          setTy((previous) => previous - event.deltaY * unit);
+          setViewport((previous) => previous.scale <= cfg.panScale ? previous : {
+            ...previous, tx: previous.tx - event.deltaX * unit, ty: previous.ty - event.deltaY * unit,
+          });
           return;
         }
 
@@ -120,18 +128,7 @@ export function useImageViewportGesture({
         const factor = event.ctrlKey
           ? Math.exp(-clamp(dy, -40, 40) * cfg.pinchSensitivity)
           : Math.exp(-clamp(dy, -120, 120) * WHEEL_ZOOM_SENSITIVITY);
-        setScale((previous) => {
-          const next = clamp(previous * factor, cfg.minScale, cfg.maxScale);
-          if (next <= cfg.panScale) {
-            setTx(0);
-            setTy(0);
-            return next;
-          }
-          const ratio = next / previous;
-          setTx((current) => cx - ratio * (cx - current));
-          setTy((current) => cy - ratio * (cy - current));
-          return next;
-        });
+        setViewport((previous) => zoomViewport(previous, previous.scale * factor, cx, cy, cfg));
       };
       element.addEventListener('wheel', onWheel, { passive: false });
       return () => element.removeEventListener('wheel', onWheel);
@@ -177,8 +174,9 @@ export function useImageViewportGesture({
     const onMove = (event: PointerEvent) => {
       const start = dragStart.current;
       if (!start || event.pointerId !== start.pointerId) return;
-      setTx(start.tx + event.clientX - start.x);
-      setTy(start.ty + event.clientY - start.y);
+      const nextTx = start.tx + event.clientX - start.x;
+      const nextTy = start.ty + event.clientY - start.y;
+      setViewport((previous) => ({ ...previous, tx: nextTx, ty: nextTy }));
     };
     const onUp = (event: PointerEvent) => {
       const start = dragStart.current;

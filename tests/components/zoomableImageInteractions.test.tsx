@@ -11,7 +11,8 @@ vi.mock('react', async () => ({
 vi.mock('../../src/hooks/useImageViewportGesture', () => ({
   useImageViewportGesture: () => ({
     ...gesture,
-    containerRef: vi.fn(), containerEl: { current: null },
+    containerRef: vi.fn(),
+    containerEl: { current: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) } },
     tx: 0, ty: 0, dragging: false, gesturing: false, cursor: 'default',
     onPointerDown: vi.fn(),
   }),
@@ -23,7 +24,12 @@ type Element = ReactElement<{
   children?: React.ReactNode;
   className?: string;
   'aria-label'?: string;
+  'data-tauri-drag-region'?: string;
+  style?: { transform?: string; transition?: string; willChange?: string };
   onClick?: (event: Event) => void;
+  onDoubleClick?: (event: Event) => void;
+  onMouseDown?: (event: Event) => void;
+  onMouseUp?: (event: Event) => void;
 }>;
 
 function children(element: Element): Element[] {
@@ -31,12 +37,17 @@ function children(element: Element): Element[] {
 }
 
 // 按按钮、控制栏、预览容器的顺序冒泡，复现缩放尚未重新渲染时的同一次点击。
-function click(path: Element[]) {
-  const event = new Event('click', { bubbles: true });
+function dispatch(path: Element[], handler: 'onClick' | 'onDoubleClick' | 'onMouseDown' | 'onMouseUp' = 'onClick') {
+  const type = { onClick: 'click', onDoubleClick: 'dblclick', onMouseDown: 'mousedown', onMouseUp: 'mouseup' }[handler];
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'target', { value: path[0] });
+  Object.assign(event, { clientX: 400, clientY: 300 });
   for (const element of path) {
-    element.props.onClick?.(event);
+    Object.defineProperty(event, 'currentTarget', { value: element, configurable: true });
+    element.props[handler]?.(event);
     if (event.cancelBubble) break;
   }
+  return event;
 }
 
 beforeEach(() => {
@@ -45,6 +56,13 @@ beforeEach(() => {
 });
 
 describe('fullscreen image zoom controls', () => {
+  it('静止图片不保持变换图层，也不对大图追加过渡或 will-change', () => {
+    const image = children(children(ZoomableImage({ src: 'asset://preview.png' }))[0])[0];
+    expect(image.props.style?.transform).toBe('none');
+    expect(image.props.style).not.toHaveProperty('transition');
+    expect(image.props.style).not.toHaveProperty('willChange');
+  });
+
   it.each([
     ['放大', 1, 1.4],
     ['缩小', 1.4, 1],
@@ -56,17 +74,49 @@ describe('fullscreen image zoom controls', () => {
     const controls = children(root).find((element) => element.props.className === 'zoom-controls')!;
     const button = children(controls).find((element) => element.props['aria-label'] === label)!;
 
-    click([button, controls, root]);
+    dispatch([button, controls, root]);
 
     expect(onClose).not.toHaveBeenCalled();
     if (expectedScale === null) expect(gesture.reset).toHaveBeenCalledOnce();
     else expect(gesture.zoomTo).toHaveBeenCalledWith(expectedScale, 0, 0);
   });
 
-  it('still closes when clicking the image at the default scale', () => {
+  it.each([1, 1.4, 8])('keeps image clicks inside the preview at scale %s', (scale) => {
+    gesture.scale = scale;
+    const onClose = vi.fn();
+    const parent = { props: { onClick: vi.fn() } } as unknown as Element;
+    const root = ZoomableImage({ src: 'asset://preview.png', onClose });
+    const stage = children(root)[0];
+    const image = children(stage)[0];
+    dispatch([image, stage, root, parent]);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(parent.props.onClick).not.toHaveBeenCalled();
+  });
+
+  it('keeps the two clicks before a double click open and then zooms around the cursor', () => {
     const onClose = vi.fn();
     const root = ZoomableImage({ src: 'asset://preview.png', onClose });
-    click([children(root)[0], root]);
+    const stage = children(root)[0];
+    const image = children(stage)[0];
+    dispatch([image, stage, root]);
+    dispatch([image, stage, root]);
+    dispatch([image, stage, root], 'onDoubleClick');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(gesture.zoomTo).toHaveBeenCalledExactlyOnceWith(2, 0, 0);
+  });
+
+  it('still closes when directly clicking the blank background at the default scale', () => {
+    const onClose = vi.fn();
+    const root = ZoomableImage({ src: 'asset://preview.png', onClose });
+    dispatch([root]);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each(['onMouseDown', 'onMouseUp'] as const)('blocks %s before it can trigger native window dragging', (handler) => {
+    const root = ZoomableImage({ src: 'asset://preview.png' });
+    const parent = { props: { [handler]: vi.fn() } } as unknown as Element;
+    dispatch([children(children(root)[0])[0], root, parent], handler);
+    expect(root.props['data-tauri-drag-region']).toBe('false');
+    expect(parent.props[handler]).not.toHaveBeenCalled();
   });
 });

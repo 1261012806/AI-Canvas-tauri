@@ -522,3 +522,29 @@ npx vitest run tests/components/canvasImageDisplay.test.ts tests/components/canv
 - `src-tauri/`：`cargo check --lib`、`cargo test --lib clipboard::tests`、`cargo test --lib proxy_http_tests`。剪贴板超时用例会等待约 5 秒；自动化不能代替 macOS 原生窗口、进程和媒体解码验收。
 
 回滚：按上述六条独立撤销对应源文件与接入，恢复原预览回退／选中加载策略和 HTTP 传输即可；恢复流程只增加诊断文件，没有项目 schema 迁移。保留上一轮 IPC 主线程补丁与 Mac 预览预算也可独立运行。
+
+### 第三轮：全屏图片点击与缩放（2026-10-20）
+
+状态：已实现，待用户验证。用户补充 macOS 26 或更高版本下，约 2K 图片全屏后点击“＋”会退出界面。当前未取得对应进程的崩溃报告，不能确认是主进程退出、WebContent 重载还是其他页面异常，也不能据本轮改动宣称原生闪退已解决。本次未运行测试，待用户验收；仅完成调用链、差异与 UTF-8 静态核对。
+
+已确认并修正的路径：
+
+- `ZoomableImage.tsx` 原来在 100% 时对任意单击调用关闭，图片内容单击和双击的首次单击都会退出。现在只有直接点击 100% 视图的空白背景才关闭；图片、缩放控件的点击留在查看器内，并阻止鼠标事件冒泡及原生拖动区域接管。缩放按钮明确使用 `type="button"`。
+- `useImageViewportGesture.ts` 原来在倍率的状态更新函数内再更新两项位移。现在把倍率与位移合为一个局部状态，缩放、捏合和拖动各自一次提交；更新函数只计算下一状态，不再嵌套调用 setter。复位会结束旧拖动和手势计时，迟到移动不再恢复原位移；达到倍率上限不继续改变锚点，非有限缩放输入被忽略。共享裁切入口继续使用自身的 0.1–5 倍范围、初始倍率与鼠标键配置。依据：[React 状态更新函数的纯度与重复求值说明](https://react.dev/reference/react/useState#updating-state-based-on-the-previous-state)。
+- `ZoomableImage.tsx` 与 `nodes.css` 在图片静止且无位移时使用 `transform: none`；共享查看器不再对大图追加滤镜入场、强制图层提示或 transform 插值，缩放条也不再对底层图片采样模糊。此处调整适用于共享图片查看器各入口，保留原图来源、倍率范围及鼠标锚点。这是渲染路径收敛，没有测量实际 GPU 内存，不能当作系统崩溃根因的证据。
+- `zoomableImageInteractions.test.tsx` 补图片单击、双击前两次单击、背景关闭、控件与原生拖动隔离、静止变换用例；新增 `useImageViewportGesture.test.ts`，通过重放同一旧状态并禁止嵌套 setter 的 Hook 模拟覆盖缩放纯度、锚点、连续捏合、Mac 平移、复位后的迟到拖动、裁切范围及资源清理。这些用例尚未执行，也不代替真实 React 或 WebKit 实机验证。
+
+Tauri 桌面验收：
+
+1. 前置：保存项目，使用包含本轮前端修改的桌面版本，在原故障 Mac 上打开同一张约 2K 图片。100% 时单击图片应保持全屏，双击应放大到 200%，再次双击复位；直接点击图片外空白应关闭，关闭按钮与 Escape 均应可用。
+2. 再次打开全屏，连续点击“＋”到上限，再点击“－”和百分比复位。应只改变倍率、不退出界面、不移动背景节点或拖动原生窗口；双击控制栏不触发图片双击。放大后拖动、触控板捏合与双指平移仍可用，复位后旧拖动不应继续写回位移。
+3. 检查上一张／下一张、切换项目后关闭预览、连续打开关闭、加载失败后的重试，并回归资源库与生成历史的图片预览；裁切入口检查左右键框选、中／右键平移、自定义比例及复位。深浅主题、普通与性能模式各检查一次。
+4. 若点击“＋”仍退出界面，记录故障时间、是否整个应用退出或返回项目列表，核对现有 `last-webview-termination.json` 与同时间的系统崩溃报告；只提取进程名、Exception Type、Termination Reason 和崩溃线程，继续区分主进程与 WebKit/GPU 故障。
+
+可选自动化命令（仓库根目录，供用户执行，尚未运行）：
+
+```sh
+npx vitest run tests/components/zoomableImageInteractions.test.tsx tests/hooks/useImageViewportGesture.test.ts tests/components/fullscreenOverlay.test.tsx tests/components/mediaPreviewMemoryGuard.test.ts --exclude '.planning/**'
+```
+
+回滚：撤销本轮 6 个文件的对应差异即可；共享查看器和裁切 Hook 的接口保持原样，无媒体或项目数据迁移。本轮不调整原生安全配置或依赖。

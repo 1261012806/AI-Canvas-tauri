@@ -30,8 +30,6 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
     scale,
     tx,
     ty,
-    dragging,
-    gesturing,
     cursor,
     onPointerDown,
     reset,
@@ -46,6 +44,7 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (e.target === e.currentTarget) return;
     const el = containerEl.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -61,16 +60,24 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
     zoomTo(scale * (dir > 0 ? 1.4 : 1 / 1.4), 0, 0);
   }, [scale, zoomTo]);
 
-  const handleClick = useCallback(() => {
-    if (scale <= MIN_SCALE) onClose?.();
+  const handleClick = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    // 图片和控制栏都属于查看器内容，只有直接点到空白背景才关闭。
+    if (event.target === event.currentTarget && scale <= MIN_SCALE) onClose?.();
   }, [scale, onClose]);
 
   return (
     <div
       ref={containerRef}
       className="zoomable-image-container"
+      data-tauri-drag-region="false"
       style={{ cursor }}
-      onPointerDown={onPointerDown}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onPointerDown(event);
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+      onMouseUp={(event) => event.stopPropagation()}
       onDoubleClick={handleDoubleClick}
       onClick={handleClick}
     >
@@ -82,23 +89,22 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
           draggable={false}
           onError={onError}
           style={{
-            transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
-            transition: dragging || gesturing ? 'none' : 'transform 0.18s var(--ease-out-expo, ease-out)',
-            willChange: dragging || gesturing ? 'transform' : undefined,
+            transform: scale === MIN_SCALE && tx === 0 && ty === 0
+              ? 'none' : `translate(${tx}px, ${ty}px) scale(${scale})`,
           }}
         />
       </div>
 
       <div className="zoom-controls" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        <button className="zoom-btn" onClick={() => stepZoom(-1)} aria-label="缩小" disabled={scale <= MIN_SCALE}>
+        <button type="button" className="zoom-btn" onClick={() => stepZoom(-1)} aria-label="缩小" disabled={scale <= MIN_SCALE}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
-        <button className="zoom-percent" onClick={reset} aria-label="复位缩放" data-tooltip="点击复位">
+        <button type="button" className="zoom-percent" onClick={reset} aria-label="复位缩放" data-tooltip="点击复位">
           {Math.round(scale * 100)}%
         </button>
-        <button className="zoom-btn" onClick={() => stepZoom(1)} aria-label="放大" disabled={scale >= MAX_SCALE}>
+        <button type="button" className="zoom-btn" onClick={() => stepZoom(1)} aria-label="放大" disabled={scale >= MAX_SCALE}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />

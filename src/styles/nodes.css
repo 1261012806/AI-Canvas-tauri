@@ -1249,17 +1249,16 @@
   display: inline-flex;
   line-height: 0;
   transform-origin: center center;
-  will-change: transform, filter;
-  animation: imgZoomIn 0.5s var(--ease-out-expo) both;
 }
 
 /* 容器内的图片不再单独执行入场动画，transform 完全由 JS 控制 */
 .zoomable-image-container .fullscreen-img-view {
   animation: none;
+  transition: none;
   cursor: inherit;
 }
 
-/* 图片节点全屏预览即时入场；其他 ZoomableImage 调用保留原视觉效果。 */
+/* 全屏图片预览显式关闭滤镜入场和强制图层。 */
 .fullscreen-overlay--image-preview .zoomable-image-stage {
   animation: none;
   will-change: auto;
@@ -1282,7 +1281,8 @@
   padding: 5px 7px;
   border-radius: 999px;
   background: rgba(20, 20, 22, 0.62);
-  backdrop-filter: blur(var(--glass-blur-lg));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
   user-select: none;
