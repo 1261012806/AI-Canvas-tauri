@@ -1052,15 +1052,12 @@ button.wf-ionode-badge.is-default {
   pointer-events: none;
 }
 .assets-panel {
+  position: relative;
   width: calc(100vw - 140px);
   height: calc(100vh - 64px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background:
-    var(--appearance-surface-image, none) padding-box,
-    linear-gradient(var(--glass-panel-bg), var(--glass-panel-bg)) padding-box,
-    var(--glass-bevel-border) border-box;
   backdrop-filter: blur(var(--glass-blur-lg));
   border: 1px solid transparent;
   border-radius: 14px;
@@ -2095,7 +2092,7 @@ button.wf-ionode-badge.is-default {
   color: var(--theme-text-muted);
 }
 
-/* Keep the light glass surface translucent while giving its controls an opaque foreground. */
+/* Light theme controls retain explicit foreground contrast. */
 [data-theme='light'] .assets-panel {
   --assets-light-muted: color-mix(in srgb, var(--theme-text-secondary) 78%, var(--theme-text));
   --assets-light-control-bg: color-mix(in srgb, var(--theme-surface) 90%, transparent);

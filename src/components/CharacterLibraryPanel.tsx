@@ -660,7 +660,7 @@ export default function CharacterLibraryPanel() {
         isOpen={open}
         onClose={() => setOpen(false)}
         ariaLabel={t('角色库')}
-        className="character-library-panel"
+        className="character-library-panel ui-dialog-surface"
       >
         <div className="character-library-toolbar">
           <div className="character-library-tabs" role="tablist" aria-label={t('角色保存范围')}>

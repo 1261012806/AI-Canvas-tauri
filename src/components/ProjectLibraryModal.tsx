@@ -476,7 +476,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
         <main
           inert={deleteTarget ? true : undefined}
           aria-hidden={deleteTarget ? true : undefined}
-          className="min-h-0 flex-1 overflow-y-auto bg-canvas-bg/60 p-3"
+          className={`min-h-0 flex-1 overflow-y-auto p-3${isStartPage ? ' bg-canvas-bg/60' : ''}`}
         >
           <div ref={projectGridRef} style={isStartPage ? { maxHeight: projectGridMaxHeight } : undefined}
             className={`grid gap-3 ${isStartPage
@@ -884,7 +884,7 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
       ariaLabel={t('项目库')}
       motionPreset="quick"
       backdropBlur={false}
-      className="h-[min(560px,calc(100dvh-24px))] w-[min(840px,calc(100vw-24px))]"
+      className="ui-dialog-surface h-[min(560px,calc(100dvh-24px))] w-[min(840px,calc(100vw-24px))]"
     >
       {content}
     </ModalOverlay>

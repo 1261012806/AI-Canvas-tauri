@@ -766,6 +766,8 @@ const settings = {
   '保存预设': 'Save preset',
   '内置预设不可覆盖': 'Built-in presets cannot be overwritten',
   '覆盖当前预设': 'Overwrite current preset',
+  '恢复默认配置': 'Restore defaults',
+  '恢复当前外观的默认配置，保留已保存预设和当前主题模式': 'Restore default appearance settings while keeping saved presets and the current theme mode',
   '节点预览': 'Node preview',
   '当前主题': 'Current theme',
   '外观预设': 'Appearance presets',

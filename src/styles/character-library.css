@@ -3,7 +3,6 @@
   height: min(760px, calc(100vh - 80px));
   min-width: 720px;
   color: var(--theme-text);
-  background: color-mix(in srgb, var(--glass-panel-bg) 94%, var(--theme-surface));
   border-color: var(--theme-border);
 }
 
@@ -555,7 +554,6 @@
   flex: 0 0 auto;
   align-items: stretch;
   border-top: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--theme-bg) 34%, transparent);
 }
 
 .character-library-strip-label {

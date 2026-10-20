@@ -452,7 +452,7 @@ export default function OutputHistoryPanel() {
           {/* Bottom Sheet — 固定时缩成右下角小窗（避开底部工具栏），否则保持底部抽屉 */}
           <motion.div
             data-resource-video-boundary
-            className={`z-[250] flex flex-col glass-panel shadow-2xl overflow-hidden ${
+            className={`z-[250] flex flex-col glass-panel ui-dialog-surface shadow-2xl overflow-hidden ${
               historyPinned
                 ? 'fixed bottom-14 right-3 w-[360px] max-h-[min(60vh,520px)] border rounded-2xl'
                 : 'fixed inset-x-0 bottom-0 mx-auto w-full max-w-[720px] max-h-[75vh] border border-b-0 rounded-t-2xl'

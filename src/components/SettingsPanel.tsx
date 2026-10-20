@@ -340,7 +340,7 @@ export default function SettingsPanel() {
       isOpen={settingsOpen}
       onClose={() => setSettingsOpen(false)}
       ariaLabel={t('设置')}
-      className="w-[min(900px,90vw)] h-[90vh] max-h-[940px] rounded-2xl settings-modal-shell border ring-1 ring-black/5 shadow-2xl"
+      className="w-[min(900px,90vw)] h-[90vh] max-h-[940px] rounded-2xl settings-modal-shell ui-dialog-surface border ring-1 ring-black/5 shadow-2xl"
       closeOnBackdrop={false}
     >
         {/* Header */}

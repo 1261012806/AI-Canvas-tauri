@@ -1492,6 +1492,13 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
   color: var(--node-panorama-light);
 }
 
+/* 弹窗面板：配合 glass-panel 的独立背景层，设置与业务弹窗共用同一底色。 */
+.ui-dialog-surface {
+  --canvas-panel-bg: var(--dialog-surface-bg);
+  --canvas-panel-opacity: 1;
+  color: var(--theme-text);
+}
+
 /* ==========================================================================
    Card / 卡片
    结构：

@@ -77,7 +77,7 @@ export default function StyleGuideDialogs() {
         closeOnBackdrop={closeOnBackdrop}
         draggable={draggable}
         backdropBlur={backdropBlur}
-        className={`max-h-[calc(100vh-32px)] ${kind === 'long' ? 'w-[min(640px,calc(100vw-32px))]' : 'w-[min(480px,calc(100vw-32px))]'}`}
+        className={`ui-dialog-surface max-h-[calc(100vh-32px)] ${kind === 'long' ? 'w-[min(640px,calc(100vw-32px))]' : 'w-[min(480px,calc(100vw-32px))]'}`}
       >
         <header data-modal-drag-handle className={`ui-card__header shrink-0 ${draggable ? 'cursor-grab' : ''}`}>
           <div className="min-w-0 flex-1">

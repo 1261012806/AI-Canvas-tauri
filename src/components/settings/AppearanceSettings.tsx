@@ -575,6 +575,7 @@ function ColorCardInput({
   followThemeVar,
   image,
   onImageChange,
+  swatches,
 }: {
   label: string;
   value: string;
@@ -584,6 +585,7 @@ function ColorCardInput({
   followThemeVar?: string;
   image?: AppearanceBackgroundImage;
   onImageChange?: (image: AppearanceBackgroundImage) => void;
+  swatches?: readonly string[];
 }) {
   const t = useT();
   const isAuto = Boolean(followThemeVar) && value === 'auto';
@@ -594,8 +596,9 @@ function ColorCardInput({
 
   return (
     <div className={`p-3 settings-sub-card rounded-xl transition-colors ${stacked ? 'ui-field' : 'flex flex-wrap items-center justify-between gap-2'}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className={`text-xs font-semibold text-canvas-text ${stacked ? 'whitespace-nowrap' : ''}`}>{label}</span>
+      <div className={`flex items-center gap-2 ${swatches ? 'min-w-min flex-1 flex-wrap' : 'justify-between'}`}>
+        <span className={`text-xs font-semibold text-canvas-text ${stacked || swatches ? 'shrink-0 whitespace-nowrap' : ''}`}>{label}</span>
+        {swatches && <QuickSwatches colors={swatches} value={value} onChange={onChange} title={label} />}
         {onImageChange && <Select aria-label={`${label}背景类型`} value={imageConfig.kind} className="shrink-0 w-24" size="sm"
           onChange={(kind) => onImageChange({ ...imageConfig, kind: kind as AppearanceBackgroundImage['kind'] })}>
           <option value="color">{t('纯色')}</option>
@@ -691,16 +694,17 @@ function QuickSwatches({
   title?: string;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 pt-1" aria-label={title}>
+    <div className="flex min-w-0 flex-wrap items-center gap-2" role="group" aria-label={title}>
       {colors.map((color) => {
         const isSelected = value.toLowerCase() === color.toLowerCase();
         return (
           <button
             key={color}
             type="button"
+            aria-pressed={isSelected}
             onClick={() => onChange(color)}
             style={{ backgroundColor: color }}
-            className={`w-8 h-8 rounded-lg transition-transform ${
+            className={`w-7 h-7 shrink-0 rounded-md transition-transform ${
               isSelected
                 ? 'ring-2 ring-brand ring-offset-2 ring-offset-canvas-card flex items-center justify-center text-white shadow-xs'
                 : 'hover:scale-105'
@@ -708,7 +712,7 @@ function QuickSwatches({
             title={color}
           >
             {isSelected && (
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             )}
@@ -1081,13 +1085,8 @@ export default function AppearanceSettings() {
               label={t('画布背景颜色')}
               value={active.canvas.color}
               fallbackColor={active.mode === 'light' ? '#F4F6FB' : '#0a0a0f'}
+              swatches={active.mode === 'light' ? LIGHT_CANVAS_COLOR_SWATCHES : DARK_CANVAS_COLOR_SWATCHES}
               onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
-            />
-            <QuickSwatches
-              colors={active.mode === 'light' ? LIGHT_CANVAS_COLOR_SWATCHES : DARK_CANVAS_COLOR_SWATCHES}
-              value={active.canvas.color}
-              onChange={(value) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, color: value, kind: 'color' } }))}
-              title={t('画布底色预设')}
             />
           </div>
         )}
@@ -1347,22 +1346,36 @@ export default function AppearanceSettings() {
             />
           </div>
 
-          <button
-            type="button"
-            disabled={!currentPreset || currentPreset.builtin}
-            title={currentPreset?.builtin ? t('内置预设不可覆盖') : t('覆盖当前预设')}
-            onClick={() => {
-              if (currentPreset && !currentPreset.builtin) {
-                setConfirmation({ kind: 'overwrite', theme: currentPreset });
-              }
-            }}
-            className="ui-btn ui-btn--secondary ui-btn--sm"
-          >
-            <svg className="w-3.5 h-3.5 text-canvas-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-            </svg>
-            <span>{t('覆盖当前预设')}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              title={t('恢复当前外观的默认配置，保留已保存预设和当前主题模式')}
+              onClick={() => void selectPreset({
+                ...getBuiltinAppearanceTheme(active.id, resolveAppearanceMode(active.mode)),
+                mode: active.mode,
+              })}
+              className="ui-btn ui-btn--secondary ui-btn--sm"
+            >
+              <Icon icon="lucide:rotate-ccw" width="14" height="14" aria-hidden="true" className="text-canvas-text-muted" />
+              <span>{t('恢复默认配置')}</span>
+            </button>
+            <button
+              type="button"
+              disabled={!currentPreset || currentPreset.builtin}
+              title={currentPreset?.builtin ? t('内置预设不可覆盖') : t('覆盖当前预设')}
+              onClick={() => {
+                if (currentPreset && !currentPreset.builtin) {
+                  setConfirmation({ kind: 'overwrite', theme: currentPreset });
+                }
+              }}
+              className="ui-btn ui-btn--secondary ui-btn--sm"
+            >
+              <svg className="w-3.5 h-3.5 text-canvas-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+              </svg>
+              <span>{t('覆盖当前预设')}</span>
+            </button>
+          </div>
         </div>
         <p className="ui-hint" role="status" aria-live="polite">
           {presetOperation === 'import' ? t('正在校验并恢复预设图片…')
@@ -1584,23 +1597,13 @@ export default function AppearanceSettings() {
             label={t('主题色')}
             value={active.ui.accent}
             fallbackColor={active.mode === 'light' ? '#7280E4' : '#6366f1'}
+            swatches={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
             onChange={(value) =>
               update((theme) => ({
                 ...theme,
                 ui: { ...theme.ui, accent: value, accentStrong: value, accentSoft: value, focus: value },
               }))
             }
-          />
-          <QuickSwatches
-            colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
-            value={active.ui.accent}
-            onChange={(value) =>
-              update((theme) => ({
-                ...theme,
-                ui: { ...theme.ui, accent: value, accentStrong: value, accentSoft: value, focus: value },
-              }))
-            }
-            title={t('主题色调色板')}
           />
         </div>
       </SectionCard>
@@ -1822,11 +1825,7 @@ export default function AppearanceSettings() {
                   label={t('手柄颜色')}
                   value={active.handle.color}
                   fallbackColor={active.mode === 'light' ? '#7280E4' : '#6366f1'}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
-                />
-                <QuickSwatches
-                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
-                  value={active.handle.color}
+                  swatches={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
                   onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, color: val } }))}
                 />
               </div>
@@ -1837,11 +1836,7 @@ export default function AppearanceSettings() {
                   label={t('悬浮颜色')}
                   value={active.handle.hoverColor}
                   fallbackColor={active.mode === 'light' ? '#5A69D4' : '#818cf8'}
-                  onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
-                />
-                <QuickSwatches
-                  colors={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
-                  value={active.handle.hoverColor}
+                  swatches={active.mode === 'light' ? LIGHT_THEME_COLOR_SWATCHES : DARK_THEME_COLOR_SWATCHES}
                   onChange={(val) => update((theme) => ({ ...theme, handle: { ...theme.handle, hoverColor: val } }))}
                 />
               </div>

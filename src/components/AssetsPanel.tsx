@@ -1198,7 +1198,7 @@ export default function AssetsPanel() {
           <div className={isPage ? 'absolute inset-0 z-40' : `assets-panel-wrapper${isDrawer ? ' assets-panel-wrapper--drawer' : ''}`}>
             <motion.div
               data-resource-video-boundary
-              className={isPage ? 'assets-library-page flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas-bg pb-3' : `assets-panel${isDrawer ? ' assets-panel--drawer' : ''}`}
+              className={isPage ? 'assets-library-page flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas-bg pb-3' : `assets-panel glass-panel ui-dialog-surface${isDrawer ? ' assets-panel--drawer' : ''}`}
               role={isPage ? 'main' : isDrawer ? 'region' : 'dialog'}
               aria-label={isPage ? '资源库' : isDrawer ? '资产库快捷面板' : '资产管理'}
               aria-modal={isDrawer || isPage ? undefined : true}
