@@ -36,7 +36,7 @@ beforeEach(() => {
 
 describe('video task retry entry', () => {
   it('uses the shared preview overlay and wait timer for a paused video', () => {
-    const root = render(true)!;
+    const root = elements(render(true))[0];
     expect(root.props.className).toContain('generation-progress-overlay--interactive');
     expect(root.props.className).not.toContain('ui-card');
     expect(elements(root).some((element) => element.type === GenerationWaitTime)).toBe(true);

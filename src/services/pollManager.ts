@@ -936,7 +936,10 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
     // 被删除、取消或新一轮查询替代时，不能清理当前任务或覆盖其界面状态。
     if (signal.aborted) return;
     if (err instanceof ComfyPendingError) {
-      if (!(err instanceof CanvasResultStaleError)) updatePendingTask(nodeId, { comfyRecoveryState: 'disconnected' }, taskId);
+      // 图片/音频切走后仍需恢复入口；视频另用 canvas_changed 保留本地交付状态。
+      if (!(err instanceof CanvasResultStaleError) || nodeType !== 'ai-video') {
+        updatePendingTask(nodeId, { comfyRecoveryState: 'disconnected' }, taskId);
+      }
       if (nodeType === 'ai-video' && pauseVideoNodeTask(nodeId, taskId, undefined, err instanceof CanvasResultStaleError ? 'canvas_changed' : 'query_interrupted')) return;
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: err.message });
     } else {

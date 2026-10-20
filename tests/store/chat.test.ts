@@ -82,7 +82,7 @@ describe('chat conversation restoration', () => {
 
   it('restores general history on the start page without creating a canvas project', async () => {
     const general = { ...conversation('conv-general', 1), projectId: GENERAL_ASSISTANT_SCOPE_ID };
-    useAppStore.setState({ currentProjectId: null });
+    useAppStore.setState({ currentProjectId: null, projects: [] });
     historyMocks.loadProjectConversations.mockResolvedValue([general]);
     historyMocks.loadMessages.mockResolvedValue({ messages: [message('general-answer', general.id)], total: 1 });
     await useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);

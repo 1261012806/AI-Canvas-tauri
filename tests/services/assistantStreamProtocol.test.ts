@@ -50,7 +50,7 @@ beforeEach(() => {
 describe('assistant custom protocol boundary', () => {
   it('builds a general prompt without borrowing the open canvas or requesting a project for ordinary chat', () => {
     useAppStore.setState({ currentProjectId: 'other-project', nodes: [{ id: 'private-node', type: 'ai-text',
-      position: { x: 0, y: 0 }, data: { label: '另一个项目的私有内容', status: 'idle' } }] });
+      position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '另一个项目的私有内容', status: 'idle' } }] });
     const prompt = buildAssistantSystemPrompt({ projectId: GENERAL_ASSISTANT_SCOPE_ID,
       agentTools: true, includeToolGuidance: false });
     expect(prompt).toContain('通用 AI 助手');

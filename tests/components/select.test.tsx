@@ -1,5 +1,4 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +68,12 @@ describe('共享 Select 迁移语义', () => {
     expect(markup).toContain('autofocus=""');
     expect(markup).toContain('name="fps"');
     expect(markup).toContain('ui-select__trigger');
+  });
+
+  it('展开菜单默认启用 Portal，无需业务组件重复传参', () => {
+    hooks.states = [true, false];
+    const nodes = elements(Select({ value: '1', onChange: vi.fn(), options: [{ value: '1', label: '一' }] }));
+    expect(nodes.find((node) => node.props.role === 'listbox')?.props['data-ui-select-portal']).toBe('');
   });
 
   it('点击选项传递原字符串并收起菜单，恢复触发器焦点', () => {
@@ -178,10 +183,8 @@ describe('共享 Select 迁移语义', () => {
     cleanup?.();
   });
 
-  it('源码仅保留 UI Kit 内部原生控件，迁移后的业务控件全部启用 Portal', () => {
+  it('源码仅保留 UI Kit 内部原生控件，业务控件沿用默认 Portal', () => {
     const natives: string[] = [];
-    const plan = readFileSync(resolve('doc/plans/2026-09-14-ui-kit-selects/task_plan.md'), 'utf8');
-    const migrated = new Set([...plan.matchAll(/`(src\/[^`]+\.tsx)`/g)].map((match) => match[1]));
     function scan(directory: string) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         const file = `${directory}/${entry.name}`;
@@ -191,8 +194,11 @@ describe('共享 Select 迁移语义', () => {
         function visit(node: ts.Node) {
           if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
             if (node.tagName.getText(source) === 'select') natives.push(file);
-            if (ts.isJsxOpeningElement(node) && node.tagName.getText(source) === 'Select' && migrated.has(file)) {
-              expect(node.attributes.properties.some((attr) => ts.isJsxAttribute(attr) && attr.name.getText(source) === 'fixedMenu'), file).toBe(true);
+            if (node.tagName.getText(source) === 'Select') {
+              const portal = node.attributes.properties.find((attr) => ts.isJsxAttribute(attr) && attr.name.getText(source) === 'fixedMenu');
+              if (portal && ts.isJsxAttribute(portal) && portal.initializer) {
+                expect(ts.isJsxExpression(portal.initializer) && portal.initializer.expression?.kind === ts.SyntaxKind.TrueKeyword, file).toBe(true);
+              }
             }
           }
           ts.forEachChild(node, visit);

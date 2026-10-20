@@ -47,7 +47,7 @@ describe('ComfyUI memory resources', () => {
   ] as const)('sends the official /free payload for %s', async (mode, payload) => {
     mocks.fetch.mockResolvedValue(new Response(null, { status: 200 }));
     await releaseComfyMemory('http://127.0.0.1:8188/', mode);
-    expect(mocks.fetch).toHaveBeenCalledWith('/api/comfyui/free', expect.objectContaining({
+    expect(mocks.fetch).toHaveBeenCalledWith('http://127.0.0.1:8188/free', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify(payload),
     }));

@@ -170,8 +170,8 @@ describe('EmptyChatState', () => {
       />,
     );
 
-    expect(markup).toContain('AI 助手');
-    expect(markup).toContain('默认助手仍可正常使用');
+    expect(markup).toContain('有什么可以帮你？');
+    expect(markup).toContain('问答、写作、翻译和资料分析，直接开始就好。对话会自动保存。');
     expect(markup).toContain('智能体中心');
     expect(markup).not.toContain('画布 AI 助手');
   });

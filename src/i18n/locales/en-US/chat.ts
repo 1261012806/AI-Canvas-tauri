@@ -3,7 +3,6 @@
  */
 const chat = {
   '正在连接模型': 'Connecting to model',
-  '模型推理摘要': 'Provider reasoning summary',
   '由模型接口返回，仅供参考；工具权限和执行依据由应用独立判定。': 'Returned by the model API, for reference only; the app independently decides tool permissions and execution evidence.',
   '推理内容过长，展示已截断。': 'Reasoning is too long; the display was truncated.',
   '正在压缩上下文': 'Compressing context',
@@ -23,14 +22,10 @@ const chat = {
   // ── EmptyChatState ──
   '新建对话': 'New conversation',
   '历史记录': 'History',
-  '试试这些：': 'Try these:',
-  '现在有几个失败节点？': 'How many failed nodes are there?',
   '选中 3 号节点': 'Select node #3',
   '删除失败节点': 'Delete failed nodes',
   '打开 AI 助手': 'Open AI Assistant',
   '智能体中心': 'Agent Center',
-  '直接开始对话，或按需安装智能体来扩展专业能力。没有智能体时，默认助手仍可正常使用。':
-    'Start chatting right away, or install agents when you need specialist capabilities. The default assistant keeps working without any agents.',
   '默认助手': 'Default assistant',
   '始终可用': 'Always available',
   '不安装智能体也能继续使用聊天、画布、工作流和模型功能。':
@@ -127,7 +122,6 @@ const chat = {
   '将消息加入队列': 'Queue this message',
   '发送消息': 'Send message',
   '当前任务完成后发送': 'Send after the current task finishes',
-  '重要操作执行前会请求确认': 'Important actions require confirmation before running',
   '角色': 'Character',
   '场景': 'Scene',
   '道具': 'Prop',
@@ -160,7 +154,6 @@ const chat = {
 
   // ── ChatMessages ──
   '开始对话': 'Start a conversation',
-  '用自然语言操作画布，AI 助手帮你完成': 'Control the canvas in natural language, and the AI assistant will help',
   '加载更早消息（还有 {count} 条）': 'Load earlier messages ({count} remaining)',
   '回到最新消息，{count} 条未读': 'Back to latest, {count} unread',
   '回到最新消息': 'Back to latest messages',

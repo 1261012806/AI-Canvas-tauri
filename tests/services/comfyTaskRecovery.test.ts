@@ -408,6 +408,13 @@ describe('ComfyUI 任务恢复合同', () => {
     expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
     expect(useAppStore.getState().nodes[0].data.imageUrl).toBeUndefined();
     expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'disconnected' });
+    useAppStore.setState({ currentProjectId: 'p1' });
+    mocks.history.mockImplementation(async () => completed());
+    mocks.persist.mockImplementation(async (url: string) => ({ mediaUrl: url, sourceUrl: url }));
+    await resumeComfyUINodeTask('n1');
+    expect(pending()).toEqual([]);
+    expect(useAppStore.getState().nodes[0].data.status).toBe('success');
+    expect(promptCalls()).toHaveLength(0);
   });
 
   it('取消后迟到的 history 成功响应不能作为成功结果返回', async () => {

@@ -63,7 +63,7 @@ export default function McpConnectionEditor({ connection, onClose }: { connectio
         </label>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <label className="ui-field"><span className="ui-label">认证方式</span>
-            <Select value={draft.authHeader} onChange={(event) => setDraft({ ...draft, authHeader: event.target.value as McpClientConnection['authHeader'] })}>
+            <Select value={draft.authHeader} onChange={(authHeader) => setDraft({ ...draft, authHeader })}>
               <option value="authorization">Bearer Token</option><option value="x-api-key">X-API-Key</option>
             </Select>
           </label>
@@ -87,11 +87,10 @@ export default function McpConnectionEditor({ connection, onClose }: { connectio
               return <div key={tool.name} className="rounded-md border border-canvas-border p-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="min-w-0 break-all text-sm font-medium">{tool.name}</span>
-                  <Select aria-label={`${tool.name} 的授权`} value={changed ? 'disabled' : grant?.access ?? 'disabled'} onChange={(event) => {
+                  <Select aria-label={`${tool.name} 的授权`} value={changed ? 'disabled' : grant?.access ?? 'disabled'} onChange={(access) => {
                     const nextTools = new Map(Object.entries(draft.tools));
-                    const access = event.target.value;
                     if (access === 'disabled') nextTools.delete(tool.name);
-                    else nextTools.set(tool.name, { access: access as 'read' | 'write', fingerprint: tool.fingerprint });
+                    else nextTools.set(tool.name, { access, fingerprint: tool.fingerprint });
                     setDraft({ ...draft, tools: Object.fromEntries(nextTools) });
                   }}>
                     <option value="disabled">禁用</option><option value="read">我确认为只读</option><option value="write">允许写操作</option>

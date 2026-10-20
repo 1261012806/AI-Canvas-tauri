@@ -89,7 +89,7 @@ beforeEach(() => {
 
 describe('conversation execution controller', () => {
   it('binds a general request to application scope and caps its tools', () => {
-    useAppStore.setState({ currentProjectId: null, conversations: [], activeConversationId: null });
+    useAppStore.setState({ currentProjectId: null, projects: [], conversations: [], activeConversationId: null });
     const conversationId = useAppStore.getState().createConversation(GENERAL_ASSISTANT_SCOPE_ID);
     useAppStore.setState({ currentProjectId: 'newly-opened-project' });
     const result = submitConversationMessage({ content: '帮我拟一份学习计划', conversationId, projectId: 'newly-opened-project' });

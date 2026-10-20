@@ -9,7 +9,10 @@ import { comfyFetch } from '../../src/services/comfyPolling';
 import { connectNativeComfyProgress } from '../../src/services/comfyProgressTransport';
 import { useAppStore } from '../../src/store/useAppStore';
 
-vi.mock('../../src/services/comfyPolling', () => ({ comfyFetch: vi.fn() }));
+vi.mock('../../src/services/comfyPolling', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/comfyPolling')>(),
+  comfyFetch: vi.fn(),
+}));
 vi.mock('../../src/services/comfyProgressTransport', () => ({ connectNativeComfyProgress: vi.fn() }));
 
 const nativeConnections: Array<{
