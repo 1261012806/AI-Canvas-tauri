@@ -5,8 +5,9 @@
  * 未填写的字段一律保持 undefined，绝不替用户猜测默认值。
  */
 import Select from '../../shared/Select';
+import NumberStepper from '../../shared/NumberStepper';
 import { Icon } from '@iconify/react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { ProviderModelSelection } from '../../../types';
 import type { VideoInputConstraints, VideoModelCapability } from '../../../types/aiTypes';
 import {
@@ -63,9 +64,11 @@ export default function VideoCapabilityEditor({
   onClose,
 }: VideoCapabilityEditorProps) {
   const [customRatio, setCustomRatio] = useState('');
+  const durationInputId = useId();
   const [customResolution, setCustomResolution] = useState('');
   const [customFrameRate, setCustomFrameRate] = useState('');
   const [customDuration, setCustomDuration] = useState('');
+  const [durationDragScale, setDurationDragScale] = useState<{ min: number; max: number }>();
   const [seedanceTemplateId, setSeedanceTemplateId] = useState('2.5:volcengine');
   const [h3TemplateId, setH3TemplateId] = useState('h3-standard:minimax');
   const capability = createEditableVideoCapability(model.videoCapability);
@@ -86,22 +89,49 @@ export default function VideoCapabilityEditor({
     ...(discreteDurations ?? []),
   ])].sort((left, right) => left - right);
   const inputConstraints = capability.inputConstraints ?? {};
+  const declaredMinDuration = capability.minDuration ?? discreteDurations?.[0];
+  const declaredMaxDuration = capability.maxDuration ?? discreteDurations?.at(-1);
   const editorMinDuration = Math.min(
     VIDEO_DURATION_RANGE_MAX,
     Math.max(
       VIDEO_DURATION_RANGE_MIN,
-      capability.minDuration ?? Math.min(...(capability.durations ?? [VIDEO_DURATION_RANGE_MIN])),
+      declaredMinDuration ?? Math.min(2, declaredMaxDuration ?? 2),
     ),
   );
   const editorMaxDuration = Math.max(
     editorMinDuration,
     Math.min(
       VIDEO_DURATION_RANGE_MAX,
-      capability.maxDuration ?? Math.max(...(capability.durations ?? [15])),
+      declaredMaxDuration ?? 15,
     ),
   );
+  // 输入上限不是滑轨刻度；常用秒数不能被 1–3600 秒的完整范围挤到一起。
+  const sliderMinDuration = durationDragScale?.min ?? Math.min(2, editorMinDuration);
+  const sliderMaxDuration = durationDragScale?.max ?? Math.max(30, editorMaxDuration);
+  const sliderDurationSpan = sliderMaxDuration - sliderMinDuration;
+  const minimumThumbOnTop = editorMinDuration > (sliderMinDuration + sliderMaxDuration) / 2;
 
   const commit = (next: VideoModelCapability) => onChange(createEditableVideoCapability(next));
+  const changeDurationEndpoint = (endpoint: 'min' | 'max', rawValue: string): number => {
+    const previous = endpoint === 'min' ? editorMinDuration : editorMaxDuration;
+    const parsed = Number(rawValue);
+    if (!rawValue.trim() || !Number.isInteger(parsed)
+      || parsed < VIDEO_DURATION_RANGE_MIN || parsed > VIDEO_DURATION_RANGE_MAX) return previous;
+    const value = endpoint === 'min'
+      ? Math.min(parsed, editorMaxDuration)
+      : Math.max(parsed, editorMinDuration);
+    if (value === previous) return value;
+    commit({
+      ...capability,
+      [endpoint === 'min' ? 'minDuration' : 'maxDuration']: value,
+      ...(capability.defaultDuration === undefined ? {} : {
+        defaultDuration: endpoint === 'min'
+          ? Math.max(value, capability.defaultDuration)
+          : Math.min(value, capability.defaultDuration),
+      }),
+    });
+    return value;
+  };
   const commitInputConstraints = (next: VideoInputConstraints) => commit({
     ...capability,
     inputConstraints: next,
@@ -337,7 +367,7 @@ export default function VideoCapabilityEditor({
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <span className="text-xs font-medium text-canvas-text">生成时长</span>
             <div className="ui-segmented border border-canvas-border" role="group" aria-label="时长模式">
-              <button type="button" aria-pressed={!discreteDurations} className={`ui-segmented__item ${!discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: capability.minDuration ?? VIDEO_DURATION_RANGE_MIN, maxDuration: capability.maxDuration ?? 15 })}>连续范围</button>
+              <button type="button" aria-pressed={!discreteDurations} className={`ui-segmented__item ${!discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: editorMinDuration, maxDuration: editorMaxDuration })}>连续范围</button>
               <button type="button" aria-pressed={!!discreteDurations} className={`ui-segmented__item ${discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: [capability.defaultDuration ?? 5] })}>固定档位</button>
             </div>
           </div>
@@ -360,67 +390,85 @@ export default function VideoCapabilityEditor({
             </div>
           ) : (
             <div>
-              <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-canvas-text">
-                <span>最短 {capability.minDuration ?? '未声明'}</span>
-                <span>最长 {capability.maxDuration ?? '未声明'}</span>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-canvas-text">
+                <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+                  <label htmlFor={`${durationInputId}-min`}>最短</label>
+                  <NumberStepper
+                    id={`${durationInputId}-min`}
+                    size="sm"
+                    unit="s"
+                    value={editorMinDuration}
+                    min={VIDEO_DURATION_RANGE_MIN}
+                    max={editorMaxDuration}
+                    step={1}
+                    aria-label="最短生成时长（秒）"
+                    className={editorMinDuration < 100 ? '[&_.ui-stepper__input]:max-w-[2ch]' : undefined}
+                    onChange={(value) => changeDurationEndpoint('min', String(value))}
+                  />
+                </div>
+                <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+                  <label htmlFor={`${durationInputId}-max`}>最长</label>
+                  <NumberStepper
+                    id={`${durationInputId}-max`}
+                    size="sm"
+                    unit="s"
+                    value={editorMaxDuration}
+                    min={editorMinDuration}
+                    max={VIDEO_DURATION_RANGE_MAX}
+                    step={1}
+                    aria-label="最长生成时长（秒）"
+                    className={editorMaxDuration < 100 ? '[&_.ui-stepper__input]:max-w-[2ch]' : undefined}
+                    onChange={(value) => changeDurationEndpoint('max', String(value))}
+                  />
+                </div>
               </div>
               {capability.minDuration === undefined && capability.maxDuration === undefined && (
                 <p className="mb-2 text-[10px] text-canvas-text-muted">
-                  当前未声明时长范围；滑动端点后才会写入限制。
+                  当前未声明时长范围；拖动或修改端点后才会写入限制。
                 </p>
               )}
               <div className="relative h-8">
-                <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-canvas-card" />
-                <div
-                  className="pointer-events-none absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.35)]"
-                  style={{
-                    left: `${((editorMinDuration - VIDEO_DURATION_RANGE_MIN) / (VIDEO_DURATION_RANGE_MAX - VIDEO_DURATION_RANGE_MIN)) * 100}%`,
-                    width: `${((editorMaxDuration - editorMinDuration) / (VIDEO_DURATION_RANGE_MAX - VIDEO_DURATION_RANGE_MIN)) * 100}%`,
-                  }}
-                />
+                <div className="pointer-events-none absolute inset-x-1.5 top-1/2 h-1 -translate-y-1/2 rounded-full bg-canvas-border">
+                  <div
+                    className="absolute inset-y-0 rounded-full bg-brand"
+                    style={{
+                      left: `${((editorMinDuration - sliderMinDuration) / sliderDurationSpan) * 100}%`,
+                      width: `${((editorMaxDuration - editorMinDuration) / sliderDurationSpan) * 100}%`,
+                    }}
+                  />
+                </div>
                 <input
                   type="range"
-                  min={VIDEO_DURATION_RANGE_MIN}
-                  max={VIDEO_DURATION_RANGE_MAX}
+                  min={sliderMinDuration}
+                  max={sliderMaxDuration}
                   step="1"
                   value={editorMinDuration}
                   aria-label="最短生成时长"
-                  className="rh-duration-input pointer-events-none absolute inset-0 z-20 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto"
-                  style={{ position: 'absolute', top: 4, left: 0, right: 0, zIndex: 20 }}
-                  onChange={(event) => {
-                    const minDuration = Math.min(Number(event.target.value), editorMaxDuration);
-                    commit({
-                      ...capability,
-                      minDuration,
-                      ...(capability.defaultDuration === undefined
-                        ? {}
-                        : { defaultDuration: Math.max(minDuration, capability.defaultDuration) }),
-                    });
-                  }}
+                  className={`ui-slider pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 [--range-track-background:transparent] focus-visible:z-30 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto ${minimumThumbOnTop ? 'z-20' : 'z-10'}`}
+                  onPointerDown={() => setDurationDragScale({ min: sliderMinDuration, max: sliderMaxDuration })}
+                  onPointerUp={() => setDurationDragScale(undefined)}
+                  onPointerCancel={() => setDurationDragScale(undefined)}
+                  onBlur={() => setDurationDragScale(undefined)}
+                  onChange={(event) => changeDurationEndpoint('min', event.target.value)}
                 />
                 <input
                   type="range"
-                  min={VIDEO_DURATION_RANGE_MIN}
-                  max={VIDEO_DURATION_RANGE_MAX}
+                  min={sliderMinDuration}
+                  max={sliderMaxDuration}
                   step="1"
                   value={editorMaxDuration}
                   aria-label="最长生成时长"
-                  className="rh-duration-input pointer-events-none absolute inset-0 z-10 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto"
-                  style={{ position: 'absolute', top: 4, left: 0, right: 0, zIndex: 10 }}
-                  onChange={(event) => {
-                    const maxDuration = Math.max(Number(event.target.value), editorMinDuration);
-                    commit({
-                      ...capability,
-                      maxDuration,
-                      ...(capability.defaultDuration === undefined
-                        ? {}
-                        : { defaultDuration: Math.min(maxDuration, capability.defaultDuration) }),
-                    });
-                  }}
+                  className={`ui-slider pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 [--range-track-background:transparent] focus-visible:z-30 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto ${minimumThumbOnTop ? 'z-10' : 'z-20'}`}
+                  onPointerDown={() => setDurationDragScale({ min: sliderMinDuration, max: sliderMaxDuration })}
+                  onPointerUp={() => setDurationDragScale(undefined)}
+                  onPointerCancel={() => setDurationDragScale(undefined)}
+                  onBlur={() => setDurationDragScale(undefined)}
+                  onChange={(event) => changeDurationEndpoint('max', event.target.value)}
                 />
               </div>
               <div className="flex justify-between text-[9px] text-canvas-text-muted" aria-hidden="true">
-                {[2, 6, 10, 14, 18, 22, 26, 30].map((value) => <span key={value}>{value}s</span>)}
+                {Array.from({ length: 8 }, (_, index) => Math.round(sliderMinDuration + sliderDurationSpan * index / 7))
+                  .map((value) => <span key={value}>{value}s</span>)}
               </div>
               <label className="mt-3 flex items-center justify-end gap-2 text-[10px] text-canvas-text-secondary">
                 默认时长

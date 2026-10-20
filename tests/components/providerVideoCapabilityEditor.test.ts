@@ -37,6 +37,44 @@ describe('provider video capability editor normalization', () => {
   });
 
   it.each([
+    { capability: undefined, minimum: 2, maximum: 15, scaleMin: 2, scaleMax: 30 },
+    { capability: { durations: [] }, minimum: 2, maximum: 15, scaleMin: 2, scaleMax: 30 },
+    { capability: { minDuration: 4, maxDuration: 15 }, minimum: 4, maximum: 15, scaleMin: 2, scaleMax: 30 },
+    { capability: { minDuration: 1, maxDuration: 15 }, minimum: 1, maximum: 15, scaleMin: 1, scaleMax: 30 },
+    { capability: { minDuration: 60, maxDuration: 120 }, minimum: 60, maximum: 120, scaleMin: 2, scaleMax: 120 },
+    { capability: { maxDuration: 1 }, minimum: 1, maximum: 1, scaleMin: 1, scaleMax: 30 },
+    { capability: { minDuration: 60, maxDuration: 3600 }, minimum: 60, maximum: 3600, scaleMin: 2, scaleMax: 3600 },
+  ])('shows $minimum–$maximum seconds on a matching $scaleMin–$scaleMax slider', ({ capability, minimum, maximum, scaleMin, scaleMax }) => {
+    const changes: Array<VideoModelCapability | undefined> = [];
+    const model: ProviderModelSelection = {
+      id: 'duration-video', name: 'Duration Video', category: 'video', provider: 'custom',
+      videoCapability: capability,
+    };
+    const html = renderToStaticMarkup(createElement(VideoCapabilityEditor, {
+      model, onChange: (value) => changes.push(value), onApplySeedanceTemplate: () => undefined,
+      onApplyH3Template: () => undefined, onClose: () => undefined,
+    }));
+    const sliders = [...html.matchAll(/<input\b[^>]*type="range"[^>]*>/g)].map((match) => match[0]);
+    expect(sliders).toHaveLength(2);
+    for (const [label, value] of [['最短生成时长', minimum], ['最长生成时长', maximum]] as const) {
+      const slider = sliders.find((input) => input.includes(`aria-label="${label}"`));
+      expect(slider).toBeDefined();
+      expect(slider).toContain(`min="${scaleMin}"`);
+      expect(slider).toContain(`max="${scaleMax}"`);
+      expect(slider).toContain(`value="${value}"`);
+    }
+    const numericInputs = [...html.matchAll(/<input\b[^>]*role="spinbutton"[^>]*>/g)]
+      .map((match) => match[0]);
+    expect(numericInputs).toHaveLength(2);
+    expect(numericInputs[0]).toContain('aria-valuemin="1"');
+    expect(numericInputs[0]).toContain(`aria-valuemax="${maximum}"`);
+    expect(numericInputs[1]).toContain(`aria-valuemin="${minimum}"`);
+    expect(numericInputs[1]).toContain('aria-valuemax="3600"');
+    expect(changes).toEqual([]);
+    expect(model.videoCapability).toEqual(capability);
+  });
+
+  it.each([
     [undefined, ''],
     [true, 'supported'],
     [false, 'unsupported'],

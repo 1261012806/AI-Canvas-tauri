@@ -22,6 +22,7 @@ import { getDreaminaVideoCapability } from '../../../services/ai/dreaminaModels'
 import { getGrsaiVideoCapability } from '../../../services/ai/grsaiModels';
 import { AUTODL_H3_WORKFLOW } from '../../../services/workflowApi/autodlWorkflowManifest';
 import { getModelProtocolPresetVideoCapability } from '../../../services/ai/modelProtocol';
+import { getProviderDefinition } from '../../../services/ai/providerCatalogService';
 import {
   resolveVideoDurationSeconds,
   VIDEO_ASPECT_RATIOS,
@@ -374,6 +375,18 @@ export default function VideoParamSelector({
   const generalModel = useMemo(() => {
     return resolveGeneralVideoModel(generalModels, selectedModel, provider);
   }, [generalModels, provider, selectedModel]);
+  const settingsConnectionId = provider === 'general' ? generalModel?.providerConfigId : provider;
+  const settingsConnection = useAppStore((state) => (
+    settingsConnectionId ? state.config.providers[settingsConnectionId] : undefined
+  ));
+  const settingsModelId = generalModel?.providerConfigId === settingsConnectionId
+    ? generalModel?.modelId
+    : settingsConnectionId && selectedModel?.startsWith(`${settingsConnectionId}/`)
+      ? selectedModel.slice(settingsConnectionId.length + 1) : selectedModel;
+  const settingsModel = settingsConnectionId && settingsConnection
+    && getProviderDefinition(settingsConnectionId, settingsConnection)?.id === 'custom-openai'
+    ? settingsConnection.selectedModels?.find((model) => model.id === settingsModelId && model.category === 'video')
+    : undefined;
 
   const apimartCapability = provider === 'apimart'
     ? getApimartSeedanceCapability(selectedModel)
@@ -444,6 +457,12 @@ export default function VideoParamSelector({
   });
   const isNativeSeedance = provider === 'volcengine' || provider === 'dreamina' || Boolean(apimartCapability || grsaiCapability || workflowApiCapability);
   const generalControlSupport = resolveGeneralVideoControlSupport(generalCapability);
+  const hasParameterOverrides = [
+    ...Object.values(generalCapability?.inputModeCapabilities ?? {}),
+    ...Object.values(generalCapability?.operationCapabilities ?? {}),
+  ].some((capability) => capability?.ratios?.length || capability?.defaultRatio || capability?.automaticDurationOnly);
+  const needsParameterSettings = Boolean(settingsModel)
+    && !Object.values(generalControlSupport).some(Boolean) && !hasParameterOverrides;
   // 本地工作流（ComfyUI / RunningHub）才按像素分辨率 + 帧率走；
   // 其余接口模型使用按秒表达的 API 布局；具体控件仍只由 capability 决定。
   const isWorkflowProvider = provider === 'comfyui' || provider === 'runninghub' || !provider;
@@ -691,11 +710,13 @@ export default function VideoParamSelector({
         ? '音频模型默认'
         : displayedGenerateAudio ? '有声视频' : '无声视频'
       : '模型默认参数';
-  const triggerLabel = usesDurationControls
-    ? durationTriggerLabel
-    : showGenericRatio
-      ? `${genericRatio} · ${legacyVideoResolution} · 时长${displayedDuration}s`
-      : `时长${displayedDuration}s · 帧率${legacyVideoFps} · 分辨率${legacyVideoResolution}`;
+  const triggerLabel = needsParameterSettings
+    ? '参数'
+    : usesDurationControls
+      ? durationTriggerLabel
+      : showGenericRatio
+        ? `${genericRatio} · ${legacyVideoResolution} · 时长${displayedDuration}s`
+        : `时长${displayedDuration}s · 帧率${legacyVideoFps} · 分辨率${legacyVideoResolution}`;
 
   return (<>
     <div className="ui-schema-renderer" data-ui-schema-placement="videoParams" ref={ref}>
@@ -704,7 +725,16 @@ export default function VideoParamSelector({
           type="button"
           className="img-pill-btn ui-schema-menu-trigger"
           title={triggerLabel}
-          onClick={(e) => { e.stopPropagation(); if (open) closePopup(); else setOpen(true); }}
+          aria-label={needsParameterSettings && settingsModel ? `${settingsModel.name} · 参数` : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (needsParameterSettings && settingsConnectionId && settingsModel) {
+              closePopup();
+              useAppStore.getState().openApiKeySettings(settingsConnectionId, settingsModel.id);
+              return;
+            }
+            if (open) closePopup(); else setOpen(true);
+          }}
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polygon points="23 7 16 12 23 17 23 7" />
@@ -713,7 +743,7 @@ export default function VideoParamSelector({
           <span className="ui-schema-pill-label ui-schema-quality-ratio-label">{triggerLabel}</span>
         </AnimatedButton>
 
-        {open && (
+        {open && !needsParameterSettings && (
           <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup" style={{ display: 'block' }}>
             {onChangeVideoReferences && provider !== 'workflow-api' && (
               <div className="img-rp-quality-area mb-2">
