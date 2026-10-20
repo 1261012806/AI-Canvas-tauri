@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanvasProject } from '../../src/types';
+import type { AssetFileEntry } from '../../src/services/fs/core';
 
 const mocks = vi.hoisted(() => ({
   directories: new Map<string, Array<{ name: string; isDirectory: boolean; isFile: boolean }>>(),
@@ -44,7 +45,7 @@ vi.mock('../../src/services/fs/assetIndex', async (importOriginal) => ({
   identifyAsset: mocks.identifyAsset,
 }));
 
-import { listExternalFolderFiles, walkDirectoryFiles } from '../../src/services/fs/assetLibrary';
+import { listExternalFolderContents, listExternalFolderFiles, walkDirectoryFiles } from '../../src/services/fs/assetLibrary';
 import { listProjectFiles } from '../../src/services/fileService';
 import { scanStorageHealth, collectNodeFilePaths, deleteOrphanFile, deleteDuplicateFile } from '../../src/services/fs/storageHealth';
 
@@ -104,6 +105,91 @@ describe('project thumbnail directories stay outside asset scans', () => {
     expect(files.map((file) => file.relativePath)).toEqual(['original.png', 'group/.thumbnail/user.png']);
     expect(files.every((file) => file.source === 'project')).toBe(true);
     expect(mocks.readDir).not.toHaveBeenCalledWith('/project/.thumbnail');
+    expect(mocks.identifyAsset).toHaveBeenCalledTimes(2);
+    expect(mocks.identifyAsset.mock.calls.every(([, options]) => options.source === 'project'
+      && options.projectId === 'project' && options.mtimeMs === 0)).toBe(true);
+  });
+
+  it('publishes the first stable project asset before later assets are identified', async () => {
+    const batches: AssetFileEntry[][] = [];
+    const identifiedCounts: number[] = [];
+    const files = await listProjectFiles('project', { onFiles: (batch) => {
+      batches.push(batch);
+      identifiedCounts.push(mocks.identifyAsset.mock.calls.length);
+    } });
+
+    expect(batches.flat()).toEqual(files);
+    expect(batches[0]).toEqual([expect.objectContaining({
+      assetId: 'asset-/project/original.png', relativePath: 'original.png', source: 'project',
+    })]);
+    expect(identifiedCounts[0]).toBe(1);
+  });
+
+  it('excludes nested internal directories from both streamed and final project assets', async () => {
+    addDirectory('/project/group', ['.thumbnail/', 'AppData/', '.trash/']);
+    addDirectory('/project/group/AppData', ['internal.json']);
+    addDirectory('/project/group/.trash', ['removed.png']);
+    const batches: AssetFileEntry[][] = [];
+    const files = await listProjectFiles('project', { onFiles: (batch) => { batches.push(batch); } });
+
+    expect(batches.flat()).toEqual(files);
+    expect(files.map((file) => file.relativePath)).toEqual(['original.png', 'group/.thumbnail/user.png']);
+    expect(mocks.readDir).not.toHaveBeenCalledWith('/project/group/AppData');
+    expect(mocks.readDir).not.toHaveBeenCalledWith('/project/group/.trash');
+  });
+
+  it('stops scanning after an incremental consumer cancels', async () => {
+    const controller = new AbortController();
+    const batches: AssetFileEntry[][] = [];
+    await expect(listProjectFiles('project', { signal: controller.signal, onFiles: (batch) => {
+      batches.push(batch);
+      controller.abort();
+    } })).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(batches.flat()).toHaveLength(1);
+    expect(mocks.identifyAsset).toHaveBeenCalledTimes(1);
+    expect(mocks.readDir).not.toHaveBeenCalledWith('/project/group');
+  });
+
+  it('does not treat cancellation during a directory read as an offline directory', async () => {
+    const controller = new AbortController();
+    mocks.readDir.mockImplementationOnce(async () => {
+      controller.abort();
+      throw new Error('read interrupted');
+    });
+
+    await expect(walkDirectoryFiles('/project', { signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the final incremental batch cancels the scan', async () => {
+    addDirectory('/two', ['first.png', 'last.png']);
+    const controller = new AbortController();
+
+    await expect(walkDirectoryFiles('/two', { signal: controller.signal, onFiles: (batch) => {
+      if (batch.some((file) => file.name === 'last.png')) controller.abort();
+    } })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('bounds stat batches without waiting for all files before the first result', async () => {
+    addDirectory('/many', Array.from({ length: 30 }, (_, index) => `image-${index}.png`));
+    let firstStatCount: number | undefined;
+    const files = await walkDirectoryFiles('/many', { onFiles: () => {
+      firstStatCount ??= mocks.stat.mock.calls.length;
+    } });
+
+    expect(files).toHaveLength(30);
+    expect(firstStatCount).toBe(12);
+  });
+
+  it('includes external folder identity in incremental batches', async () => {
+    const batches: AssetFileEntry[][] = [];
+    const result = await listExternalFolderContents(['/project'], { onFiles: (batch) => { batches.push(batch); } });
+
+    expect(batches.flat()).toEqual(result.files);
+    expect(batches.flat().every((file) => file.source === 'folder' && file.folderRoot === '/project'
+      && file.assetId && file.relativePath)).toBe(true);
   });
 
   it('keeps root and nested thumbnail folders in explicitly registered external directories', async () => {

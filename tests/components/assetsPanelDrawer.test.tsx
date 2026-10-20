@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { AppState } from '../../src/store/useAppStore';
 import type { AssetFileEntry, AssetFolderEntry } from '../../src/services/fileService';
+import type { AssetScanOptions } from '../../src/services/fs/assetLibrary';
 import { createUISlice } from '../../src/store/store.ui';
 import type { NodeType } from '../../src/types';
 
@@ -11,7 +12,7 @@ const driver = vi.hoisted(() => ({
   states: [] as unknown[], setters: [] as Array<(next: unknown) => void>, refs: [] as Array<{ current: unknown }>,
   effects: [] as Array<{ deps?: readonly unknown[]; cleanup?: () => void }>,
   pending: [] as Array<() => void>, stateIndex: 0, refIndex: 0, effectIndex: 1,
-  dirty: false, listProject: vi.fn(), listGlobal: vi.fn(), listExternal: vi.fn(), drag: vi.fn(),
+  dirty: false, listProject: vi.fn(), getProjectDir: vi.fn(), listGlobal: vi.fn(), listExternal: vi.fn(), drag: vi.fn(),
   portal: vi.fn((children: unknown) => children),
   memos: [] as Array<{ value: unknown; deps: readonly unknown[] }>, memoIndex: 0,
   reduceMotion: true,
@@ -84,7 +85,8 @@ vi.mock('framer-motion', () => ({
 }));
 vi.mock('../../src/services/fileService', async () => ({
   listProjectFiles: driver.listProject, listGlobalFiles: driver.listGlobal,
-  listGlobalFolderContents: async () => ({ files: await driver.listGlobal(), folders: driver.globalFolders, truncated: false, rootPath: '/global/file' }),
+  getProjectDataDir: driver.getProjectDir,
+  listGlobalFolderContents: async (options?: AssetScanOptions) => ({ files: await driver.listGlobal(options), folders: driver.globalFolders, truncated: false, rootPath: '/global/file' }),
   createAssetSubfolder: driver.createFolder, resolveAssetFolderDirectory: driver.resolveFolder, copyAssetFolder: driver.copyFolder,
   importAssetFilesToFolder: driver.importFiles,
   listExternalFolderContents: driver.listExternal,
@@ -243,6 +245,7 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', vi.fn());
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   driver.listProject.mockReset().mockResolvedValue([file('森林', ['夜景']), file('人物')]);
+  driver.getProjectDir.mockReset().mockImplementation(async (id: string) => `/${id}`);
   driver.listGlobal.mockReset().mockResolvedValue([{ ...file('全局参考'), source: 'global' }]);
   driver.listExternal.mockReset().mockResolvedValue({ files: [], folders: [], truncated: false });
   driver.portal.mockClear();
@@ -864,15 +867,17 @@ describe('资产库 Tab 抽屉', () => {
     expect(all(tree, (el) => el.type === 'motion-config')).toHaveLength(0);
   });
 
-  it('抽屉固定三列且隐藏列数控件与提示，不改写大弹窗设置', async () => {
+  it('抽屉固定三列且隐藏列数、批量反推与提示，不改写大弹窗设置', async () => {
     key(); render(); await settle();
     expect(find((el) => el.props.className === 'assets-file-waterfall').props['data-columns']).toBe(3);
     expect(all(tree, (el) => el.props['aria-label'] === '瀑布流列数')).toHaveLength(0);
+    expect(all(tree, (el) => el.props.title === '批量反推当前筛选图片的提示词和标签')).toHaveLength(0);
     expect(all(tree, (el) => el.props.className === 'assets-panel-subtitle')).toHaveLength(0);
     expect(driver.store!.getState().updateConfig).not.toHaveBeenCalled();
     driver.store!.getState().setAssetsPanelOpen(true); render();
     expect(button('当前 6 列').props.children).toBe(6);
     expect(button('减少瀑布流列数').props.disabled).toBe(false);
+    expect(all(tree, (el) => el.props.title === '批量反推当前筛选图片的提示词和标签')).toHaveLength(1);
     expect(all(tree, (el) => el.props.className === 'assets-panel-subtitle')).toHaveLength(1);
   });
 
@@ -1106,6 +1111,113 @@ describe('资产库 Tab 抽屉', () => {
     expect(driver.store!.getState().assetsPanelOpen).toBe(false);
   });
 
+  it.each(['drawer', 'modal'] as const)('%s 首批文件就绪后立即显示，不等待全部扫描完成', async (mode) => {
+    let publish!: (batch: AssetFileEntry[]) => void;
+    let finish!: (files: AssetFileEntry[]) => void;
+    driver.listProject.mockImplementationOnce((_id: string, options?: AssetScanOptions) => {
+      publish = options!.onFiles!;
+      return new Promise<AssetFileEntry[]>((resolve) => { finish = resolve; });
+    });
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render();
+    expect(cards()).toHaveLength(0);
+    publish([file('先完成')]); render();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['先完成']);
+    expect(all(tree, (el) => el.props.className === 'assets-empty')).toHaveLength(0);
+    finish([file('先完成'), file('后完成')]); await settle();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['先完成', '后完成']);
+  });
+
+  it.each(['drawer', 'modal'] as const)('%s 同范围重开时保留已有卡片，扫描完成后替换为最新列表', async (mode) => {
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); await settle();
+    expect(cards()).toHaveLength(2);
+    driver.store!.getState().setAssetsPanelOpen(false); render();
+    let finish!: (files: AssetFileEntry[]) => void;
+    driver.listProject.mockImplementationOnce(() => new Promise<AssetFileEntry[]>((resolve) => { finish = resolve; }));
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); render();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['森林', '人物']);
+    expect(all(tree, (el) => el.props.className === 'assets-empty')).toHaveLength(0);
+    finish([file('刷新结果')]); await settle();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['刷新结果']);
+  });
+
+  it.each(['drawer', 'modal'] as const)('%s 扫描中重命名图片会刷新列表，旧扫描不能恢复旧路径', async (mode) => {
+    const previous = { ...file('改名前'), assetUrl: 'asset://before.png' };
+    const renamed = { ...file('改名后'), assetUrl: 'asset://after.png' };
+    let oldOptions!: AssetScanOptions;
+    let finishOld!: (files: AssetFileEntry[]) => void;
+    driver.listProject.mockImplementationOnce((_id: string, options?: AssetScanOptions) => {
+      oldOptions = options!;
+      return new Promise<AssetFileEntry[]>((resolve) => { finishOld = resolve; });
+    }).mockResolvedValueOnce([renamed]);
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render();
+    oldOptions.onFiles!([previous]); render();
+    (cards()[0].props.onImagePreview as () => void)(); render();
+    const preview = find((el) => el.type === 'asset-image-preview');
+    (preview.props.onRenamed as (previous: AssetFileEntry, next: AssetFileEntry) => void)(previous, renamed);
+    render(); await settle();
+    expect(oldOptions.signal?.aborted).toBe(true);
+    expect(driver.listProject).toHaveBeenCalledTimes(2);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).path)).toEqual([renamed.path]);
+    oldOptions.onFiles!([previous]); await settle();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).path)).toEqual([renamed.path]);
+    finishOld([previous]); await settle();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).path)).toEqual([renamed.path]);
+  });
+
+  it.each([
+    { label: '空列表', files: [] as AssetFileEntry[] },
+    { label: '不同文件', files: [file('重试结果')] },
+  ])('首轮流出文件后失败，重试成功返回$label时不残留首轮条目', async ({ files: finalFiles }) => {
+    vi.useFakeTimers();
+    let publish!: (batch: AssetFileEntry[]) => void;
+    let fail!: (error: Error) => void;
+    driver.listProject.mockImplementationOnce((_id: string, options?: AssetScanOptions) => {
+      publish = options!.onFiles!;
+      return new Promise<AssetFileEntry[]>((_resolve, reject) => { fail = reject; });
+    }).mockResolvedValueOnce(finalFiles);
+    key(); render();
+    publish([file('首轮旧条目')]); render();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['首轮旧条目']);
+    fail(new Error('temporary scan failure'));
+    await vi.advanceTimersByTimeAsync(100); render();
+    expect(driver.listProject).toHaveBeenCalledTimes(2);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(finalFiles.map((entry) => entry.name));
+    expect(all(tree, (el) => el.props.role === 'alert')).toHaveLength(0);
+  });
+
+  it.each([
+    { label: '最深分集目录', firstDirectory: '/series/episodes', secondDirectory: '/series/episodes/第二集' },
+    { label: '相同目录按后一个分集', firstDirectory: '/series/shared', secondDirectory: '/series/shared' },
+  ])('父扫描首批按$label解析归属，预览和悬浮读取都使用分集身份', async ({ firstDirectory, secondDirectory }) => {
+    driver.store!.setState({ currentProjectId: 'series', projects: [
+      { id: 'series', name: '剧集', createdAt: 1, updatedAt: 1 },
+      { id: 'episode-1', name: '第一集', parentId: 'series', episodeNo: 1, createdAt: 1, updatedAt: 1 },
+      { id: 'episode-2', name: '第二集', parentId: 'series', episodeNo: 2, createdAt: 1, updatedAt: 1 },
+    ] });
+    const directories: Record<string, string> = { series: '/series', 'episode-1': firstDirectory, 'episode-2': secondDirectory };
+    driver.getProjectDir.mockImplementation(async (id: string) => directories[id]);
+    let publish!: (batch: AssetFileEntry[]) => void;
+    let finishParent!: (files: AssetFileEntry[]) => void;
+    driver.listProject.mockImplementation((id: string, options?: AssetScanOptions) => {
+      if (id !== 'series') return Promise.resolve([]);
+      publish = options!.onFiles!;
+      return new Promise<AssetFileEntry[]>((resolve) => { finishParent = resolve; });
+    });
+    key(); render(); await settle(); vi.useFakeTimers();
+    const entry = { ...file('分集图片'), path: `${secondDirectory}/hero.png`, assetUrl: 'asset://hero.png' };
+    publish([entry]); render();
+    expect(driver.listProject).toHaveBeenCalledTimes(1);
+    expect(cards()[0].props.videoProjectId).toBe('episode-2');
+    (cards()[0].props.onImagePreview as () => void)(); render();
+    const preview = find((el) => el.type === 'asset-image-preview');
+    expect((preview.props.projectIdForFile as (file: AssetFileEntry) => string | undefined)(entry)).toBe('episode-2');
+    (preview.props.onClose as () => void)(); render();
+    (cards()[0].props.onHover as () => void)(); render();
+    await vi.advanceTimersByTimeAsync(400); render();
+    expect(driver.imageDetails).toHaveBeenCalledWith(entry, 'episode-2', expect.any(AbortSignal));
+    finishParent([entry]); await vi.advanceTimersByTimeAsync(0); render();
+  });
+
   it.each(['drawer', 'modal'] as const)('首次打开 %s 读取短暂失败时自动恢复，不必关闭重开', async (mode) => {
     vi.useFakeTimers();
     driver.listProject.mockRejectedValueOnce(new Error('temporary index failure'));
@@ -1192,13 +1304,22 @@ describe('资产库 Tab 抽屉', () => {
     expect(all(tree, (el) => el.props.role === 'alert')).toHaveLength(0);
   });
 
-  it('项目切换后忽略旧项目的迟到列表', async () => {
+  it('项目切换后取消旧扫描，忽略旧项目的迟到批次和最终列表', async () => {
+    let oldOptions!: AssetScanOptions;
     let finishOld!: (files: AssetFileEntry[]) => void;
-    driver.listProject.mockImplementationOnce(() => new Promise<AssetFileEntry[]>((resolve) => { finishOld = resolve; }));
+    driver.listProject.mockImplementationOnce((_id: string, options?: AssetScanOptions) => {
+      oldOptions = options!;
+      return new Promise<AssetFileEntry[]>((resolve) => { finishOld = resolve; });
+    });
     key(); render();
+    oldOptions.onFiles!([file('项目一首批')]); render();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['项目一首批']);
     driver.store!.setState({ currentProjectId: 'project-2' });
     driver.listProject.mockResolvedValue([file('项目二')]);
     render(); await settle();
+    expect(oldOptions.signal?.aborted).toBe(true);
+    oldOptions.onFiles!([file('项目一迟到批次')]); await settle();
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['项目二']);
     finishOld([file('项目一迟到文件')]); await settle();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['项目二']);
   });

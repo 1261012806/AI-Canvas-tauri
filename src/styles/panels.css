@@ -1181,9 +1181,9 @@ button.wf-ionode-badge.is-default {
   height: 27px;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 8px;
-  background: var(--theme-card);
+  background: transparent;
   color: var(--theme-text-secondary);
   cursor: var(--cursor-pointer, pointer);
   transition: var(--transition-control);
@@ -2116,7 +2116,6 @@ button.wf-ionode-badge.is-default {
   color: color-mix(in srgb, var(--brand) 78%, var(--theme-text));
 }
 [data-theme='light'] .assets-cat-chip,
-[data-theme='light'] .assets-filter-more,
 [data-theme='light'] .assets-search,
 [data-theme='light'] .assets-column-stepper,
 [data-theme='light'] .ui-select--custom .assets-project-select.ui-select__trigger,
@@ -2125,7 +2124,6 @@ button.wf-ionode-badge.is-default {
   border-color: var(--assets-light-control-border);
 }
 [data-theme='light'] .assets-cat-chip:hover:not(:disabled),
-[data-theme='light'] .assets-filter-more:hover,
 [data-theme='light'] .ui-select--custom .assets-project-select.ui-select__trigger:hover {
   background-color: var(--theme-surface);
   border-color: color-mix(in srgb, var(--theme-text-secondary) 58%, var(--theme-surface));

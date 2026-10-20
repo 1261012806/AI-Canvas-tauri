@@ -32,6 +32,16 @@ export type AssetFolderSelection =
   | { kind: 'global' }
   | { kind: 'folder'; rootPath: string; relativePath: string };
 
+export interface AssetScanOptions {
+  signal?: AbortSignal;
+  /** 已完成稳定身份识别的新增条目；完整列表仍通过返回值获取。 */
+  onFiles?: (batch: AssetFileEntry[]) => void;
+}
+
+function throwIfScanAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('资源扫描已取消', 'AbortError');
+}
+
 function comparablePath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
   return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : normalized;
@@ -73,10 +83,13 @@ export async function listGlobalFiles(): Promise<AssetFileEntry[]> {
   return (await listGlobalFolderContents()).files;
 }
 
-export async function listGlobalFolderContents(): Promise<{ files: AssetFileEntry[]; folders: AssetFolderEntry[]; truncated: boolean; rootPath: string | null }> {
+export async function listGlobalFolderContents(options: AssetScanOptions = {}): Promise<{ files: AssetFileEntry[]; folders: AssetFolderEntry[]; truncated: boolean; rootPath: string | null }> {
+  throwIfScanAborted(options.signal);
   const dir = await getGlobalFilesDir();
-  if (!dir || !(await exists(dir).catch(() => false))) return { files: [], folders: [], truncated: false, rootPath: dir };
-  return { ...await scanDirectoryFiles(dir, { source: 'global' }), rootPath: dir };
+  const available = dir && await exists(dir).catch(() => false);
+  throwIfScanAborted(options.signal);
+  if (!dir || !available) return { files: [], folders: [], truncated: false, rootPath: dir };
+  return { ...await scanDirectoryFiles(dir, { ...options, source: 'global' }), rootPath: dir };
 }
 
 /** 只把已登记目录或全局目录作为写入目标，不接受聚合视图。 */
@@ -114,17 +127,23 @@ export async function createAssetSubfolder(selection: AssetFolderSelection, root
 
 /**
  * 递归遍历目录收集文件（带数量/深度上限，避免超大目录卡死）。
- * 每个目录内的 stat 并行，整体用栈迭代而非深递归。
+ * stat 小批并行，身份识别串行；边扫描边返回稳定条目，整体用栈迭代而非深递归。
  */
 async function scanDirectoryFiles(
   rootDir: string,
-  opts: { maxFiles?: number; maxDepth?: number; maxDirectories?: number; excludedRootDirectories?: readonly string[]; source?: 'folder' | 'global' } = {},
+  opts: AssetScanOptions & {
+    maxFiles?: number; maxDepth?: number; maxDirectories?: number;
+    excludedRootDirectories?: readonly string[]; excludedDirectories?: readonly string[];
+    source?: 'project' | 'folder' | 'global'; projectId?: string;
+  } = {},
 ): Promise<{ files: AssetFileEntry[]; folders: AssetFolderEntry[]; truncated: boolean }> {
+  throwIfScanAborted(opts.signal);
   if (!isTauriEnv()) return { files: [], folders: [], truncated: false };
   const maxFiles = opts.maxFiles ?? 3000;
   const maxDepth = opts.maxDepth ?? 8;
   const maxDirectories = Math.max(1, opts.maxDirectories ?? 3000);
   const convertFileSrc = await getConvertFileSrc();
+  throwIfScanAborted(opts.signal);
   const out: AssetFileEntry[] = [];
   const root: AssetFolderEntry = {
     rootPath: rootDir, relativePath: '', parentRelativePath: null,
@@ -135,21 +154,28 @@ async function scanDirectoryFiles(
   let truncated = false;
 
   while (stack.length > 0 && out.length < maxFiles) {
+    throwIfScanAborted(opts.signal);
     const { dir, depth, folder } = stack.pop()!;
     let entries: Awaited<ReturnType<typeof readDir>>;
     try {
       entries = await readDir(dir);
       folder.availability = 'online';
     } catch {
+      throwIfScanAborted(opts.signal);
       folder.availability = 'offline';
       continue;
     }
+    throwIfScanAborted(opts.signal);
     // 不跟随符号链接扩大外部目录授权或形成遍历环。
     const fileEntries = entries.filter((e) => e.isFile && !e.isSymlink);
     const subDirs = entries.filter((e) => e.isDirectory && !e.isSymlink);
 
-    const statResults = await Promise.all(
-      fileEntries.map(async (e) => {
+    const initialFileCount = out.length;
+    const statBatchSize = 12;
+    for (let offset = 0; offset < fileEntries.length && out.length < maxFiles; offset += statBatchSize) {
+      throwIfScanAborted(opts.signal);
+      const batchEntries = fileEntries.slice(offset, offset + statBatchSize);
+      const statResults = await Promise.all(batchEntries.map(async (e) => {
         const filePath = joinPath(dir, e.name);
         try {
           const s = await stat(filePath);
@@ -157,40 +183,48 @@ async function scanDirectoryFiles(
         } catch {
           return null;
         }
-      }),
-    );
-
-    const initialFileCount = out.length;
-    for (const r of statResults) {
-      if (!r) continue;
-      if (out.length >= maxFiles) { truncated = true; break; }
-      const ext = `.${r.name.split('.').pop()?.toLowerCase()}`;
-      let assetUrl: string | undefined;
-      if (CATEGORY_EXTENSIONS.image.includes(ext) && convertFileSrc) {
-        assetUrl = convertFileSrc(r.filePath);
+      }));
+      throwIfScanAborted(opts.signal);
+      const batch: AssetFileEntry[] = [];
+      for (const r of statResults) {
+        if (!r) continue;
+        if (out.length >= maxFiles) { truncated = true; break; }
+        throwIfScanAborted(opts.signal);
+        const ext = `.${r.name.split('.').pop()?.toLowerCase()}`;
+        const assetUrl = CATEGORY_EXTENSIONS.image.includes(ext) && convertFileSrc ? convertFileSrc(r.filePath) : undefined;
+        const identity = await identifyAsset(r.filePath, {
+          rootPath: rootDir,
+          source: opts.source ?? 'folder',
+          projectId: opts.projectId,
+          size: r.size,
+          mtimeMs: r.mtimeMs,
+        });
+        throwIfScanAborted(opts.signal);
+        const file: AssetFileEntry = {
+          assetId: identity.assetId,
+          name: r.name,
+          path: r.filePath,
+          relativePath: identity.relativePath,
+          assetUrl,
+          size: r.size,
+          category: getFileCategory(r.name),
+          availability: 'online',
+          source: opts.source,
+        };
+        out.push(file);
+        batch.push(file);
+        // 首个条目立即可见，后续合并通知，避免逐文件触发渲染。
+        if (out.length === 1) opts.onFiles?.(batch.splice(0));
       }
-      const identity = await identifyAsset(r.filePath, {
-        rootPath: rootDir,
-        source: opts.source ?? 'folder',
-        size: r.size,
-        mtimeMs: r.mtimeMs,
-      });
-      out.push({
-        assetId: identity.assetId,
-        name: r.name,
-        path: r.filePath,
-        relativePath: identity.relativePath,
-        assetUrl,
-        size: r.size,
-        category: getFileCategory(r.name),
-        availability: 'online',
-        source: opts.source,
-      });
+      throwIfScanAborted(opts.signal);
+      if (batch.length) opts.onFiles?.(batch);
+      if (out.length >= maxFiles && offset + batchEntries.length < fileEntries.length) truncated = true;
     }
 
     folder.fileCount = out.length - initialFileCount;
     if (depth < maxDepth) {
       for (const d of subDirs) {
+        if (opts.excludedDirectories?.includes(d.name)) continue;
         // 项目派生缓存只占用根目录；分组和外部目录内的同名文件夹仍是用户素材。
         if (depth === 0 && opts.excludedRootDirectories?.includes(d.name)) continue;
         if (folders.length >= maxDirectories) { truncated = true; break; }
@@ -209,13 +243,18 @@ async function scanDirectoryFiles(
       truncated = true;
     }
   }
+  throwIfScanAborted(opts.signal);
   return { files: out, folders, truncated: truncated || stack.length > 0 };
 }
 
 /** 保留原文件扫描接口，项目文件和独立资源搜索继续返回扁平列表。 */
 export async function walkDirectoryFiles(
   rootDir: string,
-  opts: { maxFiles?: number; maxDepth?: number; excludedRootDirectories?: readonly string[] } = {},
+  opts: AssetScanOptions & {
+    maxFiles?: number; maxDepth?: number;
+    excludedRootDirectories?: readonly string[]; excludedDirectories?: readonly string[];
+    source?: 'project' | 'folder' | 'global'; projectId?: string;
+  } = {},
 ): Promise<AssetFileEntry[]> {
   return (await scanDirectoryFiles(rootDir, opts)).files;
 }
@@ -223,15 +262,20 @@ export async function walkDirectoryFiles(
 /** 一次扫描同时收集真实目录和文件，空目录也可浏览。 */
 export async function listExternalFolderContents(
   roots: string[],
-  opts: { maxFilesPerFolder?: number; maxDepth?: number; maxDirectories?: number } = {},
+  opts: AssetScanOptions & { maxFilesPerFolder?: number; maxDepth?: number; maxDirectories?: number } = {},
 ): Promise<{ files: AssetFileEntry[]; folders: AssetFolderEntry[]; truncated: boolean }> {
+  throwIfScanAborted(opts.signal);
   if (!isTauriEnv()) return { files: [], folders: [], truncated: false };
   const results = await Promise.all(roots.map(async (root) => {
+    const withFolderRoot = (file: AssetFileEntry): AssetFileEntry => ({ ...file, source: 'folder', folderRoot: root });
     const result = await scanDirectoryFiles(root, {
       maxFiles: opts.maxFilesPerFolder, maxDepth: opts.maxDepth, maxDirectories: opts.maxDirectories,
+      source: 'folder', signal: opts.signal,
+      onFiles: opts.onFiles ? (batch) => opts.onFiles?.(batch.map(withFolderRoot)) : undefined,
     });
-    return { ...result, files: result.files.map((file) => ({ ...file, source: 'folder' as const, folderRoot: root })) };
+    return { ...result, files: result.files.map(withFolderRoot) };
   }));
+  throwIfScanAborted(opts.signal);
   return {
     files: results.flatMap((result) => result.files),
     folders: results.flatMap((result) => result.folders),

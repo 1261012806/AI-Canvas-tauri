@@ -11,7 +11,7 @@ import { isLocalMediaUrl, isRemoteMediaUrl, localMediaUrlToPath } from '../utils
 import { downloadGithubBytes, githubMirrorUrl } from './githubDownloadService';
 import { identifyAsset, getRelativeAssetPath } from './fs/assetIndex';
 import { readAssetTextFile } from './fs/assetTextFiles';
-import { walkDirectoryFiles } from './fs/assetLibrary';
+import { walkDirectoryFiles, type AssetScanOptions } from './fs/assetLibrary';
 import { completeMediaRelocation, mediaFileAllocationKey, persistMediaRelocation, retiredMediaPaths, type MediaRelocation } from './indexedDb/mediaRelocations';
 import {
   decodeDataUrlBytesAsync,
@@ -1266,31 +1266,19 @@ export async function renameAssetFile(
 }
 
 /** 获取项目文件列表 */
-export async function listProjectFiles(projectId: string): Promise<AssetFileEntry[]> {
+export async function listProjectFiles(projectId: string, options: AssetScanOptions = {}): Promise<AssetFileEntry[]> {
+  if (options.signal?.aborted) throw new DOMException('资源扫描已取消', 'AbortError');
   const projectDir = await getProjectDataDir(projectId);
+  if (options.signal?.aborted) throw new DOMException('资源扫描已取消', 'AbortError');
   if (!projectDir) return [];
-  // 递归：节点文件可能位于分组子文件夹内
-  const allFiles = await walkDirectoryFiles(projectDir, { excludedRootDirectories: ['.thumbnail'] });
-  // Filter out files inside AppData / .trash subdirectories (可能嵌套在分组文件夹内)
-  const files = allFiles.filter((f) => {
-    const relative = f.path.substring(projectDir.length).replace(/\\/g, '/').replace(/^\//, '');
-    return !relative.split('/').slice(0, -1).some((dir) => dir === 'AppData' || dir === '.trash');
+  // 一次扫描完成项目身份识别；派生缓存与内部目录在遍历前排除，增量和最终结果保持一致。
+  return walkDirectoryFiles(projectDir, {
+    ...options,
+    source: 'project',
+    projectId,
+    excludedRootDirectories: ['.thumbnail'],
+    excludedDirectories: ['AppData', '.trash'],
   });
-  return Promise.all(files.map(async (file) => {
-    const identity = await identifyAsset(file.path, {
-      rootPath: projectDir,
-      projectId,
-      source: 'project',
-      size: file.size,
-    });
-    return {
-      ...file,
-      assetId: identity.assetId,
-      relativePath: identity.relativePath,
-      source: 'project' as const,
-      availability: 'online' as const,
-    };
-  }));
 }
 
 export interface AgentTextFileSelection {

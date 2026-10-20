@@ -29,6 +29,7 @@ import { useAppStore } from '../store/useAppStore';
 import { listTopLevelProjects, listEpisodes, seriesOwnerId } from '../store/store.utils';
 import {
   listProjectFiles,
+  getProjectDataDir,
   listGlobalFolderContents,
   listExternalFolderContents,
   selectAssetFolderFiles,
@@ -252,7 +253,9 @@ export default function AssetsPanel() {
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const filterListRef = useRef<HTMLDivElement | null>(null);
   const loadRequestRef = useRef(0);
+  const loadControllerRef = useRef<AbortController | null>(null);
   const projectFilesScopeRef = useRef<string | null>(null);
+  const permanentFilesScopeRef = useRef<string | null>(null);
 
   // 同一组件在两种展示方式之间复用；每次从画布打开时跟随当前项目。
   const presentation = assetsPanelOpen ? assetsPanelMode : null;
@@ -320,11 +323,38 @@ export default function AssetsPanel() {
 
   // 载入文件列表（按 Tab 聚合）
   const loadFiles = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     const requestId = ++loadRequestRef.current;
-    const isCurrentRequest = () => requestId === loadRequestRef.current
+    const isCurrentRequest = () => !controller.signal.aborted && requestId === loadRequestRef.current
       && useAppStore.getState().assetsPanelOpen
       && currentProjectId === useAppStore.getState().currentProjectId
       && baseDataDir === useAppStore.getState().config.baseDataDir;
+    let publishTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastPublishAt = 0;
+    let publishFiles: (() => void) | undefined;
+    const cancelPublish = () => {
+      if (publishTimer !== null) clearTimeout(publishTimer);
+      publishTimer = null;
+    };
+    const publishProgress = () => {
+      if (!isCurrentRequest()) return;
+      const remaining = 80 - (Date.now() - lastPublishAt);
+      if (lastPublishAt === 0 || remaining <= 0) {
+        cancelPublish();
+        lastPublishAt = Date.now();
+        publishFiles?.();
+      } else if (publishTimer === null) {
+        publishTimer = setTimeout(() => {
+          publishTimer = null;
+          if (!isCurrentRequest()) return;
+          lastPublishAt = Date.now();
+          publishFiles?.();
+        }, remaining);
+      }
+    };
+    controller.signal.addEventListener('abort', cancelPublish, { once: true });
     setLoading(true);
     setLoadError(null);
     try {
@@ -336,15 +366,63 @@ export default function AssetsPanel() {
           setProjectFileOwners(new Map());
         }
         if (!viewProjectIds.length) { setProjectFiles([]); setProjectFileOwners(new Map()); return; }
+        // 父目录的首批文件也可能属于分集；展示前解析真实归属，避免详情写入父项目。
+        const projectRoots = viewProjectIds.length > 1 ? await Promise.all(viewProjectIds.map(async (projectId) => {
+          const directory = await getProjectDataDir(projectId).catch(() => null);
+          return { projectId, prefix: directory ? `${imageHistoryReferenceKey(directory) ?? directory}/` : null };
+        })) : [];
+        if (!isCurrentRequest()) return;
+        const fileOwner = (file: AssetFileEntry, fallbackProjectId: string) => {
+          const path = imageHistoryReferenceKey(file.path) ?? file.path;
+          let owner = fallbackProjectId;
+          let prefixLength = 0;
+          for (const root of projectRoots) {
+            if (root.prefix && path.startsWith(root.prefix) && root.prefix.length >= prefixLength) {
+              owner = root.projectId;
+              prefixLength = root.prefix.length;
+            }
+          }
+          return owner;
+        };
         const owners = new Map<string, string>();
         const diskEntries = new Map<string, AssetFileEntry>();
+        publishFiles = () => {
+          const snapshot = Array.from(diskEntries.entries());
+          const ownerSnapshot = Array.from(owners.entries());
+          setProjectFiles((previous) => {
+            const merged = new Map(previous.map((file) => [imageHistoryReferenceKey(file.path) ?? file.path, file]));
+            for (const [key, file] of snapshot) merged.set(key, file);
+            return Array.from(merged.values());
+          });
+          setProjectFileOwners((previous) => new Map([...previous, ...ownerSnapshot]));
+        };
+        const receiveFiles = (entries: AssetFileEntry[], projectId: string) => {
+          if (!isCurrentRequest()) return;
+          for (const file of entries) {
+            diskEntries.set(imageHistoryReferenceKey(file.path) ?? file.path, file);
+            owners.set(file.path, fileOwner(file, projectId));
+            deletedFilePathsRef.current.delete(file.path);
+          }
+          if (entries.length) publishProgress();
+        };
         let failedProjects = 0;
         // 父项目后读取分集，重叠目录中的文件沿用具体分集的身份和历史归属。
         for (const projectId of viewProjectIds) {
+          const previousEntries = new Map(diskEntries);
+          const previousOwners = new Map(owners);
           let entries: AssetFileEntry[] | null = null;
           // 单个目录/索引读取失败不丢弃整部剧；短暂故障仅自动重读一次。
           for (let attempt = 0; attempt < 2; attempt++) {
-            try { entries = await listProjectFiles(projectId); }
+            if (attempt > 0) {
+              diskEntries.clear();
+              for (const [key, file] of previousEntries) diskEntries.set(key, file);
+              owners.clear();
+              for (const [path, owner] of previousOwners) owners.set(path, owner);
+            }
+            try { entries = await listProjectFiles(projectId, {
+              signal: controller.signal,
+              onFiles: (batch) => receiveFiles(batch, projectId),
+            }); }
             catch {
               if (!isCurrentRequest()) return;
               if (attempt === 0) await new Promise<void>((resolve) => setTimeout(resolve, 100));
@@ -353,10 +431,7 @@ export default function AssetsPanel() {
             if (entries !== null) break;
           }
           if (entries === null) failedProjects++;
-          for (const file of entries ?? []) {
-            diskEntries.set(imageHistoryReferenceKey(file.path) ?? file.path, file);
-            owners.set(file.path, projectId);
-          }
+          receiveFiles(entries ?? [], projectId);
         }
         const diskFiles = Array.from(diskEntries.values());
         if (!isCurrentRequest()) return;
@@ -379,16 +454,40 @@ export default function AssetsPanel() {
             }
           }
         }
-        if (failedProjects < viewProjectIds.length || nodeEntries.length) {
+        if (failedProjects < viewProjectIds.length || nodeEntries.length || diskFiles.length) {
           setProjectFileOwners(owners);
           setProjectFiles([...diskFiles, ...nodeEntries]);
         }
         if (failedProjects) setLoadError('项目文件读取未完成，已保留可用资源，请重试。');
       } else {
+        const scope = JSON.stringify([baseDataDir, folders]);
+        if (permanentFilesScopeRef.current !== scope) {
+          permanentFilesScopeRef.current = scope;
+          setPermanentFiles([]);
+          setExternalFolders([]);
+          setGlobalRootPath(null);
+          setFolderScanTruncated(false);
+        }
+        const discovered = new Map<string, AssetFileEntry>();
+        publishFiles = () => {
+          const snapshot = Array.from(discovered.entries());
+          setPermanentFiles((previous) => {
+            const merged = new Map(previous.map((file) => [file.path, file]));
+            for (const [path, file] of snapshot) merged.set(path, file);
+            return Array.from(merged.values());
+          });
+        };
+        const receiveFiles = (entries: AssetFileEntry[]) => {
+          if (!isCurrentRequest()) return;
+          for (const file of entries) {
+            if (discovered.get(file.path)?.source !== 'global' || file.source === 'global') discovered.set(file.path, file);
+          }
+          if (entries.length) publishProgress();
+        };
         // 永久 = 全局 file 目录 + 登记的外部文件夹（递归）
         const [globalContents, contents] = await Promise.all([
-          listGlobalFolderContents(),
-          listExternalFolderContents(folders),
+          listGlobalFolderContents({ signal: controller.signal, onFiles: receiveFiles }),
+          listExternalFolderContents(folders, { signal: controller.signal, onFiles: receiveFiles }),
         ]);
         if (!isCurrentRequest()) return;
         const seen = new Set<string>();
@@ -409,9 +508,16 @@ export default function AssetsPanel() {
           ? { kind: 'all' } : selection);
       }
     } catch {
-      if (isCurrentRequest()) setLoadError('资源读取失败，请重试。');
+      if (isCurrentRequest()) {
+        publishFiles?.();
+        setLoadError('资源读取失败，请重试。');
+      }
     } finally {
+      cancelPublish();
+      controller.signal.removeEventListener('abort', cancelPublish);
       if (isCurrentRequest()) setLoading(false);
+      controller.abort();
+      if (loadControllerRef.current === controller) loadControllerRef.current = null;
     }
   }, [activeTab, currentProjectId, baseDataDir, viewProjectIds, folders]);
 
@@ -422,7 +528,10 @@ export default function AssetsPanel() {
       void loadFiles().then(loadTags);
       void prepareDragIcon();
     }
-    return () => { loadRequestRef.current += 1; };
+    return () => {
+      loadRequestRef.current += 1;
+      loadControllerRef.current?.abort();
+    };
   }, [assetsPanelOpen, loadFiles, loadTags]);
 
   useEffect(() => () => { folderOperationRef.current?.abort(); }, [assetsPanelOpen, activeTab, currentProjectId]);
@@ -1302,7 +1411,7 @@ export default function AssetsPanel() {
                     <Icon icon="lucide:plus" aria-hidden="true" />
                   </button>
                 </div>}
-                {(visibleTab === 'project' || visibleTab === 'permanent') && <button type="button" className="ui-btn ui-btn--sm shrink-0"
+                {!isDrawer && (visibleTab === 'project' || visibleTab === 'permanent') && <button type="button" className="ui-btn ui-btn--sm shrink-0"
                   disabled={!isTauriEnv() || !batchImages.length || busy || loading} title="批量反推当前筛选图片的提示词和标签"
                   onClick={() => {
                     dismissHover(); setAddMenuOpen(false); setFileMenu(null);
@@ -1494,7 +1603,7 @@ export default function AssetsPanel() {
                     </div>
                   )}
                   <div className="assets-file-waterfall" data-columns={waterfallColumns}>
-                    {loading ? (
+                    {loading && filteredFiles.length === 0 ? (
                       <div className="assets-empty">
                         <motion.div className="assets-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.6, ease: 'linear' }} />
                         <span>加载中...</span>
@@ -1567,6 +1676,7 @@ export default function AssetsPanel() {
                         {visibleCount < filteredFiles.length && (
                           <div ref={sentinelRef} className="assets-load-sentinel">加载更多…</div>
                         )}
+                        {loading && <div className="assets-load-sentinel" role="status" aria-live="polite">正在继续加载资源…</div>}
                       </>
                     )}
                   </div>
@@ -1603,6 +1713,8 @@ export default function AssetsPanel() {
     ? <MotionConfig reducedMotion="user" transition={drawerTransition}>{panel}</MotionConfig>
     : createPortal(panel, document.body);
   const handleAssetRenamed = (previous: AssetFileEntry, next: AssetFileEntry) => {
+    if (fileScopeRef.current !== previewScope || !useAppStore.getState().assetsPanelOpen
+      || useAppStore.getState().currentProjectId !== currentProjectId) return;
     const replace = (entries: AssetFileEntry[]) => entries.map((entry) => entry.path === previous.path ? next : entry);
     setProjectFiles(replace); setPermanentFiles(replace);
     setProjectFileOwners((current) => {
@@ -1615,6 +1727,8 @@ export default function AssetsPanel() {
       if (!tags || assetKey(previous) === assetKey(next)) return current;
       const updated = { ...current }; delete updated[assetKey(previous)]; updated[assetKey(next)] = tags; return updated;
     });
+    // 增量扫描快照仍可能持有旧路径；重新扫描以取消后续旧批次。
+    if (loadControllerRef.current) void loadFiles().then(loadTags);
   };
   return <>{presentationPanel}
     {assetsPanelOpen && batchReverse?.scope === previewScope && <Suspense fallback={null}>
@@ -1635,8 +1749,11 @@ export default function AssetsPanel() {
     {assetsPanelOpen && textPreview?.scope === previewScope && <Suspense fallback={<p role="status">正在打开文档…</p>}>
       <AssetTextPreview key={textPreview.scope} file={textPreview.file} projectId={projectIdForFile(textPreview.file)}
         onClose={() => setTextPreview(null)} onSaved={(next) => {
+          if (fileScopeRef.current !== previewScope || !useAppStore.getState().assetsPanelOpen
+            || useAppStore.getState().currentProjectId !== currentProjectId) return;
           const replace = (entries: AssetFileEntry[]) => entries.map((entry) => entry.path === next.path ? { ...entry, size: next.size } : entry);
           setProjectFiles(replace); setPermanentFiles(replace);
+          if (loadControllerRef.current) void loadFiles().then(loadTags);
         }} onRenamed={(previous, next) => {
           handleAssetRenamed(previous, next);
           setTextPreview((current) => current?.file.path === previous.path ? { ...current, file: next } : current);
