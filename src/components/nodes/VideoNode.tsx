@@ -993,8 +993,8 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             <img src={initialCoverUrl} alt="" className="video-node-initial-cover" draggable={false}
               onError={() => { if (suppliedCover) setFailedCover(suppliedCover); }} />
           )}
+          {data.videoTaskState === 'paused' && <VideoTaskStatus nodeId={id} overlay />}
         </div>
-        {data.videoTaskState === 'paused' && <VideoTaskStatus nodeId={id} />}
         {data.error && <NodeError nodeId={id} message={data.error} />}
         <Handle type="source" position={Position.Left} id="left" className="node-handle handle-source handle-video" >
           <GooeyBtn className="gooey-btn-left" hue={217} />

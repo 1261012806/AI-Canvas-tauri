@@ -3,13 +3,14 @@ import { useAppStore } from '../../../store/useAppStore';
 import { getGenerationNodeType } from '../../../utils/nodeGeneration';
 import { useT } from '../../../i18n';
 
-function GenerationWaitTime({ nodeId }: { nodeId: string }) {
+export function GenerationWaitTime({ nodeId }: { nodeId: string }) {
   const t = useT();
   const projectId = useAppStore((state) => state.currentProjectId);
   const startedAt = useAppStore((state) => {
     const data = state.nodes.find((node) => node.id === nodeId)?.data;
     const type = getGenerationNodeType(data?.type);
-    if (data?.status !== 'loading' || (type !== 'ai-image' && type !== 'ai-video')) return undefined;
+    if (!data || (type !== 'ai-image' && type !== 'ai-video')
+      || (data.status !== 'loading' && !(type === 'ai-video' && data.videoTaskState === 'paused'))) return undefined;
     const value = data.generationStartedAt;
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
   });
@@ -21,8 +22,9 @@ function GenerationWaitTime({ nodeId }: { nodeId: string }) {
     if (startedAt === 0) {
       const state = useAppStore.getState();
       const node = state.nodes.find((item) => item.id === nodeId);
-      if (state.currentProjectId === projectId && node?.data.status === 'loading') {
-        state.updateNodeDataTransient(nodeId, { status: 'loading' });
+      if (state.currentProjectId === projectId && node
+        && (node.data.status === 'loading' || node.data.videoTaskState === 'paused')) {
+        state.updateNodeDataTransient(nodeId, { generationStartedAt: Date.now() });
       }
       return;
     }

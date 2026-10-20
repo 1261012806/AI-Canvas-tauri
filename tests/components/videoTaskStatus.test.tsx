@@ -16,6 +16,7 @@ vi.mock('../../src/services/pollManager', () => ({
 }));
 vi.mock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
 import VideoTaskStatus from '../../src/components/nodes/shared/VideoTaskStatus';
+import { GenerationWaitTime } from '../../src/components/nodes/shared/NodeGenerationProgress';
 
 type Element = ReactElement<Record<string, unknown> & { children?: unknown }>;
 function elements(value: unknown): Element[] {
@@ -24,7 +25,7 @@ function elements(value: unknown): Element[] {
   const element = value as Element;
   return [element, ...elements(element.props.children)];
 }
-const render = () => VideoTaskStatus({ nodeId: 'video' });
+const render = (overlay = false) => VideoTaskStatus({ nodeId: 'video', overlay });
 const retryButton = () => elements(render()).find((element) => element.type === 'button')!;
 
 beforeEach(() => {
@@ -34,6 +35,16 @@ beforeEach(() => {
 });
 
 describe('video task retry entry', () => {
+  it('uses the shared preview overlay and wait timer for a paused video', () => {
+    const root = render(true)!;
+    expect(root.props.className).toContain('generation-progress-overlay--interactive');
+    expect(root.props.className).not.toContain('ui-card');
+    expect(elements(root).some((element) => element.type === GenerationWaitTime)).toBe(true);
+    const event = { stopPropagation: vi.fn() };
+    (root.props.onDoubleClick as (input: typeof event) => void)(event);
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+  });
+
   it('keeps a safe download failure reason visible alongside the retry entry', () => {
     const reason = '生成媒体未能写入项目目录：视频下载返回空文件，可重试下载原任务';
     mocks.tasks[0].videoRecoveryMessage = reason;

@@ -250,14 +250,14 @@ async function executeOneNode(
       videoResultReceived = true;
       videoTaskId = ctx.currentProjectId ? getPendingTasksForProject(ctx.currentProjectId).find((task) => task.nodeId === node.id)?.taskId : undefined;
       if (!await isFresh()) {
-        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId);
+        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId, undefined, 'canvas_changed');
         return false;
       }
       const persisted = ctx.currentProjectId
         ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-video', d.label)
         : { mediaUrl: result.url, sourceUrl: result.url };
       if (!await isFresh()) {
-        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId);
+        if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId, undefined, 'canvas_changed');
         return false;
       }
       const mediaUrl = persisted.mediaUrl;
@@ -346,7 +346,7 @@ async function executeOneNode(
     return true;
   } catch (err) {
     if (err instanceof VideoPollingPausedError) return false;
-    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId, err)) return false;
+    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId, err, 'delivery_pending')) return false;
     if (!await isFresh()) return false;
     const msg = err instanceof Error ? err.message : typeof err === 'string' && err.trim() ? err : '生成失败';
     ctx.updateNodeDataTransient(node.id, { status: 'error', error: msg });

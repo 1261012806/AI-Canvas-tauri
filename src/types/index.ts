@@ -224,7 +224,7 @@ export interface BaseNodeData {
   prompt?: string;           // 提示词
   output?: string;            // 输出结果（文本/URL等）
   status?: 'idle' | 'loading' | 'success' | 'error';
-  /** 当前图片／视频生成等待的开始时间；仅状态切入 loading 时记录，不逐秒写入。 */
+  /** 本轮图片／视频生成开始时间；视频暂停和续查沿用，不逐秒写入，交付或明确结束时清理。 */
   generationStartedAt?: number;
   /** 已提交的视频任务暂停本地查询，仍可续查或提交新的生成。 */
   videoTaskState?: 'paused';

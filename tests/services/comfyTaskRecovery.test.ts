@@ -90,6 +90,7 @@ describe('ComfyUI 任务恢复合同', () => {
     expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'disconnected' });
     if (kind === '视频') {
       expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'idle', videoTaskState: 'paused', error: undefined });
+      expect(pending()[0].videoRecoveryMessage).toContain('本轮视频查询中断');
     }
     await expect(executeComfyUIGenerate(params)).rejects.toThrow('未确认结束');
     mocks.history.mockResolvedValue(kind === '视频'
@@ -114,8 +115,80 @@ describe('ComfyUI 任务恢复合同', () => {
     expect(pending()).toEqual([]);
   });
 
+  it('视频已回填时完成通知同步清除暂停提示，重开项目不再恢复旧任务', async () => {
+    configureVideo();
+    savePendingTask({ ...task, nodeType: 'ai-video', videoRecoveryState: 'paused' });
+    useAppStore.getState().updateNodeDataTransient('n1', {
+      videoUrl: 'asset://local.mp4', status: 'success', videoTaskState: 'paused',
+    });
+    completeVideoNodeTask('n1', 'prompt-1');
+    expect(pending()).toEqual([]);
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ videoUrl: 'asset://local.mp4', status: 'success', videoTaskState: undefined });
+    await resumePendingTasks('p1');
+    expect(useAppStore.getState().nodes[0].data.videoTaskState).toBeUndefined();
+    expect(mocks.history).not.toHaveBeenCalled();
+  });
+
+  it('旧视频或旧任务的完成通知不能清除另一轮暂停任务', () => {
+    configureVideo();
+    savePendingTask({ ...task, taskId: 'new-prompt', nodeType: 'ai-video', videoRecoveryState: 'paused' });
+    useAppStore.getState().updateNodeDataTransient('n1', { videoUrl: 'asset://previous.mp4', status: 'idle', videoTaskState: 'paused' });
+    completeVideoNodeTask('n1', 'prompt-1');
+    expect(pending()[0]).toMatchObject({ taskId: 'new-prompt', videoRecoveryState: 'paused' });
+    expect(useAppStore.getState().nodes[0].data.videoTaskState).toBe('paused');
+  });
+
+  it('暂停、重开项目和重试沿用本轮开始时间，成功交付后结束计时', async () => {
+    configureVideo();
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'loading' });
+    const startedAt = useAppStore.getState().nodes[0].data.generationStartedAt!;
+    await executeComfyUIVideoGenerate(params);
+    vi.setSystemTime(startedAt + 60_000);
+    pauseVideoNodeTask('n1', 'prompt-1');
+    expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBe(startedAt);
+    expect(pending()[0].videoGenerationStartedAt).toBe(startedAt);
+
+    // 模拟项目快照还未保存暂停状态，重开时从待续任务恢复同一个计时起点。
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'idle', videoTaskState: undefined });
+    expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBeUndefined();
+    await resumePendingTasks('p1');
+    expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBe(startedAt);
+    mocks.persist.mockImplementationOnce(async () => {
+      expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBe(startedAt);
+      return { mediaUrl: 'asset://local.mp4', sourceUrl: 'http://comfy.test/out.mp4' };
+    });
+    await resumeVideoNodeTask('n1');
+    expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBeUndefined();
+    expect(pending()).toEqual([]);
+    expect(promptCalls()).toHaveLength(1);
+  });
+
+  it('再次生成时旧恢复节点保留原计时，新一轮重新计时', async () => {
+    configureVideo();
+    await executeComfyUIVideoGenerate(params);
+    const startedAt = pending()[0].videoGenerationStartedAt;
+    pauseVideoNodeTask('n1', 'prompt-1');
+    vi.setSystemTime(startedAt! + 60_000);
+    prepareVideoNodeGeneration('n1');
+    const recoveryId = pending()[0].nodeId;
+    expect(useAppStore.getState().nodes.find((node) => node.id === recoveryId)?.data.generationStartedAt).toBe(startedAt);
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'loading' });
+    expect(useAppStore.getState().nodes.find((node) => node.id === 'n1')?.data.generationStartedAt).toBe(startedAt! + 60_000);
+  });
+
+  it('无待续任务的旧暂停标记不能让新生成继承旧计时', () => {
+    configureVideo();
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'idle', videoTaskState: 'paused' });
+    const startedAt = useAppStore.getState().nodes[0].data.generationStartedAt!;
+    vi.setSystemTime(startedAt + 60_000);
+    prepareVideoNodeGeneration('n1');
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'loading' });
+    expect(useAppStore.getState().nodes[0].data.generationStartedAt).toBe(startedAt + 60_000);
+  });
+
   it('视频下载失败保留任务，重试后落盘回填且不重复生成', async () => {
     configureVideo();
+    useAppStore.getState().updateNodeDataTransient('n1', { videoUrl: 'asset://previous.mp4' });
     await executeComfyUIVideoGenerate(params);
     mocks.persist.mockRejectedValueOnce(new MediaPersistenceError('下载结果不是有效视频 /private/user/video.mp4?token=secret'));
     await resumeVideoNodeTask('n1');
@@ -123,12 +196,12 @@ describe('ComfyUI 任务恢复合同', () => {
       videoRecoveryMessage: '生成媒体未能写入项目目录：下载结果不是有效视频，请检查输出格式或下载服务' });
     expect(JSON.stringify(pending())).not.toMatch(/\/private|secret/);
     expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'idle', videoTaskState: 'paused', error: undefined });
-    expect(useAppStore.getState().nodes[0].data.videoUrl).toBeUndefined();
+    expect(useAppStore.getState().nodes[0].data.videoUrl).toBe('asset://previous.mp4');
 
     mocks.persist.mockResolvedValue({ mediaUrl: 'asset://local.mp4', sourceUrl: 'http://comfy.test/out.mp4', filePath: 'saved.mp4' });
     await resumeVideoNodeTask('n1');
     expect(pending()).toEqual([]);
-    expect(useAppStore.getState().nodes[0].data).toMatchObject({ videoUrl: 'asset://local.mp4', filePath: 'saved.mp4', status: 'success' });
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ videoUrl: 'asset://local.mp4', filePath: 'saved.mp4', status: 'success', videoTaskState: undefined });
     expect(promptCalls()).toHaveLength(1);
   });
 
@@ -157,6 +230,18 @@ describe('ComfyUI 任务恢复合同', () => {
     expect(JSON.stringify(pending())).not.toMatch(/\/private|secret/);
   });
 
+  it('本轮已完成但取回失败时说明交付阶段，不把旧视频视为新任务成功', async () => {
+    configureVideo();
+    useAppStore.getState().updateNodeDataTransient('n1', { videoUrl: 'asset://previous.mp4' });
+    await executeComfyUIVideoGenerate(params);
+    mocks.persist.mockRejectedValueOnce(new Error('/private/user/video.mp4?token=secret'));
+    await resumeVideoNodeTask('n1');
+    expect(pending()[0].videoRecoveryMessage).toContain('本轮视频已生成，但保存或回填尚未完成');
+    expect(useAppStore.getState().nodes[0].data.videoUrl).toBe('asset://previous.mp4');
+    expect(JSON.stringify(pending())).not.toMatch(/\/private|secret/);
+    expect(promptCalls()).toHaveLength(1);
+  });
+
   it.each(['项目', '画布 revision'])('视频下载期间%s变化时不回填，保留任务供重试', async (change) => {
     configureVideo();
     await executeComfyUIVideoGenerate(params);
@@ -168,6 +253,7 @@ describe('ComfyUI 任务恢复合同', () => {
     await resumeVideoNodeTask('n1');
     expect(useAppStore.getState().nodes.find((node) => node.id === 'n1')?.data.videoUrl).toBeUndefined();
     expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', videoRecoveryState: 'paused' });
+    expect(pending()[0].videoRecoveryMessage).toContain('画布或项目在本轮视频取回期间发生变化');
     useAppStore.setState({ currentProjectId: 'p1' });
     mocks.persist.mockResolvedValue({ mediaUrl: 'asset://fresh.mp4', sourceUrl: 'http://comfy.test/out.mp4' });
     await resumeVideoNodeTask('n1');

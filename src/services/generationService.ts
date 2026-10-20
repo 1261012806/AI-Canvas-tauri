@@ -322,7 +322,7 @@ export async function executeGeneration(
       videoTaskId = submittingProjectId ? getPendingTasksForProject(submittingProjectId).find((task) => task.nodeId === nodeId)?.taskId : undefined;
       if (lease) await assertLease();
       if (!isStillCurrentSubmission()) {
-        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId);
+        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId, undefined, 'canvas_changed');
         return { success: false, message: '任务已取消' };
       }
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
@@ -330,7 +330,7 @@ export async function executeGeneration(
         : { mediaUrl: result.url, sourceUrl: result.url });
       if (lease) await assertLease();
       if (!isStillCurrentSubmission()) {
-        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId);
+        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId, undefined, 'canvas_changed');
         return { success: false, message: lease ? '任务已取消' : '画布已变化，任务已保留' };
       }
       if (lease) await assertLease();
@@ -432,7 +432,7 @@ export async function executeGeneration(
     return { success: true };
   } catch (err) {
     if (err instanceof VideoPollingPausedError) return { success: false, message: err.message };
-    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(nodeId, videoTaskId, err)) {
+    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(nodeId, videoTaskId, err, 'delivery_pending')) {
       return { success: false, message: '视频保存暂未完成，任务已保留，可重试下载' };
     }
     if (lease) {

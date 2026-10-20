@@ -253,10 +253,13 @@ function prepareDirectorNodeDataForInsertion(
 function withGenerationTiming(data: BaseNodeData, previous?: BaseNodeData): BaseNodeData {
   const type = getGenerationNodeType(data.type);
   if (type !== 'ai-image' && type !== 'ai-video') return data;
-  if (data.status !== 'loading') {
+  if (data.status !== 'loading' && !(type === 'ai-video' && data.videoTaskState === 'paused')) {
     return data.generationStartedAt === undefined ? data : { ...data, generationStartedAt: undefined };
   }
-  const startedAt = previous?.status === 'loading' ? previous.generationStartedAt : undefined;
+  const continuing = previous?.status === 'loading' || (type === 'ai-video' && previous?.videoTaskState === 'paused');
+  const previousStartedAt = continuing ? previous?.generationStartedAt : undefined;
+  const startedAt = typeof previousStartedAt === 'number' && Number.isFinite(previousStartedAt) && previousStartedAt > 0
+    ? previousStartedAt : data.generationStartedAt;
   return {
     ...data,
     generationStartedAt: typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0

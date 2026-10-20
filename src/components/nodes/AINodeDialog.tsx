@@ -650,7 +650,7 @@ function AINodeDialog() {
         videoResultReceived = true;
         videoTaskId = submittingProjectId ? getPendingTasksForProject(submittingProjectId).find((task) => task.nodeId === submittingNodeId)?.taskId : undefined;
         if (!isStillCurrentSubmission()) {
-          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId);
+          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId, undefined, 'canvas_changed');
           return;
         }
         // 下载远程 URL 到本地项目目录
@@ -658,7 +658,7 @@ function AINodeDialog() {
           ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-video', nodeLabel)
           : { mediaUrl: result.url, sourceUrl: result.url });
         if (!isStillCurrentSubmission()) {
-          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId);
+          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId, undefined, 'canvas_changed');
           return;
         }
         const mediaUrl = persisted.mediaUrl;
@@ -792,7 +792,7 @@ function AINodeDialog() {
       }
     } catch (err) {
       if (err instanceof VideoPollingPausedError) return;
-      if (videoResultReceived && videoTaskId && pauseVideoNodeTask(submittingNodeId, videoTaskId, err)) return;
+      if (videoResultReceived && videoTaskId && pauseVideoNodeTask(submittingNodeId, videoTaskId, err, 'delivery_pending')) return;
       const msg = err instanceof Error ? err.message : (typeof err === 'string' && err.trim() ? err : t('生成失败'));
       if (
         (err instanceof DOMException && err.name === 'AbortError')
