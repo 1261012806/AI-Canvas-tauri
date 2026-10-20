@@ -1,6 +1,12 @@
 /**
  * 项目缩略图合成 Worker：根据节点、连线和媒体位图绘制离屏画布并返回压缩结果。
  */
+import {
+  projectSnapshotGeometry,
+  type ProjectSnapshotGeometry,
+  type ProjectSnapshotViewport,
+} from './projectSnapshotGeometry';
+
 export interface ProjectSnapshotRect {
   x: number;
   y: number;
@@ -30,8 +36,8 @@ export interface ProjectSnapshotWorkerRequest {
   sourceWidth: number;
   sourceHeight: number;
   backgroundColor: string;
-  nodes: ProjectSnapshotNode[];
-  edges: ProjectSnapshotEdge[];
+  geometry: ProjectSnapshotGeometry;
+  viewport: ProjectSnapshotViewport;
   media: ProjectSnapshotMedia[];
 }
 
@@ -181,6 +187,7 @@ async function renderSnapshot(request: ProjectSnapshotWorkerRequest): Promise<Ar
 
   const scaleX = request.width / request.sourceWidth;
   const scaleY = request.height / request.sourceHeight;
+  const projected = projectSnapshotGeometry(request.geometry, request.viewport, request.sourceWidth, request.sourceHeight);
   context.fillStyle = request.backgroundColor || '#0a0a0f';
   context.fillRect(0, 0, request.width, request.height);
   context.save();
@@ -188,7 +195,7 @@ async function renderSnapshot(request: ProjectSnapshotWorkerRequest): Promise<Ar
 
   context.strokeStyle = 'rgba(136, 136, 160, 0.42)';
   context.lineWidth = Math.max(1 / Math.min(scaleX, scaleY), 1);
-  for (const edge of request.edges) {
+  for (const edge of projected.edges) {
     if (edge.points.length < 2) continue;
     context.beginPath();
     context.moveTo(edge.points[0].x, edge.points[0].y);
@@ -196,7 +203,7 @@ async function renderSnapshot(request: ProjectSnapshotWorkerRequest): Promise<Ar
     context.stroke();
   }
 
-  for (const node of request.nodes) {
+  for (const node of projected.nodes) {
     if (node.noteKind) {
       drawCanvasNote(context, node);
       continue;
@@ -220,7 +227,7 @@ async function renderSnapshot(request: ProjectSnapshotWorkerRequest): Promise<Ar
 
   context.font = '600 11px sans-serif';
   context.textBaseline = 'bottom';
-  for (const node of request.nodes) {
+  for (const node of projected.nodes) {
     if (!node.label || node.noteKind) continue;
     context.fillStyle = '#e8e8ed';
     const maxWidth = Math.max(0, node.width - 8);

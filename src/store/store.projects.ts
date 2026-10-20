@@ -33,6 +33,7 @@ import { duplicateProjectArchive, exportProjectArchive, importProjectArchive } f
 import {
   getLastActiveProjectId,
   setLastActiveProjectId,
+  updateProjectSnapshot,
 } from '../services/indexedDbService';
 import { describeStorageError, type StorageFailureKind } from '../services/storageQuota';
 import { relocateMediaReferences } from '../services/indexedDb/mediaRelocations';
@@ -40,6 +41,7 @@ import { isWebviewRecovery } from '../services/webviewRecoveryService';
 
 type ProjectLoadStatus = 'loading' | 'ready' | 'error';
 let activeProjectMetadataWrite: Promise<void> = Promise.resolve();
+const EMPTY_SERIES_CANVAS: readonly never[] = [];
 
 function getProjectGroups(data: { groups?: unknown } | null | undefined): NodeGroup[] {
   return Array.isArray(data?.groups) ? (data.groups as NodeGroup[]) : [];
@@ -141,7 +143,9 @@ interface PendingProjectSave {
 
 interface ProjectSaveQueue {
   running: boolean;
+  active: PendingProjectSave | null;
   pending: PendingProjectSave | null;
+  pendingSnapshot: { snapshot: string; waiters: ProjectSaveWaiter[] } | null;
 }
 
 const projectSaveQueues = new Map<string, ProjectSaveQueue>();
@@ -157,10 +161,12 @@ interface CapturedCanvasState {
 
 interface CaptureProjectSnapshotOptions {
   allowProjectChange?: boolean;
-  persistRecord?: ProjectSaveData | null;
+  persistSnapshot?: boolean;
 }
 
 let lastCapturedCanvasState: CapturedCanvasState | null = null;
+const latestSnapshotCaptures = new Map<string, number>();
+let nextSnapshotCaptureId = 1;
 
 function getCanvasViewportTransform(): string {
   if (typeof document === 'undefined') return '';
@@ -171,7 +177,17 @@ function getCanvasViewportTransform(): string {
 function waitForLoadingPaint(): Promise<void> {
   if (typeof requestAnimationFrame !== 'function') return Promise.resolve();
   return new Promise((resolve) => {
-    requestAnimationFrame(() => setTimeout(resolve, 0));
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (frame !== undefined && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      resolve();
+    };
+    // 后台/最小化窗口的 rAF 可能被暂停，不能让返回或项目创建一直等首帧。
+    const timer = setTimeout(finish, 100);
+    const frame = requestAnimationFrame(() => setTimeout(finish, 0));
   });
 }
 
@@ -188,20 +204,34 @@ async function drainProjectSaveQueue(projectId: string, queue: ProjectSaveQueue)
   queue.running = true;
 
   try {
-    while (queue.pending) {
+    while (queue.pending || queue.pendingSnapshot) {
+      if (!queue.pending) {
+        const patch = queue.pendingSnapshot!;
+        queue.pendingSnapshot = null;
+        try {
+          await updateProjectSnapshot(projectId, patch.snapshot);
+          patch.waiters.forEach((waiter) => waiter.resolve(projectId));
+        } catch (error) {
+          patch.waiters.forEach((waiter) => waiter.reject(error));
+        }
+        continue;
+      }
       const batch = queue.pending;
       queue.pending = null;
+      queue.active = batch;
 
       try {
         const savedProjectId = await fileService.saveProject(batch.record);
         batch.waiters.forEach((waiter) => waiter.resolve(savedProjectId));
       } catch (error) {
         batch.waiters.forEach((waiter) => waiter.reject(error));
+      } finally {
+        queue.active = null;
       }
     }
   } finally {
     queue.running = false;
-    if (queue.pending) {
+    if (queue.pending || queue.pendingSnapshot) {
       void drainProjectSaveQueue(projectId, queue);
     } else if (projectSaveQueues.get(projectId) === queue) {
       projectSaveQueues.delete(projectId);
@@ -209,18 +239,45 @@ async function drainProjectSaveQueue(projectId: string, queue: ProjectSaveQueue)
   }
 }
 
-function enqueueProjectSave(record: ProjectSaveData): Promise<string> {
-  let queue = projectSaveQueues.get(record.id);
+function getProjectSaveQueue(projectId: string): ProjectSaveQueue {
+  let queue = projectSaveQueues.get(projectId);
   if (!queue) {
-    queue = { running: false, pending: null };
-    projectSaveQueues.set(record.id, queue);
+    queue = { running: false, active: null, pending: null, pendingSnapshot: null };
+    projectSaveQueues.set(projectId, queue);
   }
+  return queue;
+}
+
+function hasSameProjectSaveContent(left: ProjectSaveData, right: ProjectSaveData): boolean {
+  const keys = Object.keys(left) as Array<keyof ProjectSaveData>;
+  return keys.length === Object.keys(right).length
+    && keys.every((key) => key === 'updatedAt' || left[key] === right[key]);
+}
+
+function enqueueProjectSnapshot(projectId: string, snapshot: string): Promise<string> {
+  const queue = getProjectSaveQueue(projectId);
+  return new Promise((resolve, reject) => {
+    if (queue.pendingSnapshot) {
+      queue.pendingSnapshot.snapshot = snapshot;
+      queue.pendingSnapshot.waiters.push({ resolve, reject });
+    } else {
+      queue.pendingSnapshot = { snapshot, waiters: [{ resolve, reject }] };
+    }
+    void drainProjectSaveQueue(projectId, queue);
+  });
+}
+
+function enqueueProjectSave(record: ProjectSaveData): Promise<string> {
+  const queue = getProjectSaveQueue(record.id);
 
   return new Promise((resolve, reject) => {
     const waiter = { resolve, reject };
     if (queue.pending) {
       queue.pending.record = record;
       queue.pending.waiters.push(waiter);
+    } else if (queue.active && hasSameProjectSaveContent(queue.active.record, record)) {
+      // 同一不可变画布的自动保存与返回保存共用在途写入；新版本仍排队。
+      queue.active.waiters.push(waiter);
     } else {
       queue.pending = { record, waiters: [waiter] };
     }
@@ -275,9 +332,9 @@ function createSeriesLibraryRecord(state: AppState): ProjectSaveData | null {
     dataFolder: series.dataFolder,
     settings: series.settings,
     series: series.series,
-    nodes: [],
-    edges: [],
-    groups: [],
+    nodes: EMPTY_SERIES_CANVAS,
+    edges: EMPTY_SERIES_CANVAS,
+    groups: EMPTY_SERIES_CANVAS,
     dramaAssets: state.dramaAssets,
   };
 }
@@ -761,7 +818,10 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     const project = state.projects.find((item) => item.id === projectId);
     if (!projectId || !project || state.projectLoadStatus !== 'ready') return undefined;
 
+    const captureId = nextSnapshotCaptureId++;
+    latestSnapshotCaptures.set(projectId, captureId);
     if (state.nodes.length === 0) {
+      latestSnapshotCaptures.delete(projectId);
       lastCapturedCanvasState = null;
       if (project.snapshot) {
         set((current) => ({
@@ -773,10 +833,15 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       return projectId;
     }
 
-    if (project.snapshot && isCanvasSnapshotFresh(state, projectId)) return projectId;
+    if (project.snapshot && isCanvasSnapshotFresh(state, projectId)) {
+      latestSnapshotCaptures.delete(projectId);
+      return projectId;
+    }
 
     const viewportTransform = getCanvasViewportTransform();
-    const snapshot = await captureCurrentCanvasSnapshot(projectId);
+    const snapshot = await captureCurrentCanvasSnapshot(projectId, { nodes: state.nodes, edges: state.edges });
+    if (latestSnapshotCaptures.get(projectId) !== captureId) return undefined;
+    latestSnapshotCaptures.delete(projectId);
     const latest = get();
     const projectStillExists = latest.projects.some((item) => item.id === projectId);
     if (!projectStillExists) return undefined;
@@ -791,34 +856,27 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     if (currentCanvasChanged || (!isStillCurrent && !options.allowProjectChange)) return undefined;
 
     if (snapshot) {
-      lastCapturedCanvasState = {
-        projectId,
-        nodes: state.nodes,
-        edges: state.edges,
-        groups: state.groups,
-        viewportTransform,
-      };
+      if (isStillCurrent) {
+        lastCapturedCanvasState = {
+          projectId,
+          nodes: state.nodes,
+          edges: state.edges,
+          groups: state.groups,
+          viewportTransform,
+        };
+      } else if (lastCapturedCanvasState?.projectId === projectId) {
+        lastCapturedCanvasState = null;
+      }
       set((current) => ({
         projects: current.projects.map((item) => (
           item.id === projectId ? { ...item, snapshot } : item
         )),
       }));
 
-      if (options.persistRecord) {
-        const snapshotRecord: ProjectSaveData = {
-          ...options.persistRecord,
-          updatedAt: Date.now(),
-          snapshot,
-        };
+      if (options.persistSnapshot) {
         try {
-          await enqueueProjectSave(snapshotRecord);
-          set((current) => ({
-            projects: current.projects.map((item) => (
-              item.id === projectId
-                ? { ...item, updatedAt: Math.max(item.updatedAt, snapshotRecord.updatedAt) }
-                : item
-            )),
-          }));
+          // 只在最新记录上补缩略图，不能用捕获前的正文覆盖后续自动保存。
+          await enqueueProjectSnapshot(projectId, snapshot);
         } catch (error) {
           console.warn('[项目快照] 持久化失败:', error);
         }
@@ -838,10 +896,9 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       const previousProjectId = get().currentProjectId;
 
       if (previousProjectId) {
-        const snapshotRecord = createCurrentProjectSaveRecord(get());
         void get().captureCurrentProjectSnapshot({
           allowProjectChange: true,
-          persistRecord: snapshotRecord,
+          persistSnapshot: true,
         });
         const savedProjectId = await get().saveCurrentProject();
         if (!isLatestCreate()) return undefined;
@@ -1317,10 +1374,9 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     try {
       if (get().projectLoadStatus === 'ready') {
         if (options?.captureSnapshot) {
-          const snapshotRecord = createCurrentProjectSaveRecord(get());
           void get().captureCurrentProjectSnapshot({
             allowProjectChange: true,
-            persistRecord: snapshotRecord,
+            persistSnapshot: true,
           });
         }
         const savedId = await get().saveCurrentProject();
@@ -1402,9 +1458,11 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     const sequence = projectSwitchSequence;
     set({ isReturningToStartPage: true });
     try {
-      // 列表即将出现，复用缩略图捕获；截图失败不妨碍正常保存。
-      await get().captureCurrentProjectSnapshot().catch(() => undefined);
+      // 先绘制返回状态。缩略图是派生预览，不能阻塞必要保存和导航。
+      await waitForLoadingPaint();
       if (get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
+      void get().captureCurrentProjectSnapshot({ allowProjectChange: true, persistSnapshot: true })
+        .catch(() => undefined);
       const savingState = get();
       const savedId = await savingState.saveCurrentProjectSilent();
       if (savedId !== projectId || get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
@@ -1416,6 +1474,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
         return false;
       }
       cancelProjectCanvasDerivations(projectId);
+      if (lastCapturedCanvasState?.projectId === projectId) lastCapturedCanvasState = null;
       set({
         currentProjectId: null,
         projectName: '',

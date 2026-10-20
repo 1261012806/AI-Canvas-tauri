@@ -37,6 +37,7 @@ import {
 import { listConfiguredModels } from './appTools';
 import { normalizeAiAppReference } from '../../aiApps/aiAppSchema';
 import { findDramaAsset, preferDramaLibraryReferences, preferredDramaMentionForNode } from '../../dramaAssetPrompt';
+import { AGENT_NODE_LAYOUT, AGENT_NODE_LAYOUT_GUIDANCE } from '../agentCanvasLayout';
 
 const NODE_TYPES: NodeType[] = [
   'ai-text',
@@ -223,10 +224,7 @@ interface CanvasRect extends CanvasPoint {
 const DEFAULT_NODE_WIDTH = 280;
 const DEFAULT_NODE_HEIGHT = 160;
 const COMMENT_NODE_HEIGHT = 120;
-const AGENT_NODE_COLUMN_GAP = 56;
-const AGENT_NODE_ROW_GAP = 48;
-const AGENT_NODE_ANCHOR_GAP = 72;
-const AGENT_NODE_COLLISION_GAP = 24;
+const MAX_LOCAL_LAYOUT_CANDIDATES = 32;
 const NODE_REFERENCE_PATTERN = /@\{([^:}\r\n]+):[^}\r\n]+\}/g;
 
 interface QueryNodesInput extends NodeTargetInput {
@@ -775,17 +773,21 @@ function getRectBounds(rects: CanvasRect[]): CanvasRect | null {
 }
 
 function rectsOverlap(first: CanvasRect, second: CanvasRect): boolean {
-  return first.x < second.x + second.width + AGENT_NODE_COLLISION_GAP
-    && first.x + first.width + AGENT_NODE_COLLISION_GAP > second.x
-    && first.y < second.y + second.height + AGENT_NODE_COLLISION_GAP
-    && first.y + first.height + AGENT_NODE_COLLISION_GAP > second.y;
+  return first.x < second.x + second.width + AGENT_NODE_LAYOUT.collisionGap
+    && first.x + first.width + AGENT_NODE_LAYOUT.collisionGap > second.x
+    && first.y < second.y + second.height + AGENT_NODE_LAYOUT.collisionGap
+    && first.y + first.height + AGENT_NODE_LAYOUT.collisionGap > second.y;
 }
 
-function resolveReferencedNodes(taskId: string, nodes: Node<BaseNodeData>[]): Node<BaseNodeData>[] {
+function resolveReferencedNodes(taskId: string, nodes: Node<BaseNodeData>[], inputs: CreateNodeInput[]): Node<BaseNodeData>[] {
   const task = useAppStore.getState().agentTasks.find((candidate) => candidate.id === taskId);
-  if (!task) return [];
+  // MCP 任务标题不含 prompt；与自动连线保持一致，只把生成指令里的引用视作依赖。
+  const referenceTexts = [task?.goal ?? '', ...inputs
+    .filter((input) => !isSourceNodeType(input.type) && !input.content?.trim())
+    .map((input) => input.prompt ?? '')];
   const referencedIds = new Set(
-    [...task.goal.matchAll(NODE_REFERENCE_PATTERN)].map((match) => match[1]),
+    referenceTexts.flatMap((text) => [...text.matchAll(NODE_REFERENCE_PATTERN)]
+      .map((match) => resolvePromptReferenceSourceId(match[1].trim()))),
   );
   return nodes.filter((node) => referencedIds.has(node.id));
 }
@@ -797,9 +799,13 @@ function resolveCreateNodePositions(
   const store = useAppStore.getState();
   const existingNodes = store.nodes;
   const obstacles = existingNodes.map((node) => getExistingNodeRect(node, existingNodes));
-  const autoEntries = inputs
-    .map((input, index) => ({ input, index }))
-    .filter(({ input }) => input.x === undefined || input.y === undefined);
+  const entries = inputs.map((input, index) => ({ input, index, dimensions: getNodeDimensions(input) }));
+  const autoEntries = entries.filter(({ input }) => input.x === undefined || input.y === undefined);
+  for (const { input, dimensions } of entries) {
+    if (input.x !== undefined && input.y !== undefined) {
+      obstacles.push({ x: input.x, y: input.y, ...dimensions });
+    }
+  }
   const positions = inputs.map((input) => ({
     x: input.x ?? 0,
     y: input.y ?? 0,
@@ -808,20 +814,29 @@ function resolveCreateNodePositions(
 
   const columns = Math.min(3, autoEntries.length);
   const rows = Math.ceil(autoEntries.length / columns);
-  const maxNodeWidth = Math.max(...autoEntries.map(({ input }) => getNodeDimensions(input).width));
-  const maxNodeHeight = Math.max(...autoEntries.map(({ input }) => getNodeDimensions(input).height));
-  const clusterWidth = columns * maxNodeWidth + (columns - 1) * AGENT_NODE_COLUMN_GAP;
-  const clusterHeight = rows * maxNodeHeight + (rows - 1) * AGENT_NODE_ROW_GAP;
+  const columnWidths = Array<number>(columns).fill(0);
+  const rowHeights = Array<number>(rows).fill(0);
+  autoEntries.forEach(({ dimensions }, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    columnWidths[column] = Math.max(columnWidths[column], dimensions.width);
+    rowHeights[row] = Math.max(rowHeights[row], dimensions.height);
+  });
+  const columnOffsets = columnWidths.map((_, index) => columnWidths.slice(0, index)
+    .reduce((sum, width) => sum + width + AGENT_NODE_LAYOUT.columnGap, 0));
+  const rowOffsets = rowHeights.map((_, index) => rowHeights.slice(0, index)
+    .reduce((sum, height) => sum + height + AGENT_NODE_LAYOUT.rowGap, 0));
+  const clusterWidth = columnOffsets[columns - 1] + columnWidths[columns - 1];
+  const clusterHeight = rowOffsets[rows - 1] + rowHeights[rows - 1];
 
-  const buildLayout = (anchor: CanvasPoint) => autoEntries.map(({ input, index }, layoutIndex) => {
+  const buildLayout = (anchor: CanvasPoint) => autoEntries.map(({ input, index, dimensions }, layoutIndex) => {
     const column = layoutIndex % columns;
     const row = Math.floor(layoutIndex / columns);
-    const dimensions = getNodeDimensions(input);
     return {
       index,
       position: {
-        x: input.x ?? Math.round(anchor.x + column * (maxNodeWidth + AGENT_NODE_COLUMN_GAP)),
-        y: input.y ?? Math.round(anchor.y + row * (maxNodeHeight + AGENT_NODE_ROW_GAP)),
+        x: input.x ?? Math.round(anchor.x + columnOffsets[column]),
+        y: input.y ?? Math.round(anchor.y + rowOffsets[row]),
       },
       dimensions,
     };
@@ -839,7 +854,7 @@ function resolveCreateNodePositions(
     ));
   };
 
-  const referencedNodes = resolveReferencedNodes(context.taskId, existingNodes);
+  const referencedNodes = resolveReferencedNodes(context.taskId, existingNodes, inputs);
   const referencedBounds = getRectBounds(
     referencedNodes.map((node) => getExistingNodeRect(node, existingNodes)),
   );
@@ -850,10 +865,10 @@ function resolveCreateNodePositions(
     const centeredX = referencedBounds.x + (referencedBounds.width - clusterWidth) / 2;
     const centeredY = referencedBounds.y + (referencedBounds.height - clusterHeight) / 2;
     candidates.push(
-      { x: referencedBounds.x + referencedBounds.width + AGENT_NODE_ANCHOR_GAP, y: centeredY },
-      { x: centeredX, y: referencedBounds.y + referencedBounds.height + AGENT_NODE_ANCHOR_GAP },
-      { x: centeredX, y: referencedBounds.y - clusterHeight - AGENT_NODE_ANCHOR_GAP },
-      { x: referencedBounds.x - clusterWidth - AGENT_NODE_ANCHOR_GAP, y: centeredY },
+      { x: referencedBounds.x + referencedBounds.width + AGENT_NODE_LAYOUT.anchorGap, y: centeredY },
+      { x: centeredX, y: referencedBounds.y + referencedBounds.height + AGENT_NODE_LAYOUT.anchorGap },
+      { x: centeredX, y: referencedBounds.y - clusterHeight - AGENT_NODE_LAYOUT.anchorGap },
+      { x: referencedBounds.x - clusterWidth - AGENT_NODE_LAYOUT.anchorGap, y: centeredY },
     );
   } else {
     const pointerPosition = getLastCanvasPointerPosition();
@@ -862,13 +877,47 @@ function resolveCreateNodePositions(
 
   if (canvasBounds) {
     candidates.push({
-      x: canvasBounds.x + canvasBounds.width + AGENT_NODE_ANCHOR_GAP,
+      x: canvasBounds.x + canvasBounds.width + AGENT_NODE_LAYOUT.anchorGap,
       y: referencedBounds?.y ?? canvasBounds.y,
     });
   }
   if (candidates.length === 0) candidates.push({ x: 300, y: 200 });
 
-  const anchor = candidates.find(isLayoutFree) ?? candidates[candidates.length - 1];
+  // 就近列被占用时先尝试上下空位，避免因无关远端节点把整批推到画布最右。
+  const preferredAnchor = candidates[0];
+  if (!isLayoutFree(preferredAnchor)) {
+    const nearbyByPosition = new Map<string, CanvasPoint>();
+    const addNearby = (position: CanvasPoint) => {
+      if (referencedBounds && position.x < preferredAnchor.x) return;
+      nearbyByPosition.set(`${position.x}:${position.y}`, position);
+    };
+    // 用真实布局找障碍；只传 x 或 y 时，名义锚点与节点实际位置可能不同。
+    for (const entry of buildLayout(preferredAnchor)) {
+      const { input } = entries[entry.index];
+      const offsetX = entry.position.x - preferredAnchor.x;
+      const offsetY = entry.position.y - preferredAnchor.y;
+      for (const obstacle of obstacles) {
+        if (input.y === undefined && entry.position.x < obstacle.x + obstacle.width + AGENT_NODE_LAYOUT.collisionGap
+          && entry.position.x + entry.dimensions.width + AGENT_NODE_LAYOUT.collisionGap > obstacle.x) {
+          addNearby({ x: preferredAnchor.x, y: obstacle.y + obstacle.height + AGENT_NODE_LAYOUT.rowGap - offsetY });
+          addNearby({ x: preferredAnchor.x, y: obstacle.y - entry.dimensions.height - AGENT_NODE_LAYOUT.rowGap - offsetY });
+        }
+        if (input.x === undefined && entry.position.y < obstacle.y + obstacle.height + AGENT_NODE_LAYOUT.collisionGap
+          && entry.position.y + entry.dimensions.height + AGENT_NODE_LAYOUT.collisionGap > obstacle.y) {
+          addNearby({ x: obstacle.x + obstacle.width + AGENT_NODE_LAYOUT.columnGap - offsetX, y: preferredAnchor.y });
+          addNearby({ x: obstacle.x - entry.dimensions.width - AGENT_NODE_LAYOUT.columnGap - offsetX, y: preferredAnchor.y });
+        }
+      }
+    }
+    const distance = (position: CanvasPoint) => (position.x - preferredAnchor.x) ** 2 + (position.y - preferredAnchor.y) ** 2;
+    const nearby = [...nearbyByPosition.values()]
+      .sort((first, second) => distance(first) - distance(second))
+      .slice(0, MAX_LOCAL_LAYOUT_CANDIDATES);
+    candidates.splice(1, 0, ...nearby);
+  }
+
+  const anchor = candidates.find(isLayoutFree);
+  if (!anchor) throw new Error('无法在保留指定坐标的同时避免节点重叠，请省略 x/y 自动排布，或调整指定坐标后重试。');
   for (const entry of buildLayout(anchor)) positions[entry.index] = entry.position;
   return positions;
 }
@@ -933,9 +982,9 @@ function describeConnectionLayout(sourceId: string, targetId: string, nodes: Nod
   const sourceRightX = sourceRect.x + sourceRect.width;
   const horizontalGap = targetRect.x - sourceRightX;
   return {
-    sourceRightX, targetLeftX: targetRect.x, horizontalGap, recommendedMinGap: 80,
-    warning: horizontalGap < 80
-      ? '上游应放左、下游应放右，并预留至少 80 画布单位间距；当前连线可能回绕或过于拥挤，请用 canvas_update_nodes 调整位置后再次查询。'
+    sourceRightX, targetLeftX: targetRect.x, horizontalGap, recommendedMinGap: AGENT_NODE_LAYOUT.columnGap,
+    warning: horizontalGap < AGENT_NODE_LAYOUT.columnGap
+      ? `上游应放左、下游应放右，并预留至少 ${AGENT_NODE_LAYOUT.columnGap} 画布单位间距；当前连线可能回绕或过于拥挤，请用 canvas_update_nodes 调整位置后再次查询。`
       : null,
   };
 }
@@ -1056,7 +1105,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
       title: '新建画布节点',
       description: [
         '在画布上原子创建一个或多个节点；不会自动运行节点模型。',
-        '布局按数据流从左向右：上游素材放左、下游生成或汇总节点放右；右出左入，节点之间建议预留至少 80 画布单位。',
+        AGENT_NODE_LAYOUT_GUIDANCE,
         '角色、场景和道具优先使用 drama_asset_list/get 返回的 @drama 库引用，不为库引用创建连线。只有未入库素材和真实生成依赖使用 @{nodeId:label}；节点引用会自动连线，不要重复连接。MCP 会把能唯一匹配库内同一张图片的节点引用转为精确库引用，保持 Picture 顺序。',
         '为已有资产新建参考图时传 dramaAssetId（仅项目 ai-image），生成成功后自动回填库条目；已有图用 drama_reference_image_add 绑定。先完成绑图再创建下游，不能把只有文字设定的库条目当图片。',
         'type 按这个节点最终要产出什么来选，不要因为内容是文字描述就一律建文本节点：',
@@ -1122,8 +1171,8 @@ export function registerCanvasAgentTools(): Array<() => void> {
                 musicTitle: { type: 'string', maxLength: 120 },
                 musicLyrics: { type: 'string', maxLength: 8000 },
                 autoGenerateLyrics: { type: 'boolean' },
-                x: { type: 'number', minimum: -100000, maximum: 100000 },
-                y: { type: 'number', minimum: -100000, maximum: 100000 },
+                x: { type: 'number', minimum: -100000, maximum: 100000, description: '通常省略，由宿主紧凑定位；仅明确需要指定位置时传入。' },
+                y: { type: 'number', minimum: -100000, maximum: 100000, description: '通常省略，由宿主紧凑定位；仅明确需要指定位置时传入。' },
               },
             },
           },
@@ -1447,7 +1496,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
       description: [
         '把 sourceIds 中的输出节点统一连到 targetId 接收节点；每次 1–50 个，整批校验后一次写入、一次撤销，重复节点和已有连线自动跳过。',
         '兼容旧参数 sourceId；sourceId 与 sourceIds 必须且只能提供一种。方向固定为输出节点 → 接收节点。',
-        '端口固定为右出左入（sourceHandle=right、targetHandle=left），不会自动移动节点。连接前先用 canvas_query(detail=true) 检查位置：上游放左、下游放右，目标左边界应在源节点右边界之后并预留至少 80 画布单位；否则先用 canvas_update_nodes 调整。连接后检查返回的 layout.warning。',
+        `端口固定为右出左入（sourceHandle=right、targetHandle=left），不会自动移动节点。连接前先用 canvas_query(detail=true) 检查位置：上游放左、下游放右，目标左边界应在源节点右边界之后并预留至少 ${AGENT_NODE_LAYOUT.columnGap} 画布单位；保持紧凑，不要把正常间距拉大。连接后检查返回的 layout.warning，确需调整时用 canvas_update_nodes。`,
         '连线会把上游节点的输出作为下游生成节点的参考输入，所以 targetId 必须是生成器节点：',
         'source-* 与 comment 只能作为输出节点。导演台不能反接回它所属的分镜表；批量连接只支持可见的普通节点，不含分组、笔记和插件节点。',
         '返回 connections 中每条线的实际端口、是否已连接和布局提醒，以及 createdCount、skippedCount；单源同时保留旧的 sourceId、layout 返回字段。',

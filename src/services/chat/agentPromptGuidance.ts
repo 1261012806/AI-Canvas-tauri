@@ -1,6 +1,7 @@
 import type { AgentMode } from '../../types/agent';
 import { buildSkillCatalogPrompt } from './skillCatalog';
 import { buildSubAgentCatalogPrompt } from './subAgentProfileService';
+import { AGENT_NODE_LAYOUT_GUIDANCE } from './agentCanvasLayout';
 
 export function buildMediaPrompt(mode: AgentMode = 'collaborative'): string {
   return [
@@ -48,6 +49,7 @@ export function buildAssistantToolGuidance(
   add('canvas_query', '- 需要节点 ID、坐标、尺寸、模型或现有提示词时，用 canvas_query 带 detail=true 查询，不要凭编号猜 ID');
   add('canvas_create_nodes',
     '- canvas_create_nodes 只建节点，不会实际调用媒体模型',
+    `- ${AGENT_NODE_LAYOUT_GUIDANCE}`,
     '- canvas_create_nodes 会把新节点 prompt 中的 @{nodeId:label} 自动转为「已有节点 → 新节点」连线，无须重复补线');
   add('canvas_update_nodes', '- canvas_update_nodes 可改名称、提示词、模型、画面比例、批量数量，也可移动（单个用 x/y，批量用 dx/dy）和调整尺寸');
   add('app_get_state', '- 模型 ID 从 app_get_state 的真实返回获取，不能猜测');

@@ -35,6 +35,7 @@ import {
 import { withRelocatedMedia } from './indexedDb/mediaRelocations';
 import { localMediaUrlToPath } from '../utils/mediaUrl';
 import { stripVerbatimPrefix } from './fs/core';
+import { isProjectSnapshotDataUrl } from './projectSnapshotValidation';
 
 const LAST_ACTIVE_PROJECT_KEY = 'last-active-project';
 const RECENT_ASSET_USAGE_KEY = 'recent-asset-usage';
@@ -118,6 +119,48 @@ export async function saveProjectToDb(record: ProjectRecord): Promise<void> {
     };
     tx.onerror = () => fail(tx.error);
     tx.onabort = () => fail(tx.error);
+  });
+}
+
+/** 缩略图迟到时只更新最新记录的图片；不重存旧画布，也不重新创建已删除项目。 */
+export async function updateProjectSnapshot(id: string, snapshot: string): Promise<boolean> {
+  if (typeof id !== 'string' || !id.trim() || !isProjectSnapshotDataUrl(snapshot)) {
+    throw new Error('项目缩略图参数无效');
+  }
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_PROJECTS, STORE_PROJECT_SUMMARIES], 'readwrite');
+    const projects = tx.objectStore(STORE_PROJECTS);
+    const request = projects.get(id);
+    let updated = false;
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error ?? new Error('项目缩略图保存失败'));
+    };
+    request.onsuccess = () => {
+      const current = request.result as ProjectRecord | undefined;
+      if (!current) return;
+      try {
+        const next = { ...current, snapshot };
+        const summary = toProjectSummaryRecord(next);
+        if (!summary) throw new Error('项目摘要无效，无法更新缩略图');
+        projects.put(next);
+        tx.objectStore(STORE_PROJECT_SUMMARIES).put(summary);
+        updated = true;
+      } catch (error) {
+        tx.abort();
+        fail(error);
+      }
+    };
+    request.onerror = () => fail(request.error);
+    tx.oncomplete = () => {
+      if (settled) return;
+      settled = true;
+      resolve(updated);
+    };
+    tx.onerror = tx.onabort = () => fail(tx.error);
   });
 }
 

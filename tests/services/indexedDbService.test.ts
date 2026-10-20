@@ -88,6 +88,88 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+describe('project snapshot updates', () => {
+  it('patches a late snapshot onto the latest canvas and metadata without reverting other fields', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const { openDB } = await import('../../src/services/indexedDb/schema');
+    await service.saveProjectToDb({ ...RECOVERY_PROJECT, snapshot: 'data:image/webp;base64,OLD' });
+    const latest = {
+      ...RECOVERY_PROJECT,
+      name: '编辑后的项目', updatedAt: 42,
+      nodes: [{ id: 'new-node', data: { output: '保存后的最新正文' } }],
+      edges: [{ id: 'new-edge', source: 'saved-node', target: 'new-node' }],
+      groups: [{ id: 'new-group', nodeIds: ['new-node'] }],
+      dramaAssets: { characters: [], scenes: [], props: [{ id: 'new-prop', name: '新道具' }] },
+      episodeScript: '最新分集剧本',
+      snapshot: 'data:image/webp;base64,CURRENT',
+    };
+    await service.saveProjectToDb(latest);
+    const snapshot = 'data:image/webp;base64,LATE';
+
+    await expect(service.updateProjectSnapshot(latest.id, snapshot)).resolves.toBe(true);
+
+    const db = await openDB();
+    expect(await readRecord(db, 'projects', latest.id)).toEqual({ ...latest, snapshot });
+    expect(await readRecord(db, 'projectSummaries', latest.id)).toMatchObject({
+      id: latest.id, name: latest.name, createdAt: latest.createdAt, updatedAt: latest.updatedAt,
+      episodeScript: latest.episodeScript, snapshot,
+    });
+    const summary = await readRecord(db, 'projectSummaries', latest.id);
+    expect(summary).not.toHaveProperty('nodes');
+    expect(summary).not.toHaveProperty('dramaAssets');
+  });
+
+  it('does not recreate a deleted project or its summary when a snapshot arrives', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const { openDB } = await import('../../src/services/indexedDb/schema');
+    await service.saveProjectToDb(RECOVERY_PROJECT);
+    await service.deleteProjectFromDb(RECOVERY_PROJECT.id);
+
+    await expect(service.updateProjectSnapshot(RECOVERY_PROJECT.id, 'data:image/webp;base64,LATE'))
+      .resolves.toBe(false);
+
+    const db = await openDB();
+    expect(await readRecord(db, 'projects', RECOVERY_PROJECT.id)).toBeUndefined();
+    expect(await readRecord(db, 'projectSummaries', RECOVERY_PROJECT.id)).toBeUndefined();
+  });
+
+  it('rejects and rolls back both stores when the summary write fails', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const { openDB } = await import('../../src/services/indexedDb/schema');
+    await service.saveProjectToDb(RECOVERY_PROJECT);
+    const db = await openDB();
+    const summaryBefore = await readRecord(db, 'projectSummaries', RECOVERY_PROJECT.id);
+    const objectStore = db.transaction('projectSummaries', 'readonly').objectStore('projectSummaries');
+    const prototype = Object.getPrototypeOf(objectStore) as IDBObjectStore;
+    const originalPut = prototype.put;
+    const failure = new DOMException('fixture quota exhausted', 'QuotaExceededError');
+    const put = vi.spyOn(prototype, 'put').mockImplementation(function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if (this.name === 'projectSummaries') throw failure;
+      return originalPut.call(this, value, key);
+    });
+    try {
+      await expect(service.updateProjectSnapshot(RECOVERY_PROJECT.id, 'data:image/webp;base64,LATE'))
+        .rejects.toBe(failure);
+    } finally {
+      put.mockRestore();
+    }
+
+    expect(await readRecord(db, 'projects', RECOVERY_PROJECT.id)).toEqual(RECOVERY_PROJECT);
+    expect(await readRecord(db, 'projectSummaries', RECOVERY_PROJECT.id)).toEqual(summaryBefore);
+  });
+
+  it('rejects oversized and non-image snapshot values before opening the database', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const { PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH } = await import('../../src/services/projectSnapshotValidation');
+    const open = vi.spyOn(indexedDB, 'open');
+    for (const snapshot of ['https://example.com/snapshot.webp', 'data:text/plain;base64,AAAA',
+      `data:image/webp;base64,${'A'.repeat(PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH)}`]) {
+      await expect(service.updateProjectSnapshot(RECOVERY_PROJECT.id, snapshot)).rejects.toThrow('参数无效');
+    }
+    expect(open).not.toHaveBeenCalled();
+  });
+});
+
 describe('indexedDbService schema', () => {
   it('全局角色排序持久化只改顺序，旧编辑保存不会覆盖新顺序', async () => {
     const service = await import('../../src/services/indexedDbService');

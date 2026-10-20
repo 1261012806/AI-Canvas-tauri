@@ -28,6 +28,7 @@ const snapshotMocks = vi.hoisted(() => ({
 const metadataMocks = vi.hoisted(() => ({
   getLastActiveProjectId: vi.fn(async () => null as string | null),
   setLastActiveProjectId: vi.fn(async () => undefined),
+  updateProjectSnapshot: vi.fn(async (_id: string, _snapshot: string) => true),
 }));
 
 vi.mock('../../src/services/fileService', () => ({
@@ -78,6 +79,7 @@ beforeEach(() => {
   metadataMocks.getLastActiveProjectId.mockReset();
   metadataMocks.getLastActiveProjectId.mockResolvedValue(null);
   metadataMocks.setLastActiveProjectId.mockClear();
+  metadataMocks.updateProjectSnapshot.mockClear();
 });
 
 function stubInitializationActions() {
@@ -403,14 +405,9 @@ describe('project switching', () => {
         snapshot: 'data:image/webp;base64,PROJECT_THREE',
       }),
     ]));
-    expect(fileMocks.saveProject).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'project-2',
-      snapshot: 'data:image/webp;base64,PROJECT_TWO',
-    }));
-    expect(fileMocks.saveProject).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'project-3',
-      snapshot: 'data:image/webp;base64,PROJECT_THREE',
-    }));
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('project-2', 'data:image/webp;base64,PROJECT_TWO');
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('project-3', 'data:image/webp;base64,PROJECT_THREE');
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(2);
   });
 
   it('serializes project settings behind an in-flight save and preserves project data', async () => {
@@ -493,16 +490,14 @@ describe('project switching', () => {
     expect(useAppStore.getState().projects.find((item) => item.id === 'project-2')?.snapshot).toBeUndefined();
 
     resolveSnapshot?.('data:image/webp;base64,COMPLEX_PROJECT');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(useAppStore.getState().projects.find((item) => item.id === 'project-2')?.snapshot)
       .toBe('data:image/webp;base64,COMPLEX_PROJECT');
-    expect(fileMocks.saveProject).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'project-2',
-      snapshot: 'data:image/webp;base64,COMPLEX_PROJECT',
-    }));
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith(
+      'project-2', 'data:image/webp;base64,COMPLEX_PROJECT',
+    );
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(1);
   });
 
   it('does not switch when the target project is unknown', async () => {
@@ -1031,6 +1026,146 @@ describe('returning to the startup page', () => {
       activeNodeId: 'text', projectLibraryOpen: true,
     });
   }
+
+  it('returns after saving even when thumbnail encoding remains pending', async () => {
+    openProject();
+    let finishSnapshot!: (snapshot: string) => void;
+    snapshotMocks.captureCurrentCanvasSnapshot.mockReturnValue(new Promise((resolve) => { finishSnapshot = resolve; }));
+    const nodes = useAppStore.getState().nodes;
+    const edges = useAppStore.getState().edges;
+
+    expect(await useAppStore.getState().returnToStartPage()).toBe(true);
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledWith('logo-project', { nodes, edges });
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
+
+    finishSnapshot('data:image/webp;base64,LATE_PREVIEW');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', 'data:image/webp;base64,LATE_PREVIEW');
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+
+  it('reuses an in-flight autosave for an unchanged canvas and shared series library', async () => {
+    openProject();
+    useAppStore.setState((state) => ({ projects: [
+      { id: 'series', name: 'Series', createdAt: 1, updatedAt: 1 },
+      { ...state.projects[0], parentId: 'series', episodeNo: 1 },
+    ] }));
+    const finishes: Array<() => void> = [];
+    fileMocks.saveProject.mockImplementation((record) => new Promise<string>((resolve) => {
+      finishes.push(() => resolve(record.id));
+    }));
+    const autosave = useAppStore.getState().saveCurrentProjectSilent();
+    const returning = useAppStore.getState().returnToStartPage();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(2);
+    expect(fileMocks.saveProject.mock.calls.map(([record]) => record.id)).toEqual(['logo-project', 'series']);
+    finishes.forEach((finish) => finish());
+
+    expect(await autosave).toBe('logo-project');
+    expect(await returning).toBe(true);
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues a changed canvas behind its older autosave instead of coalescing it', async () => {
+    openProject();
+    const finishes: Array<() => void> = [];
+    fileMocks.saveProject.mockImplementation((record) => new Promise<string>((resolve) => {
+      finishes.push(() => resolve(record.id));
+    }));
+    const autosave = useAppStore.getState().saveCurrentProjectSilent();
+    useAppStore.getState().updateNodeDataTransient('text', { label: '新的内容' });
+    const returning = useAppStore.getState().returnToStartPage();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
+    finishes[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(2);
+    expect(fileMocks.saveProject).toHaveBeenLastCalledWith(expect.objectContaining({
+      nodes: [expect.objectContaining({ data: expect.objectContaining({ label: '新的内容' }) })],
+    }));
+    finishes[1]();
+
+    await autosave;
+    expect(await returning).toBe(true);
+  });
+
+  it('drops an older thumbnail that completes after a newer capture and project departure', async () => {
+    openProject();
+    let finishOld!: (snapshot: string) => void;
+    let finishNew!: (snapshot: string) => void;
+    snapshotMocks.captureCurrentCanvasSnapshot
+      .mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }));
+    const older = useAppStore.getState().captureCurrentProjectSnapshot({ allowProjectChange: true, persistSnapshot: true });
+    useAppStore.getState().updateNodeDataTransient('text', { label: '新的内容' });
+    const newer = useAppStore.getState().captureCurrentProjectSnapshot({ allowProjectChange: true, persistSnapshot: true });
+    useAppStore.setState({ currentProjectId: null, nodes: [], edges: [] });
+
+    finishNew('data:image/webp;base64,NEW');
+    await newer;
+    finishOld('data:image/webp;base64,OLD');
+    expect(await older).toBeUndefined();
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledOnce();
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', 'data:image/webp;base64,NEW');
+    expect(useAppStore.getState().projects[0]?.snapshot).toBe('data:image/webp;base64,NEW');
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it('does not restore an old thumbnail after the canvas was cleared', async () => {
+    openProject();
+    let finishOld!: (snapshot: string) => void;
+    snapshotMocks.captureCurrentCanvasSnapshot.mockReturnValue(new Promise((resolve) => { finishOld = resolve; }));
+    const older = useAppStore.getState().captureCurrentProjectSnapshot({ allowProjectChange: true, persistSnapshot: true });
+    useAppStore.setState({ nodes: [] });
+    await useAppStore.getState().captureCurrentProjectSnapshot();
+    useAppStore.setState({ currentProjectId: null });
+
+    finishOld('data:image/webp;base64,OLD');
+    expect(await older).toBeUndefined();
+    expect(metadataMocks.updateProjectSnapshot).not.toHaveBeenCalled();
+    expect(useAppStore.getState().projects[0]?.snapshot).toBeUndefined();
+  });
+
+  it('persists a late thumbnail after queued newer canvas content', async () => {
+    openProject();
+    const finishes: Array<() => void> = [];
+    fileMocks.saveProject.mockImplementation((record) => new Promise<string>((resolve) => {
+      finishes.push(() => resolve(record.id));
+    }));
+    const firstSave = useAppStore.getState().saveCurrentProjectSilent();
+    snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue('data:image/webp;base64,PREVIEW');
+    const capturing = useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true });
+    await vi.advanceTimersByTimeAsync(0);
+    useAppStore.getState().updateNodeDataTransient('text', { label: '后续编辑' });
+    const newerSave = useAppStore.getState().saveCurrentProjectSilent();
+    finishes[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fileMocks.saveProject).toHaveBeenCalledTimes(2);
+    expect(metadataMocks.updateProjectSnapshot).not.toHaveBeenCalled();
+    finishes[1]();
+
+    await Promise.all([firstSave, newerSave, capturing]);
+    expect(fileMocks.saveProject).toHaveBeenLastCalledWith(expect.objectContaining({
+      nodes: [expect.objectContaining({ data: expect.objectContaining({ label: '后续编辑' }) })],
+    }));
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('does not wait forever for a suspended animation frame before returning', async () => {
+    openProject();
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    try {
+      const returning = useAppStore.getState().returnToStartPage();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await returning).toBe(true);
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
   it('waits for saving before leaving the canvas and keeps the project available to reopen', async () => {
     openProject();

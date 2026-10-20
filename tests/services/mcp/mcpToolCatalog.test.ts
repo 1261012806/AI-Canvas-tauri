@@ -50,7 +50,9 @@ describe('MCP tool catalog', () => {
       expect(descriptor.description).toContain('dramaAssetId');
       expect(descriptor.description).toContain('sourceId（提供内容）→ targetId（消费内容）');
       expect(descriptor.description).toContain('sourceHandle=right、targetHandle=left');
-      expect(descriptor.description).toContain('水平间距至少 80');
+      expect(descriptor.description).toContain('默认紧凑排布');
+      expect(descriptor.description).toContain('水平间距通常为 48–64');
+      expect(descriptor.description).toContain('常规新建省略 x/y');
       expect(descriptor.description).toContain('分镜表 → 导演台');
       expect(descriptor.description).toContain('不要重复连接');
       expect(descriptor.description).toContain('canvas_query(detail=true)');

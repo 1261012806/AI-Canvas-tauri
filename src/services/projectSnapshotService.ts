@@ -1,11 +1,16 @@
 /**
- * 将当前画布转换为受尺寸和体积约束的项目缩略图，必要时借助 Worker 合成媒体占位。
+ * 将轻量画布几何与有界媒体位图交给 Worker，生成受尺寸和体积约束的项目缩略图。
  */
-import { toCanvas } from 'html-to-image';
+import { getCanvasViewportController } from './canvasViewportService';
+import {
+  createProjectSnapshotGeometry,
+  type ProjectSnapshotGeometryInput,
+  type ProjectSnapshotViewport,
+} from './projectSnapshotGeometry';
+import { isProjectSnapshotDataUrl } from './projectSnapshotValidation';
+export { isProjectSnapshotDataUrl, PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH } from './projectSnapshotValidation';
 import type {
-  ProjectSnapshotEdge,
   ProjectSnapshotMedia,
-  ProjectSnapshotNode,
   ProjectSnapshotRect,
   ProjectSnapshotWorkerRequest,
   ProjectSnapshotWorkerResponse,
@@ -18,9 +23,9 @@ const SNAPSHOT_TIMEOUT_MS = 8_000;
 const SNAPSHOT_MEDIA_TIMEOUT_MS = 800;
 const SNAPSHOT_MEDIA_BUDGET_MS = 1_800;
 const SNAPSHOT_MEDIA_CONCURRENCY = 2;
+const SNAPSHOT_MEDIA_MAX_CANDIDATES = 24;
+const SNAPSHOT_MEDIA_MAX_COUNT = 12;
 const SNAPSHOT_MEDIA_MAX_EDGE = Math.max(SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT);
-export const PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH = 350_000;
-const TRANSPARENT_IMAGE_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const EXCLUDED_CLASS_NAMES = new Set([
   'react-flow__controls',
@@ -35,11 +40,14 @@ const EXCLUDED_CLASS_NAMES = new Set([
   'canvas-note-point-handles',
 ]);
 
-// html-to-image 会直接读取这些元素的当前帧；本地媒体或跨域内容可能污染 Canvas，
-// 导致整个项目快照失败。保留节点外壳，只跳过不稳定的媒体表面。
+// 保留旧过滤辅助函数的兼容语义；实际截图仅使用几何与有界媒体，不克隆 DOM。
 const EXCLUDED_TAG_NAMES = new Set(['CANVAS', 'IFRAME', 'VIDEO']);
 
-const activeCaptures = new Map<string, Promise<string | null>>();
+const activeCaptures = new Map<string, {
+  geometry: ProjectSnapshotGeometryInput;
+  viewportKey: string;
+  promise: Promise<string | null>;
+}>();
 const pendingWorkerCaptures = new Map<number, {
   resolve: (response: ProjectSnapshotWorkerResponse & { ok: true }) => void;
   reject: (error: Error) => void;
@@ -54,12 +62,6 @@ export function shouldIncludeProjectSnapshotNode(node: HTMLElement): boolean {
     if (node.classList?.contains(className)) return false;
   }
   return true;
-}
-
-export function isProjectSnapshotDataUrl(value: unknown): value is string {
-  return typeof value === 'string'
-    && value.startsWith('data:image/')
-    && value.length <= PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH;
 }
 
 export function encodeProjectSnapshot(
@@ -93,22 +95,6 @@ export function toProjectSnapshotRect(
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('capture timeout')), timeoutMs);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
 function getSnapshotWorker(): Worker {
   if (snapshotWorker) return snapshotWorker;
   const worker = new Worker(new URL('./projectSnapshotWorker.ts', import.meta.url), { type: 'module' });
@@ -136,7 +122,13 @@ function getSnapshotWorker(): Worker {
 function renderSnapshotInWorker(
   request: Omit<ProjectSnapshotWorkerRequest, 'id'>,
 ): Promise<ProjectSnapshotWorkerResponse & { ok: true }> {
-  const worker = getSnapshotWorker();
+  let worker: Worker;
+  try {
+    worker = getSnapshotWorker();
+  } catch (error) {
+    for (const media of request.media) media.bitmap.close();
+    return Promise.reject(error);
+  }
   const id = nextWorkerCaptureId++;
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -163,44 +155,6 @@ function arrayBufferToDataUrl(buffer: ArrayBuffer, mimeType: string): string {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   }
   return `data:${mimeType};base64,${window.btoa(binary)}`;
-}
-
-function collectSnapshotNodes(canvasRoot: HTMLElement, rootRect: DOMRect): ProjectSnapshotNode[] {
-  return Array.from(canvasRoot.querySelectorAll<HTMLElement>('.react-flow__node')).flatMap((node) => {
-    const rect = toProjectSnapshotRect(node.getBoundingClientRect(), rootRect);
-    if (!rect) return [];
-    const labelElement = node.querySelector<HTMLElement>('.node-label-text');
-    const labelRoot = node.querySelector<HTMLElement>('.node-label');
-    const noteRoot = node.querySelector<HTMLElement>('[data-note-kind]');
-    const noteText = noteRoot?.querySelector<HTMLElement>('.canvas-note-text');
-    return [{
-      ...rect,
-      kind: noteRoot ? 'note' : labelRoot?.dataset.labelKind ?? 'default',
-      label: (noteText ?? labelElement)?.textContent?.trim().slice(0, 48) ?? '',
-      noteKind: noteRoot?.dataset.noteKind,
-    }];
-  });
-}
-
-function collectSnapshotEdges(canvasRoot: HTMLElement, rootRect: DOMRect): ProjectSnapshotEdge[] {
-  return Array.from(canvasRoot.querySelectorAll<SVGPathElement>('.react-flow__edge-path')).flatMap((path) => {
-    try {
-      const length = path.getTotalLength();
-      const matrix = path.getScreenCTM();
-      if (!matrix || length < 1) return [];
-      const sampleCount = Math.min(32, Math.max(2, Math.ceil(length / 80)));
-      const points = Array.from({ length: sampleCount + 1 }, (_, index) => {
-        const point = path.getPointAtLength((length * index) / sampleCount);
-        return {
-          x: (point.x * matrix.a) + (point.y * matrix.c) + matrix.e - rootRect.left,
-          y: (point.x * matrix.b) + (point.y * matrix.d) + matrix.f - rootRect.top,
-        };
-      });
-      return [{ points }];
-    } catch {
-      return [];
-    }
-  });
 }
 
 function getMediaFit(element: Element): ProjectSnapshotMedia['fit'] {
@@ -275,15 +229,19 @@ function prepareSnapshotMedia(
   canvasRoot: HTMLElement,
   rootRect: DOMRect,
 ): PreparedSnapshotMedia[] {
-  const elements = Array.from(canvasRoot.querySelectorAll<HTMLImageElement | HTMLVideoElement | HTMLCanvasElement>(
+  const elements = canvasRoot.querySelectorAll<HTMLImageElement | HTMLVideoElement | HTMLCanvasElement>(
     '.react-flow__node img, .react-flow__node video, .react-flow__node canvas',
-  ));
-  return elements.flatMap((element) => {
+  );
+  const prepared: PreparedSnapshotMedia[] = [];
+  for (let index = 0; index < Math.min(elements.length, SNAPSHOT_MEDIA_MAX_CANDIDATES); index += 1) {
+    if (prepared.length >= SNAPSHOT_MEDIA_MAX_COUNT) break;
+    const element = elements[index];
     const rect = toProjectSnapshotRect(element.getBoundingClientRect(), rootRect);
     const sourceSize = getMediaSourceSize(element);
-    if (!rect || !sourceSize) return [];
-    return [{ ...rect, ...sourceSize, element, fit: getMediaFit(element) }];
-  });
+    if (!rect || !sourceSize) continue;
+    prepared.push({ ...rect, ...sourceSize, element, fit: getMediaFit(element) });
+  }
+  return prepared;
 }
 
 function captureSnapshotMediaBitmap(
@@ -379,18 +337,18 @@ async function createSnapshotMediaBitmaps(
 
 function supportsWorkerSnapshot(): boolean {
   return typeof Worker !== 'undefined'
-    && typeof OffscreenCanvas !== 'undefined'
-    && typeof createImageBitmap === 'function';
+    && typeof OffscreenCanvas !== 'undefined';
 }
 
 async function captureVisibleCanvasInWorker(
   canvasRoot: HTMLElement,
   rootRect: DOMRect,
   backgroundColor: string,
+  input: ProjectSnapshotGeometryInput,
+  viewport: ProjectSnapshotViewport,
 ): Promise<string | null> {
-  const nodes = collectSnapshotNodes(canvasRoot, rootRect);
-  const edges = collectSnapshotEdges(canvasRoot, rootRect);
-  const preparedMedia = prepareSnapshotMedia(canvasRoot, rootRect);
+  const geometry = createProjectSnapshotGeometry(input);
+  const preparedMedia = typeof createImageBitmap === 'function' ? prepareSnapshotMedia(canvasRoot, rootRect) : [];
   const scaleX = SNAPSHOT_WIDTH / rootRect.width;
   const scaleY = SNAPSHOT_HEIGHT / rootRect.height;
   // Start bitmap extraction before project switching can unmount the old canvas.
@@ -401,69 +359,70 @@ async function captureVisibleCanvasInWorker(
     sourceWidth: rootRect.width,
     sourceHeight: rootRect.height,
     backgroundColor,
-    nodes,
-    edges,
+    geometry,
+    viewport,
     media,
   });
   const snapshot = arrayBufferToDataUrl(response.buffer, response.mimeType);
   return isProjectSnapshotDataUrl(snapshot) ? snapshot : null;
 }
 
-async function captureVisibleCanvasFallback(
-  canvasRoot: HTMLElement,
-  rootRect: DOMRect,
-  backgroundColor: string,
-): Promise<string | null> {
-  const canvas = await withTimeout(toCanvas(canvasRoot, {
-    width: Math.round(rootRect.width),
-    height: Math.round(rootRect.height),
-    canvasWidth: SNAPSHOT_WIDTH,
-    canvasHeight: SNAPSHOT_HEIGHT,
-    backgroundColor,
-    cacheBust: false,
-    filter: shouldIncludeProjectSnapshotNode,
-    imagePlaceholder: TRANSPARENT_IMAGE_PLACEHOLDER,
-    pixelRatio: 1,
-    skipFonts: true,
-  }), SNAPSHOT_TIMEOUT_MS);
-  return encodeProjectSnapshot(canvas);
+interface CanvasCaptureContext {
+  canvasRoot: HTMLElement;
+  rect: DOMRect;
+  viewport: ProjectSnapshotViewport;
 }
 
-async function captureVisibleCanvas(): Promise<string | null> {
-  if (typeof document === 'undefined') return null;
+function readCanvasCaptureContext(): CanvasCaptureContext | null {
+  if (typeof document === 'undefined' || !supportsWorkerSnapshot()) return null;
   const canvasRoot = document.querySelector<HTMLElement>('.react-flow');
   if (!canvasRoot) return null;
 
   const rect = canvasRoot.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return null;
+  const currentViewport = getCanvasViewportController()?.getSnapshot();
+  if (!currentViewport || ![currentViewport.x, currentViewport.y, currentViewport.zoom].every(Number.isFinite)
+    || currentViewport.zoom <= 0) return null;
+  const viewport = { x: currentViewport.x, y: currentViewport.y, zoom: currentViewport.zoom };
+  return { canvasRoot, rect, viewport };
+}
 
+async function captureVisibleCanvas(input: ProjectSnapshotGeometryInput, context: CanvasCaptureContext): Promise<string | null> {
+  const { canvasRoot, rect, viewport } = context;
   const rootStyles = getComputedStyle(document.documentElement);
   const backgroundColor = rootStyles.getPropertyValue('--theme-bg').trim()
     || getComputedStyle(canvasRoot).backgroundColor;
 
-  if (supportsWorkerSnapshot()) {
-    try {
-      return await captureVisibleCanvasInWorker(canvasRoot, rect, backgroundColor);
-    } catch (error) {
-      console.warn('[项目快照] Worker 捕获失败，使用兼容模式:', error);
-    }
-  }
-  return captureVisibleCanvasFallback(canvasRoot, rect, backgroundColor);
+  return captureVisibleCanvasInWorker(canvasRoot, rect, backgroundColor, input, viewport);
 }
 
 /** 捕获当前可见 React Flow 画布；同一项目的并发调用复用同一次编码。 */
-export function captureCurrentCanvasSnapshot(captureKey = 'current-canvas'): Promise<string | null> {
+export function captureCurrentCanvasSnapshot(
+  captureKey = 'current-canvas',
+  geometry?: ProjectSnapshotGeometryInput,
+): Promise<string | null> {
+  // Missing geometry keeps the previous thumbnail; never clone the live DOM on return.
+  if (!geometry) return Promise.resolve(null);
+  let context: CanvasCaptureContext | null;
+  try {
+    context = readCanvasCaptureContext();
+  } catch {
+    return Promise.resolve(null);
+  }
+  if (!context) return Promise.resolve(null);
+  const viewportKey = `${context.viewport.x},${context.viewport.y},${context.viewport.zoom},${context.rect.width},${context.rect.height}`;
   const activeCapture = activeCaptures.get(captureKey);
-  if (activeCapture) return activeCapture;
+  if (activeCapture?.geometry.nodes === geometry.nodes && activeCapture.geometry.edges === geometry.edges
+    && activeCapture.viewportKey === viewportKey) return activeCapture.promise;
 
-  const capture = captureVisibleCanvas()
+  const capture = captureVisibleCanvas(geometry, context)
     .catch((error) => {
       console.warn('[项目快照] 捕获失败:', error instanceof Error ? error.message : error);
       return null;
     })
     .finally(() => {
-      activeCaptures.delete(captureKey);
+      if (activeCaptures.get(captureKey)?.promise === capture) activeCaptures.delete(captureKey);
     });
-  activeCaptures.set(captureKey, capture);
+  activeCaptures.set(captureKey, { geometry, viewportKey, promise: capture });
   return capture;
 }

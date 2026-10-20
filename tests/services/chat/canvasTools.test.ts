@@ -195,6 +195,102 @@ describe('canvas agent tools', () => {
     expect(executeGeneration).not.toHaveBeenCalled();
   });
 
+  it('keeps mixed batches compact without letting a large node enlarge every column and row', async () => {
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-text', label: '说明一' },
+      { type: 'ai-image', label: '方图', aspectRatio: '1:1' },
+      { type: 'ai-text', label: '说明二' },
+      { type: 'ai-shotlist', label: '大分镜表' },
+      { type: 'ai-text', label: '说明三' },
+      { type: 'ai-text', label: '说明四' },
+      { type: 'ai-text', label: '说明五' },
+      { type: 'ai-text', label: '说明六' },
+      { type: 'ai-text', label: '说明七' },
+    ] });
+    expect(result.status).toBe('success');
+    const created = useAppStore.getState().nodes.slice(2);
+    // 大表位于第一列、第二行，不能影响第二列的宽度与第一行的高度。
+    expect(created[2].position.x - (created[1].position.x + created[1].data.nodeWidth!)).toBe(48);
+    expect(created[3].position.y - (created[1].position.y + created[1].data.nodeHeight!)).toBe(40);
+    expect(created[6].position.y - (created[3].position.y + created[3].data.nodeHeight!)).toBe(40);
+    const right = Math.max(...created.map((item) => item.position.x + item.data.nodeWidth!));
+    const left = Math.min(...created.map((item) => item.position.x));
+    expect(right - left).toBeLessThan(1500);
+    expect(created[3].data).toMatchObject({ nodeWidth: 800, nodeHeight: 400 });
+  });
+
+  it.each(['assistant', 'mcp'] as const)('anchors %s creation beside actual prompt dependencies instead of distant unrelated nodes', async (channel) => {
+    const existing = [
+      node('source', { type: 'source-image', nodeWidth: 280, nodeHeight: 160 }),
+      node('far', {}, { x: 30_000, y: 10_000 }),
+    ];
+    useAppStore.setState({ nodes: existing, edges: [] });
+    const ctx = { ...context(), ...(channel === 'mcp' ? { conversationId: 'mcp-control-p1' } : {}) };
+    const result = await getAgentTool('canvas_create_nodes')!.execute(ctx, { nodes: [
+      { type: 'ai-image', label: '参考图变体', prompt: '依据 @{source:参考图} 调整构图' },
+    ] });
+    expect(result.status).toBe('success');
+    const state = useAppStore.getState();
+    const created = state.nodes.at(-1)!;
+    expect(created.position.x - (existing[0].position.x + existing[0].data.nodeWidth!)).toBe(48);
+    expect(created.position.y).toBe(100);
+    expect(state.nodes.slice(0, 2).map((item) => item.position)).toEqual(existing.map((item) => item.position));
+    expect(state.edges).toContainEqual(expect.objectContaining({ source: 'source', target: created.id }));
+    expect(state.history).toHaveLength(1);
+  });
+
+  it('uses nearby vertical space when the dependency column is occupied', async () => {
+    useAppStore.setState({ nodes: [
+      node('source', { type: 'source-image', nodeWidth: 280, nodeHeight: 160 }),
+      node('occupied', { nodeWidth: 280, nodeHeight: 160 }, { x: 428, y: 100 }),
+      node('far', {}, { x: 30_000, y: 10_000 }),
+    ], edges: [] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '相邻变体', prompt: '@{source:参考图}' },
+    ] });
+    expect(result.status).toBe('success');
+    const created = useAppStore.getState().nodes.at(-1)!;
+    expect(created.position.x).toBe(428);
+    expect(Math.abs(created.position.y - 100)).toBe(200);
+    const below = created.position.y >= 100 + 160 + 40;
+    const above = created.position.y + created.data.nodeHeight! <= 100 - 40;
+    expect(below || above).toBe(true);
+  });
+
+  it('preserves explicit positions and avoids them while placing automatic nodes in the same batch', async () => {
+    useAppStore.setState({ nodes: [node('source', { type: 'source-image', nodeWidth: 280, nodeHeight: 160 })], edges: [] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '指定坐标', x: 428, y: 100 },
+      { type: 'ai-image', label: '自动坐标', prompt: '@{source:参考图}' },
+    ] });
+    expect(result.status).toBe('success');
+    const [fixed, automatic] = useAppStore.getState().nodes.slice(1);
+    expect(fixed.position).toEqual({ x: 428, y: 100 });
+    expect(automatic.position.x).toBe(fixed.position.x);
+    expect(Math.abs(automatic.position.y - fixed.position.y)).toBe(200);
+  });
+
+  it('preserves a single explicit axis while avoiding obstacles on that actual axis', async () => {
+    useAppStore.setState({ nodes: [node('source', { nodeWidth: 280, nodeHeight: 160 })], edges: [] });
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '固定横坐标', x: 100 },
+    ] });
+    expect(result.status).toBe('success');
+    const created = useAppStore.getState().nodes.at(-1)!;
+    expect(created.position.x).toBe(100);
+    expect(Math.abs(created.position.y - 100)).toBe(200);
+  });
+
+  it('rejects conflicting partial coordinates before creating overlapping nodes', async () => {
+    const before = useAppStore.getState().nodes;
+    await expect(getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-image', label: '同列一', x: 100 },
+      { type: 'ai-image', label: '同列二', x: 100 },
+    ] })).rejects.toThrow('无法在保留指定坐标的同时避免节点重叠');
+    expect(useAppStore.getState().nodes).toEqual(before);
+    expect(useAppStore.getState().history).toEqual([]);
+  });
+
   it('creates image, video and audio nodes with explicit generation settings and reads them back', async () => {
     const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
       { type: 'ai-image', label: '竖屏分镜', prompt: '小满在酒馆门口', aspectRatio: '9:16', imageSize: '2K', batchCount: 2 },
@@ -701,7 +797,7 @@ describe('canvas agent tools', () => {
     expect(payload.nodes[1].outputText).toEqual({ text: '剧本正文', truncated: false });
     expect(payload.edges).toEqual([{
       id: 'e1', source: 'n1', target: 'n2', sourceHandle: null, targetHandle: null,
-      layout: { sourceRightX: 380, targetLeftX: 500, horizontalGap: 120, recommendedMinGap: 80, warning: null },
+      layout: { sourceRightX: 380, targetLeftX: 500, horizontalGap: 120, recommendedMinGap: 48, warning: null },
     }]);
   });
 
@@ -1007,17 +1103,17 @@ describe('canvas agent tools', () => {
   it('checks absolute grouped positions and returns actual ports in canvas detail', async () => {
     const parent = node('group', {}, { x: 1000, y: 0 });
     const source = { ...node('src', { type: 'source-image', nodeWidth: 400 }, { x: 100, y: 0 }), parentId: 'group' };
-    const target = node('dst', {}, { x: 1580, y: 200 });
+    const target = node('dst', {}, { x: 1548, y: 200 });
     useAppStore.setState({ nodes: [parent, source, target], edges: [] });
     const result = await getAgentTool('canvas_connect_nodes')!.execute(context(), { sourceId: 'src', targetId: 'dst' });
     const payload = JSON.parse(result.modelContent);
-    expect(payload.layout).toEqual({ sourceRightX: 1500, targetLeftX: 1580, horizontalGap: 80, recommendedMinGap: 80, warning: null });
+    expect(payload.layout).toEqual({ sourceRightX: 1500, targetLeftX: 1548, horizontalGap: 48, recommendedMinGap: 48, warning: null });
     const query = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: ['src'], detail: true });
     expect(JSON.parse(query.modelContent).edges[0]).toMatchObject({ sourceHandle: 'right', targetHandle: 'left', layout: payload.layout });
     useAppStore.setState({ nodes: useAppStore.getState().nodes.map((item) => item.id === 'dst'
-      ? { ...item, position: { ...item.position, x: 1579 } } : item) });
+      ? { ...item, position: { ...item.position, x: 1547 } } : item) });
     const crowded = await getAgentTool('canvas_connect_nodes')!.execute(context(), { sourceId: 'src', targetId: 'dst' });
-    expect(JSON.parse(crowded.modelContent).layout.warning).toContain('80');
+    expect(JSON.parse(crowded.modelContent).layout.warning).toContain('48');
   });
 
   it('runs matched nodes serially and skips ones already generating', async () => {
