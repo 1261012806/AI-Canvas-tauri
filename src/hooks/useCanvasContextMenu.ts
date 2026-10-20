@@ -13,6 +13,7 @@ import { cancelNodePolling } from '../services/pollManager';
 import { playNodeExit } from '../utils/nodeAnimations';
 import { createPluginNode, getAvailablePluginNodes } from '../services/plugins/pluginRuntime';
 import type { AvailablePluginNode } from '../types/plugin';
+import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
 
 // ── Model preference helper ──
 const MODEL_PREF_KEY = 'canvas-model-prefs';
@@ -224,15 +225,7 @@ export function useCanvasContextMenu() {
     useAppStore.setState({ selectedNodeIds: [] });
 
     // Expand to include descendants of any selected group nodes
-    const expandedIds = new Set(nodeIds);
-    const q = [...nodeIds];
-    while (q.length > 0) {
-      const pid = q.shift()!;
-      state.nodes.filter((n) => n.parentId === pid).forEach((c) => {
-        expandedIds.add(c.id);
-        q.push(c.id);
-      });
-    }
+    const expandedIds = collectCanvasDescendantIds(state.nodes, nodeIds);
     const allIds = Array.from(expandedIds);
 
     // Cancel any active polling for all deleted nodes
@@ -242,11 +235,11 @@ export function useCanvasContextMenu() {
 
     // Delete associated local files
     const keepPaths = new Set(
-      state.nodes.filter((n) => !allIds.includes(n.id))
+      state.nodes.filter((n) => !expandedIds.has(n.id))
         .map((n) => (n.data as BaseNodeData).filePath)
         .filter((p): p is string => !!p),
     );
-    for (const node of state.nodes.filter((n) => allIds.includes(n.id))) {
+    for (const node of state.nodes.filter((n) => expandedIds.has(n.id))) {
       fileService.deleteNodeFile(node.data as BaseNodeData, keepPaths, state.currentProjectId).catch(() => {});
     }
 

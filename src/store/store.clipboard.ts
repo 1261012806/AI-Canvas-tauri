@@ -11,6 +11,7 @@ import * as fileService from '../services/fileService';
 import { copyNodeMedia, needsNodeMediaCopy, discardCopiedNodeMedia } from '../services/nodeMediaCopy';
 import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
 import { AI_APP_COPY_MESSAGE, isAiAppNode } from '../services/aiApps/aiAppCreation';
+import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
 
 export interface ClipboardSlice {
   clipboard: {
@@ -70,18 +71,7 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
     if (selectedNodeIds.length === 0) return false;
 
     // Collect all node IDs to copy: selected + descendants of selected group nodes
-    const idsToCopy = new Set(selectedNodeIds);
-    const q = [...selectedNodeIds];
-    while (q.length > 0) {
-      const pid = q.shift()!;
-      const children = nodes.filter((n) => n.parentId === pid);
-      for (const c of children) {
-        if (!idsToCopy.has(c.id)) {
-          idsToCopy.add(c.id);
-          q.push(c.id); // handle nested groups
-        }
-      }
-    }
+    const idsToCopy = collectCanvasDescendantIds(nodes, selectedNodeIds);
 
     if (nodes.some((node) => idsToCopy.has(node.id) && isAiAppNode(node))) {
       set({ clipboard: { nodes: [], groups: [], projectId: null } });

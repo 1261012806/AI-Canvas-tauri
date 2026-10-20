@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../../src/types';
-import { episodeShotGroups, layoutEpisodeShots, shotVideoNodes } from '../../src/utils/episodeLayout';
+import { episodeShotGroups, episodeWorkbenchSummary, layoutEpisodeShots, shotVideoNodes } from '../../src/utils/episodeLayout';
 
 function shot(n: number): Node<BaseNodeData>[] {
   const group = `g${n}`;
@@ -56,5 +56,56 @@ describe('episode layout', () => {
     expect(shotVideoNodes(nodes, ['g2']).map((n) => n.id)).toEqual(['g2-1']);
     expect(shotVideoNodes(nodes, ['independent']).map((n) => n.id)).toEqual(['independent']);
     expect(shotVideoNodes(nodes, [])).toEqual([]);
+  });
+
+  it('keeps workbench counts stable through selection, geometry and unrelated output updates', () => {
+    const nodes = [...shot(1), ...shot(2)];
+    const summary = episodeWorkbenchSummary(nodes);
+    const changed = nodes.map((node) => ({
+      ...node, selected: true, position: { x: node.position.x + 120, y: node.position.y + 40 },
+      data: { ...node.data, output: '新的生成结果' },
+    }));
+    expect(episodeWorkbenchSummary(changed)).toBe(summary);
+    expect(summary).toEqual({ groupCount: 2, videoCount: 2, hasVideoNodes: true });
+    expect(shotVideoNodes(changed)[0]).toBe(changed.find((node) => node.id === 'g1-1'));
+    expect(episodeWorkbenchSummary(changed, ['g2-0']).videoCount).toBe(1);
+    expect(episodeWorkbenchSummary(changed, []).videoCount).toBe(0);
+  });
+
+  it('updates unnumbered production groups by current position while reusing count membership', () => {
+    const nodes = [...shot(1), ...shot(2)].map((node) => node.type === 'group'
+      ? { ...node, position: { x: node.id === 'g1' ? 0 : 500, y: 0 }, data: { ...node.data, label: '镜头组' } }
+      : node.data.type === 'ai-video' ? { ...node, data: { ...node.data,
+        shotlistProductionSource: { nodeId: 'table', rowId: node.id, kind: 'video' as const },
+      } } : node);
+    const summary = episodeWorkbenchSummary(nodes);
+    expect(episodeShotGroups(nodes).map((node) => node.id)).toEqual(['g1', 'g2']);
+    const moved = nodes.map((node) => node.id === 'g1' ? { ...node, position: { x: 1_000, y: 0 } } : node);
+    expect(episodeWorkbenchSummary(moved)).toBe(summary);
+    expect(episodeShotGroups(moved).map((node) => node.id)).toEqual(['g2', 'g1']);
+  });
+
+  it('invalidates counts on membership and production identity changes without using stale node data', () => {
+    const nodes = shot(1);
+    expect(episodeWorkbenchSummary(nodes).videoCount).toBe(1);
+    const movedOut = nodes.map((node) => node.id === 'g1-1' ? { ...node, parentId: undefined } : node);
+    expect(episodeWorkbenchSummary(movedOut).videoCount).toBe(0);
+    expect(episodeWorkbenchSummary(movedOut, ['g1-1']).videoCount).toBe(1);
+    const unnamed = movedOut.map((node) => node.id === 'g1' ? { ...node, data: { ...node.data, label: '普通分组' } } : node);
+    expect(episodeWorkbenchSummary(unnamed).groupCount).toBe(0);
+    const numbered = unnamed.map((node) => node.id === 'g1' ? { ...node, data: { ...node.data, label: 'SH10' } } : node);
+    expect(episodeWorkbenchSummary(numbered).groupCount).toBe(1);
+  });
+
+  it('recognizes and removes unnumbered shot groups when production provenance changes', () => {
+    const nodes = shot(1).map((node) => node.type === 'group'
+      ? { ...node, data: { ...node.data, label: '未编号组' } } : node);
+    expect(episodeWorkbenchSummary(nodes).groupCount).toBe(0);
+    const linked = nodes.map((node) => node.id === 'g1-1' ? { ...node, data: { ...node.data,
+      shotlistProductionSource: { nodeId: 'table', rowId: 'row', kind: 'video' as const },
+    } } : node);
+    expect(episodeWorkbenchSummary(linked)).toMatchObject({ groupCount: 1, videoCount: 1 });
+    const detached = linked.map((node) => node.id === 'g1-1' ? { ...node, data: { ...node.data, shotlistProductionSource: undefined } } : node);
+    expect(episodeWorkbenchSummary(detached)).toMatchObject({ groupCount: 0, videoCount: 0 });
   });
 });

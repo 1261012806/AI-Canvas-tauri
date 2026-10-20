@@ -1,5 +1,13 @@
 /** MCP 专用瞬时窗口和截图运行时；只操作 AI Canvas 自身固定窗口。 */
-import { toJpeg } from 'html-to-image';
+import { toCanvas } from 'html-to-image';
+import {
+  getMcpCaptureEncodingSteps,
+  MCP_CAPTURE_MAX_BYTES,
+  MCP_CAPTURE_MIME,
+  McpCaptureLimitError,
+  type McpCaptureWorkerRequest,
+  type McpCaptureWorkerResponse,
+} from './mcpCaptureEncoding';
 
 export const APP_WINDOW_LABELS = [
   'main', 'chat-assistant', 'asset-search', 'video-editor', 'director-desk', 'comfyui',
@@ -39,7 +47,26 @@ interface CaptureOptions {
 
 const CAPTURE_REQUEST_EVENT = 'mcp-ui-capture-request';
 const CAPTURE_RESPONSE_EVENT = 'mcp-ui-capture-response';
-const MAX_IMAGE_BASE64_CHARS = 2_600_000;
+const CAPTURE_TIMEOUT_MS = 12_000;
+const ENCODING_TIMEOUT_MS = 8_000;
+const MAX_PENDING_CAPTURES = 2;
+const MAX_REMOTE_CAPTURES = 4;
+const CAPTURABLE_LABELS = new Set<string>(['main', 'chat-assistant', 'asset-search', 'video-editor']);
+const documentCaptures = new Map<string, Promise<WindowCaptureResult>>();
+const remoteCaptures = new Map<string, Promise<WindowCaptureResult>>();
+const responderRequests = new Set<string>();
+let documentCaptureTail: Promise<void> = Promise.resolve();
+
+function captureKey(options: Omit<CaptureOptions, 'target'>): string {
+  return `${options.maxWidth}:${options.quality}:${options.redactSensitive}`;
+}
+
+function validateCaptureOptions(options: CaptureOptions): void {
+  if (!options || !CAPTURABLE_LABELS.has(options.target)) throw new Error('不支持截取该应用窗口');
+  if (!Number.isInteger(options.maxWidth) || options.maxWidth < 320 || options.maxWidth > 1920
+    || !Number.isFinite(options.quality) || options.quality < 0.4 || options.quality > 0.92
+    || typeof options.redactSensitive !== 'boolean') throw new Error('窗口截图参数无效');
+}
 
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -54,35 +81,110 @@ export function isSensitiveElement(node: Node): boolean {
   return node.type === 'password' || /(api.?key|token|secret|password|authorization)/.test(marker);
 }
 
-async function captureCurrentDocument(options: Omit<CaptureOptions, 'target'>): Promise<WindowCaptureResult> {
+function captureBufferResult(buffer: ArrayBuffer, width: number, height: number): WindowCaptureResult {
+  if (buffer.byteLength > MCP_CAPTURE_MAX_BYTES) throw new McpCaptureLimitError();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return { data: btoa(binary), mimeType: MCP_CAPTURE_MIME, width, height };
+}
+
+async function encodeInWorker(canvas: HTMLCanvasElement, quality: number): Promise<WindowCaptureResult> {
+  const bitmap = await createImageBitmap(canvas);
+  let worker: Worker | undefined;
+  let timer: number | undefined;
+  try {
+    worker = new Worker(new URL('./mcpCaptureWorker.ts', import.meta.url), { type: 'module' });
+    const currentWorker = worker;
+    const response = await new Promise<McpCaptureWorkerResponse & { ok: true }>((resolve, reject) => {
+      timer = window.setTimeout(() => reject(new Error('截图编码超时')), ENCODING_TIMEOUT_MS);
+      currentWorker.onmessage = (event: MessageEvent<McpCaptureWorkerResponse>) => {
+        if (event.data.ok) resolve(event.data);
+        else reject(event.data.oversized ? new McpCaptureLimitError() : new Error(event.data.error));
+      };
+      currentWorker.onerror = () => reject(new Error('截图编码 Worker 不可用'));
+      currentWorker.onmessageerror = () => reject(new Error('截图编码结果无效'));
+      const request: McpCaptureWorkerRequest = { bitmap, quality };
+      currentWorker.postMessage(request, [bitmap]);
+    });
+    return captureBufferResult(response.buffer, response.width, response.height);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+    worker?.terminate();
+    bitmap.close();
+  }
+}
+
+async function encodeOnMainThread(source: HTMLCanvasElement, quality: number): Promise<WindowCaptureResult> {
+  const canvas = document.createElement('canvas');
+  try {
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('截图画布不可用');
+    for (const step of getMcpCaptureEncodingSteps(source.width, source.height, quality)) {
+      canvas.width = step.width;
+      canvas.height = step.height;
+      context.drawImage(source, 0, 0, step.width, step.height);
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => result ? resolve(result) : reject(new Error('截图编码失败')), MCP_CAPTURE_MIME, step.quality);
+      });
+      if (blob.type !== MCP_CAPTURE_MIME) throw new Error('截图 JPEG 编码不可用');
+      if (blob.size <= MCP_CAPTURE_MAX_BYTES) {
+        return captureBufferResult(await blob.arrayBuffer(), step.width, step.height);
+      }
+    }
+    throw new McpCaptureLimitError();
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+async function renderCurrentDocument(options: Omit<CaptureOptions, 'target'>): Promise<WindowCaptureResult> {
   const root = document.getElementById('root') ?? document.body;
   const sourceWidth = Math.max(1, root.clientWidth || window.innerWidth);
   const sourceHeight = Math.max(1, root.clientHeight || window.innerHeight);
-  let width = Math.min(sourceWidth, options.maxWidth);
-  let height = Math.max(1, Math.round(sourceHeight * (width / sourceWidth)));
-  let quality = options.quality;
-  let dataUrl = '';
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    dataUrl = await toJpeg(root, {
-      backgroundColor: getComputedStyle(document.documentElement).backgroundColor || '#0a0a0f',
-      canvasWidth: width,
-      canvasHeight: height,
-      pixelRatio: 1,
-      quality,
-      cacheBust: false,
-      filter: options.redactSensitive ? (node) => !isSensitiveElement(node) : undefined,
-    });
-    if (dataUrl.length <= MAX_IMAGE_BASE64_CHARS) break;
-    width = Math.max(320, Math.round(width * 0.75));
-    height = Math.max(180, Math.round(height * 0.75));
-    quality = Math.max(0.4, quality - 0.12);
+  const width = Math.min(sourceWidth, options.maxWidth);
+  const height = Math.max(1, Math.round(sourceHeight * (width / sourceWidth)));
+  // DOM 只能在本窗口采集一次；压缩重试及兼容降级均复用这张已过滤画布。
+  const canvas = await toCanvas(root, {
+    backgroundColor: getComputedStyle(document.documentElement).backgroundColor || '#0a0a0f',
+    canvasWidth: width,
+    canvasHeight: height,
+    pixelRatio: 1,
+    cacheBust: false,
+    filter: options.redactSensitive ? (node) => !isSensitiveElement(node) : undefined,
+  });
+  try {
+    if (typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined'
+      && typeof createImageBitmap === 'function') {
+      try {
+        return await encodeInWorker(canvas, options.quality);
+      } catch (error) {
+        if (error instanceof McpCaptureLimitError) throw error;
+        // Worker 已终止后再降级；不重新克隆 DOM，也不改变本次脱敏选项。
+      }
+    }
+    return await encodeOnMainThread(canvas, options.quality);
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
   }
-  if (dataUrl.length > MAX_IMAGE_BASE64_CHARS) throw new Error('截图压缩后仍超过 MCP 图像上限');
-  const marker = 'base64,';
-  const markerIndex = dataUrl.indexOf(marker);
-  if (markerIndex < 0) throw new Error('截图编码格式无效');
-  return { data: dataUrl.slice(markerIndex + marker.length), mimeType: 'image/jpeg', width, height };
+}
+
+function captureCurrentDocument(options: Omit<CaptureOptions, 'target'>): Promise<WindowCaptureResult> {
+  const key = captureKey(options);
+  const existing = documentCaptures.get(key);
+  if (existing) return existing;
+  if (documentCaptures.size >= MAX_PENDING_CAPTURES) return Promise.reject(new Error('窗口截图繁忙，请稍后重试'));
+  // 客户端超时不代表 html-to-image 已取消；只在底层采集及编码真正结束时释放名额。
+  const capture = documentCaptureTail.then(() => renderCurrentDocument(options))
+    .finally(() => documentCaptures.delete(key));
+  documentCaptures.set(key, capture);
+  // 队尾只保留完成信号，不长期持有上一次截图的 Base64。
+  documentCaptureTail = capture.then(() => {}, () => {});
+  return capture;
 }
 
 async function readWindowState(handle: import('@tauri-apps/api/window').Window): Promise<AppWindowState> {
@@ -159,28 +261,47 @@ export async function setAppWindowBounds(
 }
 
 export async function captureAppWindow(options: CaptureOptions): Promise<WindowCaptureResult> {
+  validateCaptureOptions(options);
+  options = { ...options };
   if (!isTauriRuntime()) return captureCurrentDocument(options);
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
   if (getCurrentWindow().label === options.target) return captureCurrentDocument(options);
 
+  const key = `${options.target}:${captureKey(options)}`;
+  const existing = remoteCaptures.get(key);
+  if (existing) return existing;
+  if (remoteCaptures.size >= MAX_REMOTE_CAPTURES) throw new Error('窗口截图繁忙，请稍后重试');
+  const capture = requestWindowCapture(options).finally(() => remoteCaptures.delete(key));
+  remoteCaptures.set(key, capture);
+  return capture;
+}
+
+async function requestWindowCapture(options: CaptureOptions): Promise<WindowCaptureResult> {
   const { emitTo, listen } = await import('@tauri-apps/api/event');
   const requestId = `capture-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   return new Promise<WindowCaptureResult>((resolve, reject) => {
     let unlisten: (() => void) | undefined;
+    let settled = false;
     const timer = window.setTimeout(() => {
+      settled = true;
       unlisten?.();
       reject(new Error(`窗口截图响应超时: ${options.target}`));
-    }, 12_000);
+    }, CAPTURE_TIMEOUT_MS);
     void listen<{ requestId: string; result?: WindowCaptureResult; error?: string }>(CAPTURE_RESPONSE_EVENT, (event) => {
-      if (event.payload.requestId !== requestId) return;
+      if (settled || event.payload.requestId !== requestId) return;
+      settled = true;
       window.clearTimeout(timer);
       unlisten?.();
       if (event.payload.result) resolve(event.payload.result);
       else reject(new Error(event.payload.error || '窗口截图失败'));
     }).then((dispose) => {
+      // 监听安装可能比客户端期限更晚完成，不能漏清理或在超时后再启动采集。
+      if (settled) { dispose(); return; }
       unlisten = dispose;
       return emitTo(options.target, CAPTURE_REQUEST_EVENT, { requestId, options });
     }).catch((error) => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timer);
       unlisten?.();
       reject(error);
@@ -191,12 +312,29 @@ export async function captureAppWindow(options: CaptureOptions): Promise<WindowC
 export async function installMcpScreenshotResponder(): Promise<() => void> {
   if (!isTauriRuntime()) return () => {};
   const { emitTo, listen } = await import('@tauri-apps/api/event');
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  const currentLabel = getCurrentWindow().label;
+  if (!CAPTURABLE_LABELS.has(currentLabel)) return () => {};
   return listen<{ requestId: string; options: CaptureOptions }>(CAPTURE_REQUEST_EVENT, (event) => {
-    void captureCurrentDocument(event.payload.options)
-      .then((result) => emitTo('main', CAPTURE_RESPONSE_EVENT, { requestId: event.payload.requestId, result }))
+    const { requestId, options } = event.payload;
+    if (typeof requestId !== 'string' || requestId.length > 128 || responderRequests.has(requestId)) return;
+    if (options?.target !== currentLabel) return;
+    try {
+      validateCaptureOptions(options);
+      if (responderRequests.size >= MAX_REMOTE_CAPTURES) throw new Error('窗口截图繁忙，请稍后重试');
+    } catch (error) {
+      void emitTo('main', CAPTURE_RESPONSE_EVENT, { requestId, error: error instanceof Error ? error.message : '窗口截图参数无效' }).catch(() => {});
+      return;
+    }
+    // 客户端连续超时重试，也只保留有限个等待者，不为仍未结束的 DOM 采集增加监听链。
+    responderRequests.add(requestId);
+    void captureCurrentDocument(options)
+      .then((result) => emitTo('main', CAPTURE_RESPONSE_EVENT, { requestId, result }))
       .catch((error) => emitTo('main', CAPTURE_RESPONSE_EVENT, {
-        requestId: event.payload.requestId,
+        requestId,
         error: error instanceof Error ? error.message : '窗口截图失败',
-      }));
+      }))
+      .catch(() => {})
+      .finally(() => responderRequests.delete(requestId));
   });
 }

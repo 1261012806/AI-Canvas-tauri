@@ -97,11 +97,30 @@ interface MaterializedInlineMedia {
   assetUrl: string;
 }
 
-interface MediaSerializationContext {
+interface ProjectFileLookup {
+  existsByPath: Map<string, Promise<boolean>>;
+}
+
+interface MediaSerializationContext extends ProjectFileLookup {
   projectId: string;
   projectDir: string;
   cache: Map<string, Promise<MaterializedInlineMedia>>;
   directoryReady?: Promise<void>;
+}
+
+/** 只在当前项目的一次保存/加载内复用；不缓存授权，也不跨操作保留文件状态。 */
+function projectFileLookupKey(path: string): string {
+  const normalized = stripVerbatimPrefix(path).replace(/\\/g, '/').replace(/\/+$/, '');
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function projectFileExists(path: string, lookup: ProjectFileLookup): Promise<boolean> {
+  const key = projectFileLookupKey(path);
+  const existing = lookup.existsByPath.get(key);
+  if (existing) return existing;
+  const pending = exists(path);
+  lookup.existsByPath.set(key, pending);
+  return pending;
 }
 
 type InlineMediaKind = keyof typeof MEDIA_DATA_URL_BYTE_LIMITS;
@@ -182,8 +201,9 @@ async function persistTransientMedia(
     // 加载旧项目时的媒体迁移也经过这里，不能依赖 Store 后台创建目录。
     context.directoryReady ??= mkdir(context.projectDir, { recursive: true });
     await context.directoryReady;
-    if (!await exists(filePath)) {
+    if (!await projectFileExists(filePath, context)) {
       await writeFile(filePath, bytes);
+      context.existsByPath.set(projectFileLookupKey(filePath), Promise.resolve(true));
       notifyProjectDiskChanged();
     }
     return { filePath, assetUrl: await getAssetUrlFromPath(filePath) };
@@ -235,16 +255,16 @@ async function materializeAssetReference<T extends AssetReferenceLike>(
 
 async function serializeAssetReference<T extends AssetReferenceLike>(
   data: T,
-  projectId: string,
-  projectDir: string,
+  context: MediaSerializationContext,
 ): Promise<T> {
+  const { projectId, projectDir } = context;
   // 参考角色/参考帧的旧记录只有 URL；同样收敛为本地身份，避免目录变化后仍读取旧地址。
   const filePath = data.filePath ?? assetUrlToPath(data.imageUrl || data.videoUrl || data.audioUrl || data.url);
   if (!filePath) return data;
   const normalizedPath = filePath.replace(/\\/g, '/');
   const normalizedDir = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normalizedPath.toLowerCase().startsWith(`${normalizedDir.toLowerCase()}/`)) return data;
-  if (!await exists(normalizedPath).catch(() => false)) return data;
+  if (!await projectFileExists(normalizedPath, context).catch(() => false)) return data;
 
   // ponytail: 文件仍停在记录的相对路径上时直接沿用旧身份，省掉每次自动保存对每个节点的
   // stat + 索引读写；代价是索引里的 size/mtime 不会被保存刷新（加载扫描和资产库列举会刷）。
@@ -316,12 +336,12 @@ async function serializeProjectNodes(
       context,
       NODE_PRIMARY_MEDIA_KEYS,
     );
-    data = await serializeAssetReference(data, context.projectId, context.projectDir);
+    data = await serializeAssetReference(data, context);
     if (Array.isArray(data.storyboardOverrides)) {
       const storyboardOverrides = await mapWithConcurrency(data.storyboardOverrides, 4, async (override) => {
         if (!override) return null;
         const materialized = await materializeAssetReference(override, context);
-        return serializeAssetReference(materialized, context.projectId, context.projectDir);
+        return serializeAssetReference(materialized, context);
       });
       data = { ...data, storyboardOverrides };
     }
@@ -329,7 +349,7 @@ async function serializeProjectNodes(
       const shotlistRows = await mapWithConcurrency(data.shotlistRows, 4, async (row) => {
         if (!row.frame) return row;
         const materialized = await materializeAssetReference(row.frame, context);
-        const frame = await serializeAssetReference(materialized, context.projectId, context.projectDir);
+        const frame = await serializeAssetReference(materialized, context);
         return { ...row, frame };
       });
       data = { ...data, shotlistRows };
@@ -337,7 +357,7 @@ async function serializeProjectNodes(
     if (Array.isArray(data.videoReferences)) {
       const videoReferences = await mapWithConcurrency(data.videoReferences, 4, async (reference) => {
         const materialized = await materializeAssetReference(reference, context);
-        return serializeAssetReference(materialized, context.projectId, context.projectDir);
+        return serializeAssetReference(materialized, context);
       });
       data = { ...data, videoReferences };
     }
@@ -378,8 +398,7 @@ async function serializeProjectSettings(
   const materialized = await materializeAssetReference(reference, context);
   const styleReference = await serializeAssetReference(
     materialized,
-    context.projectId,
-    context.projectDir,
+    context,
   );
   return {
     ...settings,
@@ -417,6 +436,7 @@ async function restoreAssetReference<T extends AssetReferenceLike>(
   data: T,
   projectId: string,
   projectDir: string,
+  lookup: ProjectFileLookup,
 ): Promise<T> {
   const storedPath = data.filePath ? stripVerbatimPrefix(data.filePath) : undefined;
   const relativeCandidate = data.relativePath ? joinPath(projectDir, data.relativePath) : undefined;
@@ -439,7 +459,7 @@ async function restoreAssetReference<T extends AssetReferenceLike>(
       : [relativeCandidate, storedPath];
   let filePath: string | undefined;
   for (const candidate of candidates) {
-    if (candidate && await exists(candidate).catch(() => false)) {
+    if (candidate && await projectFileExists(candidate, lookup).catch(() => false)) {
       filePath = candidate;
       break;
     }
@@ -500,9 +520,10 @@ async function restoreAssetReferenceSafely<T extends AssetReferenceLike>(
   data: T,
   projectId: string,
   projectDir: string,
+  lookup: ProjectFileLookup,
 ): Promise<T> {
   try {
-    return await restoreAssetReference(data, projectId, projectDir);
+    return await restoreAssetReference(data, projectId, projectDir, lookup);
   } catch {
     console.warn('[项目加载] 单个资产展示信息恢复失败，已保留节点', {
       projectId,
@@ -521,13 +542,15 @@ async function refreshProjectAssetIndex(projectId: string, projectDir: string): 
     return;
   }
 
-  const results = await Promise.allSettled(diskFiles.map((file) => identifyAsset(file.path, {
-    rootPath: projectDir,
-    projectId,
-    source: 'project',
-    size: file.size,
-  })));
-  const failedCount = results.filter((result) => result.status === 'rejected').length;
+  const results = await mapWithConcurrency(diskFiles, 4, async (file) => {
+    try {
+      await identifyAsset(file.path, { rootPath: projectDir, projectId, source: 'project', size: file.size });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const failedCount = results.filter((result) => !result).length;
   if (failedCount > 0) {
     console.warn('[项目加载] 部分资产索引刷新失败，已继续加载画布', {
       projectId,
@@ -608,17 +631,17 @@ function hasUnresolvedAsset(node: PersistedNodeLike): boolean {
   ));
 }
 
-async function restoreProjectNodes(nodes: unknown, projectId: string): Promise<unknown> {
+async function restoreProjectNodes(nodes: unknown, projectId: string, lookup: ProjectFileLookup): Promise<unknown> {
   if (!Array.isArray(nodes)) return nodes;
   const projectDir = await getProjectDataDir(projectId);
   if (!projectDir) return nodes;
 
   const restoreNode = async (node: PersistedNodeLike) => {
     if (!node.data) return node;
-    let data = await restoreAssetReferenceSafely(node.data, projectId, projectDir);
+    let data = await restoreAssetReferenceSafely(node.data, projectId, projectDir, lookup);
     if (Array.isArray(data.storyboardOverrides)) {
       const storyboardOverrides = await mapWithConcurrency(data.storyboardOverrides, 4, async (override) => (
-        override ? restoreAssetReferenceSafely(override, projectId, projectDir) : null
+        override ? restoreAssetReferenceSafely(override, projectId, projectDir, lookup) : null
       ));
       data = { ...data, storyboardOverrides };
     }
@@ -626,14 +649,14 @@ async function restoreProjectNodes(nodes: unknown, projectId: string): Promise<u
       const shotlistRows = await mapWithConcurrency(data.shotlistRows, 4, async (row) => ({
         ...row,
         frame: row.frame
-          ? await restoreAssetReferenceSafely(row.frame, projectId, projectDir)
+          ? await restoreAssetReferenceSafely(row.frame, projectId, projectDir, lookup)
           : row.frame,
       }));
       data = { ...data, shotlistRows };
     }
     if (Array.isArray(data.videoReferences)) {
       const videoReferences = await mapWithConcurrency(data.videoReferences, 4, (reference) => (
-        restoreAssetReferenceSafely(reference, projectId, projectDir)
+        restoreAssetReferenceSafely(reference, projectId, projectDir, lookup)
       ));
       data = { ...data, videoReferences };
     }
@@ -643,7 +666,7 @@ async function restoreProjectNodes(nodes: unknown, projectId: string): Promise<u
         2,
         async (url, index) => {
           const filePath = data.directorCaptureFilePaths?.[index];
-          return filePath && await exists(filePath).catch(() => false)
+          return filePath && await projectFileExists(filePath, lookup).catch(() => false)
             ? getAssetUrlFromPath(filePath)
             : url;
         },
@@ -653,22 +676,25 @@ async function restoreProjectNodes(nodes: unknown, projectId: string): Promise<u
     return { ...node, data };
   };
 
-  const restored = await Promise.all((nodes as PersistedNodeLike[]).map(restoreNode));
+  const restored = await mapWithConcurrency(nodes as PersistedNodeLike[], 4, restoreNode);
   // ponytail: 节点全都就位就不扫目录了 —— 只有解析失败（外部重命名/移动）才刷新索引再试一轮，
   // 省掉每次切画布对整个项目目录的两轮 stat + 索引写。
   if (!restored.some(hasUnresolvedAsset)) return restored;
   await refreshProjectAssetIndex(projectId, projectDir);
-  return Promise.all((nodes as PersistedNodeLike[]).map(restoreNode));
+  // 恢复阶段可能重新找到文件，重试不能复用第一轮的缺失或权限失败结果。
+  lookup.existsByPath.clear();
+  return mapWithConcurrency(nodes as PersistedNodeLike[], 4, restoreNode);
 }
 
 async function restoreProjectSettings(
   settings: ProjectSettings | undefined,
   projectId: string,
   projectDir: string,
+  lookup: ProjectFileLookup,
 ): Promise<ProjectSettings | undefined> {
   const reference = settings?.visualStyle?.styleReference;
   if (!settings?.visualStyle || !reference) return settings;
-  const styleReference = await restoreAssetReferenceSafely(reference, projectId, projectDir);
+  const styleReference = await restoreAssetReferenceSafely(reference, projectId, projectDir, lookup);
   return {
     ...settings,
     visualStyle: { ...settings.visualStyle, styleReference },
@@ -683,7 +709,7 @@ async function serializeProjectDramaAssets(
   if (!library) return library;
   const serializeReference = async <T extends AssetReferenceLike>(reference: T): Promise<T> => {
     const materialized = await materializeAssetReference(reference, context);
-    return serializeAssetReference(materialized, context.projectId, context.projectDir);
+    return serializeAssetReference(materialized, context);
   };
   const characters = await mapWithConcurrency(library.characters, 2, async (character) => {
     const topLevel = await serializeReference(character);
@@ -725,6 +751,7 @@ async function serializeProjectRecord(data: ProjectSaveData): Promise<ProjectSav
     projectId: data.id,
     projectDir,
     cache: new Map(),
+    existsByPath: new Map(),
   };
   const referencedNodes = await recoverVideoReferenceIdentities(data.nodes, data.dramaAssets, data.parentId);
   const nodes = await serializeProjectNodes(referencedNodes, context);
@@ -736,11 +763,12 @@ async function serializeProjectRecord(data: ProjectSaveData): Promise<ProjectSav
 async function restoreProjectDramaAssets(
   library: DramaAssetLibrary,
   projectId: string,
+  lookup: ProjectFileLookup,
 ): Promise<DramaAssetLibrary> {
   const projectDir = await getProjectDataDir(projectId);
   if (!projectDir) return library;
   const restoreReference = <T extends AssetReferenceLike>(reference: T): Promise<T> => (
-    restoreAssetReferenceSafely(reference, projectId, projectDir)
+    restoreAssetReferenceSafely(reference, projectId, projectDir, lookup)
   );
   const characters = await mapWithConcurrency(library.characters, 2, async (character) => {
     const topLevel = await restoreReference(character);
@@ -822,6 +850,7 @@ export async function loadProjectsList(): Promise<ProjectSummaryData[]> {
 /** 从 IndexedDB 加载单个项目完整数据 */
 export async function loadProjectData(id: string): Promise<ProjectSaveData | null> {
   try {
+    const lookup: ProjectFileLookup = { existsByPath: new Map() };
     const record = await getProjectById(id);
     if (!record) return null;
     let persistedRecord = record as ProjectSaveData;
@@ -837,7 +866,7 @@ export async function loadProjectData(id: string): Promise<ProjectSaveData | nul
     let nodes = persistedRecord.nodes;
     try {
       nodes = await recoverVideoReferenceIdentities(nodes, persistedRecord.dramaAssets, persistedRecord.parentId);
-      nodes = await restoreProjectNodes(nodes, id);
+      nodes = await restoreProjectNodes(nodes, id, lookup);
     } catch {
       console.warn('[项目加载] 资产恢复未完成，已使用原始画布数据', { projectId: id });
     }
@@ -845,14 +874,14 @@ export async function loadProjectData(id: string): Promise<ProjectSaveData | nul
     let settings = persistedRecord.settings;
     if (projectDir) {
       try {
-        settings = await restoreProjectSettings(settings, id, projectDir);
+        settings = await restoreProjectSettings(settings, id, projectDir, lookup);
       } catch {
         console.warn('[项目加载] 项目风格参考图恢复失败，已保留原始设置', { projectId: id });
       }
     }
     let dramaAssets = normalizeDramaAssetLibrary(persistedRecord.dramaAssets);
     try {
-      dramaAssets = await restoreProjectDramaAssets(dramaAssets, id);
+      dramaAssets = await restoreProjectDramaAssets(dramaAssets, id, lookup);
     } catch {
       console.warn('[项目加载] 角色库本地文件恢复未完成，已使用原始角色数据', { projectId: id });
     }

@@ -94,6 +94,17 @@ beforeEach(() => {
 });
 
 describe('canvas clipboard', () => {
+  it('copies nested descendants once for overlapping group selections', () => {
+    const root = { ...node('root'), type: 'group' };
+    const child = { ...node('child'), type: 'group', parentId: root.id };
+    const leaf = { ...node('leaf'), parentId: child.id };
+    useAppStore.setState({ nodes: [root, child, leaf, node('outside')], selectedNodeIds: [root.id, child.id] });
+    expect(useAppStore.getState().copySelectedNodes()).toBe(true);
+    expect(useAppStore.getState().clipboard.nodes.map((item) => item.id)).toEqual(['root', 'child', 'leaf']);
+    expect(useAppStore.getState().clipboard.nodes[2].parentId).toBe(child.id);
+    expect(useAppStore.getState().nodes).toHaveLength(4);
+  });
+
   it('keeps incoming connections without copying outgoing external connections', () => {
     const incomingEdge: Edge = {
       id: 'edge-source-copy',

@@ -123,8 +123,8 @@ export async function saveProjectToDb(record: ProjectRecord): Promise<void> {
 }
 
 /** 缩略图迟到时只更新最新记录的图片；不重存旧画布，也不重新创建已删除项目。 */
-export async function updateProjectSnapshot(id: string, snapshot: string): Promise<boolean> {
-  if (typeof id !== 'string' || !id.trim() || !isProjectSnapshotDataUrl(snapshot)) {
+export async function updateProjectSnapshot(id: string, snapshot: string | undefined): Promise<boolean> {
+  if (typeof id !== 'string' || !id.trim() || (snapshot !== undefined && !isProjectSnapshotDataUrl(snapshot))) {
     throw new Error('项目缩略图参数无效');
   }
   const db = await openDB();

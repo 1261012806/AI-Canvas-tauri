@@ -28,7 +28,7 @@ const snapshotMocks = vi.hoisted(() => ({
 const metadataMocks = vi.hoisted(() => ({
   getLastActiveProjectId: vi.fn(async () => null as string | null),
   setLastActiveProjectId: vi.fn(async () => undefined),
-  updateProjectSnapshot: vi.fn(async (_id: string, _snapshot: string) => true),
+  updateProjectSnapshot: vi.fn(async (_id: string, _snapshot: string | undefined) => true),
 }));
 
 vi.mock('../../src/services/fileService', () => ({
@@ -353,6 +353,78 @@ describe('project switching', () => {
     await useAppStore.getState().captureCurrentProjectSnapshot();
 
     expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists only the preview without serializing the canvas again', async () => {
+    snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue('data:image/webp;base64,PREVIEW_ONLY');
+    useAppStore.setState({
+      projects: [{ id: 'preview-project', name: 'Preview project', createdAt: 1, updatedAt: 1 }],
+      currentProjectId: 'preview-project',
+      nodes: [{ id: 'preview-node', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '正文保持' } }],
+    });
+
+    expect(await useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true })).toBe('preview-project');
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('preview-project', 'data:image/webp;base64,PREVIEW_ONLY');
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it('persists empty-canvas preview removal without a full project save', async () => {
+    useAppStore.setState({
+      projects: [{ id: 'empty-preview', name: 'Empty project', createdAt: 1, updatedAt: 1, snapshot: 'data:image/webp;base64,OLD' }],
+      currentProjectId: 'empty-preview', nodes: [],
+    });
+
+    expect(await useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true })).toBe('empty-preview');
+    expect(useAppStore.getState().projects[0].snapshot).toBeUndefined();
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('empty-preview', undefined);
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).not.toHaveBeenCalled();
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('persists a cached preview after an earlier non-persisting capture (empty: %s)', async (empty) => {
+    const projectId = `cached-preview-${empty}`;
+    const snapshot = 'data:image/webp;base64,CACHED_PREVIEW';
+    snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue(snapshot);
+    useAppStore.setState({
+      projects: [{ id: projectId, name: 'Cached preview', createdAt: 1, updatedAt: 1, snapshot: 'data:image/webp;base64,OLD' }],
+      currentProjectId: projectId,
+      nodes: empty ? [] : [{ id: 'preview-node', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '正文保持' } }],
+    });
+
+    expect(await useAppStore.getState().captureCurrentProjectSnapshot()).toBe(projectId);
+    expect(metadataMocks.updateProjectSnapshot).not.toHaveBeenCalled();
+    expect(await useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true })).toBe(projectId);
+
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledOnce();
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith(projectId, empty ? undefined : snapshot);
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(empty ? 0 : 1);
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('retries preview persistence after a failed patch without recapturing (empty: %s)', async (empty) => {
+    const projectId = `retry-preview-${empty}`;
+    const snapshot = 'data:image/webp;base64,RETRY_PREVIEW';
+    snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue(snapshot);
+    metadataMocks.updateProjectSnapshot.mockRejectedValueOnce(new Error('temporary preview failure'));
+    useAppStore.setState({
+      projects: [{ id: projectId, name: 'Retry preview', createdAt: 1, updatedAt: 1, snapshot: 'data:image/webp;base64,OLD' }],
+      currentProjectId: projectId,
+      nodes: empty ? [] : [{ id: 'preview-node', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '正文保持' } }],
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true })).toBe(projectId);
+      expect(useAppStore.getState().projects[0].snapshot).toBe(empty ? undefined : snapshot);
+      expect(await useAppStore.getState().captureCurrentProjectSnapshot({ persistSnapshot: true })).toBe(projectId);
+
+      expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledTimes(2);
+      expect(metadataMocks.updateProjectSnapshot).toHaveBeenNthCalledWith(1, projectId, empty ? undefined : snapshot);
+      expect(metadataMocks.updateProjectSnapshot).toHaveBeenNthCalledWith(2, projectId, empty ? undefined : snapshot);
+      expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(empty ? 0 : 1);
+      expect(fileMocks.saveProject).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('persists snapshots for both projects while switching back and forth', async () => {
@@ -1044,6 +1116,31 @@ describe('returning to the startup page', () => {
     expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', 'data:image/webp;base64,LATE_PREVIEW');
     expect(fileMocks.saveProject).toHaveBeenCalledOnce();
     expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+
+  it('queues necessary canvas saving before an immediate empty-preview patch', async () => {
+    openProject();
+    useAppStore.setState((state) => ({
+      nodes: [], projects: state.projects.map((project) => ({ ...project, snapshot: 'data:image/webp;base64,OLD' })),
+    }));
+    let finishSave!: () => void;
+    fileMocks.saveProject.mockImplementation((record) => new Promise<string>((resolve) => {
+      finishSave = () => resolve(record.id);
+    }));
+
+    const returning = useAppStore.getState().returnToStartPage();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
+    expect(metadataMocks.updateProjectSnapshot).not.toHaveBeenCalled();
+
+    finishSave();
+    expect(await returning).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', undefined);
+    expect(fileMocks.saveProject.mock.invocationCallOrder[0])
+      .toBeLessThan(metadataMocks.updateProjectSnapshot.mock.invocationCallOrder[0]);
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).not.toHaveBeenCalled();
   });
 
   it('reuses an in-flight autosave for an unchanged canvas and shared series library', async () => {

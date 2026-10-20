@@ -338,12 +338,13 @@ export default function App() {
               break;
             }
             try {
-              await store.captureCurrentProjectSnapshot();
-            } catch (error) {
-              console.warn('[退出] 生成画布快照失败:', error);
-            }
-            try {
-              await store.saveCurrentProjectSilent();
+              // 正文先入队，避免已有/空预览的补丁抢在必要保存之前。
+              const savingProject = store.saveCurrentProjectSilent();
+              // 缩略图是可选预览，不能挡住必要保存或窗口退出。
+              void store.captureCurrentProjectSnapshot({ persistSnapshot: true }).catch((error) => {
+                console.warn('[退出] 生成画布快照失败:', error);
+              });
+              await savingProject;
             } catch (error) {
               console.warn('[退出] 保存失败:', error);
             }

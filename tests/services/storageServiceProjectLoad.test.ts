@@ -388,6 +388,136 @@ describe('project loading tolerates asset recovery failures', () => {
     expect(record.nodes[0].data).toEqual({ assetId: 'asset-saved', relativePath: 'saved.png' });
   });
 
+  it('checks a shared path once per save across nodes, references, settings and the asset library', async () => {
+    const reference = { assetId: 'shared', relativePath: 'shared.png', filePath: '/project/data/shared.png',
+      imageUrl: 'asset:///project/data/shared.png' };
+    const project = {
+      id: `shared-save-${Date.now()}`, name: 'Shared asset', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'a', data: reference }, { id: 'b', data: { ...reference,
+        storyboardOverrides: [{ ...reference, url: reference.imageUrl }],
+        videoReferences: [{ ...reference, url: reference.imageUrl }],
+      } }], edges: [],
+      settings: { visualStyle: { styleReference: { ...reference, fileName: 'shared.png' } } },
+      dramaAssets: { version: 2, characters: [], scenes: [{ ...reference, id: 'scene', kind: 'scene', name: '场景',
+        key: 'scene', summary: '', visualNotes: '', importance: 'supporting', confirmed: true,
+        source: 'manual', createdAt: 1, updatedAt: 2 }], props: [] },
+    } as ProjectSaveData;
+
+    await saveProject(project);
+    expect(mocks.exists).toHaveBeenCalledExactlyOnceWith('/project/data/shared.png');
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+    await saveProject(project);
+    expect(mocks.exists).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares load path checks without reusing file state across later loads or projects', async () => {
+    const reference = { assetId: 'shared', relativePath: 'shared.png', imageUrl: 'asset:///project/data/shared.png' };
+    const record = {
+      id: `shared-load-${Date.now()}`, name: 'Shared asset', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'a', data: reference }, { id: 'b', data: { ...reference,
+        videoReferences: [{ ...reference, url: reference.imageUrl }],
+      } }], edges: [],
+      settings: { visualStyle: { styleReference: { ...reference, fileName: 'shared.png' } } },
+      dramaAssets: { version: 2, characters: [], scenes: [{ ...reference, id: 'scene', kind: 'scene', name: '场景',
+        key: 'scene', summary: '', visualNotes: '', importance: 'supporting', confirmed: true,
+        source: 'manual', createdAt: 1, updatedAt: 2 }], props: [] },
+    } as ProjectSaveData;
+    await saveProjectToDb(record);
+    await saveProjectToDb({ ...record, id: `${record.id}-other` });
+
+    await loadProjectData(record.id);
+    expect(mocks.exists).toHaveBeenCalledExactlyOnceWith('/project/data/shared.png');
+    await loadProjectData(record.id);
+    expect(mocks.exists).toHaveBeenCalledTimes(2);
+    await loadProjectData(`${record.id}-other`);
+    expect(mocks.exists).toHaveBeenCalledTimes(3);
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+  });
+
+  it('bounds node restoration concurrency while preserving node order', async () => {
+    let active = 0;
+    let peak = 0;
+    mocks.exists.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return true;
+    });
+    const projectId = `bounded-load-${Date.now()}`;
+    const nodes = Array.from({ length: 20 }, (_, index) => ({ id: `n${index}`,
+      data: { assetId: `asset${index}`, relativePath: `image${index}.png` } }));
+    await saveProjectToDb({ id: projectId, name: 'Bounded load', createdAt: 1, updatedAt: 2, nodes, edges: [] });
+
+    const loaded = await loadProjectData(projectId);
+
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(peak).toBeGreaterThan(1);
+    expect((loaded?.nodes as typeof nodes).map((node) => node.id)).toEqual(nodes.map((node) => node.id));
+  });
+
+  it('normalizes Windows path separators without merging case-sensitive non-Windows paths', async () => {
+    const windowsId = `normalized-load-${Date.now()}`;
+    mocks.getProjectDataDir.mockResolvedValue('C:/project/data');
+    await saveProjectToDb({ id: windowsId, name: 'Windows paths', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'a', data: { assetId: 'shared', relativePath: 'folder/shared.png' } },
+        { id: 'b', data: { assetId: 'shared', relativePath: 'folder\\shared.png' } }], edges: [],
+    });
+    await loadProjectData(windowsId);
+    expect(mocks.exists).toHaveBeenCalledOnce();
+
+    mocks.exists.mockClear();
+    mocks.getProjectDataDir.mockResolvedValue('/project/data');
+    const sensitiveId = `${windowsId}-sensitive`;
+    await saveProjectToDb({ id: sensitiveId, name: 'Distinct paths', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'a', data: { assetId: 'lower', relativePath: 'a.png' } },
+        { id: 'b', data: { assetId: 'upper', relativePath: 'A.png' } }], edges: [],
+    });
+    await loadProjectData(sensitiveId);
+    expect(mocks.exists).toHaveBeenCalledTimes(2);
+  });
+
+  it('observes a file that reappears during missing-asset recovery', async () => {
+    let recovered = false;
+    mocks.exists.mockImplementation(async () => recovered);
+    mocks.walkDirectoryFiles.mockImplementation(async () => { recovered = true; return []; });
+    const projectId = `reappeared-load-${Date.now()}`;
+    await saveProjectToDb({ id: projectId, name: 'Recovered file', createdAt: 1, updatedAt: 2,
+      nodes: [{ id: 'a', data: { assetId: 'saved', relativePath: 'saved.png' } }], edges: [],
+    });
+
+    const loaded = await loadProjectData(projectId);
+
+    expect((loaded?.nodes as Array<{ data: { filePath?: string } }>)[0].data.filePath).toBe('/project/data/saved.png');
+    expect(mocks.exists).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds missing-asset index refresh and rechecks files for the recovery retry', async () => {
+    let active = 0;
+    let peak = 0;
+    mocks.exists.mockResolvedValue(false);
+    const files = Array.from({ length: 12 }, (_, index) => ({ path: `/project/data/image${index}.png`, size: 10 }));
+    mocks.walkDirectoryFiles.mockResolvedValue(files);
+    mocks.identifyAsset.mockImplementation(async (path: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return { assetId: path, relativePath: path.split('/').pop() };
+    });
+    const projectId = `bounded-recovery-${Date.now()}`;
+    await saveProjectToDb({ id: projectId, name: 'Recovery', createdAt: 1, updatedAt: 2,
+      nodes: files.map((_, index) => ({ id: `n${index}`, data: { assetId: `asset${index}`, relativePath: `image${index}.png` } })),
+      edges: [],
+    });
+
+    await loadProjectData(projectId);
+
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(mocks.identifyAsset).toHaveBeenCalledTimes(files.length);
+    expect(mocks.exists).toHaveBeenCalledTimes(files.length * 2);
+  });
+
   it('moves legacy inline generated media to a project file before saving', async () => {
     mocks.exists.mockResolvedValueOnce(false).mockResolvedValue(true);
     mocks.identifyAsset.mockImplementation(async (path: string) => ({

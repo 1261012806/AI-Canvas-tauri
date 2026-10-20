@@ -23,12 +23,14 @@ const mocks = vi.hoisted(() => ({
   notifyProjectDiskChanged: vi.fn(),
   getBaseDir: vi.fn(async () => '/data'),
   remove: vi.fn(async () => undefined),
+  serializeEntries: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: mocks.getVersion }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open, save: mocks.save }));
 vi.mock('@tauri-apps/plugin-fs', () => ({ remove: mocks.remove }));
+vi.mock('../../src/services/projectArchiveSerialization', () => ({ serializeProjectArchiveEntries: mocks.serializeEntries }));
 vi.mock('../../src/services/indexedDbService', () => ({
   getAllProjects: mocks.getAllProjects,
   getProjectById: mocks.getProjectById,
@@ -144,7 +146,11 @@ describe('projectTransferService', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     mocks.isTauriEnv.mockReturnValue(true);
     mocks.getVersion.mockResolvedValue('0.6.13');
-    mocks.getAllProjects.mockResolvedValue([]);
+    mocks.getAllProjects.mockResolvedValue([{ id: PROJECT_RECORD.id, name: PROJECT_RECORD.name,
+      createdAt: PROJECT_RECORD.createdAt, updatedAt: PROJECT_RECORD.updatedAt }]);
+    mocks.serializeEntries.mockImplementation(async (entries: Array<{ path: string; value: unknown }>) => (
+      entries.map(({ path, value }) => ({ path, content: JSON.stringify(value) }))
+    ));
     mocks.deleteProjectFromDb.mockResolvedValue(undefined);
     mocks.deleteProjectDataDir.mockResolvedValue(undefined);
     mocks.getProjectConversations.mockResolvedValue([]);
@@ -202,6 +208,38 @@ describe('projectTransferService', () => {
 
     await expect(exportProjectArchive('source-project')).resolves.toBeNull();
     expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.getProjectById).not.toHaveBeenCalled();
+    expect(mocks.serializeEntries).not.toHaveBeenCalled();
+  });
+
+  it('uses only summaries before the dialog and packs the latest complete record after confirmation', async () => {
+    const latest = { ...PROJECT_RECORD, name: '确认时的新名称', updatedAt: 400,
+      nodes: [{ id: 'latest-node', data: { output: '保存后的最新正文' } }] };
+    mocks.save.mockImplementation(async () => {
+      expect(mocks.getProjectById).not.toHaveBeenCalled();
+      mocks.getProjectById.mockResolvedValue(latest);
+      return '/out/latest.aicanvas';
+    });
+    mocks.invoke.mockResolvedValue({ assetCount: 0, assetBytes: 0, archiveBytes: 8 });
+
+    await exportProjectArchive(PROJECT_RECORD.id);
+
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: `${PROJECT_RECORD.name}.aicanvas` }));
+    expect(mocks.getProjectById).toHaveBeenCalledExactlyOnceWith(PROJECT_RECORD.id);
+    const entries = mocks.invoke.mock.calls[0][1].entries as Array<{ path: string; content: string }>;
+    expect(JSON.parse(entries.find((entry) => entry.path === 'project.json')!.content)).toEqual(latest);
+  });
+
+  it('does not invoke native packing or write project records when background serialization fails', async () => {
+    mocks.getProjectById.mockResolvedValue(PROJECT_RECORD);
+    mocks.save.mockResolvedValue('/out/project.aicanvas');
+    mocks.serializeEntries.mockRejectedValue(new Error('项目导出整理超时，请重试'));
+
+    await expect(exportProjectArchive(PROJECT_RECORD.id)).rejects.toThrow('整理超时');
+
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.saveProject).not.toHaveBeenCalled();
+    expect(mocks.remove).not.toHaveBeenCalled();
   });
 
   it('exports all episodes in order with one shared asset directory, including an episode entry point', async () => {
@@ -232,7 +270,7 @@ describe('projectTransferService', () => {
     mocks.getProjectById.mockResolvedValue(SERIES_RECORD);
     mocks.save.mockResolvedValue('/out/整部剧.aicanvas');
     if (stage === '分集读取') {
-      mocks.getAllProjects.mockResolvedValue([EPISODE_RECORD]);
+      mocks.getAllProjects.mockResolvedValue([SERIES_RECORD, EPISODE_RECORD]);
       mocks.getProjectById.mockImplementation(async (id: string) => id === SERIES_RECORD.id ? SERIES_RECORD : undefined);
     } else if (stage === '对话读取') {
       mocks.getProjectConversations.mockRejectedValue(new Error('对话读取失败'));

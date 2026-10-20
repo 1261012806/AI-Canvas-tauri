@@ -89,6 +89,21 @@ beforeEach(() => {
 });
 
 describe('project snapshot updates', () => {
+  it('clears only the preview for an empty canvas while keeping persisted data', async () => {
+    const service = await import('../../src/services/indexedDbService');
+    const { openDB } = await import('../../src/services/indexedDb/schema');
+    await service.saveProjectToDb({ ...RECOVERY_PROJECT, snapshot: 'data:image/webp;base64,OLD' });
+
+    await expect(service.updateProjectSnapshot(RECOVERY_PROJECT.id, undefined)).resolves.toBe(true);
+
+    const db = await openDB();
+    expect(await readRecord(db, 'projects', RECOVERY_PROJECT.id)).toEqual({ ...RECOVERY_PROJECT, snapshot: undefined });
+    expect(await readRecord(db, 'projectSummaries', RECOVERY_PROJECT.id)).toMatchObject({
+      id: RECOVERY_PROJECT.id, updatedAt: RECOVERY_PROJECT.updatedAt,
+    });
+    expect(await readRecord(db, 'projectSummaries', RECOVERY_PROJECT.id)).not.toHaveProperty('snapshot');
+  });
+
   it('patches a late snapshot onto the latest canvas and metadata without reverting other fields', async () => {
     const service = await import('../../src/services/indexedDbService');
     const { openDB } = await import('../../src/services/indexedDb/schema');

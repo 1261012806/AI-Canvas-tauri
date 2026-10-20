@@ -15,6 +15,7 @@ import type { BaseNodeData, NodeType } from '../types';
 import { SHOTLIST_DEFAULT_COLUMNS, createShotRow } from '../types';
 import { generateId } from '../store/store.utils';
 import { invoke } from '@tauri-apps/api/core';
+import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
 
 interface NodeShortcutDefinition {
   type: NodeType;
@@ -315,15 +316,7 @@ export function useKeyboardShortcuts() {
         useAppStore.setState({ selectedNodeIds: [] });
 
         // Expand to include descendants of any selected group nodes
-        const expandedIds = new Set(nodeIds);
-        const q = [...nodeIds];
-        while (q.length > 0) {
-          const pid = q.shift()!;
-          state.nodes.filter((n) => n.parentId === pid).forEach((c) => {
-            expandedIds.add(c.id);
-            q.push(c.id);
-          });
-        }
+        const expandedIds = collectCanvasDescendantIds(state.nodes, nodeIds);
         const allIds = Array.from(expandedIds);
 
         // Cancel any active polling for all deleted nodes
@@ -333,11 +326,11 @@ export function useKeyboardShortcuts() {
 
         // Delete associated local files —— 跳过仍被存活节点引用的共享文件（复制节点场景）
         const keepPaths = new Set(
-          state.nodes.filter((n) => !allIds.includes(n.id))
+          state.nodes.filter((n) => !expandedIds.has(n.id))
             .map((n) => (n.data as BaseNodeData).filePath)
             .filter((p): p is string => !!p),
         );
-        for (const node of state.nodes.filter((n) => allIds.includes(n.id))) {
+        for (const node of state.nodes.filter((n) => expandedIds.has(n.id))) {
           fileService.deleteNodeFile(node.data as BaseNodeData, keepPaths, state.currentProjectId).catch(() => {});
         }
 

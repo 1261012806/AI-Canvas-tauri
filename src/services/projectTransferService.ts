@@ -32,6 +32,7 @@ import type { ProjectSaveData } from './storageService';
 import { normalizeProjectSettings } from './projectSettingsService';
 import { normalizeDramaAssetLibrary } from '../types/dramaAssets';
 import type { CanvasProject } from '../types';
+import { serializeProjectArchiveEntries, type ProjectArchiveJsonEntry } from './projectArchiveSerialization';
 
 export const PROJECT_ARCHIVE_EXTENSION = 'aicanvas';
 /** 归档格式版本；解包时拒绝更高版本，避免旧版本误读新结构。 */
@@ -314,12 +315,13 @@ async function packProjectArchive(
   // 用 ensure 而不是 get：老项目可能还没建过数据目录，直接打包会卡在路径校验上。
   const assetsDir = await fileService.ensureProjectDataDir(projectRecord.id);
   if (!assetsDir) throw new Error('无法读取项目素材目录，已取消导出');
-  const entries = [
-    { path: MANIFEST_ENTRY, content: JSON.stringify(manifest) },
-    { path: PROJECT_ENTRY, content: JSON.stringify(projectRecord) },
-    { path: CHAT_ENTRY, content: JSON.stringify(chat) },
+  const values: ProjectArchiveJsonEntry[] = [
+    { path: MANIFEST_ENTRY, value: manifest },
+    { path: PROJECT_ENTRY, value: projectRecord },
+    { path: CHAT_ENTRY, value: chat },
   ];
-  if (episodes.length > 0) entries.push({ path: EPISODES_ENTRY, content: JSON.stringify(episodes) });
+  if (episodes.length > 0) values.push({ path: EPISODES_ENTRY, value: episodes });
+  const entries = await serializeProjectArchiveEntries(values);
   const result = await invoke<PackResult>('pack_project_archive', {
     entries,
     assetsDir,
@@ -335,7 +337,11 @@ async function packProjectArchive(
 export async function exportProjectArchive(projectId: string): Promise<ProjectExportResult | null> {
   if (!fileService.isTauriEnv()) throw new Error('项目导出仅在桌面版可用');
 
-  const record = await getArchiveProject(projectId);
+  // 保存对话框只需要名字与归属；用户确认后再读取最新完整画布和对话。
+  const summaries = await getAllProjects();
+  const source = summaries.find((project) => project.id === projectId);
+  const record = source?.parentId ? summaries.find((project) => project.id === source.parentId) : source;
+  if (!record || record.parentId) throw new Error('未找到项目摘要，无法导出');
 
   const defaultName = `${fileService.sanitizeFileName(record.name || '项目')}.${PROJECT_ARCHIVE_EXTENSION}`;
   const outputPath = await save({
@@ -345,7 +351,7 @@ export async function exportProjectArchive(projectId: string): Promise<ProjectEx
   });
   if (!outputPath) return null;
 
-  const result = await packProjectArchive(record.id, outputPath);
+  const result = await packProjectArchive(projectId, outputPath);
   return {
     filePath: outputPath,
     assetCount: result.assetCount,

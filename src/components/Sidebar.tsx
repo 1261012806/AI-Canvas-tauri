@@ -660,16 +660,18 @@ function LogoMenu() {
     })),
   );
 
-  const openProjectLibrary = () => {
-    setProjectLibraryOpen(true);
-    window.setTimeout(async () => {
+  useEffect(() => {
+    if (!projectLibraryOpen) return;
+    const projectId = useAppStore.getState().currentProjectId;
+    if (!projectId) return;
+    const timer = window.setTimeout(() => {
       const store = useAppStore.getState();
-      const capturedProjectId = await store.captureCurrentProjectSnapshot();
-      if (capturedProjectId && useAppStore.getState().currentProjectId === capturedProjectId) {
-        await useAppStore.getState().saveCurrentProjectSilent();
-      }
+      if (!store.projectLibraryOpen || store.currentProjectId !== projectId) return;
+      void store.captureCurrentProjectSnapshot({ persistSnapshot: true })
+        .catch((error) => console.warn('[项目库] 更新预览失败:', error));
     }, 220);
-  };
+    return () => window.clearTimeout(timer);
+  }, [projectLibraryOpen]);
 
   return (
     <>
@@ -679,7 +681,7 @@ function LogoMenu() {
         data-tooltip={t('画布 / 项目')}
         aria-haspopup="dialog"
         aria-expanded={projectLibraryOpen}
-        onClick={openProjectLibrary}
+        onClick={() => setProjectLibraryOpen(true)}
       >
         <svg className="ico-normal" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path fillRule="evenodd" d="M3 4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zm0 14a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM18 3a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 8a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1zm-6-1a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1zm-8 1a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zm8-8a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 15a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1zm8-1a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1z" clipRule="evenodd" />

@@ -1,31 +1,98 @@
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../types';
+import { indexCanvasChildren } from './canvasHierarchy';
 
 type CanvasNode = Node<BaseNodeData>;
 const shotNumber = (label: string) => /(?:^|[^a-z])SH0*(\d+)/i.exec(label)?.[1];
 const imageTypes = new Set(['source-image', 'ai-image', 'ai-storyboard']);
 const textTypes = new Set(['ai-markdown', 'source-text', 'ai-text']);
 
+interface EpisodeIndex {
+  groups: Set<string>;
+  children: Map<string, string[]>;
+  parents: Map<string, string | undefined>;
+  videos: string[];
+}
+
+let latestIndex: { nodes: readonly CanvasNode[]; value: EpisodeIndex } | undefined;
+interface EpisodeSummary { groupCount: number; videoCount: number; hasVideoNodes: boolean }
+let latestSummary: { index: EpisodeIndex; selected?: readonly string[]; value: EpisodeSummary } | undefined;
+
+function sameMembership(current: CanvasNode, previous: CanvasNode): boolean {
+  if (current === previous) return true;
+  return current.id === previous.id && current.parentId === previous.parentId
+    && current.type === previous.type
+    && (current.data.type === 'ai-video') === (previous.data.type === 'ai-video')
+    && (current.data.shotlistProductionSource?.kind === 'video') === (previous.data.shotlistProductionSource?.kind === 'video')
+    && (current.type !== 'group' || (shotNumber(current.data.label || '') !== undefined)
+      === (shotNumber(previous.data.label || '') !== undefined));
+}
+
+/** Geometry, selection and unrelated model output do not invalidate shot membership. */
+function episodeIndex(nodes: readonly CanvasNode[]): EpisodeIndex {
+  const cached = latestIndex;
+  if (cached?.nodes === nodes) return cached.value;
+  if (cached && cached.nodes.length === nodes.length
+    && nodes.every((node, index) => sameMembership(node, cached.nodes[index]))) {
+    latestIndex = { nodes, value: cached.value };
+    return latestIndex.value;
+  }
+  const children = indexCanvasChildren(nodes);
+  const parents = new Map(nodes.map((node) => [node.id, node.parentId]));
+  const productionGroups = new Set(nodes.filter((node) => node.data.shotlistProductionSource?.kind === 'video')
+    .map((node) => node.parentId));
+  const groups = new Set(nodes.filter((node) => node.type === 'group' && !node.parentId
+    && (shotNumber(node.data.label || '') !== undefined || productionGroups.has(node.id))).map((node) => node.id));
+  const value = { groups, children, parents, videos: nodes.filter((node) => node.data.type === 'ai-video').map((node) => node.id) };
+  latestIndex = { nodes, value };
+  return value;
+}
+
+function selectedShotGroups(index: EpisodeIndex, selected?: readonly string[]): ReadonlySet<string> {
+  if (!selected) return index.groups;
+  const groups = new Set<string>();
+  for (const id of selected) {
+    if (index.groups.has(id)) groups.add(id);
+    const parent = index.parents.get(id);
+    if (parent && index.groups.has(parent)) groups.add(parent);
+  }
+  return groups;
+}
+
+function scopedVideoIds(index: EpisodeIndex, selected?: readonly string[]): string[] {
+  const groups = selectedShotGroups(index, selected);
+  const ids = selected ? new Set(selected) : undefined;
+  return index.videos.filter((id) => {
+    const parent = index.parents.get(id);
+    return !!(parent && groups.has(parent)) || ids?.has(id) === true;
+  });
+}
+
+/** Counts are independent of ordering and payloads; the workbench never subscribes to full nodes. */
+export function episodeWorkbenchSummary(nodes: readonly CanvasNode[], selected?: readonly string[]) {
+  const index = episodeIndex(nodes);
+  if (latestSummary?.index === index && latestSummary.selected === selected) return latestSummary.value;
+  const value = { groupCount: index.groups.size, videoCount: scopedVideoIds(index, selected).length, hasVideoNodes: index.videos.length > 0 };
+  latestSummary = { index, selected, value };
+  return value;
+}
+
 /** Shot groups must be explicit: do not mistake shared assets or tests for shots. */
-export function episodeShotGroups(nodes: CanvasNode[]): CanvasNode[] {
-  return nodes.filter((group) => group.type === 'group' && !group.parentId
-    && (shotNumber(group.data.label || '') !== undefined
-      || nodes.some((n) => n.parentId === group.id && n.data.shotlistProductionSource?.kind === 'video')))
+export function episodeShotGroups(nodes: readonly CanvasNode[]): CanvasNode[] {
+  const index = episodeIndex(nodes);
+  return nodes.filter((node) => index.groups.has(node.id))
     .sort((a, b) => Number(shotNumber(a.data.label || '') ?? Infinity)
       - Number(shotNumber(b.data.label || '') ?? Infinity)
       || a.position.y - b.position.y || a.position.x - b.position.x);
 }
 
 export function shotVideoNodes(nodes: CanvasNode[], selected?: string[]): CanvasNode[] {
-  const groups = episodeShotGroups(nodes);
-  const ids = selected ? new Set(selected) : null;
-  const groupIds = new Set(groups.filter((g) => !ids || ids.has(g.id)
-    || nodes.some((n) => n.parentId === g.id && ids.has(n.id))).map((g) => g.id));
-  return nodes.filter((n) => n.data.type === 'ai-video'
-    && ((n.parentId && groupIds.has(n.parentId)) || ids?.has(n.id)))
+  const index = episodeIndex(nodes);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return scopedVideoIds(index, selected).map((id) => byId.get(id)!)
     .sort((a, b) => {
-      const ag = groups.find((g) => g.id === a.parentId);
-      const bg = groups.find((g) => g.id === b.parentId);
+      const ag = a.parentId && index.groups.has(a.parentId) ? byId.get(a.parentId) : undefined;
+      const bg = b.parentId && index.groups.has(b.parentId) ? byId.get(b.parentId) : undefined;
       return Number(shotNumber(ag?.data.label || a.data.label) ?? Infinity)
         - Number(shotNumber(bg?.data.label || b.data.label) ?? Infinity)
         || (a.data.displayId ?? Infinity) - (b.data.displayId ?? Infinity);
@@ -46,17 +113,18 @@ function resize(node: CanvasNode, x: number, y: number, width: number, height: n
 
 /** Pure layout; group identities, content, file references and membership are unchanged. */
 export function layoutEpisodeShots(nodes: CanvasNode[], selected?: string[], columns = 3) {
-  const selectedIds = selected && new Set(selected);
-  const candidates = episodeShotGroups(nodes).filter((g) => !selectedIds || selectedIds.has(g.id)
-    || nodes.some((n) => n.parentId === g.id && selectedIds.has(n.id)));
+  const index = episodeIndex(nodes);
+  const selectedGroups = selectedShotGroups(index, selected);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const candidates = episodeShotGroups(nodes).filter((group) => selectedGroups.has(group.id));
   const groups = candidates.filter((g) => !g.data.groupCollapsed
-    && !nodes.some((n) => n.parentId === g.id && n.type === 'group'));
+    && !(index.children.get(g.id) ?? []).some((id) => byId.get(id)?.type === 'group'));
   if (!groups.length) return { nodes, groupIds: [], skipped: candidates.length };
   const groupIds = new Set(groups.map((g) => g.id));
   const updates = new Map<string, CanvasNode>();
   const heights = new Map<string, number>();
   for (const group of groups) {
-    const children = nodes.filter((n) => n.parentId === group.id);
+    const children = (index.children.get(group.id) ?? []).map((id) => byId.get(id)!);
     const images = children.filter((n) => imageTypes.has(n.data.type));
     const videos = children.filter((n) => n.data.type === 'ai-video' || n.data.type === 'source-video');
     const texts = children.filter((n) => textTypes.has(n.data.type));

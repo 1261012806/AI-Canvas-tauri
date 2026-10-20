@@ -39,6 +39,7 @@ import { copyNodeMedia, needsNodeMediaCopy, discardCopiedNodeMedia } from '../se
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
 import { AI_APP_COPY_MESSAGE, AI_APP_CREATION_MESSAGE, assertAiAppNodeInsertion, isAiAppNode } from '../services/aiApps/aiAppCreation';
 import { getGenerationNodeType } from '../utils/nodeGeneration';
+import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
 
 interface GroupNodeDataAccess {
   groupId: string;
@@ -1315,16 +1316,8 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     get().commitToHistory();
 
     // Collect all node IDs to delete: self + descendants (for group nodes)
-    const idsToDelete = new Set<string>([nodeId]);
     const { nodes } = get();
-    const q = [nodeId];
-    while (q.length > 0) {
-      const pid = q.shift()!;
-      nodes.filter((n) => n.parentId === pid).forEach((c) => {
-        idsToDelete.add(c.id);
-        q.push(c.id);
-      });
-    }
+    const idsToDelete = collectCanvasDescendantIds(nodes, [nodeId]);
     // Cancel any active polling for all deleted nodes
     for (const id of idsToDelete) {
       cancelNodePolling(id);
@@ -1357,16 +1350,8 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     get().commitToHistory();
 
     // 收集所有要删除的 ID（包含子节点递归）
-    const idsToDelete = new Set<string>(limitedIds);
     const { nodes } = get();
-    const q = [...limitedIds];
-    while (q.length > 0) {
-      const pid = q.shift()!;
-      nodes.filter((n) => n.parentId === pid).forEach((c) => {
-        idsToDelete.add(c.id);
-        q.push(c.id);
-      });
-    }
+    const idsToDelete = collectCanvasDescendantIds(nodes, limitedIds);
     // 取消所有轮询
     for (const id of idsToDelete) {
       cancelNodePolling(id);

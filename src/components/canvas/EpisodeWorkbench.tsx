@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { CheckCircle2, LayoutGrid, ListVideo, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useT } from '../../i18n';
-import { episodeShotGroups, shotVideoNodes } from '../../utils/episodeLayout';
+import { episodeWorkbenchSummary, shotVideoNodes } from '../../utils/episodeLayout';
 import { checkVideoServices, inspectVideoNode } from '../../services/videoBatchPlanning';
 import type { VideoBatchItemStatus, VideoBatchScope, VideoPreflightItem } from '../../types/videoBatch';
 import ModalOverlay from '../shared/ModalOverlay';
@@ -17,20 +18,19 @@ function EpisodeWorkbench() {
   const t = useT();
   const projectId = useAppStore((s) => s.currentProjectId);
   const projectName = useAppStore((s) => s.projectName);
-  const nodes = useAppStore((s) => s.nodes);
-  const selected = useAppStore((s) => s.selectedNodeIds);
+  const [scope, setScope] = useState<VideoBatchScope>('episode');
+  const { groupCount, videoCount, hasVideoNodes } = useAppStore(useShallow((s) => (
+    episodeWorkbenchSummary(s.nodes, scope === 'selected' ? s.selectedNodeIds : undefined)
+  )));
   const batchesByProject = useAppStore((s) => s.videoBatches);
   const busy = useAppStore((s) => s.videoBatchBusy);
   const loadBatches = useAppStore((s) => s.loadVideoBatches);
-  const [scope, setScope] = useState<VideoBatchScope>('episode');
   const [columns, setColumns] = useState(3);
   const [checking, setChecking] = useState(false);
   const [panel, setPanel] = useState<'check' | 'queue' | null>(null);
   const [check, setCheck] = useState<{ projectId: string; items: VideoPreflightItem[] } | null>(null);
   const [regenerate, setRegenerate] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
-  const groups = useMemo(() => episodeShotGroups(nodes), [nodes]);
-  const candidates = useMemo(() => shotVideoNodes(nodes, scope === 'selected' ? selected : undefined), [nodes, selected, scope]);
   const batches = projectId ? batchesByProject[projectId] || [] : [];
   const items = check?.projectId === projectId ? check.items : [];
   const ready = items.filter((i) => !i.issues.length && (!i.existing || i.stale || regenerate));
@@ -75,7 +75,7 @@ function EpisodeWorkbench() {
     setPanel('queue');
     void operation.catch(notify);
   };
-  if (!groups.length && !nodes.some((n) => n.data.type === 'ai-video') && !batches.length) return null;
+  if (!groupCount && !hasVideoNodes && !batches.length) return null;
 
   return <>
     <div className="pointer-events-none absolute inset-x-3 bottom-2 z-40 flex justify-center">
@@ -88,13 +88,13 @@ function EpisodeWorkbench() {
             <option value="episode">{t('本集镜头')}</option><option value="selected">{t('选中镜头组')}</option><option value="pending">{t('待生成或失败')}</option>
           </Select>
         </div>
-        <span className="whitespace-nowrap px-1 text-[11px] text-canvas-text-secondary/70">{candidates.length} {t('视频')}</span>
+        <span className="whitespace-nowrap px-1 text-[11px] text-canvas-text-secondary/70">{videoCount} {t('视频')}</span>
         <Select fixedMenu size="sm" className="w-[56px] shrink-0" aria-label={t('布局列数')} value={columns} onChange={(value) => setColumns(Number(value))}>
           {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} {t('列')}</option>)}
         </Select>
-        <button className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" title={t('统一布局')} aria-label={t('统一布局')} onClick={layout} disabled={busy || !groups.length}><LayoutGrid size={14} aria-hidden="true" /></button>
-        <button className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" title={checking ? t('检查中') : t('检查物料')} aria-label={checking ? t('检查中') : t('检查物料')} onClick={() => void inspect()} disabled={checking || !candidates.length}><CheckCircle2 size={14} aria-hidden="true" /></button>
-        <button className="ui-btn ui-btn--sm ui-btn--primary" title={busy ? t('批次执行中') : t('生成本集视频')} aria-label={busy ? t('批次执行中') : t('生成本集视频')} onClick={() => void inspect()} disabled={busy || checking || !candidates.length}><Play size={14} aria-hidden="true" /></button>
+        <button className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" title={t('统一布局')} aria-label={t('统一布局')} onClick={layout} disabled={busy || !groupCount}><LayoutGrid size={14} aria-hidden="true" /></button>
+        <button className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" title={checking ? t('检查中') : t('检查物料')} aria-label={checking ? t('检查中') : t('检查物料')} onClick={() => void inspect()} disabled={checking || !videoCount}><CheckCircle2 size={14} aria-hidden="true" /></button>
+        <button className="ui-btn ui-btn--sm ui-btn--primary" title={busy ? t('批次执行中') : t('生成本集视频')} aria-label={busy ? t('批次执行中') : t('生成本集视频')} onClick={() => void inspect()} disabled={busy || checking || !videoCount}><Play size={14} aria-hidden="true" /></button>
         <button className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" title={t('查看队列')} aria-label={t('查看队列')} onClick={() => setPanel('queue')}><ListVideo size={14} aria-hidden="true" /></button>
       </div>
     </div>

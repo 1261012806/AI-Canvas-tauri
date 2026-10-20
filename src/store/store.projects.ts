@@ -145,7 +145,7 @@ interface ProjectSaveQueue {
   running: boolean;
   active: PendingProjectSave | null;
   pending: PendingProjectSave | null;
-  pendingSnapshot: { snapshot: string; waiters: ProjectSaveWaiter[] } | null;
+  pendingSnapshot: { snapshot: string | undefined; waiters: ProjectSaveWaiter[] } | null;
 }
 
 const projectSaveQueues = new Map<string, ProjectSaveQueue>();
@@ -254,7 +254,7 @@ function hasSameProjectSaveContent(left: ProjectSaveData, right: ProjectSaveData
     && keys.every((key) => key === 'updatedAt' || left[key] === right[key]);
 }
 
-function enqueueProjectSnapshot(projectId: string, snapshot: string): Promise<string> {
+function enqueueProjectSnapshot(projectId: string, snapshot: string | undefined): Promise<string> {
   const queue = getProjectSaveQueue(projectId);
   return new Promise((resolve, reject) => {
     if (queue.pendingSnapshot) {
@@ -830,11 +830,25 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           )),
         }));
       }
+      if (options.persistSnapshot) {
+        try {
+          await enqueueProjectSnapshot(projectId, undefined);
+        } catch (error) {
+          console.warn('[项目快照] 清理预览失败:', error);
+        }
+      }
       return projectId;
     }
 
     if (project.snapshot && isCanvasSnapshotFresh(state, projectId)) {
       latestSnapshotCaptures.delete(projectId);
+      if (options.persistSnapshot) {
+        try {
+          await enqueueProjectSnapshot(projectId, project.snapshot);
+        } catch (error) {
+          console.warn('[项目快照] 持久化失败:', error);
+        }
+      }
       return projectId;
     }
 
@@ -1461,10 +1475,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       // 先绘制返回状态。缩略图是派生预览，不能阻塞必要保存和导航。
       await waitForLoadingPaint();
       if (get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
+      const savingState = get();
+      // 正文先入队，空图清理或缓存预览的补丁随后排队，不能抢占必要保存。
+      const saving = savingState.saveCurrentProjectSilent();
       void get().captureCurrentProjectSnapshot({ allowProjectChange: true, persistSnapshot: true })
         .catch(() => undefined);
-      const savingState = get();
-      const savedId = await savingState.saveCurrentProjectSilent();
+      const savedId = await saving;
       if (savedId !== projectId || get().currentProjectId !== projectId || projectSwitchSequence !== sequence) return false;
       const latest = get();
       // 保存期间 MCP 或生成任务仍可回填；卸载前必须确认没有落在这次快照之后的新内容。

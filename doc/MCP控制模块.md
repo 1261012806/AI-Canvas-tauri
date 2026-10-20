@@ -2,9 +2,11 @@
 
 负责外部客户端控制 AI Canvas，以及内部助手连接外部 MCP 服务。这两个方向独立；业务工具与外部调用均复用 Registry、Policy 与任务审计。
 
+设置页先展示并默认选中「外部控制本应用」，右侧为「助手连接外部服务」。默认页签只决定展示内容，不开启控制会话；MCP 仍默认关闭，仅用户手动开启或显式启用 `mcpAutoStart` 后才启动。
+
 ## 助手连接外部服务
 
-已实现，待用户桌面验收；本轮未运行测试、类型检查或构建。设置 → MCP →「助手连接外部服务」添加地址与认证，读取目录并逐工具授权；助手输入框的 MCP 入口为每个会话显式选择连接，默认不启用。通用对话、画布对话和独立窗口共用配置，主窗口唯一执行。
+已实现，待用户桌面验收；本轮未运行测试、类型检查或构建。设置 → MCP →「助手连接外部服务」添加地址与认证，读取目录并逐工具授权；助手顶部的 MCP 入口为每个会话显式选择连接，默认不启用。通用对话、画布对话和独立窗口共用配置，主窗口唯一执行。
 
 入口：`components/settings/McpClientSettings.tsx` / `McpConnectionEditor.tsx`、`services/mcp/mcpClientService.ts`、`chat/tools/externalMcpTools.ts` 与原生 `mcp/client.rs`。复用已安装的 TS MCP SDK 和原生 reqwest，无新增依赖或运行环境；安装包增量尚未实测。
 
@@ -25,6 +27,8 @@
 | [mcpControlService.ts](../src/services/mcp/mcpControlService.ts) | 主窗口工具发现、控制请求和任务映射 |
 | [mcpToolCatalog.ts](../src/services/mcp/mcpToolCatalog.ts) / [mcpDiscoveryTools.ts](../src/services/chat/tools/mcpDiscoveryTools.ts) | 有界目录检索、完整参数读取与 Registry 发现工具注册 |
 | [mcpSettingsScope.ts](../src/services/mcp/mcpSettingsScope.ts) / [projectTools.ts](../src/services/chat/tools/projectTools.ts) | 应用级审计白名单与启动页项目导航 |
+| [mcpUiRuntimeService.ts](../src/services/mcp/mcpUiRuntimeService.ts) | 固定应用窗口控制、单次 DOM 截图采集及有界跨窗请求 |
+| [mcpCaptureEncoding.ts](../src/services/mcp/mcpCaptureEncoding.ts) / [mcpCaptureWorker.ts](../src/services/mcp/mcpCaptureWorker.ts) | 共用 JPEG 编码预算、已采集位图的 Worker 缩放压缩与资源释放 |
 | [services/mcp](../src/services/mcp/) / [types/mcp.ts](../src/types/mcp.ts) | 前端桥接、会话配置及协议类型 |
 | [原生 mcp](../src-tauri/src/mcp/) | 端口、鉴权、请求关联与双传输 |
 | [ai-canvas-mcp.mjs](../scripts/ai-canvas-mcp.mjs) | 本机 stdio 客户端适配器 |
@@ -72,6 +76,14 @@ MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 
 搜索和详情是注册为 `read` 的 MCP 专用工具；`tools_call` 是主窗口解包的传输信封。参数校验、effect、授权、预算、审计与取消均属于真实目标工具，只产生一次业务执行任务；通用入口不标为只读或可重试，不接受递归分发。原工具名直接调用仍兼容，内部对话助手的工具列表保持原有行为。
 
 回退时选择「完整工具列表」并刷新客户端即可，不改变原工具权限或业务数据。
+
+## 窗口截图与并发
+
+- 每个截图任务只调用一次 `html-to-image.toCanvas`；DOM 采集仍在目标窗口主线程，后续缩放与 JPEG 编码优先交给固定模块 Worker。Worker 不可用或编码超时时，先终止 Worker，再仅对同一张已过滤画布降级编码，不重新克隆 DOM；已耗尽图像预算则直接失败。
+- 同一窗口按 `maxWidth`、`quality`、`redactSensitive` 复用未完成请求，脱敏与非脱敏结果不混用。采集串行执行，最多保留一个执行中与一个排队任务；跨窗请求及目标窗口等待者各有最多 4 项的上限。客户端 12 秒响应超时不代表底层 DOM 任务已取消，只有实际采集和编码结束才释放采集名额，避免超时重试堆积。
+- 保留敏感元素、密码和 API Key 等过滤与显式脱敏参数，目标仍限于固定可截图窗口；JPEG/base64 返回和 2,600,000 字符预算不变。位图关闭、画布清零，Worker、计时器及事件监听及时回收；队尾不保留上次截图正文。`ui_capture_window` 仅返回瞬时图像，不持久化截图内容；`ui_capture_to_canvas` 仍走用户显式要求的素材导入流程。
+
+已实现，本轮新增或调整的截图回归用例未运行，待 Tauri 桌面隐私与并发验收；不能以历史工具测试通过记录代替本轮验收。源码与定向用例见 `tests/services/mcp/mcpUiRuntimeService.test.ts`，大画布同类优化、桌面步骤和剩余缺口见[大画布返回与后台处理计划](./plans/2026-10-20-large-canvas-return.md)。
 
 ## 媒体输入与视频制作工具
 
