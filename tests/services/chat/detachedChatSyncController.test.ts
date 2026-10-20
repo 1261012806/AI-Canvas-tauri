@@ -24,6 +24,7 @@ import {
 import { applyChatStatePatch, createChatStatePatch, receiveChatStateSync, type ChatStateSync, type ChatWindowState } from '../../../src/services/chat/chatWindowService';
 import { runAgentTask } from '../../../src/services/chat/agentTaskControl';
 import { useAppStore } from '../../../src/store/useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../../src/services/chat/assistantScope';
 
 function arrangeDetachedState(): void {
   useAppStore.setState(useAppStore.getInitialState(), true);
@@ -65,6 +66,18 @@ beforeEach(() => {
 });
 
 describe('detached chat sync controller', () => {
+  it('creates and sends the first general conversation through the main store on the start page', () => {
+    useAppStore.setState({ currentProjectId: null, activeConversationId: null, conversations: [] });
+    handleDetachedChatAction({ type: 'send_message', content: '帮我写一份提纲' }, vi.fn());
+    const state = useAppStore.getState();
+    expect(state.conversations).toHaveLength(1);
+    expect(state.conversations[0].projectId).toBe(GENERAL_ASSISTANT_SCOPE_ID);
+    expect(conversationControllerMocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: GENERAL_ASSISTANT_SCOPE_ID, conversationId: state.conversations[0].id,
+    }));
+    expect(state.projects.map((project) => project.id)).toEqual(['project-1']);
+  });
+
   it('keeps an image request bound to the active episode when its conversation belongs to the series', () => {
     useAppStore.setState({ currentProjectId: 'episode-1', projects: [
       ...useAppStore.getState().projects,
@@ -715,4 +728,20 @@ it('includes bounded reasoning and independent errors in main-window snapshots a
   const next = buildDetachedChatSnapshot(useAppStore.getState());
   const patch = createChatStatePatch(first, next);
   expect(applyChatStatePatch(first, patch).messages[0]).toMatchObject({ reasoning: 'updated summary', content: 'partial answer', activity: 'compressing' });
+});
+
+it('reuses the newly created conversation for rapid MCP selections and projects no endpoint', () => {
+  arrangeDetachedState();
+  const makeConnection = (id: string) => ({ id, name: id, url: 'https://private.example/mcp', enabled: true, revision: 'rev-1', authHeader: 'authorization' as const, hasSecret: true, tools: { lookup: { access: 'read' as const, fingerprint: 'digest' } } });
+  useAppStore.setState({ activeConversationId: null, conversations: [], config: { ...useAppStore.getState().config, mcpClientConnections: [makeConnection('one'), makeConnection('two')] } });
+  const sync = vi.fn();
+  handleDetachedChatAction({ type: 'set_mcp_connection', scopeId: 'project-1', serverId: 'one', enabled: true, draft: 'keep this draft' }, sync);
+  handleDetachedChatAction({ type: 'set_mcp_connection', scopeId: 'project-1', serverId: 'two', enabled: true, draft: 'stale draft' }, sync);
+  const state = useAppStore.getState();
+  expect(state.conversations).toHaveLength(1);
+  expect(state.conversations[0].mcpServerIds).toEqual(['one', 'two']);
+  expect(state.chatComposerLiveDraft).toBe('keep this draft');
+  const snapshot = buildDetachedChatSnapshot(state);
+  expect(snapshot.mcpClientOptions).toEqual([{ id: 'one', name: 'one', toolCount: 1 }, { id: 'two', name: 'two', toolCount: 1 }]);
+  expect(JSON.stringify(snapshot.mcpClientOptions)).not.toContain('private.example');
 });

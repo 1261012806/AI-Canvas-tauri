@@ -14,6 +14,7 @@ const historyMocks = vi.hoisted(() => ({
 vi.mock('../../src/services/chat/chatHistoryService', () => historyMocks);
 
 import { useAppStore } from '../../src/store/useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../src/services/chat/assistantScope';
 
 const storageValues = new Map<string, string>();
 const localStorageMock = {
@@ -66,6 +67,53 @@ beforeEach(() => {
 });
 
 describe('chat conversation restoration', () => {
+  it('does not let a late general-history load replace an opened project conversation', async () => {
+    useAppStore.setState({ currentProjectId: null });
+    let finish!: (conversations: ChatConversation[]) => void;
+    historyMocks.loadProjectConversations.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const loading = useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);
+    useAppStore.setState({ currentProjectId: 'project-1', activeConversationId: 'project-conversation',
+      conversations: [conversation('project-conversation', 2)] });
+    finish([{ ...conversation('conv-general', 1), projectId: GENERAL_ASSISTANT_SCOPE_ID }]);
+    await loading;
+    expect(useAppStore.getState().activeConversationId).toBe('project-conversation');
+    expect(useAppStore.getState().conversations.map((item) => item.id)).toEqual(['project-conversation']);
+  });
+
+  it('restores general history on the start page without creating a canvas project', async () => {
+    const general = { ...conversation('conv-general', 1), projectId: GENERAL_ASSISTANT_SCOPE_ID };
+    useAppStore.setState({ currentProjectId: null });
+    historyMocks.loadProjectConversations.mockResolvedValue([general]);
+    historyMocks.loadMessages.mockResolvedValue({ messages: [message('general-answer', general.id)], total: 1 });
+    await useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);
+    expect(useAppStore.getState().activeConversationId).toBe(general.id);
+    expect(useAppStore.getState().messages[0].content).toBe('general-answer');
+    expect(useAppStore.getState().projects).toEqual([]);
+  });
+
+  it('keeps a new general conversation and its live message when an older list finishes loading', async () => {
+    useAppStore.setState({ currentProjectId: null });
+    let finish!: (conversations: ChatConversation[]) => void;
+    historyMocks.loadProjectConversations.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    historyMocks.loadMessages.mockResolvedValue({ messages: [], total: 0 });
+    const loading = useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);
+    const id = useAppStore.getState().createConversation(GENERAL_ASSISTANT_SCOPE_ID);
+    useAppStore.getState().addMessage(message('just-created', id));
+    finish([]);
+    await loading;
+    expect(useAppStore.getState().activeConversationId).toBe(id);
+    expect(useAppStore.getState().messages.map((item) => item.id)).toEqual(['just-created']);
+  });
+
+  it('does not replace an unbound general draft with a restored conversation', async () => {
+    useAppStore.setState({ currentProjectId: null, chatComposerLiveDraft: '我正在输入的新问题' });
+    historyMocks.loadProjectConversations.mockResolvedValue([{ ...conversation('conv-old', 1), projectId: GENERAL_ASSISTANT_SCOPE_ID }]);
+    await useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);
+    expect(useAppStore.getState().activeConversationId).toBeNull();
+    expect(useAppStore.getState().chatComposerLiveDraft).toBe('我正在输入的新问题');
+    expect(historyMocks.loadMessages).not.toHaveBeenCalled();
+  });
+
   it('keeps per-conversation drafts and does not apply a delayed draft to the newly selected conversation', () => {
     useAppStore.setState({ conversations: [conversation('a', 1), conversation('b', 2)] });
     const store = useAppStore.getState();

@@ -382,7 +382,12 @@ export async function assembleAgentContext(
 
   const tasks = useAppStore.getState().agentTasks.filter((task) =>
     task.conversationId === conversationId && task.projectId === projectId);
-  const persisted = persistedResult.messages.filter((message) => message.conversationId === conversationId)
+  // 上一轮可能仍在节流落盘；同会话的最新内存消息也要进入追问上下文。
+  const persisted = [...new Map([
+    ...persistedResult.messages.filter((message) => message.conversationId === conversationId),
+    ...useAppStore.getState().messages.filter((message) => message.conversationId === conversationId),
+  ].map((message) => [message.id, message])).values()]
+    .sort((a, b) => a.timestamp - b.timestamp)
     .map((message) => ({
       ...message,
       content: historyMessageContent(message, tasks.find((task) => task.id === message.agentTaskId)),

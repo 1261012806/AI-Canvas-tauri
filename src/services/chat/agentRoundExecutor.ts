@@ -4,6 +4,7 @@ import { estimateTokens } from './tokenEstimate';
  * 任务预算、审批等待和步骤快照在此轮次边界内统一更新。
  */
 import { isMcpGlobalToolContext } from '../mcp/mcpSettingsScope';
+import { isGeneralAssistantToolContext } from './assistantScope';
 import { useAppStore } from '../../store/useAppStore';
 import { getPreparedProviderCatalogApproval, MAX_PROVIDER_MODEL_SELECTION, validateProviderModelSelection } from './providerModelCatalogService';
 import {
@@ -351,8 +352,11 @@ export async function executePreparedToolCall(
     const executionContext = { ...context, mode: resolveAgentExecutionMode(currentTask, policyMode) };
     const policy = evaluateAgentToolPolicy(prepared.definition, prepared.input, executionContext);
     const currentStep = currentTask.steps.find((item) => item.id === step.id);
-    const globalScopeActive = isMcpGlobalToolContext(executionContext, prepared.definition.id)
-      && isMcpGlobalToolContext(currentTask, prepared.definition.id);
+    const globalScopeActive = (isMcpGlobalToolContext(executionContext, prepared.definition.id)
+      && isMcpGlobalToolContext(currentTask, prepared.definition.id))
+      || (isGeneralAssistantToolContext(executionContext, prepared.definition.id)
+        && isGeneralAssistantToolContext(currentTask, prepared.definition.id)
+        && currentTask.conversationId === context.conversationId);
     const reverifyReason = !globalScopeActive
       && useAppStore.getState().currentProjectId !== context.projectId
       ? '目标项目已切换，已取消该工具执行'

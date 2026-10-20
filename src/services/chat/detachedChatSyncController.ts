@@ -4,6 +4,9 @@
 import type { Node } from '@xyflow/react';
 import { useAppStore } from '../../store/useAppStore';
 import { seriesOwnerId } from '../../store/store.utils';
+import { GENERAL_ASSISTANT_SCOPE_ID } from './assistantScope';
+import { getMcpClientOptions } from '../mcp/mcpClientService';
+import { MCP_SETTINGS_CONVERSATION_ID } from '../mcp/mcpSettingsScope';
 import type {
   ApiProviderConfig,
   BaseNodeData,
@@ -60,6 +63,8 @@ import {
 const DEFAULT_SYNC_INTERVAL_MS = 150;
 const MAX_SYNC_RETRY_DELAY_MS = 5_000;
 const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+// 同一空输入区连续勾选连接时，复用第一次创建且仍活动的会话，等待快照到达。
+let pendingMcpSelection: { scopeId: string; conversationId: string } | null = null;
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 
@@ -257,18 +262,26 @@ export function buildChatModelCatalog(state: Pick<AppState, 'config' | 'workflow
 }
 
 export function buildDetachedChatSnapshot(state: AppState): ChatStateSnapshot {
-  const imageDrafts = state.activeConversationId ? state.chatImageDrafts[state.activeConversationId] ?? [] : [];
+  const chatScopeId = state.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID;
+  const ownerId = seriesOwnerId(state.projects, chatScopeId);
+  const conversations = state.conversations.filter((conversation) => conversation.projectId === ownerId
+    || conversation.id === MCP_SETTINGS_CONVERSATION_ID);
+  const activeConversationId = conversations.some((conversation) => conversation.id === state.activeConversationId)
+    ? state.activeConversationId : null;
+  const composerDraft = activeConversationId ? state.chatComposerDrafts[activeConversationId] ?? ''
+    : state.activeConversationId ? '' : state.chatComposerLiveDraft;
+  const imageDrafts = activeConversationId ? state.chatImageDrafts[activeConversationId] ?? [] : [];
   const imageFileNames = [
     ...imageDrafts.map((image) => image.fileName),
-    ...state.messages.filter((message) => message.conversationId === state.activeConversationId)
+    ...state.messages.filter((message) => message.conversationId === activeConversationId)
       .flatMap((message) => parseChatImageReferences(message.content).map((image) => image.fileName)),
-    ...parseChatImageReferences(state.chatComposerLiveDraft).map((image) => image.fileName),
+    ...parseChatImageReferences(composerDraft).map((image) => image.fileName),
   ];
-  void prepareChatImagePreviews(state.currentProjectId, imageFileNames);
+  void prepareChatImagePreviews(chatScopeId, imageFileNames);
   const project = state.projects.find((item) => item.id === state.currentProjectId);
   return {
-    conversations: state.conversations,
-    activeConversationId: state.activeConversationId,
+    conversations,
+    activeConversationId,
     messages: state.messages,
     agentTasks: projectChatAgentTasks(state.agentTasks),
     projectId: state.currentProjectId,
@@ -281,15 +294,16 @@ export function buildDetachedChatSnapshot(state: AppState): ChatStateSnapshot {
     )[0],
     assistantImageModelId: state.config.assistantImageModelId,
     assistantVideoModelId: state.config.assistantVideoModelId,
-    localFileGrants: state.activeConversationId
-      ? listConversationFileGrants(state.activeConversationId)
+    localFileGrants: activeConversationId
+      ? listConversationFileGrants(activeConversationId)
       : [],
     imageDrafts,
-    imagePreviewUrls: getChatImagePreviews(state.currentProjectId, imageFileNames),
+    imagePreviewUrls: getChatImagePreviews(chatScopeId, imageFileNames),
     nodes: projectChatNodes(state.nodes),
     dramaAssets: state.dramaAssets,
     skillOptions: projectSkillPickerOptions(state.userSkills, state.agentPackageSkills),
-    composerDraft: state.activeConversationId ? state.chatComposerDrafts[state.activeConversationId] ?? '' : state.chatComposerLiveDraft,
+    mcpClientOptions: getMcpClientOptions(state.config.mcpClientConnections ?? []),
+    composerDraft,
     composerDrafts: state.chatComposerDrafts,
     panelView: state.chatPanelView,
     promptSubmitShortcut: state.configHydrated ? normalizePromptSubmitShortcut(state.config.promptSubmitShortcut) : undefined,
@@ -327,24 +341,55 @@ export function handleDetachedChatAction(
   const store = useAppStore.getState();
 
   switch (action.type) {
+    case 'open_mcp_client_settings':
+      store.setSettingsOpen(true, 'mcp');
+      if (isTauri) void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+        const main = getCurrentWindow();
+        await main.show();
+        await main.unminimize();
+        await main.setFocus();
+      }).catch(() => store.showToast('请在主窗口设置中管理 MCP 连接', 'info'));
+      break;
+    case 'set_mcp_connection': {
+      const scopeId = store.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID;
+      if (action.scopeId !== scopeId) break;
+      if (!store.config.mcpClientConnections?.some((item) => item.id === action.serverId && item.enabled)) break;
+      if (action.conversationId && action.conversationId !== store.activeConversationId) break;
+      const current = store.conversations.find((item) => item.id === store.activeConversationId && !item.deletedAt
+        && item.projectId === seriesOwnerId(store.projects, scopeId));
+      if (!action.conversationId && current && (pendingMcpSelection?.scopeId !== scopeId || pendingMcpSelection.conversationId !== current.id)) break;
+      const created = !action.conversationId && !current;
+      const conversationId = action.conversationId ?? current?.id ?? store.createConversation(scopeId);
+      if (created) pendingMcpSelection = { scopeId, conversationId };
+      const conversation = useAppStore.getState().conversations.find((item) => item.id === conversationId && !item.deletedAt);
+      if (conversation?.projectId !== seriesOwnerId(store.projects, scopeId)) break;
+      if (created && action.draft !== undefined) store.setChatComposerLiveDraft(action.draft, conversationId);
+      store.setConversationMcpServer(conversationId, action.serverId, action.enabled);
+      requestSync(true);
+      break;
+    }
     case 'send_message': {
-      if (action.conversationId !== store.activeConversationId) {
-        store.setActiveConversation(action.conversationId);
+      if (!action.content.trim() && !action.imageFileNames?.length) break;
+      if (action.conversationId && !store.conversations.some((item) => item.id === action.conversationId && !item.deletedAt)) break;
+      const conversationId = action.conversationId
+        ?? store.createConversation(store.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID);
+      if (conversationId !== store.activeConversationId) {
+        store.setActiveConversation(conversationId);
       }
       const conversation = store.conversations.find(
-        (item) => item.id === action.conversationId,
+        (item) => item.id === conversationId,
       );
       const submitted = submitConversationMessage({
         content: action.content,
         ...(action.imageFileNames !== undefined ? { imageFileNames: action.imageFileNames } : {}),
         projectId: store.currentProjectId && conversation?.projectId === seriesOwnerId(store.projects, store.currentProjectId)
-          ? store.currentProjectId : conversation?.projectId ?? store.currentProjectId ?? '',
-        conversationId: action.conversationId,
+          ? store.currentProjectId : conversation?.projectId ?? store.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID,
+        conversationId,
         mode: conversation?.agentMode ?? 'collaborative',
         dispatchMode: action.dispatchMode,
       });
       if (action.imageFileNames?.length) {
-        store.setChatComposerLiveDraft(submitted?.status === 'ignored' ? action.content : '', action.conversationId);
+        store.setChatComposerLiveDraft(submitted?.status === 'ignored' ? action.content : '', conversationId);
         requestSync(true);
       }
       break;
@@ -356,7 +401,9 @@ export function handleDetachedChatAction(
       break;
 
     case 'create_conversation':
-      store.createConversation(action.projectId, action.title);
+      if (action.projectId === (store.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID)) {
+        store.createConversation(action.projectId, action.title);
+      }
       break;
 
     case 'rename_conversation':
@@ -386,8 +433,12 @@ export function handleDetachedChatAction(
       store.removeConversation(action.conversationId);
       break;
 
-    case 'authorize_local_files':
-      void attachConversationFiles(action.conversationId)
+    case 'authorize_local_files': {
+      const draft = action.draft ?? store.chatComposerLiveDraft;
+      const conversationId = action.conversationId
+        ?? store.createConversation(store.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID);
+      if (!action.conversationId && draft) store.setChatComposerLiveDraft(draft, conversationId);
+      void attachConversationFiles(conversationId)
         .then((created) => {
           store.showToast(
             `已添加 ${created.images} 张参考图，授权 ${created.texts} 个文本文件${created.failed ? '；部分图片未添加，请检查格式、大小或数量上限' : ''}`,
@@ -399,6 +450,7 @@ export function handleDetachedChatAction(
           'error',
         ));
       break;
+    }
 
     case 'remove_image_attachment':
       store.removeChatImageDrafts(action.conversationId, [action.fileName]);

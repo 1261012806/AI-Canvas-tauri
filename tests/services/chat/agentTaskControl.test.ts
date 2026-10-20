@@ -20,6 +20,7 @@ import {
   scheduleConversationAgentExecution,
 } from '../../../src/services/chat/agentScheduler';
 import { useAppStore } from '../../../src/store/useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../../src/services/chat/assistantScope';
 
 function createTask(
   id: string,
@@ -154,6 +155,13 @@ describe('agent replan requests', () => {
 });
 
 describe('agent resume validation', () => {
+  it('can resume a general conversation without opening a project', () => {
+    const task = createTask('general-paused', GENERAL_ASSISTANT_SCOPE_ID, 'conv-general', 'paused');
+    arrangeTask(task);
+    useAppStore.setState({ currentProjectId: null });
+    expect(validateTaskResumable(task.id)).toEqual({ ok: true });
+  });
+
   it('allows resuming a paused task below the lifetime cap', () => {
     arrangeTask(createTask('task-fresh', 'project-1', 'conversation-1', 'paused'));
     expect(validateTaskResumable('task-fresh')).toEqual({ ok: true });
@@ -209,6 +217,26 @@ describe('agent resume validation', () => {
 });
 
 describe('agent task control', () => {
+  it('resolves a general file approval only from its active conversation and retained tool scope', async () => {
+    const task = { ...createTask('general-approval-task', GENERAL_ASSISTANT_SCOPE_ID, 'conv-general', 'waiting_approval'),
+      toolAllowlist: ['file_write_text'], steps: [{
+        id: 'general-step', taskId: 'general-approval-task', index: 0, kind: 'approval' as const, title: 'Save',
+        status: 'waiting_approval' as const, createdAt: 1, updatedAt: 1,
+        approval: { id: 'general-save-approval', kind: 'file_write' as const, status: 'pending' as const, summary: 'Save', requestedAt: 1 },
+        toolCall: { callId: 'general-save', toolId: 'file_write_text', effect: 'file_write' as const, inputSummary: 'Save', retryCount: 0 },
+      }] };
+    arrangeTask(task);
+    useAppStore.setState({ currentProjectId: null, activeConversationId: 'another-conversation' });
+    const pending = waitForAgentApproval('general-save-approval', new AbortController().signal);
+    expect(resolveAgentApproval('general-save-approval', { approved: true })).toBe(false);
+    useAppStore.setState({ activeConversationId: task.conversationId });
+    useAppStore.getState().updateAgentTask(task.id, { toolAllowlist: [] });
+    expect(resolveAgentApproval('general-save-approval', { approved: true })).toBe(false);
+    useAppStore.getState().updateAgentTask(task.id, { toolAllowlist: ['file_write_text'] });
+    expect(resolveAgentApproval('general-save-approval', { approved: true })).toBe(true);
+    await expect(pending).resolves.toEqual({ approved: true });
+  });
+
   it('synchronously aborts active work and clears queued work for a deleted conversation', async () => {
     const conversationId = 'conversation-target';
     useAppStore.setState({

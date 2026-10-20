@@ -34,6 +34,7 @@ const KIND_META: Record<AgentApprovalKind, { label: string; icon: string }> = {
   memory_write: { label: '保存记忆', icon: 'mdi:brain' },
   config_write: { label: 'API 配置', icon: 'mdi:api' },
   asset_write: { label: '资产库写入', icon: 'mdi:account-box-multiple-outline' },
+  external_write: { label: '外部 MCP 操作', icon: 'mdi:connection' },
 };
 
 

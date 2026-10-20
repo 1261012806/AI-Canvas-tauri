@@ -256,6 +256,16 @@ fn delete_entry(
     write_map(file, &map)
 }
 
+/// 仅供原生受限连接读取；不通过 Renderer 中转认证明文。
+pub(crate) async fn read_internal_secret(app: AppHandle, key: String) -> Result<Option<String>, SecretError> {
+    validate_key(&key).map_err(|_| SecretError::new("invalid_data"))?;
+    let file = secret_file(&app).map_err(|_| SecretError::new("unavailable"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = lock_store(&file, LOCK_TIMEOUT)?;
+        Ok(read_map(&file)?.get(&key).cloned())
+    }).await.map_err(|_| SecretError::new("unknown"))?
+}
+
 /// 写入或覆盖一条凭据。
 #[tauri::command]
 pub async fn secret_set(

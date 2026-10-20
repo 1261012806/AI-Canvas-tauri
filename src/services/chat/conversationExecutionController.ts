@@ -42,6 +42,7 @@ import {
 } from '../skillPromptService';
 import { useAppStore } from '../../store/useAppStore';
 import { formatChatImageReference, parseChatImageReferences, MAX_CHAT_IMAGES } from './chatImageReferenceService';
+import { GENERAL_ASSISTANT_SCOPE_ID, isGeneralAssistantScope, resolveAssistantToolAllowlist } from './assistantScope';
 import type { ChatMessage } from '../../types/chat';
 import {
   type AgentApprovalResolution,
@@ -229,7 +230,9 @@ export function submitConversationMessage({
   }
 
   const conversation = store.conversations.find((item) => item.id === conversationId);
-  const executionProjectId = projectId ?? conversation?.projectId ?? store.currentProjectId ?? '';
+  // 窗口快照可能晚于项目切换；通用会话绝不能因此继承新画布权限。
+  const executionProjectId = isGeneralAssistantScope(conversation?.projectId)
+    ? GENERAL_ASSISTANT_SCOPE_ID : projectId ?? conversation?.projectId ?? store.currentProjectId ?? '';
   const userMessage: ChatMessage = {
     id: createMessageId(),
     conversationId,
@@ -296,7 +299,7 @@ function startAgentMessageExecution({
       userMessageId,
       mode,
       goal: text,
-      toolAllowlist: resolveSkillBindingToolAllowlist(skillBindings),
+      toolAllowlist: resolveAssistantToolAllowlist(projectId, resolveSkillBindingToolAllowlist(skillBindings)),
       skillBindings,
     });
     taskId = task.id;
@@ -427,6 +430,7 @@ function driveAgentTask(
         });
         if (
           availableTools.length > 0
+          || isGeneralAssistantScope(projectId)
           || mode === 'plan'
           || task.toolAllowlist !== undefined
         ) {
@@ -557,19 +561,23 @@ function driveAgentTask(
       }
     }
 
-    if (mode === 'plan' || task.toolAllowlist !== undefined) {
+    if (isGeneralAssistantScope(projectId) || mode === 'plan' || task.toolAllowlist !== undefined) {
       useAppStore.getState().updateMessage(assistantMessageId, {
-        content: mode === 'plan'
+        content: isGeneralAssistantScope(projectId)
+          ? '未选择可用的对话文本模型，本次请求尚未处理。请在输入框下方选择已配置的文本模型后重试。'
+          : mode === 'plan'
           ? 'Plan 模式需要配置文本模型后才能生成分析与规划；未执行任何写操作。'
           : '该 Skill 声明了工具限制，需要配置文本模型后才能安全执行；未执行任何操作。',
-        status: 'done',
+        status: 'error',
+        finishReason: 'error',
       });
       onProgress?.();
-      return 'completed';
+      return 'failed';
     }
 
     try {
       const result = await runAssistantPipeline(text, conversationId, projectId);
+      if (result.errorCode) throw new Error(result.reply);
       useAppStore.getState().updateMessage(assistantMessageId, {
         content: result.reply,
         status: 'done',

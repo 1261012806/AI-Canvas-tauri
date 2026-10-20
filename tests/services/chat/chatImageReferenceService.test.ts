@@ -8,6 +8,7 @@ import {
 import { clearConversationFileGrants, listConversationFileGrants } from '../../../src/services/chat/fileGrantService';
 import { resolvePromptToChatContent, resolvePromptWithImageRefs } from '../../../src/services/ai/promptResolver';
 import { prepareAssistantVisualMessages } from '../../../src/services/chat/assistantVisualContext';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../../src/services/chat/assistantScope';
 
 const fileName = 'chat-ref-11111111-1111-4111-8111-111111111111.png';
 const dataUrl = 'data:image/png;base64,QUJDRA==';
@@ -24,6 +25,18 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); clearConversationFileGrants('chat-1'); });
 
 describe('chat image references', () => {
+  it('stores general chat references in their own scope without opening or creating a project', async () => {
+    useAppStore.setState((state) => ({ currentProjectId: null,
+      conversations: state.conversations.map((conversation) => ({ ...conversation, projectId: GENERAL_ASSISTANT_SCOPE_ID })) }));
+    vi.spyOn(files, 'selectAgentTextFiles').mockResolvedValue([{ path: 'selected/reference.png', fileName: '参考.png', extension: 'png', size: 4 }]);
+    vi.spyOn(files, 'readAgentSelectedImage').mockResolvedValue({ bytes: new Uint8Array([1, 2, 3, 4]), extension: 'png' });
+    const save = vi.spyOn(files, 'saveBinaryToProjectData').mockResolvedValue({ filePath: 'general/reference.png', assetUrl: 'asset://general' });
+    expect(await attachConversationFiles('chat-1')).toEqual({ images: 1, texts: 0, failed: 0 });
+    expect(save).toHaveBeenCalledWith(expect.any(Uint8Array), GENERAL_ASSISTANT_SCOPE_ID, expect.any(String), { throwOnError: true });
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+    expect(useAppStore.getState().projects.map((project) => project.id)).toEqual(['project-1']);
+  });
+
   it('round-trips labels without persisting paths or letting delimiters escape the reference', () => {
     const raw = formatChatImageReference(image);
     expect(parseChatImageReferences(`看看 ${raw}`)).toMatchObject([{ fileName, label: image.label, raw }]);

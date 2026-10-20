@@ -5,6 +5,7 @@ import type { AgentMode, AgentToolDisplaySnapshot } from '../../types/agent';
 import type { ProposedToolCall, ToolResultSummary, WebSource } from '../../types/chat';
 import type { McpContent } from '../../types/mcp';
 import type { SkillReadBudget } from './skillReadService';
+import { isGeneralAssistantScope, isGeneralAssistantTool } from './assistantScope';
 import {
   validateAgentToolInput,
   type AgentToolSchema,
@@ -20,7 +21,8 @@ export type AgentToolEffect =
   | 'media_generation'
   | 'memory_write'
   | 'config_write'
-  | 'asset_write';
+  | 'asset_write'
+  | 'external_write';
 
 export interface AgentToolContext {
   taskId: string;
@@ -129,6 +131,7 @@ export function getAvailableAgentTools(
   context: Omit<AgentToolContext, 'signal'>,
 ): AgentToolDefinition[] {
   return [...registry.values()].filter((definition) => {
+    if (isGeneralAssistantScope(context.projectId) && !isGeneralAssistantTool(definition.id)) return false;
     if (context.mode === 'plan' && definition.effect !== 'read') return false;
     if (
       context.toolAllowlist !== undefined
@@ -164,6 +167,7 @@ export function prepareAgentToolCall(
 ): PrepareAgentToolCallResult {
   const definition = registry.get(call.toolId);
   const unavailable = !definition
+    || (isGeneralAssistantScope(context.projectId) && !isGeneralAssistantTool(call.toolId))
     || (context.mode === 'plan' && definition.effect !== 'read')
     || (
       context.toolAllowlist !== undefined

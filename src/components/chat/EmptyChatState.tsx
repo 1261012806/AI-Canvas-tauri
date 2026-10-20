@@ -1,86 +1,72 @@
-/**
- * EmptyChatState — 空会话状态页
- *
- * 无活动会话时展示，含新建对话 / 历史记录入口 + 示例提示。
- */
+/** 新会话欢迎页与建议入口；示例只预填，发送仍由用户决定。 */
 import { Icon } from '@iconify/react';
-import AnimatedButton from '../shared/AnimatedButton';
 import MascotAvatar from './MascotAvatar';
 import { useT } from '../../i18n';
 
 interface EmptyChatStateProps {
   onNew: () => void;
   onList: () => void;
-  /** 打开全局智能体中心；独立窗口不提供以保持主窗口单写入。 */
   onOpenAgents?: () => void;
-  /** 点击示例提示 → 预填输入框（不提供时示例不可点击） */
   onExample?: (text: string) => void;
+  hasCanvas?: boolean;
+  compact?: boolean;
 }
 
-const EXAMPLES = [
-  '现在有几个失败节点？',
-  '选中 3 号节点',
-  '删除失败节点',
+const SUGGESTIONS = [
+  { icon: 'lucide:lightbulb', title: '分析与解答', description: '把复杂问题拆开，找到清晰的思路',
+    prompt: '帮我分析一个问题，梳理关键因素并给出可行建议：' },
+  { icon: 'lucide:pen-line', title: '写作与润色', description: '起草、改写、翻译或整理表达',
+    prompt: '帮我润色下面这段文字，保留原意，让表达更清晰自然：' },
+  { icon: 'lucide:files', title: '资料与总结', description: '结合上传文件或链接提炼重点',
+    prompt: '请总结我提供的资料，列出关键结论、依据和待确认的问题：' },
 ];
+const CANVAS_SUGGESTION = {
+  icon: 'lucide:workflow', title: '画布与任务', description: '查看当前进度，安排下一步工作',
+  prompt: '请查看当前画布，概括已有内容和未完成的任务，给出下一步建议。',
+};
 
-export default function EmptyChatState({ onNew, onList, onOpenAgents, onExample }: EmptyChatStateProps) {
+export default function EmptyChatState({
+  onNew, onList, onOpenAgents, onExample, hasCanvas = false, compact = false,
+}: EmptyChatStateProps) {
   const t = useT();
+  const suggestions = hasCanvas ? [...SUGGESTIONS, CANVAS_SUGGESTION] : SUGGESTIONS;
   return (
-    <div className="chat-empty-state flex flex-col items-center justify-center h-full text-center px-6">
-      <MascotAvatar size={72} className="mb-5" />
-      <h3 className="text-base font-semibold text-canvas-text mb-2">{t('AI 助手')}</h3>
-      <p className="text-sm text-canvas-text-secondary mb-6 max-w-[260px]">
-        {t('直接开始对话，或按需安装智能体来扩展专业能力。没有智能体时，默认助手仍可正常使用。')}
-      </p>
-      <div className="chat-empty-state-actions flex flex-col gap-2 w-48">
-        <AnimatedButton
-          className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl
-                     bg-brand text-white text-sm font-medium hover:bg-brand-light transition-colors"
-          onClick={onNew}
-        >
-          <Icon icon="mdi:plus" width="16" height="16" />
-          {t('新建对话')}
-        </AnimatedButton>
-        <AnimatedButton
-          className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl
-                     bg-canvas-hover text-canvas-text-secondary text-sm hover:text-canvas-text
-                     hover:bg-canvas-border transition-colors"
-          onClick={onList}
-        >
-          <Icon icon="mdi:history" width="16" height="16" />
-          {t('历史记录')}
-        </AnimatedButton>
-        {onOpenAgents && (
-          <AnimatedButton
-            className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl
-                       border border-canvas-border bg-canvas-card text-canvas-text-secondary text-sm
-                       hover:border-brand/40 hover:bg-brand/10 hover:text-canvas-text transition-colors"
-            onClick={onOpenAgents}
-          >
-            <Icon icon="lucide:bot" width="16" height="16" />
-            {t('智能体中心')}
-          </AnimatedButton>
-        )}
+    <section className="chat-welcome mx-auto flex min-h-full w-full max-w-xl flex-col items-center justify-center gap-4 p-3 text-center"
+      aria-label={t('开始对话')}>
+      <MascotAvatar size={compact ? 36 : 48} />
+      <div className="space-y-2">
+        <h3 className="text-base font-semibold text-canvas-text">{t('有什么可以帮你？')}</h3>
+        <p className="max-w-sm text-xs leading-relaxed text-canvas-text-secondary">
+          {t(hasCanvas
+            ? '可以直接聊天、写作和分析资料，也可以协助处理当前画布。'
+            : '问答、写作、翻译和资料分析，直接开始就好。对话会自动保存。')}
+        </p>
       </div>
-
-      {/* Example prompts */}
       {onExample && (
-        <div className="chat-empty-state-examples mt-8 space-y-2 w-56">
-          <p className="text-[11px] text-canvas-text-muted mb-2">{t('试试这些：')}</p>
-          {EXAMPLES.map((example) => (
-            <button
-              key={example}
-              type="button"
-              onClick={() => onExample(example)}
-              className="w-full text-left px-3 py-2 text-xs text-canvas-text-secondary bg-canvas-bg
-                         border border-canvas-border rounded-lg transition-colors
-                         hover:border-brand-light/50 hover:text-canvas-text hover:bg-canvas-hover"
-            >
-              {t(example)}
+        <div className="chat-welcome-suggestions w-full">
+          {suggestions.map((suggestion) => (
+            <button key={suggestion.title} type="button" onClick={() => onExample(t(suggestion.prompt))}
+              className="ui-card flex min-w-0 items-start gap-2 p-3 text-left transition-colors hover:bg-canvas-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand">
+              <Icon icon={suggestion.icon} width="16" height="16" aria-hidden="true" className="mt-0.5 shrink-0 text-canvas-text-secondary" />
+              <span className="min-w-0 space-y-1">
+                <span className="block text-xs font-medium text-canvas-text">{t(suggestion.title)}</span>
+                <span className="block text-[11px] leading-relaxed text-canvas-text-secondary">{t(suggestion.description)}</span>
+              </span>
             </button>
           ))}
         </div>
       )}
-    </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {!compact && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onNew}>
+          <Icon icon="lucide:plus" width="14" aria-hidden="true" />{t('新建对话')}
+        </button>}
+        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onList}>
+          <Icon icon="lucide:history" width="14" aria-hidden="true" />{t('历史记录')}
+        </button>
+        {onOpenAgents && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onOpenAgents}>
+          <Icon icon="lucide:bot" width="14" aria-hidden="true" />{t('智能体中心')}
+        </button>}
+      </div>
+    </section>
   );
 }

@@ -31,10 +31,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { openDetachedChatWindow } from '../../services/chat/chatWindowLifecycle';
 import { useAppStore } from '../../store/useAppStore';
 import { seriesOwnerId } from '../../store/store.utils';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../services/chat/assistantScope';
 import ConversationList from './ConversationList';
 import ChatHeader from './ChatHeader';
 import ChatMessages from './ChatMessages';
 import ChatInput from './ChatInput';
+import { getMcpClientOptions } from '../../services/mcp/mcpClientService';
 import { MCP_SETTINGS_CONVERSATION_ID, MCP_SETTINGS_SCOPE_ID } from '../../services/mcp/mcpSettingsScope';
 import ProjectMemoryPanel from './ProjectMemoryPanel';
 import SubAgentPanel from './SubAgentPanel';
@@ -186,14 +188,24 @@ export default function ChatPanel({
 
   // ── detached 模式数据 ──
   const effectiveConversations = detached ? (detachedSnapshot?.conversations ?? []) : conversations;
-  const effectiveActiveConversationId = detached ? (detachedSnapshot?.activeConversationId ?? null) : activeConversationId;
+  const conversationScopeId = currentProjectId ? seriesOwnerId(projects, currentProjectId) : GENERAL_ASSISTANT_SCOPE_ID;
+  const effectiveActiveConversationId = detached ? (detachedSnapshot?.activeConversationId ?? null)
+    : activeConversationId !== MCP_SETTINGS_CONVERSATION_ID
+      && !conversations.some((conversation) => conversation.id === activeConversationId && conversation.projectId === conversationScopeId)
+      ? null : activeConversationId;
   const effectiveMessages = useMemo(
     () => detached ? (detachedSnapshot?.messages ?? []) : messages,
     [detached, detachedSnapshot?.messages, messages],
   );
   const effectiveAgentTasks = detached ? (detachedSnapshot?.agentTasks ?? []) : agentTasks;
   const effectiveProjectId = detached ? (detachedSnapshot?.projectId ?? null) : currentProjectId;
-  const effectiveProjectName = detached ? detachedSnapshot?.projectName : undefined;
+  const chatScopeId = effectiveProjectId ?? GENERAL_ASSISTANT_SCOPE_ID;
+  const effectiveProjectName = detached ? detachedSnapshot?.projectName : projects.find((item) => item.id === currentProjectId)?.name;
+  useEffect(() => {
+    if (!detached && currentProjectId === null) {
+      void useAppStore.getState().loadConversationsForProject(GENERAL_ASSISTANT_SCOPE_ID);
+    }
+  }, [detached, currentProjectId]);
   const currentProject = projects.find((item) => item.id === currentProjectId);
   const projectAssistantModelId = getAssistantTextModelCandidates(
     currentProject?.settings,
@@ -231,13 +243,28 @@ export default function ChatPanel({
     (conversation) => conversation.id === effectiveActiveConversationId,
   );
   const settingsConversation = effectiveActiveConversationId === MCP_SETTINGS_CONVERSATION_ID;
+  const [inputValue, setInputValue] = useState('');
+  const mcpOptions = detached ? detachedSnapshot?.mcpClientOptions ?? [] : getMcpClientOptions(config.mcpClientConnections ?? []);
+  const handleMcpToggle = (serverId: string, enabled: boolean) => {
+    if (detached) {
+      void emitAction({ type: 'set_mcp_connection', conversationId: effectiveActiveConversationId ?? undefined, scopeId: chatScopeId, serverId, enabled, draft: inputValue });
+      return;
+    }
+    const state = useAppStore.getState();
+    const conversationId = effectiveActiveConversationId ?? state.createConversation(chatScopeId);
+    if (!effectiveActiveConversationId) state.setChatComposerLiveDraft(inputValue, conversationId);
+    state.setConversationMcpServer(conversationId, serverId, enabled);
+  };
+  const handleMcpSettings = () => {
+    if (detached) void emitAction({ type: 'open_mcp_client_settings' });
+    else useAppStore.getState().setSettingsOpen(true, 'mcp');
+  };
   const effectiveAgentMode = effectiveActiveConversation?.agentMode ?? 'collaborative';
   const hasActiveConversationTask = effectiveAgentTasks.some(
     (task) => task.conversationId === effectiveActiveConversationId
       && ['planning', 'running', 'waiting_tool', 'waiting_approval'].includes(task.status),
   );
 
-  const [inputValue, setInputValue] = useState('');
   const imageDrafts = useAppStore((state) => state.chatImageDrafts);
   const effectiveImageDrafts = detached ? (detachedSnapshot?.imageDrafts ?? EMPTY_IMAGE_DRAFTS)
     : effectiveActiveConversationId ? imageDrafts[effectiveActiveConversationId] ?? EMPTY_IMAGE_DRAFTS : EMPTY_IMAGE_DRAFTS;
@@ -249,13 +276,13 @@ export default function ChatPanel({
     ...effectiveImageDrafts.map((image) => image.fileName),
   ], [effectiveMessages, effectiveActiveConversationId, inputValue, effectiveImageDrafts]);
   useEffect(() => {
-    if (!detached) void prepareChatImagePreviews(effectiveProjectId, imageFileNames);
-  }, [detached, effectiveProjectId, imageFileNames]);
+    if (!detached) void prepareChatImagePreviews(chatScopeId, imageFileNames);
+  }, [detached, chatScopeId, imageFileNames]);
   const imageFileKey = [...new Set(imageFileNames)].join('|');
   const imagePreviewUrls = useMemo(() => {
     if (detached) return detachedSnapshot?.imagePreviewUrls;
-    return imagePreviewVersion === 0 ? {} : getChatImagePreviews(effectiveProjectId, imageFileKey ? imageFileKey.split('|') : []);
-  }, [detached, detachedSnapshot?.imagePreviewUrls, effectiveProjectId, imageFileKey, imagePreviewVersion]);
+    return imagePreviewVersion === 0 ? {} : getChatImagePreviews(chatScopeId, imageFileKey ? imageFileKey.split('|') : []);
+  }, [detached, detachedSnapshot?.imagePreviewUrls, chatScopeId, imageFileKey, imagePreviewVersion]);
   const pendingDraftsRef = useRef(new Map<string | null, string>());
   const pendingConversationDraftRef = useRef<string | null>(null);
   const effectivePanelView = detached ? detachedSnapshot?.panelView ?? 'chat' : chatPanelView;
@@ -428,7 +455,7 @@ export default function ChatPanel({
 
   const canonicalDraft = effectiveActiveConversationId
     ? (detached ? detachedSnapshot?.composerDrafts : chatComposerDrafts)?.[effectiveActiveConversationId] ?? ''
-    : detached ? detachedSnapshot?.composerDraft ?? '' : chatComposerLiveDraft;
+    : detached ? detachedSnapshot?.composerDraft ?? '' : activeConversationId ? '' : chatComposerLiveDraft;
   const ownsComposer = detached ? detachedInitialized : !chatPanelDetached;
   useEffect(() => {
     if (!ownsComposer) return;
@@ -521,14 +548,13 @@ export default function ChatPanel({
 
   // ── 会话操作 ──
   const handleNewConversation = useCallback(() => {
-    if (!effectiveProjectId) return;
     if (detached) {
-      void emitAction({ type: 'create_conversation', projectId: effectiveProjectId });
+      void emitAction({ type: 'create_conversation', projectId: chatScopeId });
     } else {
-      createConversation(effectiveProjectId);
+      createConversation(chatScopeId);
     }
     setViewMode('chat');
-  }, [detached, effectiveProjectId, createConversation, setViewMode]);
+  }, [detached, chatScopeId, createConversation, setViewMode]);
 
   const handleSelectConversation = useCallback(
     (id: string) => {
@@ -546,17 +572,17 @@ export default function ChatPanel({
   const handleShowList = useCallback(() => setViewMode('list'), [setViewMode]);
 
   const handleExampleClick = useCallback((text: string) => {
-    if (!effectiveActiveConversationId && effectiveProjectId) {
+    if (!effectiveActiveConversationId) {
       pendingConversationDraftRef.current = text;
       handleNewConversation();
       setInputValue(text);
       return;
     }
     updateInputDraft(text);
-  }, [effectiveActiveConversationId, effectiveProjectId, handleNewConversation, updateInputDraft]);
+  }, [effectiveActiveConversationId, handleNewConversation, updateInputDraft]);
 
   useEffect(() => {
-    if (detached || chatPanelDetached || !chatComposerDraft || !effectiveProjectId) return;
+    if (detached || chatPanelDetached || !chatComposerDraft) return;
     let focusFrame = 0;
     const draftFrame = requestAnimationFrame(() => {
       handleExampleClick(chatComposerDraft);
@@ -708,15 +734,19 @@ export default function ChatPanel({
   ]);
 
   const handleAuthorizeLocalFiles = useCallback(() => {
-    if (!effectiveActiveConversationId) return;
     if (detached) {
       void emitAction({
         type: 'authorize_local_files',
-        conversationId: effectiveActiveConversationId,
+        conversationId: effectiveActiveConversationId ?? undefined,
+        draft: inputValue,
       });
       return;
     }
-    void attachConversationFiles(effectiveActiveConversationId)
+    const conversationId = effectiveActiveConversationId ?? createConversation(chatScopeId);
+    if (!effectiveActiveConversationId && inputValue) {
+      useAppStore.getState().setChatComposerLiveDraft(inputValue, conversationId);
+    }
+    void attachConversationFiles(conversationId)
       .then((created) => {
         showToast(
           `已添加 ${created.images} 张参考图，授权 ${created.texts} 个文本文件${created.failed ? '；部分图片未添加，请检查格式、大小或数量上限' : ''}`,
@@ -727,7 +757,7 @@ export default function ChatPanel({
         error instanceof Error ? error.message : t('文件授权失败'),
         'error',
       ));
-  }, [detached, effectiveActiveConversationId, showToast, t]);
+  }, [detached, effectiveActiveConversationId, createConversation, chatScopeId, inputValue, showToast, t]);
 
   const handleRevokeLocalFile = useCallback((grantId: string) => {
     if (!effectiveActiveConversationId) return;
@@ -752,7 +782,7 @@ export default function ChatPanel({
   const sendMessageText = useCallback((content: string, dispatchMode: 'queue' | 'interject' = 'queue', includePendingImages = true) => {
     const text = content.trim();
     const imageFileNames = includePendingImages ? effectiveImageDrafts.map((image) => image.fileName) : [];
-    if ((!text && !imageFileNames.length) || !effectiveActiveConversationId || settingsConversation) return;
+    if ((!text && !imageFileNames.length) || settingsConversation) return;
 
     if (detached) {
       if (imageFileNames.length) {
@@ -767,7 +797,7 @@ export default function ChatPanel({
         type: 'send_message',
         content: text,
         imageFileNames,
-        conversationId: effectiveActiveConversationId,
+        conversationId: effectiveActiveConversationId ?? undefined,
         dispatchMode,
       });
       if (!imageFileNames.length) updateInputDraft('');
@@ -777,8 +807,8 @@ export default function ChatPanel({
     const submitted = submitConversationMessage({
       content: text,
       imageFileNames,
-      projectId: effectiveProjectId ?? '',
-      conversationId: effectiveActiveConversationId,
+      projectId: chatScopeId,
+      conversationId: effectiveActiveConversationId ?? createConversation(chatScopeId),
       mode: effectiveAgentMode,
       dispatchMode,
       onProgress: scrollToBottom,
@@ -790,7 +820,8 @@ export default function ChatPanel({
     detached,
     effectiveActiveConversationId,
     effectiveAgentMode,
-    effectiveProjectId,
+    chatScopeId,
+    createConversation,
     effectiveImageDrafts,
     settingsConversation,
     scrollToBottom,
@@ -915,7 +946,7 @@ export default function ChatPanel({
             <ChatHeader
               detached={detached}
               chatPanelDetached={chatPanelDetached}
-              projectName={effectiveProjectName}
+              projectName={effectiveProjectName ?? t('通用对话')}
               agentMode={effectiveAgentMode}
               onAgentModeChange={handleAgentModeChange}
               agentModeDisabled={!effectiveActiveConversationId || settingsConversation}
@@ -956,7 +987,7 @@ export default function ChatPanel({
             <div className="chat-panel-body flex flex-1 min-h-0">
               {showTaskCenter ? (
                 <AgentTaskCenter
-                  tasks={effectiveAgentTasks.filter((task) => task.projectId === effectiveProjectId || task.projectId === MCP_SETTINGS_SCOPE_ID)}
+                  tasks={effectiveAgentTasks.filter((task) => task.projectId === chatScopeId || task.projectId === MCP_SETTINGS_SCOPE_ID)}
                   conversations={effectiveConversations}
                   onClose={() => setShowTaskCenter(false)}
                   {...agentControls}
@@ -1010,6 +1041,7 @@ export default function ChatPanel({
                 >
                   {/* Messages */}
                   <ChatMessages
+                    hasCanvas={!!effectiveProjectId}
                     messages={conversationMessages}
                     imagePreviewUrls={imagePreviewUrls}
                     agentTasks={effectiveAgentTasks}
@@ -1030,7 +1062,7 @@ export default function ChatPanel({
                   />
 
                   {/* Input area */}
-                  {!showEmptyState && !settingsConversation && (
+                  {!settingsConversation && (
                     <ChatInput
                       assistantModelId={effectiveAssistantModelId}
                       onAssistantModelChange={handleTextModelChange}
@@ -1052,6 +1084,10 @@ export default function ChatPanel({
                       onRemoveImage={handleRemoveImage}
                       onAuthorizeLocalFiles={handleAuthorizeLocalFiles}
                       onRevokeLocalFile={handleRevokeLocalFile}
+                      mcpOptions={mcpOptions}
+                      mcpServerIds={effectiveActiveConversation?.mcpServerIds}
+                      onMcpToggle={handleMcpToggle}
+                      onMcpSettings={handleMcpSettings}
                       contextUsage={contextUsage}
                       allowSkillUpload={!detached}
                       skillOptions={detached ? (detachedSnapshot?.skillOptions ?? []) : undefined}

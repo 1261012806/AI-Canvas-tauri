@@ -146,7 +146,8 @@ function MessageBubble({
             <span>{t(message.activity === 'connecting' ? '正在连接模型' : '正在分析请求')}</span>
           </div>
         )}
-        {!isUser && message.reasoning && <ReasoningPanel content={message.reasoning} truncated={message.reasoningTruncated} />}
+        {!isUser && message.reasoning && <ReasoningPanel content={message.reasoning} truncated={message.reasoningTruncated}
+          active={message.status === 'streaming' && message.activity === 'planning'} />}
         {!isUser && message.activity === 'compressing' && !showTimeline && <p role="status" className="py-2 text-xs text-canvas-text-secondary">{t('正在压缩上下文')}</p>}
         {!isUser && message.responseError && <div role="alert" className="ui-alert ui-alert--danger mb-2 break-words">{message.responseError}</div>}
         {isUser && <ChatImageAttachments images={parseChatImageReferences(message.content)} previews={imagePreviewUrls} />}

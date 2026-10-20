@@ -77,13 +77,13 @@ export default function ChatHeader({
           </button>
         )}
         <MascotAvatar size={26} className="shrink-0" />
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex flex-col min-w-0">
           <span className="chat-panel-title text-sm font-semibold text-canvas-text truncate">
             {t('AI 助手')}
           </span>
-          {detached && projectName && (
-            <span className="text-[11px] text-canvas-text-muted truncate max-w-[120px]">
-              · {projectName}
+          {projectName && (
+            <span className="text-[11px] text-canvas-text-secondary truncate max-w-[160px]" title={projectName}>
+              {projectName}
             </span>
           )}
 

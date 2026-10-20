@@ -1,6 +1,22 @@
 # MCP 控制
 
-负责外部 MCP 客户端连接、工具发现、控制会话、请求桥接和返回结果。具体业务工具复用内部 Registry、Policy 与宿主服务。
+负责外部客户端控制 AI Canvas，以及内部助手连接外部 MCP 服务。这两个方向独立；业务工具与外部调用均复用 Registry、Policy 与任务审计。
+
+## 助手连接外部服务
+
+已实现，待用户桌面验收；本轮未运行测试、类型检查或构建。设置 → MCP →「助手连接外部服务」添加地址与认证，读取目录并逐工具授权；助手输入框的 MCP 入口为每个会话显式选择连接，默认不启用。通用对话、画布对话和独立窗口共用配置，主窗口唯一执行。
+
+入口：`components/settings/McpClientSettings.tsx` / `McpConnectionEditor.tsx`、`services/mcp/mcpClientService.ts`、`chat/tools/externalMcpTools.ts` 与原生 `mcp/client.rs`。复用已安装的 TS MCP SDK 和原生 reqwest，无新增依赖或运行环境；安装包增量尚未实测。
+
+- 首期 Streamable HTTP，只允许 HTTPS 或本机回环 HTTP，URL 不含凭据、查询参数或片段；支持 Bearer Token 与 X-API-Key。凭据经 `providerSecretService` 写入 Rust `secret_store`，请求中原生注入，不进入普通配置或独立窗口快照。
+- 逐工具授权绑定名称、说明、输入/输出 schema、标注与执行元数据的 SHA-256。远端只读标注只是提示；用户确认只读才走 `read`，其余已授权操作走 `external_write`：Plan 拒绝、B 确认、C 自动，不自动重试。inbound MCP 会话不暴露这组内部助手专用工具。
+- `mcp_tools_search` 按需发现、`mcp_tools_describe` 读取单个参数定义，`mcp_read_tool` / `mcp_call_tool` 执行。目录最多 256 个同步工具与 32 页，单定义 32 KiB；单次模型参数说明另受 16,000 字符预算限制，超限明确拒绝，不截断 JSON。
+- 原生仅接受配置过的固定端点和有限 MCP 方法，禁止重定向；请求 128 KiB、响应 1 MiB、同时最多 8 个 HTTP 请求，单次原生超时 65 秒。SSE 响应只在收到匹配 RPC 的完整结束帧后返回；不建立后台 GET 订阅，每次调用前重新读取目录。
+- SDK 仅做协议结构校验，不动态编译远端 outputSchema，保留桌面严格 CSP。远端说明、参数和结果都是不可信资料；仅文本及结构化结果进入有界、脱敏 Observation，图片和资源不自动读取，不传入服务端 instructions。
+- 停用、删除、连接修订、会话撤销和画布项目切换会取消旧请求；执行前后复核授权。取消不保证撤销远端副作用，写请求错误或状态不确定时须核实远端状态，不重投。删除先停用并保存，凭据清理失败保留停用条目供重试。
+- 暂不支持 OAuth、stdio、旧 HTTP+SSE、后台 MCP Tasks、resources/prompts、sampling、roots、elicitation 与 MCP Apps。
+
+实施、桌面步骤和回退见[助手 MCP URL 连接计划](./plans/2026-10-20-assistant-mcp-client.md)。定向用例：`tests/services/mcpClientService.test.ts`、`tests/services/chat/policyEngine.test.ts` 及原生 client 内单元用例；均未运行。
 
 ## 主要入口
 

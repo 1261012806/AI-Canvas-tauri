@@ -359,6 +359,10 @@ export interface ChatConversation {
   archived: boolean;
   /** 当前会话的 Agent 自治模式；旧会话读取时回填 collaborative。 */
   agentMode: AgentMode;
+  /** 用户为本会话显式启用的外部 MCP 连接；默认全部关闭。 */
+  mcpServerIds?: string[];
+  /** 每次选择变化均轮换，撤销后重新勾选不能复活旧审批。 */
+  mcpSelectionRevision?: string;
   /** 上下文压缩摘要；不存在表示尚未压缩过 */
   contextSummary?: ConversationContextSummary;
   createdAt: number;

@@ -12,6 +12,9 @@ import {
   ensureAgentToolsRegistered,
   resetAgentToolsRegistrationForTests,
 } from '../../../src/services/chat/tools';
+import {
+  GENERAL_ASSISTANT_SCOPE_ID, isGeneralAssistantToolContext, resolveAssistantToolAllowlist,
+} from '../../../src/services/chat/assistantScope';
 
 const context: Omit<AgentToolContext, 'signal'> = {
   taskId: 'task-1',
@@ -48,6 +51,18 @@ afterEach(() => {
 });
 
 describe('Agent tool registry', () => {
+  it('caps general discovery and execution even if a Skill requests canvas access', () => {
+    registerAgentTool(createTool({ id: 'file_read_text' }));
+    registerAgentTool(createTool({ id: 'canvas_query_test' }));
+    const general = { ...context, projectId: GENERAL_ASSISTANT_SCOPE_ID, conversationId: 'conv-general' };
+    expect(buildAssistantFunctionTools(general).map((tool) => tool.function.name)).toEqual(['file_read_text']);
+    expect(prepareAgentToolCall({ callId: 'unsafe', toolId: 'canvas_query_test', input: { query: 'all' } }, general).ok).toBe(false);
+    expect(resolveAssistantToolAllowlist(GENERAL_ASSISTANT_SCOPE_ID, ['file_read_text', 'canvas_query_test'])).toEqual(['file_read_text']);
+    expect(resolveAssistantToolAllowlist(GENERAL_ASSISTANT_SCOPE_ID, [])).toEqual([]);
+    expect(isGeneralAssistantToolContext({ ...general, toolAllowlist: ['file_read_text'] }, 'file_read_text')).toBe(true);
+    expect(isGeneralAssistantToolContext({ ...general, toolAllowlist: ['file_read_text', 'canvas_query_test'] }, 'file_read_text')).toBe(false);
+  });
+
   it('rejects unregistered tools', () => {
     expect(prepareAgentToolCall({
       callId: 'call-1',

@@ -48,6 +48,8 @@ mod theme_assets;
 mod local_fonts;
 #[path = "mcp/bridge.rs"]
 mod mcp_bridge;
+#[path = "mcp/client.rs"]
+mod mcp_client;
 #[cfg(feature = "local-onnx")]
 #[path = "media/model_mirror.rs"]
 mod model_mirror;
@@ -1240,6 +1242,7 @@ pub fn run() {
         .manage(blender_runtime::ProjectGrantState::default())
         .manage(blender_runtime::production_blender_job_core())
         .manage(mcp_bridge::McpBridgeState::default())
+        .manage(mcp_client::McpClientState::default())
         .manage(path_policy::UserStorageRoot::default())
         .manage(billing::BillingStoragePath::default())
         .register_uri_scheme_protocol("director-desk", director_desk_runtime::handle_protocol)
@@ -1368,6 +1371,9 @@ pub fn run() {
             mcp_bridge::mcp_bridge_stop,
             mcp_bridge::mcp_bridge_status,
             mcp_bridge::mcp_bridge_respond,
+            mcp_client::mcp_client_configure,
+            mcp_client::mcp_client_fetch,
+            mcp_client::mcp_client_cancel,
             secret_store::secret_set,
             secret_store::secret_get,
             secret_store::secret_delete,

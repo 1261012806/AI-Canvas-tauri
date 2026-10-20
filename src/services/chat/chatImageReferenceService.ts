@@ -6,6 +6,7 @@ import {
 } from '../fileService';
 import { useAppStore } from '../../store/useAppStore';
 import { seriesOwnerId } from '../../store/store.utils';
+import { GENERAL_ASSISTANT_SCOPE_ID } from './assistantScope';
 import { authorizeConversationFiles } from './fileGrantService';
 
 export const MAX_CHAT_IMAGES = 6;
@@ -90,13 +91,13 @@ export async function attachConversationFiles(conversationId: string): Promise<{
 
 async function attachSelectedConversationFiles(conversationId: string): Promise<{ images: number; texts: number; failed: number }> {
   const initial = useAppStore.getState();
-  const projectId = initial.currentProjectId;
+  const projectId = initial.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID;
   const conversation = initial.conversations.find((item) => item.id === conversationId && !item.deletedAt);
   if (!projectId || initial.projectLoadStatus !== 'ready' || !conversation
-    || conversation.projectId !== seriesOwnerId(initial.projects, projectId)) throw new Error('请先打开项目并选择普通对话');
+    || conversation.projectId !== seriesOwnerId(initial.projects, projectId)) throw new Error('请先选择当前范围的普通对话');
   const valid = () => {
     const state = useAppStore.getState();
-    return state.currentProjectId === projectId && state.activeConversationId === conversationId
+    return (state.currentProjectId ?? GENERAL_ASSISTANT_SCOPE_ID) === projectId && state.activeConversationId === conversationId
       && state.conversations.some((item) => item.id === conversationId && !item.deletedAt);
   };
   const selected = await selectAgentTextFiles('添加参考图或授权读取文本文件', true);

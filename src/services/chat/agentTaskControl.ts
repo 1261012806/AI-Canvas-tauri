@@ -2,6 +2,7 @@
  * 管理 AgentTask 状态机、运行时取消控制器和审批 Promise，统一约束任务状态迁移。
  */
 import { isMcpSettingsToolContext } from '../mcp/mcpSettingsScope';
+import { isGeneralAssistantScope, isGeneralAssistantToolContext } from './assistantScope';
 import { useAppStore } from '../../store/useAppStore';
 import {
   AGENT_TERMINAL_STATUSES,
@@ -245,7 +246,7 @@ export function validateTaskResumable(taskId: string): AgentResumeValidation {
       message: '专家子任务不能单独继续，请从上级任务重新规划',
     };
   }
-  if (store.currentProjectId !== task.projectId) {
+  if (store.currentProjectId !== task.projectId && !isGeneralAssistantScope(task.projectId)) {
     return {
       ok: false,
       errorCode: 'AGENT_RESUME_PROJECT_NOT_ACTIVE',
@@ -253,7 +254,8 @@ export function validateTaskResumable(taskId: string): AgentResumeValidation {
     };
   }
   const conversation = store.conversations.find((item) => item.id === task.conversationId);
-  if (!conversation || conversation.deletedAt) {
+  if (!conversation || conversation.deletedAt
+    || (isGeneralAssistantScope(task.projectId) && conversation.projectId !== task.projectId)) {
     return {
       ok: false,
       errorCode: 'AGENT_RESUME_CONVERSATION_GONE',
@@ -277,10 +279,15 @@ export function resolveAgentApproval(
   const task = store.agentTasks.find((item) =>
     item.steps.some((step) => step.approval?.id === approvalId),
   );
+  const step = task?.steps.find((item) => item.approval?.id === approvalId);
+  const generalApproval = !!task && isGeneralAssistantToolContext(task, step?.toolCall?.toolId ?? '')
+    && store.conversations.some((conversation) => conversation.id === task.conversationId
+      && conversation.projectId === task.projectId && !conversation.deletedAt);
   if (
     !task
     || store.activeConversationId !== task.conversationId
     || (store.currentProjectId !== task.projectId
+      && !generalApproval
       && !task.steps.some((step) => step.approval?.id === approvalId
         && step.approval.kind === 'user_choice'
         && isMcpSettingsToolContext(task, step.toolCall?.toolId ?? '')))

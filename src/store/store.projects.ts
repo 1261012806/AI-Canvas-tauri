@@ -4,6 +4,7 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { StateCreator } from 'zustand';
 import type { AppState } from './useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../services/chat/assistantScope';
 import type {
   BaseNodeData,
   CanvasProject,
@@ -1425,7 +1426,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
         nodeMenuVisible: false, nodePickerOpen: false, projectLibraryOpen: false,
         assetsPanelOpen: false, characterLibraryOpen: false, characterActionLibraryOpen: false,
         historyPanelOpen: false, dramaAssetsPanelOpen: false, workflowPanelOpen: false,
-        chatOpen: false, reversePromptRequest: null,
+        chatOpen: false, activeConversationId: null, chatComposerLiveDraft: '', reversePromptRequest: null,
       });
       return true;
     } catch {
@@ -1659,9 +1660,11 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           .catch((e) => console.warn('[初始化] 加载项目记忆失败:', e));
       }
       // 即使停留在启动页，也修复所有项目的遗留 Agent 任务，禁止打开项目时自动续跑。
-      await Promise.all(get().projects.map((project) =>
-        get().repairInterruptedAgentTasksForProject(project.id),
-      ));
+      await Promise.all([
+        ...get().projects.map((project) => get().repairInterruptedAgentTasksForProject(project.id)),
+        get().repairInterruptedAgentTasksForProject(GENERAL_ASSISTANT_SCOPE_ID),
+        get().repairInterruptedForProject(GENERAL_ASSISTANT_SCOPE_ID),
+      ]);
     } catch (error) {
       console.error('Init from IndexedDB failed:', error);
       set({ currentProjectId: null, projectLoadStatus: 'error' });

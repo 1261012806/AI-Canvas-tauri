@@ -25,6 +25,7 @@ import { registerConversationAgentTools } from './conversationTools';
 import { registerHistoryAgentTools } from './historyTools';
 import { registerDirectorAgentTools } from './directorTools';
 import { registerMcpDiscoveryTools } from './mcpDiscoveryTools';
+import { registerExternalMcpTools } from './externalMcpTools';
 import { registerShotlistAgentTools } from './shotlistTools';
 import { registerSeriesSourceTools } from './seriesSourceTools';
 import { removeAgentToolsById, snapshotAgentToolIds } from '../toolRegistry';
@@ -74,6 +75,7 @@ function getRegistrationFactories(): AgentToolRegistrationFactory[] {
     registerWebAgentTools,
     registerAppAgentTools,
     registerMcpDiscoveryTools,
+    registerExternalMcpTools,
   ];
 }
 

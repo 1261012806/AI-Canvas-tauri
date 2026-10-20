@@ -49,7 +49,8 @@ export type AgentApprovalKind =
   | 'media_generation'
   | 'memory_write'
   | 'config_write'
-  | 'asset_write';
+  | 'asset_write'
+  | 'external_write';
 
 export type AgentApprovalStatus =
   | 'pending'

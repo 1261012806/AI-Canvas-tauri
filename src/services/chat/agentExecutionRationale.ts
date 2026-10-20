@@ -71,6 +71,7 @@ function policyDetail(
       case 'memory_write': return '项目记忆必须由用户确认后保存。';
       case 'config_write': return '厂商配置写入必须由用户确认。';
       case 'asset_write': return '资产库写入必须由用户确认。';
+      case 'external_write': return '当前协作模式下，外部 MCP 操作需要用户确认。';
       default: return '此操作执行前需要用户确认。';
     }
   }

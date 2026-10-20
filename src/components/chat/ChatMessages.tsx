@@ -15,6 +15,7 @@ import type { ChatReferenceHandlers } from './ChatReferenceText';
 import { useT } from '../../i18n';
 
 interface ChatMessagesProps extends ChatReferenceHandlers {
+  hasCanvas?: boolean;
   messages: ChatMessage[];
   imagePreviewUrls?: Record<string, string>;
   agentTasks?: AgentTask[];
@@ -33,7 +34,6 @@ interface ChatMessagesProps extends ChatReferenceHandlers {
   onRegenerateMessage?: (content: string) => void;
 }
 
-const START_EXAMPLES = ['现在有几个失败节点？', '选中 3 号节点', '删除失败节点'];
 const EMPTY_AGENT_TASKS: AgentTask[] = [];
 const INITIAL_MESSAGE_BATCH = 80;
 const MESSAGE_BATCH_SIZE = 60;
@@ -75,6 +75,7 @@ function mapChatMessageRows<T>(
 }
 
 export default function ChatMessages({
+  hasCanvas = false,
   messages,
   imagePreviewUrls,
   agentTasks = EMPTY_AGENT_TASKS,
@@ -330,40 +331,15 @@ export default function ChatMessages({
         onScroll={handleScroll}
         className="chat-panel-messages h-full min-h-0 overflow-y-auto px-3.5 py-3 flex flex-col gap-3"
       >
-        {showEmptyState && detachedInitialized && (
+        {(showEmptyState || messages.length === 0) && detachedInitialized && (
           <EmptyChatState
+            hasCanvas={hasCanvas}
+            compact={!showEmptyState}
             onNew={onNewConversation}
             onList={onShowList}
             onOpenAgents={onOpenAgents}
             onExample={onExampleClick}
           />
-        )}
-
-        {!showEmptyState && messages.length === 0 && detachedInitialized && (
-          <div className="chat-panel-start-hint flex flex-col items-center justify-center h-full text-center px-4">
-            <div className="w-11 h-11 rounded-xl bg-indigo-500/12 flex items-center justify-center mb-3">
-              <Icon icon="mdi:chat-processing-outline" width="20" height="20" className="text-indigo-400" />
-            </div>
-            <p className="text-[13px] text-canvas-text-secondary mb-0.5">{t('开始对话')}</p>
-            <p className="text-[11px] text-canvas-text-muted mb-4">
-              {t('用自然语言操作画布，AI 助手帮你完成')}
-            </p>
-            {onExampleClick && (
-              <div className="flex flex-wrap justify-center gap-1.5 max-w-[260px]">
-                {START_EXAMPLES.map((example) => (
-                  <button
-                    key={example}
-                    type="button"
-                    onClick={() => onExampleClick(example)}
-                    className="rounded-full border border-canvas-border px-2.5 py-1 text-[11px] text-canvas-text-secondary
-                               hover:border-indigo-400/50 hover:text-canvas-text transition-colors"
-                  >
-                    {t(example)}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         )}
 
         {hiddenMessageCount > 0 && (

@@ -237,14 +237,15 @@ export interface RulesEngineResult {
  * 按置信度降序排列，优先返回高置信度规则。
  */
 export function parseRules(input: string): RulesEngineResult {
-  const trimmed = input.trim();
+  const trimmed = input.trim().replace(/[。！？!?]+$/, '').trim();
   if (!trimmed) return { intents: [], hasHighConfidence: false };
 
   const intents: CommandIntent[] = [];
 
   for (const pattern of PATTERNS) {
     const match = trimmed.match(pattern.regex);
-    if (match) {
+    // 快捷规则只接管完整指令，不能截取长任务、否定句或引用资料的开头执行。
+    if (match && match[0].length === trimmed.length) {
       const { selector, params } = pattern.extract(match);
       intents.push({
         commandId: pattern.commandId,

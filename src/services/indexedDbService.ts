@@ -858,6 +858,8 @@ export interface ChatConversationRecord {
   pinned: boolean;
   archived: boolean;
   agentMode: AgentMode;
+  mcpServerIds?: string[];
+  mcpSelectionRevision?: string;
   contextSummary?: ConversationContextSummary;
   createdAt: number;
   updatedAt: number;

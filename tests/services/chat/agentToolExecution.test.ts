@@ -14,6 +14,7 @@ import {
   waitForAgentApproval,
 } from '../../../src/services/chat/agentTaskControl';
 import { useAppStore } from '../../../src/store/useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../../src/services/chat/assistantScope';
 import { registerProviderConfigAgentTools } from '../../../src/services/chat/tools/providerConfigTools';
 import { getAgentTool } from '../../../src/services/chat/toolRegistry';
 import { clearProviderModelCatalogsForTests, clearProviderModelCatalogsForTask, createProviderModelCatalog } from '../../../src/services/chat/providerModelCatalogService';
@@ -99,6 +100,26 @@ function setBoundaryMode(mode: AgentMode) {
 }
 
 describe('shared Agent tool execution for MCP', () => {
+  it.each([false, true])('rechecks general tool access after approval; revoked=%s', async (revoked) => {
+    const task = { ...createTask(), projectId: GENERAL_ASSISTANT_SCOPE_ID,
+      conversationId: 'conv-general', toolAllowlist: ['file_write_text'], mode: 'collaborative' as const };
+    useAppStore.setState((state) => ({ currentProjectId: null, agentTasks: [task],
+      conversations: [{ ...state.conversations[0], id: task.conversationId, projectId: task.projectId, agentMode: task.mode }] }));
+    const execute = registerBoundaryTool({ id: 'file_write_text', effect: 'file_write' });
+    transitionAgentTask(task.id, 'planning');
+    const wait = vi.fn(async () => {
+      useAppStore.setState({ currentProjectId: 'other-project' });
+      if (revoked) useAppStore.getState().updateAgentTask(task.id, { toolAllowlist: [] });
+      return { approved: true };
+    });
+    const result = await executeRegisteredAgentToolCall({ taskId: task.id,
+      call: { callId: 'general-save', toolId: 'file_write_text', input: {} },
+      signal: new AbortController().signal, transitionTask: transitionAgentTask, waitForApproval: wait });
+    expect(wait).toHaveBeenCalledOnce();
+    expect(result.summary.status).toBe(revoked ? 'denied' : 'success');
+    expect(execute).toHaveBeenCalledTimes(revoked ? 0 : 1);
+  });
+
   function arrangeProviderSelection(catalog: boolean) {
     registerProviderConfigAgentTools();
     const options = Array.from({ length: catalog ? 1000 : 20 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}`, category: 'text' as const }));

@@ -302,6 +302,18 @@ describe('episode conversation compression recovery', () => {
 });
 
 describe('conversation continuity', () => {
+  it('keeps the previous live answer in a follow-up before persistence finishes and excludes other conversations', async () => {
+    useAppStore.setState({ messages: [chat(1, 'user', '写一份简洁的计划'), chat(2, 'assistant', '已经完成的最新计划'),
+      chat(3, 'assistant', '其他对话的私有内容', { conversationId: 'other-conversation' })] });
+    loadMessages.mockResolvedValue({ messages: [chat(1, 'user', '写一份简洁的计划'), chat(2, 'assistant', '旧版本')], total: 2 });
+    const assembled = await assembleAgentContext({ conversationId: 'conversation-1', projectId: 'project-1',
+      systemPrompt: 'system', userMessage: '把刚才的计划精简一下' });
+    const content = assembled.messages.map((message) => message.content).join('\n');
+    expect(content).toContain('已经完成的最新计划');
+    expect(content).not.toContain('旧版本');
+    expect(content).not.toContain('其他对话的私有内容');
+  });
+
   it('carries successful tool results and real node references into a follow-up, including tool-only replies', async () => {
     loadMessages.mockResolvedValue({ messages: [
       chat(1, 'user', '生成分镜，保持水彩风格'),

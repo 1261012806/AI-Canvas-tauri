@@ -108,5 +108,11 @@ export function evaluateAgentToolPolicy(
         reason: '写入资产库与角色库必须由用户确认',
         approvalKind: 'asset_write',
       };
+    case 'external_write':
+      return {
+        outcome: 'require_approval',
+        reason: 'B 协作模式的外部 MCP 操作需要确认',
+        approvalKind: 'external_write',
+      };
   }
 }

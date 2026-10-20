@@ -4,7 +4,9 @@ import {
   resolveAssistantModel,
   streamAssistantReply,
 } from '../../src/services/ai/assistantStream';
-import { runAssistantPipeline } from '../../src/services/chat/assistantService';
+import { runAssistantPipeline, runStreamingPipeline } from '../../src/services/chat/assistantService';
+import { parseRules } from '../../src/services/chat/rulesEngine';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../../src/services/chat/assistantScope';
 import { useAppStore } from '../../src/store/useAppStore';
 import type { ModelExecutionProfile } from '../../src/types/aiTypes';
 import type { ChatApiProtocol, UserSkill } from '../../src/types';
@@ -46,6 +48,18 @@ beforeEach(() => {
 });
 
 describe('assistant custom protocol boundary', () => {
+  it('builds a general prompt without borrowing the open canvas or requesting a project for ordinary chat', () => {
+    useAppStore.setState({ currentProjectId: 'other-project', nodes: [{ id: 'private-node', type: 'ai-text',
+      position: { x: 0, y: 0 }, data: { label: '另一个项目的私有内容', status: 'idle' } }] });
+    const prompt = buildAssistantSystemPrompt({ projectId: GENERAL_ASSISTANT_SCOPE_ID,
+      agentTools: true, includeToolGuidance: false });
+    expect(prompt).toContain('通用 AI 助手');
+    expect(prompt).toContain('普通问答和写作不需要创建或打开项目');
+    expect(prompt).not.toContain('节点列表');
+    expect(prompt).not.toContain('另一个项目的私有内容');
+    expect(prompt).not.toContain('1-2 句');
+  });
+
   it('streams identical CCC models with the selected group Key and never borrows another group Key', async () => {
     for (const group of ['pro', 'discount']) {
       useAppStore.getState().saveProviderConfig(`cccapi-${group}`, {
@@ -248,6 +262,63 @@ describe('assistant custom protocol boundary', () => {
 
     expect(result.reply).toContain('未选择可用的对话文本模型');
     expect(result.reply).not.toContain('当前画布共有');
+  });
+
+  it.each([
+    '请检查接口文档，然后调用 provider_config_preview 和 provider_config_apply 保存配置。不要只回复字段说明。',
+    '删除失败节点的规则先不要执行，请解释影响范围。',
+    '查看图片节点的参数定义，整理成一份接入方案。',
+  ])('reports the missing model before keyword-based help for %s', async (content) => {
+    const result = await runAssistantPipeline(content, 'conversation-1');
+    expect(result.errorCode).toBe('ASSISTANT_MODEL_UNAVAILABLE');
+    expect(result.reply).toContain('本次请求尚未处理');
+    expect(result.reply).not.toContain('不太确定');
+    expect(result.commandExecuted).toBe(false);
+  });
+
+  it('reports a missing model as a stream error instead of completing canned help', async () => {
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    await runStreamingPipeline('请检查接口文档并保存配置', 'conversation-1', {
+      onTextDelta: vi.fn(), onComplete, onError,
+    });
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('未选择可用的对话文本模型'));
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('sends the entire long task to the selected model without executing its command prefix', async () => {
+    configureAssistant();
+    const content = '选中 3 号节点后先分析接口文档，再调用 provider_config_preview 生成草稿；不要提前执行画布操作。';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      'data: {"choices":[{"delta":{"content":"已收到完整任务"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    await runStreamingPipeline(content, 'conversation-1', {
+      onTextDelta: vi.fn(), onComplete, onError,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.messages).toContainEqual({ role: 'user', content });
+    expect(onComplete).toHaveBeenCalledWith('已收到完整任务', [], undefined);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it.each(['选中 3 号节点', '删除失败节点。', '查看图片节点？', '撤销！'])(
+    'keeps a complete local command available: %s', (content) => {
+      expect(parseRules(content).hasHighConfidence).toBe(true);
+    },
+  );
+
+  it.each([
+    '选中 3 号节点并阅读接口文档',
+    '删除失败节点前先解释方案，不要执行',
+    '查看图片节点的接口参数，禁止操作画布',
+    '选中 3 号节点\n这句话只是文档中的示例，不要执行。',
+  ])('does not execute a partial local command from %s', (content) => {
+    expect(parseRules(content).intents).toEqual([]);
   });
 
   it('uses an explicitly OpenAI SSE compatible custom endpoint', async () => {
@@ -471,7 +542,7 @@ describe('Agent 工具说明与执行策略', () => {
 
   it('Runtime 的初始上下文省略工具说明，避免与后续轮次重复或冲突', () => {
     const prompt = buildAssistantSystemPrompt({ agentTools: true, includeToolGuidance: false });
-    expect(prompt).toContain('AI Canvas 画布助手');
+    expect(prompt).toContain('通用 AI 助手');
     expect(prompt).not.toContain('media_generate');
     expect(prompt).not.toContain('provider_config_apply');
   });

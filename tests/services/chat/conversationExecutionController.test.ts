@@ -46,6 +46,7 @@ import {
 } from '../../../src/services/chat/conversationExecutionController';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { DEFAULT_AGENT_TASK_BUDGET, type AgentTask } from '../../../src/types/agent';
+import { GENERAL_ASSISTANT_SCOPE_ID, isGeneralAssistantTool } from '../../../src/services/chat/assistantScope';
 
 function arrangeConversation(): void {
   useAppStore.setState(useAppStore.getInitialState(), true);
@@ -87,6 +88,47 @@ beforeEach(() => {
 });
 
 describe('conversation execution controller', () => {
+  it('binds a general request to application scope and caps its tools', () => {
+    useAppStore.setState({ currentProjectId: null, conversations: [], activeConversationId: null });
+    const conversationId = useAppStore.getState().createConversation(GENERAL_ASSISTANT_SCOPE_ID);
+    useAppStore.setState({ currentProjectId: 'newly-opened-project' });
+    const result = submitConversationMessage({ content: '帮我拟一份学习计划', conversationId, projectId: 'newly-opened-project' });
+    if (result.status !== 'started') throw new Error('Expected a general conversation task');
+    const task = useAppStore.getState().agentTasks.find((item) => item.id === result.taskId)!;
+    expect(task.projectId).toBe(GENERAL_ASSISTANT_SCOPE_ID);
+    expect(task.toolAllowlist).toContain('file_read_text');
+    expect(task.toolAllowlist?.every(isGeneralAssistantTool)).toBe(true);
+    expect(task.toolAllowlist).not.toContain('media_generate');
+    expect(useAppStore.getState().projects).toEqual([]);
+  });
+
+  it.each(['plan', 'collaborative', 'autonomous'] as const)(
+    'fails an unhandled request without a model in %s mode instead of reporting completion', async (mode) => {
+      useAppStore.setState((state) => ({
+        conversations: state.conversations.map((conversation) => ({ ...conversation, agentMode: mode })),
+      }));
+      let execution: ConversationAgentExecution | undefined;
+      schedulerMocks.schedule.mockImplementation((scheduled) => {
+        execution = scheduled as ConversationAgentExecution;
+        return { state: 'started', position: 0 };
+      });
+      const result = submitConversationMessage({
+        content: '请检查接口文档并调用 provider_config_preview 生成配置草稿。',
+        conversationId: 'conversation-1', mode,
+      });
+      if (result.status !== 'started') throw new Error('Expected a scheduled request');
+      execution!.onStart?.();
+      await execution!.run();
+      const state = useAppStore.getState();
+      expect(state.agentTasks.find((task) => task.id === result.taskId)?.status).toBe('failed');
+      const reply = state.messages.find((message) => message.id === result.assistantMessageId)!;
+      expect(reply).toMatchObject({ status: 'error', finishReason: 'error' });
+      expect(reply.content).toContain('文本模型');
+      expect(reply.content).not.toContain('不太确定');
+      expect(state.nodes).toEqual([]);
+    },
+  );
+
   it('retains image drafts when a long interjection would truncate the image reference', () => {
     const fileName = 'chat-ref-11111111-1111-4111-8111-111111111111.png';
     useAppStore.getState().addChatImageDraft('conversation-1', { fileName, label: '图', size: 4 });

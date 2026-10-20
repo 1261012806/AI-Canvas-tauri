@@ -28,6 +28,7 @@ import type {
   AgentTask,
 } from '../../types/agent';
 import type { LocalFileGrantSummary } from './fileGrantService';
+import type { McpClientOption } from '../../types/mcpClient';
 
 export const CHAT_SYNC_EVENT = 'chat:sync-state';
 export const CHAT_ACTION_EVENT = 'chat:action';
@@ -61,6 +62,7 @@ export interface ChatStateSnapshot {
   dramaAssets: DramaAssetLibrary;
   /** 仅供 Skill 选择器展示；不含正文、sourceId 或包内路径。 */
   skillOptions: SkillPickerOption[];
+  mcpClientOptions?: McpClientOption[];
   /** 输入框草稿，独立窗口打开/收回时接力 */
   composerDraft: string;
   composerDrafts: Record<string, string>;
@@ -96,6 +98,7 @@ export interface ChatStatePatch {
     nodes: Node<BaseNodeData>[];
     dramaAssets: DramaAssetLibrary;
     skillOptions: SkillPickerOption[];
+    mcpClientOptions: McpClientOption[];
     composerDraft: string;
     composerDrafts: Record<string, string>;
     panelView: ChatPanelView;
@@ -209,6 +212,7 @@ export function createChatStatePatch(
   setChangedField(fields, 'nodes', previous.nodes, next.nodes);
   setChangedField(fields, 'dramaAssets', previous.dramaAssets, next.dramaAssets);
   setChangedField(fields, 'skillOptions', previous.skillOptions, next.skillOptions);
+  setChangedField(fields, 'mcpClientOptions', previous.mcpClientOptions, next.mcpClientOptions);
   setChangedField(fields, 'composerDraft', previous.composerDraft, next.composerDraft);
   setChangedField(fields, 'composerDrafts', previous.composerDrafts, next.composerDrafts);
   setChangedField(fields, 'panelView', previous.panelView, next.panelView);
@@ -280,7 +284,8 @@ export type ChatAction =
       type: 'send_message';
       content: string;
       imageFileNames?: string[];
-      conversationId: string;
+      /** 首次发送由主窗口创建当前范围的会话。 */
+      conversationId?: string;
       dispatchMode?: 'queue' | 'interject';
     }
   | { type: 'switch_conversation'; conversationId: string }
@@ -301,7 +306,9 @@ export type ChatAction =
   | { type: 'skip_agent_step'; taskId: string; stepId: string }
   | { type: 'replan_agent_task'; taskId: string }
   | { type: 'rewind_agent_task'; taskId: string }
-  | { type: 'authorize_local_files'; conversationId: string }
+  | { type: 'authorize_local_files'; conversationId?: string; draft?: string }
+  | { type: 'set_mcp_connection'; conversationId?: string; scopeId: string; serverId: string; enabled: boolean; draft?: string }
+  | { type: 'open_mcp_client_settings' }
   | { type: 'revoke_local_file'; conversationId: string; grantId: string }
   | { type: 'remove_image_attachment'; conversationId: string; fileName: string }
   | { type: 'select_model'; modelId?: string; category?: 'text' | 'image' | 'video' }

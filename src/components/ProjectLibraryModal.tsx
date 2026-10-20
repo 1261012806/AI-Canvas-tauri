@@ -7,6 +7,7 @@ import { Icon } from '@iconify/react';
 import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/useAppStore';
+import { GENERAL_ASSISTANT_SCOPE_ID } from '../services/chat/assistantScope';
 import { listTopLevelProjects, resolveOpenTargetId, seriesOwnerId } from '../store/store.utils';
 import type { CanvasProject } from '../types';
 import * as fileService from '../services/fileService';
@@ -372,6 +373,23 @@ export default function ProjectLibraryModal({ isOpen, onClose, presentation = 'm
 
           <div className={`flex flex-wrap items-center gap-2 ${isStartPage ? '' : 'mt-3'}`}>
             {isStartPage && projectHeading}
+            {isStartPage && (
+              <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm"
+                onClick={() => {
+                  const state = useAppStore.getState();
+                  const active = state.conversations.find((conversation) => conversation.id === state.activeConversationId);
+                  if (active && active.projectId !== GENERAL_ASSISTANT_SCOPE_ID) state.setActiveConversation(null);
+                  state.openChat();
+                  if (state.chatPanelDetached) {
+                    void import('../services/chat/chatWindowLifecycle')
+                      .then(({ openDetachedChatWindow }) => openDetachedChatWindow())
+                      .catch(() => state.showToast(t('打开独立助手窗口失败，已恢复内嵌助手'), 'error'));
+                  }
+                }}>
+                <Icon icon="lucide:message-circle" width="14" height="14" aria-hidden="true" />
+                {t('AI 助手')}
+              </button>
+            )}
             <label className="ui-input-group w-48 max-w-full ml-auto">
               <span className="sr-only">{t('搜索项目')}</span>
               <Icon

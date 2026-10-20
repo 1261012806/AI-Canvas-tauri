@@ -11,6 +11,8 @@ import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import SendShortcutMenu from '../shared/SendShortcutMenu';
 import ModelSelector from '../nodes/shared/ModelSelector';
 import ContextUsageIndicator from './ContextUsageIndicator';
+import McpConnectionPicker from './McpConnectionPicker';
+import type { McpClientOption } from '../../types/mcpClient';
 import ChatComposerEditor, { type ChatComposerEditorHandle } from './ChatComposerEditor';
 import ChatImageAttachments from './ChatImageAttachments';
 import type { ChatImageReference } from '../../types/chat';
@@ -182,6 +184,10 @@ interface ChatInputProps {
   onRemoveImage?: (fileName: string) => void;
   onAuthorizeLocalFiles?: () => void;
   onRevokeLocalFile?: (grantId: string) => void;
+  mcpOptions?: McpClientOption[];
+  mcpServerIds?: string[];
+  onMcpToggle?: (id: string, enabled: boolean) => void;
+  onMcpSettings?: () => void;
   /** 当前会话上下文占用（估算）；无会话时为 null */
   contextUsage?: ContextUsageStat | null;
   disabled?: boolean;
@@ -212,6 +218,10 @@ export default function ChatInput({
   onRemoveImage,
   onAuthorizeLocalFiles,
   onRevokeLocalFile,
+  mcpOptions = [],
+  mcpServerIds = [],
+  onMcpToggle,
+  onMcpSettings,
   contextUsage,
   disabled = false,
   allowSkillUpload = true,
@@ -813,11 +823,12 @@ export default function ChatInput({
           )}
           </AnimatePresence>
 
+          {/* 助手只显示实际绑定；不能借用节点历史偏好冒充已选择的对话模型。 */}
           <ModelSelector
             appearance="pill"
             theme={appearanceMode}
             nodeType="ai-text"
-            selectedModel={selectedTextModel}
+            selectedModel={selectedTextModel ?? ''}
             onSelect={handleTextModelSelect}
             configuredGroupsOverride={assistantModelGroups}
             generalModelsOverride={assistantModelGroups ? [] : mediaModels}
@@ -858,6 +869,7 @@ export default function ChatInput({
               >
                 <Icon icon="mdi:slash-forward" width="14" />
               </button>
+              {onMcpToggle && onMcpSettings && <McpConnectionPicker options={mcpOptions} selected={mcpServerIds} onToggle={onMcpToggle} onSettings={onMcpSettings} disabled={disabled} />}
               {onAuthorizeLocalFiles && (
                 <button
                   type="button"

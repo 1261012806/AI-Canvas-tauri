@@ -13,7 +13,7 @@ import ApiKeySettings from './settings/ApiKeySettings';
 import StorageHealthCenter from './settings/StorageHealthCenter';
 import DirectorDeskStorageManager from './settings/DirectorDeskStorageManager';
 import OnnxModelStorageManager from './settings/OnnxModelStorageManager';
-import McpControlSettings from './settings/McpControlSettings';
+import McpSettings from './settings/McpSettings';
 import SettingsNavigation from './settings/SettingsNavigation';
 import ShortcutSettings from './settings/ShortcutSettings';
 import CanvasZoomRangeSettings from './settings/CanvasZoomRangeSettings';
@@ -1173,7 +1173,7 @@ export default function SettingsPanel() {
               </>
             )}
 
-            {activeTab === 'mcp' && <McpControlSettings />}
+            {activeTab === 'mcp' && <McpSettings />}
 
             {activeTab === 'plugins' && <PluginSettings />}
           </div>
