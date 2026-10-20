@@ -147,8 +147,6 @@ const STARTUP_VIEW_OPTIONS: {
   },
 ];
 
-const IS_MAC = typeof navigator !== 'undefined' && /Macintosh|Mac OS X/.test(navigator.userAgent);
-
 /** 格式化字节为可读大小 */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -783,8 +781,7 @@ export default function SettingsPanel() {
 
                 </>)}
 
-                {/* 画布交互模式（macOS 使用系统原生手势，隐藏此设置） */}
-                {!IS_MAC && (
+                {/* Mac 也能切换模式，鼠标和触摸板按各自习惯选择。 */}
                 <section className="canvas-interaction-settings">
                   <div className="canvas-interaction-heading">
                     <div>
@@ -865,7 +862,6 @@ export default function SettingsPanel() {
                     </div>
                   </div>
                 </section>
-                )}
 
                 <CanvasZoomRangeSettings onPersist={persist} />
 

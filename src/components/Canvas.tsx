@@ -181,10 +181,6 @@ const PRO_OPTIONS = { hideAttribution: true };
 const PAN_ON_DRAG_DEFAULT = [1, 2]; // 默认交互：右键(2) + 中键(1) 拖拽平移
 const PAN_ON_DRAG_CLASSIC = [0];    // 传统交互：左键(0) 拖拽平移
 const DEFAULT_EDGE_STYLE = { stroke: 'var(--canvas-edge)', strokeWidth: 1.5 };
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-const isMacOS = typeof navigator !== 'undefined'
-  && /Macintosh|Mac OS X/.test(navigator.userAgent);
-const shouldUseMacTrackpadPan = isTauri && isMacOS;
 const easeOutCubic = (progress: number) => 1 - (1 - progress) ** 3;
 const CANVAS_INTERACTING_CLASS = 'canvas-interacting';
 type CanvasInteractionKind = 'node' | 'viewport' | 'wheel';
@@ -198,8 +194,9 @@ const ZOOM_POINTER_CONTEXT = '.node-toolbar-shell, .node-handle, .node, .react-f
 
 // ── 交互模式预设（冻结对象，避免每次 render 产生新身份，导致 React Flow 内部 effect 重跑、拖拽掉帧）──
 const DEFAULT_INTERACTION = Object.freeze({
-  panOnScroll: shouldUseMacTrackpadPan,
-  zoomOnScroll: !shouldUseMacTrackpadPan,
+  // Figma 模式各平台都直接缩放，不再把 Mac 未识别的鼠标滚轮当成平移。
+  panOnScroll: false,
+  zoomOnScroll: true,
   zoomOnPinch: true,
   panOnDrag: PAN_ON_DRAG_DEFAULT,
   selectionOnDrag: true,
@@ -810,9 +807,7 @@ function CanvasInner({ onReady }: CanvasProps) {
   useCanvasWheelZoom({
     rootRef: canvasRootRef,
     cancelRef: wheelZoomCancelRef,
-    // Mac 隐藏模式设置，旧经典模式配置也应让普通鼠标滚轮直接缩放。
-    enabled: (shouldUseMacTrackpadPan || interactionMode === 'default') && !viewportPreferences.locked,
-    nativeMouseWheel: shouldUseMacTrackpadPan,
+    enabled: interactionMode === 'default' && !viewportPreferences.locked,
     projectId: currentProjectId,
     getViewport: reactFlowInstance.getViewport,
     setViewport: reactFlowInstance.setViewport,
