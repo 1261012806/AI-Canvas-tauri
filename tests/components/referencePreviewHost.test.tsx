@@ -92,9 +92,15 @@ class EventSurface extends EventTarget {
 }
 class PreviewElement extends EventTarget {
   readonly nodeType = 1;
+  readonly attrs: Record<string, string>;
+  readonly tagName: string;
   isContentEditable = false;
   parentElement: PreviewElement | null = null;
-  constructor(readonly attrs: Record<string, string> = {}, readonly tagName = 'SPAN') { super(); }
+  constructor(attrs: Record<string, string> = {}, tagName = 'SPAN') {
+    super();
+    this.attrs = attrs;
+    this.tagName = tagName;
+  }
   getAttribute(name: string) { return this.attrs[name] ?? null; }
   hasAttribute(name: string) { return name in this.attrs; }
   contains(child: PreviewElement): boolean { return child === this || !!child.parentElement && this.contains(child.parentElement); }

@@ -9,12 +9,18 @@ import type { ReferencePreviewSource } from '../../src/types/referencePreview';
 /** 只模拟事件目标的祖先与属性，身份识别不依赖浏览器或画布 Store。 */
 class PreviewElement extends EventTarget {
   readonly nodeType = 1;
+  readonly attributes: Record<string, string>;
+  readonly tagName: string;
   parentElement: PreviewElement | null = null;
   children: PreviewElement[] = [];
   childNodes: Array<PreviewElement | { nodeType: number; textContent: string }> = [];
   textContent = '';
 
-  constructor(readonly attributes: Record<string, string> = {}, readonly tagName = 'SPAN') { super(); }
+  constructor(attributes: Record<string, string> = {}, tagName = 'SPAN') {
+    super();
+    this.attributes = attributes;
+    this.tagName = tagName;
+  }
   getAttribute(name: string) { return this.attributes[name] ?? null; }
   hasAttribute(name: string) { return name in this.attributes; }
   append(child: PreviewElement) { child.parentElement = this; this.children.push(child); this.childNodes.push(child); return child; }

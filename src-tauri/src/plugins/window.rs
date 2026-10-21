@@ -870,7 +870,8 @@ mod tests {
                 "plugin-window-profile-test-{}-{unique}",
                 std::process::id()
             ));
-        fs::create_dir(&directory).unwrap();
+        // 使用 CARGO_TARGET_DIR 时，源码目录中可能没有默认 target 父目录。
+        fs::create_dir_all(&directory).unwrap();
         let first =
             create_profile(&directory, "plugin-window-1", &options().binding.session_id).unwrap();
         let second =
