@@ -1,6 +1,7 @@
 /**
  * 解析并渲染消息中的节点、模型、Skill 和快捷指令引用，提供定位画布与查看详情交互。
  */
+import { useEffect, useRef, type MouseEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore, type AppState } from '../../store/useAppStore';
 import { useT } from '../../i18n';
@@ -156,6 +157,21 @@ interface CompactTokenProps extends ChatReferenceHandlers {
   onMissingNode: () => void;
 }
 
+function referenceAttributes(token: ReferenceToken) {
+  return {
+    'data-chat-reference': token.kind === 'slash' ? undefined : token.kind,
+    'data-chat-reference-raw': token.kind === 'slash' ? undefined : token.raw,
+    'data-ref-id': token.kind === 'node' ? token.id : undefined,
+    'data-ref-label': token.kind === 'node' ? token.label : undefined,
+    'data-drama-id': token.kind === 'drama' ? token.id : undefined,
+    'data-drama-label': token.kind === 'drama' ? token.label : undefined,
+    'data-skill-id': token.kind === 'skill' ? token.id : undefined,
+    'data-skill-name': token.kind === 'skill' ? token.label : undefined,
+    'data-model-ref-id': token.kind === 'model' ? token.id : undefined,
+    'data-model-ref-label': token.kind === 'model' ? token.label : undefined,
+  };
+}
+
 function CompactToken({
   token,
   missing = false,
@@ -165,6 +181,10 @@ function CompactToken({
   onModelActivate,
 }: CompactTokenProps) {
   const t = useT();
+  const modelClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (modelClickTimer.current !== null) clearTimeout(modelClickTimer.current);
+  }, []);
   const label = token.kind === 'skill' || token.kind === 'slash' ? `/${token.label}` : token.label;
   const interactive = token.kind === 'node' || token.kind === 'model';
   const activate = () => {
@@ -173,6 +193,20 @@ function CompactToken({
       else onNodeActivate?.(token.id);
     }
     if (token.kind === 'model' && token.id) onModelActivate?.(token.id);
+  };
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (token.kind !== 'model' || event.detail === 0) {
+      activate();
+      return;
+    }
+    if (modelClickTimer.current !== null) clearTimeout(modelClickTimer.current);
+    modelClickTimer.current = null;
+    if (event.detail > 1) return;
+    // 第二次 click 早于 dblclick，先取消单击菜单，双击留给统一引用预览入口。
+    modelClickTimer.current = setTimeout(() => {
+      modelClickTimer.current = null;
+      activate();
+    }, 300);
   };
   const content = (
     <>
@@ -194,7 +228,8 @@ function CompactToken({
     return (
       <button
         type="button"
-        onClick={activate}
+        {...referenceAttributes(token)}
+        onClick={handleClick}
         onMouseEnter={() => token.kind === 'node' && !missing && token.id && onNodeHover?.(token.id)}
         onMouseLeave={() => token.kind === 'node' && onNodeHover?.(null)}
         aria-label={missing
@@ -216,6 +251,9 @@ function CompactToken({
 
   return (
     <span
+      {...referenceAttributes(token)}
+      role={token.kind === 'slash' ? undefined : 'button'}
+      tabIndex={token.kind === 'slash' ? undefined : 0}
       className={`mx-0.5 inline-flex max-w-full items-center rounded-[7px] border px-2 py-1 align-middle text-[0.92em] font-medium leading-none shadow-sm ${COMPACT_TOKEN_CLASSES[token.kind]}`}
     >
       {content}
@@ -271,6 +309,9 @@ export default function ChatReferenceText({
       : (
           <span
             key={`${token.start}-${token.raw}`}
+            {...referenceAttributes(token)}
+            role={token.kind === 'slash' ? undefined : 'button'}
+            tabIndex={token.kind === 'slash' ? undefined : 0}
             className={INPUT_TOKEN_CLASSES[token.kind]}
           >
             {token.raw}

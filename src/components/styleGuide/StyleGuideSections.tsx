@@ -26,6 +26,7 @@ import StyleGuideMascot from './StyleGuideMascot';
 import StyleGuideGenerationEffects from './StyleGuideGenerationEffects';
 import StyleGuideDialogs from './StyleGuideDialogs';
 import StyleGuideAIInput from './StyleGuideAIInput';
+import StyleGuideReferencePreview from './StyleGuideReferencePreview';
 import { buildReferenceChipEl } from '../shared/referenceChipDom';
 import { getNodeChipIconPath } from '../nodes/shared/mentionEditorDom';
 import referenceDemoImage from '../../assets/images/styles/realistic.webp';
@@ -1605,6 +1606,9 @@ function ReferencesSection() {
       </Demo>
       <Demo label="提示词引用胶囊（真实 DOM 构造器）" code="ui-reference-chip ui-reference-chip--image | --video | --audio | --text | __icon | __thumb | __label | __index；buildReferenceChipEl(document, options)；iconPath: getNodeChipIconPath(nodeType)">
         <ReferenceChipsDemo />
+      </Demo>
+      <Demo label="双击胶囊全屏预览" code={'buildReferenceChipEl(document, options) + ReferenceContentPreview(content, onClose)；asset-image-preview-layout / asset-image-preview-stage / asset-image-preview-info'}>
+        <StyleGuideReferencePreview />
       </Demo>
     </Section>
   );

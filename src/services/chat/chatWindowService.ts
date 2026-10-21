@@ -29,11 +29,23 @@ import type {
 } from '../../types/agent';
 import type { LocalFileGrantSummary } from './fileGrantService';
 import type { McpClientOption } from '../../types/mcpClient';
+import type { ReferencePreviewContent, ReferencePreviewSource } from '../../types/referencePreview';
 
 export const CHAT_SYNC_EVENT = 'chat:sync-state';
 export const CHAT_ACTION_EVENT = 'chat:action';
 export const CHAT_CLOSE_REQUEST = 'chat:close-request';
 export const CHAT_CLOSE_EVENT = 'chat:close';
+/** 原生窗口 label 由 lib.rs 的 open_chat_window 固定创建。 */
+export const CHAT_MAIN_WINDOW_LABEL = 'main';
+export const CHAT_DETACHED_WINDOW_LABEL = 'chat-assistant';
+export const CHAT_REFERENCE_PREVIEW_EVENT = 'chat:reference-preview-result';
+
+/** 仅按需返回给独立窗口，不进入快照、补丁、消息或项目持久化。 */
+export interface ChatReferencePreviewResponse {
+  requestId: string;
+  projectId: string | null;
+  content: ReferencePreviewContent;
+}
 
 // ============================================
 // 状态快照（主窗口 → 独立窗口）
@@ -317,6 +329,8 @@ export type ChatAction =
   | { type: 'set_composer_draft'; draft: string; conversationId?: string | null }
   | { type: 'set_panel_view'; view: ChatPanelView }
   | { type: 'set_prompt_submit_shortcut'; shortcut: PromptSubmitShortcut }
+  | { type: 'preview_reference'; requestId: string; projectId: string | null; source: ReferencePreviewSource }
+  | { type: 'cancel_reference_preview'; requestId: string; projectId: string | null }
   | { type: 'dock_window'; composerDraft?: ChatComposerHandoff }
   | { type: 'confirm_commands'; messageId: string }
   | { type: 'cancel_commands'; messageId: string }

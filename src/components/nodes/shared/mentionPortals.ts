@@ -7,7 +7,7 @@
  */
 
 /** Portal 到 body 的浮层根类名 */
-export const MENTION_PORTAL_CLASSES = ['asset-picker-backdrop', 'chip-name-tip', 'mention-dropdown'] as const;
+export const MENTION_PORTAL_CLASSES = ['asset-picker-backdrop', 'chip-name-tip', 'mention-dropdown', 'reference-content-preview'] as const;
 
 const MENTION_PORTAL_SELECTOR = MENTION_PORTAL_CLASSES.map((name) => `.${name}`).join(', ');
 

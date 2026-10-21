@@ -59,6 +59,7 @@ import {
   attachConversationFiles, getChatImagePreviews, parseChatImageReferences,
   prepareChatImagePreviews, subscribeChatImagePreviews,
 } from './chatImageReferenceService';
+import { cancelMainReferencePreview, handleDetachedReferencePreviewAction } from './chatReferencePreviewService';
 
 const DEFAULT_SYNC_INTERVAL_MS = 150;
 const MAX_SYNC_RETRY_DELAY_MS = 5_000;
@@ -341,6 +342,10 @@ export function handleDetachedChatAction(
   const store = useAppStore.getState();
 
   switch (action.type) {
+    case 'preview_reference':
+    case 'cancel_reference_preview':
+      handleDetachedReferencePreviewAction(action);
+      break;
     case 'open_mcp_client_settings':
       store.setSettingsOpen(true, 'mcp');
       if (isTauri) void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
@@ -747,6 +752,7 @@ export function createDetachedChatSyncController(
     const listenerCleanup = await initListener(
       (action) => handleDetachedChatAction(action, sync),
       (draft) => {
+        cancelMainReferencePreview();
         const store = useAppStore.getState();
         if (draft) store.setChatComposerLiveDraft(draft.draft, draft.conversationId);
         store.setHoveredMentionNodeId(null);
@@ -764,6 +770,7 @@ export function createDetachedChatSyncController(
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    cancelMainReferencePreview();
     resetSyncState();
     unsubscribeStore?.();
     unsubscribeStore = undefined;

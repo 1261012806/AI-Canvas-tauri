@@ -4,6 +4,7 @@
 import { lazy, Suspense } from 'react';
 import LazyLoadBoundary, { LazyLoadFallback } from './components/shared/LazyLoadBoundary';
 import OverlayScrollbarLayer from './components/shared/OverlayScrollbarLayer';
+import ReferencePreviewHost from './components/shared/ReferencePreviewHost';
 
 const App = lazy(() => import('./App'));
 const AssetSearchWindow = lazy(() => import('./components/AssetSearchWindow'));
@@ -47,6 +48,9 @@ export default function RootView({ view }: RootViewProps) {
         </Suspense>
       </LazyLoadBoundary>
       <OverlayScrollbarLayer />
+      <LazyLoadBoundary label="引用内容预览">
+        <ReferencePreviewHost detached={view === 'chat'} />
+      </LazyLoadBoundary>
     </>
   );
 }

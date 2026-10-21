@@ -162,6 +162,9 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   useEffect(() => () => finishScrub(), [finishScrub]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (document.querySelector('.reference-content-preview') && !audioRef.current?.closest('.reference-content-preview')) return;
+      // 关闭交给宿主焦点栈，允许资源预览和画布预览复用同一播放器。
+      if (event.key === 'Escape') return;
       // Consume canvas shortcuts at window capture, but preserve native slider/button defaults.
       event.stopImmediatePropagation();
       const target = event.target;

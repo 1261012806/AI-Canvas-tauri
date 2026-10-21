@@ -98,10 +98,12 @@ interface ChipDragStart {
   clientY: number;
   isCurrent?: () => boolean;
   onCommit: () => void;
+  onClick?: (event: PointerEvent) => void;
+  onDragStart?: () => void;
 }
 
 /** 使用指针会话，兼容开启原生文件拖放的 Tauri WebView。 */
-export function startMentionChipDrag({ root, source, pointerId, clientX, clientY, isCurrent = () => true, onCommit }: ChipDragStart): () => void {
+export function startMentionChipDrag({ root, source, pointerId, clientX, clientY, isCurrent = () => true, onCommit, onClick, onDragStart }: ChipDragStart): () => void {
   const doc = root.ownerDocument;
   const win = doc.defaultView!;
   const initialPrompt = serializeDOM(root);
@@ -172,6 +174,7 @@ export function startMentionChipDrag({ root, source, pointerId, clientX, clientY
     event.stopPropagation();
     if (!active) {
       active = true;
+      onDragStart?.();
       doc.body.append(preview, marker);
       source.classList.add('is-chip-drag-source');
       root.classList.add('is-chip-dragging');
@@ -183,10 +186,13 @@ export function startMentionChipDrag({ root, source, pointerId, clientX, clientY
     if (event.pointerId !== pointerId || ended) return;
     event.preventDefault();
     event.stopPropagation();
+    const clicked = !active && valid() && serializeDOM(root) === initialPrompt
+      && Math.hypot(event.clientX - clientX, event.clientY - clientY) < 4;
     const range = active && valid() && serializeDOM(root) === initialPrompt
       ? getMentionChipDropRange(root, source, event.clientX, event.clientY) : null;
     finish();
     if (range && commitMentionChipDrop(root, source, range, event.ctrlKey || event.altKey)) onCommit();
+    else if (clicked) onClick?.(event);
   };
   const cancel = (event: PointerEvent) => { if (event.pointerId === pointerId) finish(); };
   const key = (event: KeyboardEvent) => {

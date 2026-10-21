@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { renderPromptWithChips } from '../../src/components/nodes/shared/PromptChipViewer';
 
@@ -18,13 +18,11 @@ describe('renderPromptWithChips', () => {
   });
 
   it('renders node mentions as prompt chips with correct styling and index', () => {
-    const preview = vi.fn();
     const nodes = [
       { id: 'node-c90a1u5s7', data: { label: '生成图像', type: 'ai-image', imageUrl: 'https://images.test/img.png', displayId: 5 } },
     ];
     const tree = renderPromptWithChips('美女跳舞 @{node-c90a1u5s7:生成图像}', {
       nodes: nodes as never,
-      onPreviewImage: preview,
     });
 
     const rendered = elements(tree);
@@ -37,9 +35,10 @@ describe('renderPromptWithChips', () => {
     const indexLabel = rendered.find((el) => el.props.className && String(el.props.className).includes('prompt-chip-image-index'));
     expect(indexLabel?.props.children).toBe('(图1)');
 
-    // 点击芯片支持预览图片
-    (chip?.props.onClick as (() => void) | undefined)?.();
-    expect(preview).toHaveBeenCalledWith({ url: 'https://images.test/img.png', name: '生成图像' });
+    // 双击由窗口统一处理；第一次单击不提前打开另一层图片弹窗。
+    expect(chip?.props.onClick).toBeUndefined();
+    expect(chip?.props.role).toBe('button');
+    expect(chip?.props.tabIndex).toBe(0);
   });
 
   it('renders asset, drama, skill, and workflow chips', () => {
@@ -75,5 +74,42 @@ describe('renderPromptWithChips', () => {
     const missing = elements(renderPromptWithChips('@{sheet/shot/gone:删除镜头}', { nodes }))
       .find((el) => el.props['data-ref-id'] === 'sheet/shot/gone');
     expect(missing?.props.title).toBe('删除镜头（镜头已失效）');
+  });
+
+  it('只读工作流胶囊保留完整输入身份与值，不以展示标题冒充实际内容', () => {
+    const text = '@{image:参考图}\n保持固定机位';
+    const rendered = elements(renderPromptWithChips(`@wf{12|镜头提示词|prompt}(${text}) @skill{writer|对白润色}`));
+    const workflow = rendered.find((el) => el.props['data-wf-id'] === '12');
+    expect(workflow?.props['data-wf-title']).toBe('镜头提示词');
+    expect(workflow?.props['data-wf-preview-value']).toBe(text);
+    expect(rendered.find((el) => el.props['data-skill-id'] === 'writer')?.props['data-skill-name']).toBe('对白润色');
+  });
+
+  it('嵌套括号和内嵌引用保留为完整工作流值，后续媒体编号与 Skill 不错位', () => {
+    const value = '人物(微笑(克制)，静止)，参考 @{inside:角色图}\n保留(所有括号)';
+    const nodes = [
+      { id: 'before', data: { type: 'ai-image', imageUrl: 'before.png' } },
+      { id: 'after', data: { type: 'ai-image', imageUrl: 'after.png' } },
+    ];
+    const rendered = elements(renderPromptWithChips(`@{before:首图} @wf{6|正向|prompt}(${value}) @skill{writer|对白润色} @{after:尾图}`, { nodes }));
+    expect(rendered.find((el) => el.props['data-wf-id'] === '6')?.props['data-wf-preview-value']).toBe(value);
+    expect(rendered.find((el) => el.props.className === 'prompt-chip-wf-value')?.props.children).toBe(value);
+    expect(rendered.some((el) => el.props['data-ref-id'] === 'inside')).toBe(false);
+    expect(rendered.find((el) => el.props['data-skill-id'] === 'writer')?.props['data-skill-name']).toBe('对白润色');
+    const indices = rendered.filter((el) => String(el.props.className).includes('prompt-chip-image-index')).map((el) => el.props.children);
+    expect(indices).toEqual(['(图1)', '(图2)']);
+  });
+
+  it('显式空工作流值保持为空，无值与未闭合括号不吞掉后续令牌', () => {
+    const empty = elements(renderPromptWithChips('@wf{6|正向|prompt}()')).find((el) => el.props['data-wf-id'] === '6');
+    expect(empty?.props['data-wf-preview-value']).toBe('');
+    const noValue = elements(renderPromptWithChips('@wf{6|正向|prompt} @skill{writer|写作}'));
+    expect(noValue.find((el) => el.props['data-wf-id'] === '6')?.props['data-wf-preview-value']).toBeUndefined();
+    expect(noValue.some((el) => el.props.className === 'prompt-chip-wf-value')).toBe(false);
+    expect(noValue.find((el) => el.props.className === 'prompt-chip-wf-title')?.props.children).toBe('正向');
+    expect(noValue.some((el) => el.props['data-skill-id'] === 'writer')).toBe(true);
+    const broken = elements(renderPromptWithChips('@wf{6|正向|prompt}(未闭合 @skill{writer|写作}'));
+    expect(broken.find((el) => el.props['data-wf-id'] === '6')?.props['data-wf-preview-value']).toBeUndefined();
+    expect(broken.some((el) => el.props['data-skill-id'] === 'writer')).toBe(true);
   });
 });

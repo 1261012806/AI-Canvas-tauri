@@ -40,8 +40,21 @@ export interface PromptChipRenderOptions {
   nodes?: Array<{ id: string; data?: Record<string, unknown> }>;
   dramaAssets?: DramaAssetLibrary;
   nodeMetaMap?: ReturnType<typeof getNodeMetaMap>;
-  onPreviewImage?: (preview: { url: string; name: string }) => void;
   emptyText?: string;
+}
+
+/** 与可编辑胶囊相同，按括号深度读取完整工作流值，保留其中的引用令牌。 */
+function readWorkflowValue(prompt: string, start: number): { value?: string; end: number } {
+  if (prompt[start] !== '(') return { end: start };
+  let depth = 1;
+  let index = start + 1;
+  while (index < prompt.length && depth > 0) {
+    if (prompt[index] === '(') depth += 1;
+    else if (prompt[index] === ')') depth -= 1;
+    index += 1;
+  }
+  // 未闭合时保留后面的原始正文，不吞掉其它引用。
+  return depth === 0 ? { value: prompt.slice(start + 1, index - 1), end: index } : { end: start };
 }
 
 /** 把包含 @提及标记的提示词渲染为与 MentionEditor 一致的彩色标签芯片 */
@@ -89,6 +102,7 @@ export function renderPromptWithChips(
     } else {
       references.push(undefined);
     }
+    if (scanMatch[6] !== undefined) regex.lastIndex = readWorkflowValue(prompt, regex.lastIndex).end;
   }
   const referenceLabels = numberMediaReferenceLabels(references);
   regex.lastIndex = 0;
@@ -113,7 +127,7 @@ export function renderPromptWithChips(
       const displayName = name.length > 18 ? `${name.slice(0, 16)}…` : name;
 
       elements.push(
-        <span key={`asset-${match.index}`} className="prompt-chip chip-asset" data-asset-path={path} title={name}>
+        <span key={`asset-${match.index}`} className="prompt-chip chip-asset cursor-pointer" data-asset-path={path} title={name} role="button" tabIndex={0}>
           <span className="prompt-chip-icon">{isImage ? '🖼' : '📄'}</span>
           <span className="prompt-chip-id">{displayName}</span>
           {referenceLabel !== undefined && (
@@ -162,17 +176,15 @@ export function renderPromptWithChips(
       const chipStyle = kind === 'voice' ? 'chip-audio' : kind === 'action-video' ? 'chip-video' : 'chip-image';
       const displayName = dramaName.length > 16 ? `${dramaName.slice(0, 14)}…` : dramaName;
       const referenceLabel = referenceLabels[currentIdx];
-      const canPreview = !!thumb && !!options.onPreviewImage;
 
       elements.push(
         <span
           key={`drama-${match.index}`}
-          className={`prompt-chip ${chipStyle}`}
+          className={`prompt-chip ${chipStyle} cursor-pointer`}
           data-drama-id={dramaId}
           data-drama-label={dramaName}
           title={dramaName}
-          onClick={canPreview ? () => options.onPreviewImage?.({ url: thumb!, name: dramaName }) : undefined}
-          style={canPreview ? { cursor: 'pointer' } : undefined}
+          role="button" tabIndex={0}
         >
           <span className="prompt-chip-icon">
             {thumb ? <img src={thumb} className="prompt-chip-thumb" alt="" /> : icon}
@@ -200,17 +212,15 @@ export function renderPromptWithChips(
       const displayLabel = displayId != null ? `#${displayId}` : liveLabel;
       const title = displayId != null ? `${label} (#${displayId})` : liveLabel;
       const referenceLabel = referenceLabels[currentIdx];
-      const canPreview = isMedia && !!thumbUrl && !!options.onPreviewImage;
 
       elements.push(
         <span
           key={`node-${match.index}`}
-          className={`prompt-chip prompt-chip-node ${CHIP_STYLE[nodeType] || 'chip-image'}`}
+          className={`prompt-chip prompt-chip-node ${CHIP_STYLE[nodeType] || 'chip-image'} cursor-pointer`}
           data-ref-id={nodeId}
           data-ref-label={label}
           title={title}
-          onClick={canPreview ? () => options.onPreviewImage?.({ url: thumbUrl!, name: label }) : undefined}
-          style={canPreview ? { cursor: 'pointer' } : undefined}
+          role="button" tabIndex={0}
         >
           <span className={`prompt-chip-icon${showThumbnail ? ' has-thumbnail' : ''}`} aria-hidden="true">
             {showThumbnail ? <img src={thumbUrl} className="prompt-chip-thumb" alt="" /> : iconPath ? (
@@ -230,23 +240,26 @@ export function renderPromptWithChips(
       const ioId = match[6];
       const ioTitle = match[7];
       const ioType = match[8] || 'prompt';
+      const input = readWorkflowValue(prompt, regex.lastIndex);
       elements.push(
-        <span key={`wf-${match.index}`} className={`prompt-chip prompt-chip-wf ${WF_IO_STYLE[ioType] || WF_IO_STYLE.prompt}`} data-wf-id={ioId}>
+        <span key={`wf-${match.index}`} className={`prompt-chip prompt-chip-wf ${WF_IO_STYLE[ioType] || WF_IO_STYLE.prompt}`} data-wf-id={ioId}
+          data-wf-title={ioTitle} data-wf-preview-value={input.value} role="button" tabIndex={0}>
           <span className="prompt-chip-wf-prefix">
             <span className="prompt-chip-icon">{WF_IO_ICON[ioType] || '?'}</span>
             <span className="prompt-chip-wf-id">#{ioId}</span>
             <span className="prompt-chip-wf-colon">:</span>
           </span>
-          <span className="prompt-chip-wf-value">{ioTitle}</span>
+          <span className={input.value === undefined ? 'prompt-chip-wf-title' : 'prompt-chip-wf-value'}>{input.value ?? ioTitle}</span>
         </span>,
       );
-      lastIndex = regex.lastIndex;
+      lastIndex = input.end;
+      regex.lastIndex = input.end;
     } else if (match[9] !== undefined) {
       const skillId = match[9];
       let skillName = match[10];
       try { skillName = decodeURIComponent(match[10]); } catch { /* 保留原值 */ }
       elements.push(
-        <span key={`skill-${match.index}`} className="prompt-chip chip-skill" data-skill-id={skillId} title={skillName}>
+        <span key={`skill-${match.index}`} className="prompt-chip chip-skill cursor-pointer" data-skill-id={skillId} data-skill-name={skillName} title={skillName} role="button" tabIndex={0}>
           <span className="prompt-chip-icon prompt-chip-skill-icon" aria-hidden="true">✦</span>
           <span className="prompt-chip-skill-name">{skillName.length > 20 ? `${skillName.slice(0, 18)}...` : skillName}</span>
         </span>,

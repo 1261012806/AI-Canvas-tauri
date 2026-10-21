@@ -169,6 +169,10 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   useLayoutEffect(() => {
     if (!active) return;
     const release = (event: KeyboardEvent) => {
+      if (document.querySelector('.reference-content-preview') && !stageRef.current?.closest('.reference-content-preview')) {
+        claimedEscape.current = false;
+        return;
+      }
       if (event.key === 'Escape' && claimedEscape.current) {
         claimedEscape.current = false;
         event.stopImmediatePropagation();
@@ -182,6 +186,8 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     if (!active) return;
     const keyboard = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing) return;
+      // 顶层引用预览独占键盘；背景资源库播放器不能因监听顺序抢先关闭。
+      if (document.querySelector('.reference-content-preview') && !stageRef.current?.closest('.reference-content-preview')) return;
       // 仅处理自己的全屏或菜单；嵌入页面时不抢占其他组件的 Esc。
       const fullscreenElement = document.fullscreenElement;
       if (fullscreenElement) {

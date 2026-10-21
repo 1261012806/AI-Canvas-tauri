@@ -185,6 +185,19 @@ describe('引用胶囊拖动', () => {
     start(); pointer('pointermove', { clientX: 12 }); pointer('pointerup', { clientX: 12 });
     expect(prompt()).toBe('@{a:A}说明@{b:B}'); expect(change).not.toHaveBeenCalled();
   });
+  it.each(['click', 'drag', 'cancel', 'changed'])('只有静止且仍有效的释放可进入双击预览：%s', (mode) => {
+    const clicked = vi.fn();
+    const dragged = vi.fn();
+    startMentionChipDrag({ root: html(root), source: html(a), pointerId: 1, clientX: 10, clientY: 40,
+      onCommit: () => change(), onClick: clicked, onDragStart: dragged });
+    if (mode === 'drag') pointer('pointermove');
+    if (mode === 'cancel') pointer('pointercancel');
+    if (mode === 'changed') root.append(new TestNode(3, '新编辑'));
+    pointer('pointerup', mode === 'drag' ? {} : { clientX: 10, clientY: 40 });
+    expect(clicked).toHaveBeenCalledTimes(mode === 'click' ? 1 : 0);
+    expect(dragged).toHaveBeenCalledTimes(mode === 'drag' ? 1 : 0);
+    if (mode !== 'drag') expect(change).not.toHaveBeenCalled();
+  });
   it.each(['escape', 'cancel', 'blur', 'outside', 'changed', 'removed', 'unmount'])('%s 取消并清理预览，保留其他内容', (reason) => {
     const cancel = start(); pointer('pointermove');
     if (reason === 'escape') doc.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));

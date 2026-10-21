@@ -33,6 +33,7 @@ import {
 } from '../../../types/dramaAssets';
 import type { CharacterReferenceImage } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
+import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../../utils/referencePreviewEvents';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import {
@@ -140,6 +141,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const selectFirstMentionRef = useRef<(() => void) | null>(null);
   const lastFocusedWfValueRef = useRef<HTMLSpanElement | null>(null);
   const cancelChipDragRef = useRef<(() => void) | null>(null);
+  const lastChipClickRef = useRef<{ chip: HTMLElement; time: number; x: number; y: number } | null>(null);
   const { nodes, edges, workflows, dramaAssets, globalCharacters, globalCharactersLoading, currentProjectId } = useAppStore(
     useShallow((state) => ({
       nodes: state.nodes,
@@ -159,6 +161,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   useEffect(() => () => {
     cancelChipDragRef.current?.();
     cancelChipDragRef.current = null;
+    lastChipClickRef.current = null;
   }, [currentProjectId, nodeId, prompt]);
 
   // ── 资产引用弹窗 ──
@@ -1190,7 +1193,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const root = editorRef.current;
     if (!root || event.button !== 0 || event.pointerType === 'touch') return;
     const source = findDraggableMentionChip(root, event.target);
-    if (!source) return;
+    if (!source) { lastChipClickRef.current = null; return; }
     event.preventDefault();
     event.stopPropagation();
     cancelChipDragRef.current?.();
@@ -1207,8 +1210,31 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       root, source, pointerId: event.pointerId,
       clientX: event.clientX, clientY: event.clientY, onCommit: emitDOM,
       isCurrent: () => useAppStore.getState().currentProjectId === currentProjectId,
+      onDragStart: () => { lastChipClickRef.current = null; },
+      onClick: (release) => {
+        if (release.ctrlKey || release.altKey || release.metaKey) { lastChipClickRef.current = null; return; }
+        const previous = lastChipClickRef.current;
+        const now = Date.now();
+        if (previous?.chip === source && now - previous.time <= 400
+          && Math.hypot(release.clientX - previous.x, release.clientY - previous.y) < 4) {
+          lastChipClickRef.current = null;
+          const reference = findReferencePreviewSource(source);
+          if (reference) requestReferencePreview(reference, root.ownerDocument);
+        } else lastChipClickRef.current = { chip: source, time: now, x: release.clientX, y: release.clientY };
+      },
     });
   }, [currentProjectId, emitDOM, handleEditorMouseLeave]);
+  useEffect(() => {
+    const dismissTransientReferences = () => {
+      cancelChipDragRef.current?.();
+      cancelChipDragRef.current = null;
+      lastChipClickRef.current = null;
+      handleEditorMouseLeave();
+      setShowMention(false);
+    };
+    document.addEventListener(REFERENCE_PREVIEW_EVENT, dismissTransientReferences);
+    return () => document.removeEventListener(REFERENCE_PREVIEW_EVENT, dismissTransientReferences);
+  }, [handleEditorMouseLeave]);
   const chipPreview = useMemo<MentionChipPreview | null>(() => {
     if (!chipTip || chipTip.ownerNodeId !== nodeId || chipTip.ownerProjectId !== currentProjectId) return null;
     const { source } = chipTip;
@@ -1232,24 +1258,32 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setChipHoverSuppressed(suppressed);
       if (suppressed) handleEditorMouseLeave();
     };
-    const pointerDown = () => updateSuppressed(true);
+    const pointerDown = (event: PointerEvent) => {
+      const previous = lastChipClickRef.current;
+      if (previous && (!(event.target instanceof Node) || !previous.chip.contains(event.target))) lastChipClickRef.current = null;
+      updateSuppressed(true);
+    };
     const pointerUp = (event: PointerEvent) => updateSuppressed(event.buttons !== 0);
     const pointerMove = (event: PointerEvent) => {
       // 在窗口外松开后重新进入，也能恢复普通悬浮。
       if (event.buttons === 0 && !nativeDragging && chipHoverSuppressedRef.current) updateSuppressed(false);
     };
-    const pointerCancel = () => updateSuppressed(false);
+    const pointerCancel = () => { lastChipClickRef.current = null; updateSuppressed(false); };
     const dragStart = () => {
       nativeDragging = true;
       updateSuppressed(true);
     };
     const reset = () => {
       nativeDragging = false;
+      lastChipClickRef.current = null;
       updateSuppressed(false);
       handleEditorMouseLeave();
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && lastHoverKeyRef.current) handleEditorMouseLeave();
+      if (event.key === 'Escape') {
+        lastChipClickRef.current = null;
+        if (lastHoverKeyRef.current) handleEditorMouseLeave();
+      }
     };
     window.addEventListener('pointerdown', pointerDown, true);
     window.addEventListener('pointerup', pointerUp, true);
@@ -1631,6 +1665,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         aria-label={ariaLabel}
         className={`ui-ai-input__editor prompt-editor${!prompt ? ' is-empty' : ''}`}
         data-placeholder={placeholder}
+        data-reference-owner-node-id={nodeId}
         onInput={handleInput}
         onCompositionStart={() => {
           if (editorRef.current) historyRef.current.updateSelection(captureMentionEditorSelection(editorRef.current));

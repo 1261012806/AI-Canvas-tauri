@@ -15,6 +15,8 @@ export function buildReferenceChipEl(doc: Document, options: ReferenceChipOption
   const chip = doc.createElement('span');
   chip.className = `ui-reference-chip ui-reference-chip--${kind} prompt-chip prompt-chip-node chip-${kind}`;
   chip.contentEditable = 'false';
+  chip.tabIndex = 0;
+  chip.setAttribute('role', 'button');
   chip.title = options.badge ? `${options.label} (${options.badge})` : options.label;
   chip.setAttribute('aria-label', chip.title);
   const icon = doc.createElement('span');

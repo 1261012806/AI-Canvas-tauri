@@ -153,6 +153,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
+      if (document.querySelector('.reference-content-preview')) return;
       if (event.key === 'Tab' && leaveRequest) {
         const buttons = leavePanelRef.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])');
         if (buttons?.length) {
@@ -362,7 +363,6 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
                   dramaAssets,
                   nodeMetaMap,
                   emptyText: saved?.record ? '尚未填写提示词' : history ? '此记录未保存提示词' : '暂无生成信息',
-                  onPreviewImage: (preview) => setReferencePreview({ key: queryKey, url: preview.url, name: preview.name }),
                 })}</p>}
             {(tags.length > 0 || editing) && <div className="flex flex-wrap items-center gap-2 pt-3" role="group" aria-label="资产标签">
               {tags.map((tag) => <span key={tag} className={editing ? 'ui-tag' : 'ui-badge ui-badge--primary'}>{tag}

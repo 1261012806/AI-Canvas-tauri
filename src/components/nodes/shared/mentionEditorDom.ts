@@ -302,6 +302,9 @@ export function buildAssetChipEl(path: string, assetUrl?: string): HTMLSpanEleme
   span.className = 'prompt-chip chip-asset';
   span.contentEditable = 'false';
   span.setAttribute('data-asset-path', path);
+  span.title = name;
+  span.tabIndex = 0;
+  span.setAttribute('role', 'button');
   if (isImage) span.setAttribute('data-image-ref-key', `asset:${encodeURIComponent(path)}`);
   const icon = document.createElement('span');
   icon.className = 'prompt-chip-icon';
@@ -327,6 +330,8 @@ export function buildDramaChipEl(dramaId: string, name: string, kind: string, th
   span.className = `prompt-chip ${kind === 'voice' ? 'chip-audio' : kind === 'action-video' ? 'chip-video' : 'chip-image'}`;
   span.contentEditable = 'false';
   span.setAttribute('data-drama-id', dramaId);
+  span.tabIndex = 0;
+  span.setAttribute('role', 'button');
   span.setAttribute('data-drama-label', name);
   span.setAttribute('data-drama-kind', kind);
   span.title = name;
@@ -429,6 +434,8 @@ export function buildSkillChipEl(skillId: string, skillName: string): HTMLSpanEl
   span.className = 'prompt-chip chip-skill';
   span.contentEditable = 'false';
   span.setAttribute('data-skill-id', skillId);
+  span.tabIndex = 0;
+  span.setAttribute('role', 'button');
   span.setAttribute('data-skill-name', skillName);
   span.title = skillName;
   const icon = document.createElement('span');
@@ -474,6 +481,8 @@ export function buildWorkflowChipEl(
   span.className = `prompt-chip prompt-chip-wf ${WF_IO_STYLE[ioNodeType] || WF_IO_STYLE.prompt}`;
   span.contentEditable = 'false';
   span.setAttribute('data-wf-id', ioNodeId);
+  span.tabIndex = 0;
+  span.setAttribute('role', 'button');
   span.setAttribute('data-wf-title', ioNodeTitle);
   span.setAttribute('data-wf-type', ioNodeType);
   const prefix = document.createElement('span');

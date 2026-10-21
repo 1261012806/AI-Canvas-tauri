@@ -151,8 +151,26 @@ function ensureCaretSlotBefore(referenceElement: HTMLElement): void {
 function buildReferenceElement(reference: ParsedReference, presentation?: ChatComposerEditorProps['referencePresentation']): HTMLSpanElement {
   const element = presentation?.createElement(reference) ?? document.createElement('span');
   element.contentEditable = 'false';
+  element.setAttribute('role', 'button');
+  element.tabIndex = 0;
   element.setAttribute('data-chat-reference', reference.kind);
   element.setAttribute('data-chat-reference-raw', reference.raw);
+  if (reference.kind === 'node') {
+    element.setAttribute('data-ref-id', reference.id);
+    element.setAttribute('data-ref-label', reference.label);
+  } else if (reference.kind === 'drama') {
+    element.setAttribute('data-drama-id', reference.id);
+    element.setAttribute('data-drama-label', reference.label);
+  } else if (reference.kind === 'skill') {
+    element.setAttribute('data-skill-id', reference.id);
+    element.setAttribute('data-skill-name', reference.label);
+  } else if (reference.kind === 'model') {
+    element.setAttribute('data-model-ref-id', reference.id);
+    element.setAttribute('data-model-ref-label', reference.label);
+  } else {
+    element.setAttribute('data-chat-image-file-name', reference.id);
+    element.setAttribute('data-chat-image-label', reference.label);
+  }
   const style = REFERENCE_STYLES[reference.kind];
   element.setAttribute('aria-label', `${REFERENCE_ARIA_PREFIX[reference.kind]} ${reference.label}${
     reference.kind === 'node' && reference.displayId != null ? `，编号 ${reference.displayId}` : ''
