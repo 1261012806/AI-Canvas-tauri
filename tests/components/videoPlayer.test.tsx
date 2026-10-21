@@ -45,8 +45,8 @@ let video: { src: string; paused: boolean; currentTime: number; muted: boolean; 
   buffered: { length: number; start: (index: number) => number; end: (index: number) => number };
   videoWidth: number; videoHeight: number; duration: number; readyState: number; error: { code: number } | null; play: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>; load: ReturnType<typeof vi.fn>; removeAttribute: ReturnType<typeof vi.fn>; getAttribute: ReturnType<typeof vi.fn>; addEventListener: (type: string, cb: (event: unknown) => void) => void; removeEventListener: (type: string, cb: (event: unknown) => void) => void; };
-let doc: { fullscreenElement: unknown; exitFullscreen: ReturnType<typeof vi.fn> };
-let stage: { requestFullscreen: ReturnType<typeof vi.fn>; querySelector: ReturnType<typeof vi.fn>; contains: ReturnType<typeof vi.fn> };
+let doc: { fullscreenElement: unknown; exitFullscreen: ReturnType<typeof vi.fn>; querySelector: ReturnType<typeof vi.fn> };
+let stage: { requestFullscreen: ReturnType<typeof vi.fn>; querySelector: ReturnType<typeof vi.fn>; contains: ReturnType<typeof vi.fn>; closest: ReturnType<typeof vi.fn> };
 let progress: { style: { setProperty: ReturnType<typeof vi.fn> }; value: string;
   classList: { add: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn>; toggle: ReturnType<typeof vi.fn> } };
 let frames: Map<number, FrameRequestCallback>; let nextFrame: number; let videoListeners: Map<string, Set<(event: unknown) => void>>;
@@ -82,8 +82,8 @@ beforeEach(() => {
     override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null) { super.addEventListener(type, callback); }
     override removeEventListener(type: string, callback: EventListenerOrEventListenerObject | null) { super.removeEventListener(type, callback); }
   }();
-  doc = { fullscreenElement: null, exitFullscreen: vi.fn().mockResolvedValue(undefined) };
-  stage = { requestFullscreen: vi.fn().mockResolvedValue(undefined), querySelector: vi.fn(() => ({ focus: vi.fn() })), contains: vi.fn(() => false) };
+  doc = { fullscreenElement: null, exitFullscreen: vi.fn().mockResolvedValue(undefined), querySelector: vi.fn().mockReturnValue(null) };
+  stage = { requestFullscreen: vi.fn().mockResolvedValue(undefined), querySelector: vi.fn(() => ({ focus: vi.fn() })), contains: vi.fn(() => false), closest: vi.fn().mockReturnValue(null) };
   vi.stubGlobal('window', win); vi.stubGlobal('document', doc); vi.stubGlobal('Element', DomElement);
   progress = { style: { setProperty: vi.fn() }, value: '', classList: { add: vi.fn(), remove: vi.fn(), toggle: vi.fn() } }; frames = new Map(); nextFrame = 0;
   vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; }));
@@ -272,6 +272,17 @@ describe('UI Kit VideoPlayer', () => {
     expect(control('播放速度').props['aria-expanded']).toBe(false);
     stage.contains.mockReturnValue(false); doc.fullscreenElement = {};
     expect(key().defaultPrevented).toBe(false);
+  });
+  it('顶层引用预览打开时背景播放器不处理 Esc，预览内播放器仍能关闭自己的菜单', async () => {
+    render(); await settle(); click(control('播放速度')); render();
+    doc.querySelector.mockReturnValue({});
+    expect(key().defaultPrevented).toBe(false); render();
+    expect(input.onEscape).not.toHaveBeenCalled();
+    expect(control('播放速度').props['aria-expanded']).toBe(true);
+    stage.closest.mockReturnValue({});
+    expect(key().defaultPrevented).toBe(true); render();
+    expect(control('播放速度').props['aria-expanded']).toBe(false);
+    expect(input.onEscape).not.toHaveBeenCalled();
   });
   it('换源释放旧视频并忽略旧播放请求的迟到失败', async () => {
     let reject!: (reason: Error) => void;

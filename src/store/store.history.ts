@@ -107,7 +107,7 @@ function getStructuralNodeData(data: BaseNodeData): Partial<BaseNodeData> {
   if (data.type === 'ai-animation') {
     for (const key of ANIMATION_MEDIA_KEYS) structuralData[key] = data[key] as never;
   }
-  if (data.type === 'ai-video' && data.shotlistProductionSource?.kind === 'video') {
+  if ((data.type === 'ai-video' || data.type === 'source-video') && data.shotlistProductionSource?.kind === 'video') {
     structuralData.seedanceDuration = data.seedanceDuration;
   }
   for (const key of STRUCTURAL_NODE_DATA_KEYS) {
@@ -224,11 +224,21 @@ function restoreStructuralNode(
       else delete data[key];
     }
   }
-  if (target.data.type === 'ai-video' && target.data.shotlistProductionSource?.kind === 'video') {
+  const targetShotSource = target.data.shotlistProductionSource;
+  const currentShotSource = current.data.shotlistProductionSource;
+  const videoShotSource = (target.data.type === 'ai-video' || target.data.type === 'source-video')
+    && (targetShotSource?.kind === 'video' || currentShotSource?.kind === 'video');
+  if (videoShotSource) {
     if (Object.prototype.hasOwnProperty.call(target.data, 'seedanceDuration')) {
       data.seedanceDuration = target.data.seedanceDuration;
     } else {
       delete data.seedanceDuration;
+    }
+    // 镜头引用和其时长是一项结构操作；普通布局撤销仍保留独立的文案编辑。
+    if (targetShotSource?.nodeId !== currentShotSource?.nodeId || targetShotSource?.rowId !== currentShotSource?.rowId
+      || targetShotSource?.kind !== currentShotSource?.kind) {
+      if (Object.prototype.hasOwnProperty.call(target.data, 'prompt')) data.prompt = target.data.prompt;
+      else delete data.prompt;
     }
   }
   for (const key of STRUCTURAL_NODE_DATA_KEYS) {

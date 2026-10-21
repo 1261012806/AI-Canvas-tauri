@@ -82,8 +82,8 @@ describe('canvas agent tools', () => {
     useAppStore.setState({ nodes: [node('sheet', { type: 'ai-shotlist', shotlistRows: [{ id: 'r', shotNo: '1', content: '有效镜头' }] })], edges: [] });
     const before = useAppStore.getState().nodes;
     const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
-      { type: 'ai-video', prompt: '@{sheet/shot/r:镜1}' },
-      { type: 'ai-video', prompt: '@{sheet/shot/deleted:镜2}' },
+      { type: 'ai-video', label: '有效镜头', prompt: '@{sheet/shot/r:镜1}' },
+      { type: 'ai-video', label: '已删镜头', prompt: '@{sheet/shot/deleted:镜2}' },
     ] });
     expect(result.status).toBe('error');
     expect(useAppStore.getState().nodes).toBe(before);

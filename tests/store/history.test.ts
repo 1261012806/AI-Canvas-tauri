@@ -273,8 +273,8 @@ describe('precise shot duration references', () => {
       shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'manual' } });
   });
 
-  it('undoes and redoes the prompt reference with its duration association', async () => {
-    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video', prompt: '原补充要求', seedanceDuration: 3 })] });
+  it.each(['ai-video', 'source-video'] as const)('undoes and redoes the %s prompt reference with its duration association', async (type) => {
+    useAppStore.setState({ nodes: [source(), node('video', { type, prompt: '原补充要求', seedanceDuration: 3 })] });
     useAppStore.getState().updateNodeData('video', { prompt: '@{sheet/shot/row-1:第1镜} 原补充要求' });
     expect(video().seedanceDuration).toBe(5);
     expect(await useAppStore.getState().undo()).toBe(true);
@@ -282,6 +282,30 @@ describe('precise shot duration references', () => {
     expect(video().shotlistProductionSource).toBeUndefined();
     expect(await useAppStore.getState().redo()).toBe(true);
     expect(video()).toMatchObject({ prompt: '@{sheet/shot/row-1:第1镜} 原补充要求', seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
+  });
+
+  it('preserves later prompt edits when undoing layout without changing the shot association', async () => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video' })] });
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 原补充要求' });
+    state.commitToHistory();
+    state.updateNodePositionTransient('video', { x: 500, y: 120 });
+    state.updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 后续补充要求' });
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'video')?.position).toEqual({ x: 0, y: 0 });
+    expect(video()).toMatchObject({ prompt: '@{sheet/shot/row-1:第1镜} 后续补充要求', seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
+  });
+
+  it('preserves later prompt edits when undoing only the shot duration mode', async () => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video' })] });
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 原补充要求' });
+    state.updateNodeData('video', { seedanceDuration: 12 });
+    state.updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 后续补充要求' });
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(video()).toMatchObject({ prompt: '@{sheet/shot/row-1:第1镜} 后续补充要求', seedanceDuration: 5,
       shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
   });
 });

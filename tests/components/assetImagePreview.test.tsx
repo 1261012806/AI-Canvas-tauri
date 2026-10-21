@@ -141,6 +141,7 @@ beforeEach(() => {
     override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null) { super.addEventListener(type, callback); }
     override removeEventListener(type: string, callback: EventListenerOrEventListenerObject | null) { super.removeEventListener(type, callback); }
   }(); vi.stubGlobal('window', win);
+  vi.stubGlobal('document', { querySelector: vi.fn().mockReturnValue(null), activeElement: null });
   driver.load.mockReset().mockResolvedValue(history()); driver.copy.mockReset().mockResolvedValue(true);
   driver.save.mockReset().mockImplementation(async (_file, input) => ({ id: 'asset-image:record', assetId: 'asset-image', contentDigest: 'a'.repeat(64), prompt: input.prompt, references: input.references, revision: 1, updatedAt: 1, fileName: '人物.png' }));
   driver.pick.mockReset().mockResolvedValue([]); driver.pending.mockReset().mockResolvedValue([]); driver.resolve.mockReset().mockResolvedValue([]);
@@ -311,6 +312,18 @@ describe('asset image fullscreen preview', () => {
     expect(find((element) => element.type === 'zoomable-image').props.src).toBe(files[1].assetUrl);
     expect(key('Escape').defaultPrevented).toBe(true);
     expect(input.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves keyboard navigation and closing to the active reference preview above it', async () => {
+    render(); await settle();
+    (document.querySelector as ReturnType<typeof vi.fn>).mockReturnValue({});
+    expect(key('ArrowRight').defaultPrevented).toBe(false);
+    expect(find((element) => element.type === 'zoomable-image').props.src).toBe(files[0].assetUrl);
+    expect(key('Escape').defaultPrevented).toBe(false);
+    expect(input.onClose).not.toHaveBeenCalled();
+    (document.querySelector as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    expect(key('Escape').defaultPrevented).toBe(true);
+    expect(input.onClose).toHaveBeenCalledOnce();
   });
 
   it('shows image errors and allows retry without closing the asset library', async () => {

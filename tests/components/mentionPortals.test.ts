@@ -27,6 +27,10 @@ describe('MentionEditor 的 Portal 浮层识别', () => {
     expect(isInsideMentionPortal(elementWith(['mention-dropdown']))).toBe(true);
   });
 
+  it('全屏引用预览内的点击不会被当作宿主浮层外部点击', () => {
+    expect(isInsideMentionPortal(elementWith(['reference-content-preview']))).toBe(true);
+  });
+
   it('画布上的普通元素不算', () => {
     expect(isInsideMentionPortal(elementWith(['react-flow__node']))).toBe(false);
   });
@@ -37,6 +41,6 @@ describe('MentionEditor 的 Portal 浮层识别', () => {
   });
 
   it('所有 Portal 类名都在清单里，漏一个就会漏放行', () => {
-    expect([...MENTION_PORTAL_CLASSES]).toEqual(['asset-picker-backdrop', 'chip-name-tip', 'mention-dropdown']);
+    expect([...MENTION_PORTAL_CLASSES]).toEqual(['asset-picker-backdrop', 'chip-name-tip', 'mention-dropdown', 'reference-content-preview']);
   });
 });

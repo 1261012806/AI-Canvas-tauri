@@ -41,14 +41,14 @@ class FakeAudio {
   src = 'asset://tone.wav'; currentTime = 0; duration = 120; paused = true; volume = 1; muted = false;
   play = vi.fn(async () => { this.paused = false; }); pause = vi.fn(() => { this.paused = true; });
   load = vi.fn(); removeAttribute = vi.fn(() => { this.src = ''; }); getAttribute = () => this.src;
-  closest = () => null;
+  closest = vi.fn().mockReturnValue(null);
 }
 class FakeElement { isConnected = true; focus = vi.fn(); }
 class FakeInput extends FakeElement {}
 class FakeButton extends FakeElement {}
 let tree: unknown;
 let audio: FakeAudio;
-let hidden: EventTarget & { hidden: boolean; activeElement: FakeElement };
+let hidden: EventTarget & { hidden: boolean; activeElement: FakeElement; querySelector: ReturnType<typeof vi.fn> };
 const onClose = vi.fn(); const navigate = vi.fn(); const fallback = vi.fn();
 const onVolume = vi.fn(); const onMuted = vi.fn();
 const base = { src: 'asset://tone.wav', initialTime: 0, autoPlay: false, analysis: true, volume: 0.7, muted: false,
@@ -87,7 +87,7 @@ beforeEach(() => {
   vi.clearAllMocks(); driver.states = []; driver.refs = []; driver.effects = []; driver.pending = []; driver.keys.clear();
   driver.store = { currentProjectId: 'project-a', nodes: [track('thirty', 30), track('ten', 10), track('two', 2, {}, 'source-audio'), track('unnumbered'), track('empty', 1, { audioUrl: '' }), track('hidden', 3, { hiddenByCharacterLibrary: true }), track('image', 4, {}, 'ai-image')] };
   audio = new FakeAudio();
-  hidden = Object.assign(new EventTarget(), { hidden: false, activeElement: new FakeElement() });
+  hidden = Object.assign(new EventTarget(), { hidden: false, activeElement: new FakeElement(), querySelector: vi.fn().mockReturnValue(null) });
   vi.stubGlobal('document', hidden); vi.stubGlobal('HTMLElement', FakeElement);
   vi.stubGlobal('HTMLInputElement', FakeInput); vi.stubGlobal('HTMLButtonElement', FakeButton);
   vi.stubGlobal('window', { addEventListener: (name: string, fn: (event: KeyboardEvent) => void) => driver.keys.set(name, fn), removeEventListener: (name: string) => driver.keys.delete(name) });
@@ -144,6 +144,16 @@ describe('audio player controls and lifetime', () => {
     navigate.mockClear(); const slider = key('ArrowRight', new FakeInput());
     expect(slider.stopImmediatePropagation).toHaveBeenCalled(); expect(slider.preventDefault).not.toHaveBeenCalled(); expect(navigate).not.toHaveBeenCalled();
     expect(key('Delete').stopImmediatePropagation).toHaveBeenCalled();
+  });
+  it('lets the top reference preview own shortcuts while its own audio player can still navigate', () => {
+    render({}); hidden.querySelector.mockReturnValue({});
+    const backgroundArrow = key('ArrowRight');
+    expect(backgroundArrow.stopImmediatePropagation).not.toHaveBeenCalled();
+    expect(backgroundArrow.preventDefault).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    audio.closest.mockReturnValue({});
+    expect(key('ArrowRight').preventDefault).toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(1, false);
   });
   it('remounts without analysis after CORS or Web Audio failure', async () => {
     render({ initialTime: 12, autoPlay: true }); fire(find((el) => el.type === 'audio'), 'onError'); expect(fallback).toHaveBeenCalledWith(12, true);
