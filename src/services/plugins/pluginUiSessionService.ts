@@ -112,6 +112,8 @@ interface PluginUiSession {
   effectAbortController?: AbortController;
   trustedMediaReferences: Set<string>;
   onClose: () => void;
+  onRestart?: () => void;
+  restartRequested?: boolean;
 }
 
 export interface PluginUiFrameSession {
@@ -278,7 +280,7 @@ function postResponse(
   }, '*');
 }
 
-function closeSession(sessionId: string, notify: boolean): void {
+function closeSession(sessionId: string, notify: boolean, restart = false): void {
   const session = sessions.get(sessionId);
   if (!session) return;
   sessions.delete(sessionId);
@@ -286,7 +288,7 @@ function closeSession(sessionId: string, notify: boolean): void {
   session.effectAbortController?.abort();
   clearPluginInvocationResources(session.sessionId);
   completeCanvasDerivation(session.guard);
-  if (notify) queueMicrotask(session.onClose);
+  if (notify) queueMicrotask(restart && session.onRestart ? session.onRestart : session.onClose);
 }
 
 function parseRequest(data: unknown): PluginUiRequestEnvelope | null {
@@ -311,7 +313,7 @@ async function handleRequest(event: MessageEvent): Promise<void> {
 }
 
 function finishRequest(session: PluginUiSession): void {
-  if (session.completed) closeSession(session.sessionId, true);
+  if (session.completed) closeSession(session.sessionId, true, session.restartRequested === true);
 }
 
 async function dispatchRequest(
@@ -324,7 +326,7 @@ async function dispatchRequest(
   const effectType = request.kind === 'effect' && request.payload && typeof request.payload === 'object' && 'type' in request.payload
     ? request.payload.type : undefined;
   const replicaObservation = !!session.replicaJobId && request.kind === 'effect'
-    && (effectType === 'video.replicaJob.status' || effectType === 'video.replicaJob.cancel');
+    && (effectType === 'video.replicaJob.status' || effectType === 'video.replicaJob.cancel' || effectType === 'video.replicaJob.restart');
   const playbackRead = request.kind === 'effect' && effectType === 'video.readPlayback';
   if (playbackRead && (session.playbackReadFailures ?? 0) >= 4) return { ok: false, error: '播放预览读取已失效，请重新打开插件' };
   if (request.kind !== 'close' && !replicaObservation && !playbackRead && session.requestCount >= MAX_UI_REQUESTS) {
@@ -371,7 +373,7 @@ async function dispatchRequest(
         };
       }
       case 'effect': {
-        if (effectType === 'video.replicaJob.start' || effectType === 'video.replicaJob.status' || effectType === 'video.replicaJob.cancel') {
+        if (effectType === 'video.replicaJob.start' || effectType === 'video.replicaJob.status' || effectType === 'video.replicaJob.cancel' || effectType === 'video.replicaJob.restart') {
           if (!supportsReplicaJobs(plugin)) throw new Error('插件未声明完整视频任务能力');
           const effect = parsePluginVideoReplicaEffect(request.payload);
           const service = await import('./pluginVideoReplicaJobService');
@@ -382,6 +384,7 @@ async function dispatchRequest(
             const summary = await service.startPluginVideoReplicaJob({
               ...replicaJobIdentity(session), tool: availableTool(plugin, session),
               resources: session.resources, resourceReadContext: resourceReadContext(session, plugin), signal: controller.signal,
+              uiParameters: session.parameters,
             }, effect).finally(() => {
               if (session.effectAbortController === controller) session.effectAbortController = undefined;
             });
@@ -390,6 +393,19 @@ async function dispatchRequest(
             return { ok: true, value: { type: effect.type, ok: true, value: summary } };
           }
           if (!session.replicaJobId || effect.jobId !== session.replicaJobId) throw new Error('只能查询或取消当前界面绑定的复刻任务');
+          if (effect.type === 'video.replicaJob.restart') {
+            if (!session.onRestart) throw new Error('当前入口不支持重新开始，请关闭后重新打开插件');
+            const summary = await service.getPluginVideoReplicaJob(replicaJobIdentity(session), effect.jobId);
+            resolveLivePlugin(session, false);
+            if (!['succeeded', 'failed', 'cancelled'].includes(summary.status)) {
+              throw new Error('任务尚未确认结束，请先查询已有提交状态；不能重新开始');
+            }
+            updateReplicaJobParameter(session, summary);
+            // 先回复，再由入口撤销旧会话并重建窗口绑定；不在旧 binding 上重新授权或付费重投。
+            session.restartRequested = true;
+            session.completed = true;
+            return { ok: true, value: { type: effect.type, ok: true, value: summary } };
+          }
           if ((session.replicaJobQueryCount ?? 0) >= MAX_REPLICA_JOB_QUERIES) throw new Error('复刻任务查询达到 2048 次上限，请重新打开插件');
           const now = Date.now();
           if (effect.type === 'video.replicaJob.status' && session.lastReplicaJobQueryAt !== undefined
@@ -543,6 +559,9 @@ interface CreatePluginUiSessionOptions {
   exportName: string;
   parameters?: Record<string, PluginJsonValue>;
   onClose: () => void;
+  onRestart?: () => void;
+  /** 只允许宿主重开入口请求；插件初始参数不能伪造此标记。 */
+  startNewReplica?: boolean;
 }
 
 async function createSession(
@@ -582,6 +601,8 @@ async function createSession(
     }
     // 此字段只能由宿主绑定的任务摘要注入，不能采信调用方传来的观察身份。
     delete parameters.replicaJob;
+    delete parameters.replicaLastJob;
+    delete parameters.replicaRestart;
     const targetNode = state.nodes.find((node) => node.id === options.nodeId);
     if (!targetNode || !tool.nodeTypes.includes(targetNode.data.type as NodeType)) throw new Error('插件目标节点无效');
     const session: PluginUiSession = {
@@ -594,6 +615,7 @@ async function createSession(
         targetNode.data.type as NodeType, safeNodeData(tool, targetNode.data),
       ),
       onClose: options.onClose,
+      onRestart: options.onRestart,
     };
     // 在异步 mint 前占用配额并监听失效，避免关闭/切项目后再注册一个迟到会话。
     sessions.set(sessionId, session);
@@ -606,15 +628,24 @@ async function createSession(
     if (supportsReplicaJobs(plugin)) {
       // 尚未 ready，不允许 effect；查找期间只保持版本/项目/节点身份，找到任务后完成旧 guard。
       session.replicaJobLookupPending = true;
-      const { findPluginVideoReplicaJob } = await import('./pluginVideoReplicaJobService');
+      const { findPluginVideoReplicaJob, getPluginVideoReplicaJobUiParameters } = await import('./pluginVideoReplicaJobService');
       const summary = await findPluginVideoReplicaJob(replicaJobIdentity(session));
       resolveLivePlugin(session, false);
-      session.replicaJobLookupPending = false;
       if (summary) {
-        observeReplicaJob(session, summary);
-        session.ready = true;
-        return { session, globalExport };
+        const restored = await getPluginVideoReplicaJobUiParameters(replicaJobIdentity(session), summary.jobId);
+        resolveLivePlugin(session, false);
+        session.parameters = { ...session.parameters, ...normalizeJson(restored) as Record<string, PluginJsonValue> };
+        if (['queued', 'preparing', 'generating', 'composing', 'paused', 'unknown'].includes(summary.status)) {
+          observeReplicaJob(session, summary);
+          session.ready = true;
+          return { session, globalExport };
+        }
+        updateReplicaJobParameter(session, summary);
+        session.parameters.replicaLastJob = session.parameters.replicaJob;
+        delete session.parameters.replicaJob;
+        if (options.startNewReplica) session.parameters.replicaRestart = true;
       }
+      session.replicaJobLookupPending = false;
       resolveLivePlugin(session);
     }
     session.resources = await mintPluginInvocationResources({

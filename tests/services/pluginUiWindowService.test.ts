@@ -176,6 +176,48 @@ describe('pluginUiWindowService', () => {
     expect(getPluginUiWindowStates('project-1')[0]).toMatchObject({ contextResponded: false, requestCount: 1 });
   });
 
+  it('keeps 2048 status polls separate from ordinary requests and retains their replay protection', async () => {
+    await openPluginUiWindow(options);
+    let first: PluginUiWindowEvent | undefined;
+    for (let index = 0; index < 2048; index++) {
+      const event: PluginUiWindowEvent = { type: 'request', binding, requestId: crypto.randomUUID(), kind: 'effect',
+        payload: { type: 'video.replicaJob.status', jobId: 'video-replica-task-1' } };
+      first ??= event;
+      emit(event); await Promise.resolve(); await Promise.resolve();
+    }
+    expect(replies()).toHaveLength(2048); expect(dispose).not.toHaveBeenCalled();
+    send(); await Promise.resolve(); await Promise.resolve();
+    expect(replies()).toHaveLength(2049); expect(dispose).not.toHaveBeenCalled();
+    emit(first!);
+    expect(dispose).toHaveBeenCalledOnce(); expect(request).toHaveBeenCalledTimes(2049);
+  });
+
+  it('bounds the separate status budget while preserving the close escape hatch', async () => {
+    await openPluginUiWindow(options);
+    for (let index = 0; index < 2048; index++) {
+      emit({ type: 'request', binding, requestId: crypto.randomUUID(), kind: 'effect',
+        payload: { type: 'video.replicaJob.status', jobId: 'video-replica-task-1' } });
+      await Promise.resolve(); await Promise.resolve();
+    }
+    send('close'); await Promise.resolve(); await Promise.resolve();
+    expect(request).toHaveBeenLastCalledWith('close', {}); expect(dispose).not.toHaveBeenCalled();
+    emit({ type: 'request', binding, requestId: crypto.randomUUID(), kind: 'effect',
+      payload: { type: 'video.replicaJob.status', jobId: 'video-replica-task-1' } });
+    expect(dispose).toHaveBeenCalledOnce(); expect(request).toHaveBeenCalledTimes(2049);
+  });
+
+  it('does not let extra fields disguised as status polling consume the observation budget', async () => {
+    await openPluginUiWindow(options);
+    for (let index = 0; index < 192; index++) {
+      emit({ type: 'request', binding, requestId: crypto.randomUUID(), kind: 'effect',
+        payload: { type: 'video.replicaJob.status', jobId: 'video-replica-task-1', parameters: { type: 'model.generate' } } });
+      await Promise.resolve(); await Promise.resolve();
+    }
+    expect(request).toHaveBeenCalledTimes(192); expect(dispose).not.toHaveBeenCalled();
+    send('effect');
+    expect(dispose).toHaveBeenCalledOnce(); expect(request).toHaveBeenCalledTimes(192);
+  });
+
   it('makes native windows available on desktop and preserves web fallback', async () => {
     expect(pluginUiWindowUnavailableReason()).toBeNull();
     mocks.isTauri.mockReturnValue(false);
@@ -206,6 +248,63 @@ describe('pluginUiWindowService', () => {
     expect(opens()[1][1].options.exportName).toBe('VideoFrameReview');
     expect(mocks.channels).toHaveLength(1);
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('restarts only after replying and confirming the old native window close, with a fresh session and Channel', async () => {
+    let restart!: () => void;
+    let finishClose!: () => void;
+    const create = mocks.create.getMockImplementation()!;
+    mocks.create.mockImplementation(async (input) => {
+      if (mocks.create.mock.calls.length > 1) { binding = fixtureBinding(); active = true; }
+      restart = input.onRestart;
+      return create(input);
+    });
+    mocks.invoke.mockImplementation(async (command, input) => {
+      if (command === 'open_plugin_ui_window') return { binding: input.options.binding, reused: false };
+      if (command === 'close_plugin_ui_window') await new Promise<void>((resolve) => { finishClose = resolve; });
+    });
+    await openPluginUiWindow(options);
+    const oldBinding = binding;
+    finishRequest.mockImplementationOnce(() => restart());
+    const event = send('effect');
+    await vi.waitFor(() => expect(closes()).toHaveLength(1));
+    expect(replies()[0][1]).toMatchObject({ binding: oldBinding, requestId: event.requestId });
+    expect(mocks.invoke.mock.invocationCallOrder[mocks.invoke.mock.calls.findIndex(([command]) => command === 'respond_plugin_ui_window_request')])
+      .toBeLessThan(mocks.invoke.mock.invocationCallOrder[mocks.invoke.mock.calls.findIndex(([command]) => command === 'close_plugin_ui_window')]);
+    expect(dispose).toHaveBeenCalledOnce(); expect(mocks.create).toHaveBeenCalledOnce();
+    expect(getPluginUiWindowStates('project-1')).toEqual([]);
+    finishClose();
+    await vi.waitFor(() => expect(opens()).toHaveLength(2));
+    expect(mocks.create.mock.calls[1][0]).toMatchObject({ startNewReplica: true, nodeId: options.nodeId, exportName: options.exportName });
+    expect(binding.sessionId).not.toBe(oldBinding.sessionId);
+    expect(opens()[1][1].options.binding).toEqual(binding);
+    expect(mocks.channels).toHaveLength(2);
+    mocks.channels[0].onmessage({ ...event, requestId: crypto.randomUUID() });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('does not mint a replacement session when the old native close fails', async () => {
+    await openPluginUiWindow(options);
+    const restart = mocks.create.mock.calls[0][0].onRestart;
+    mocks.invoke.mockRejectedValueOnce(new Error('transport failed'));
+    restart();
+    await vi.waitFor(() => expect(closes()).toHaveLength(1));
+    await vi.waitFor(() => expect(mocks.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('未确认'), 'error'));
+    expect(mocks.create).toHaveBeenCalledOnce(); expect(opens()).toHaveLength(1);
+    expect(active).toBe(false); expect(getPluginUiWindowStates('project-1')).toEqual([]);
+  });
+
+  it.each(['project', 'revision'] as const)('does not restart across a %s change while closing the old window', async (change) => {
+    let finishClose!: () => void;
+    await openPluginUiWindow(options);
+    mocks.invoke.mockImplementationOnce(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+    mocks.create.mock.calls[0][0].onRestart();
+    await vi.waitFor(() => expect(closes()).toHaveLength(1));
+    if (change === 'project') mocks.getState().currentProjectId = 'project-2';
+    else mocks.getState().installedPlugins = [{ ...plugin, revisionDigest: 'd'.repeat(64) }];
+    finishClose();
+    await vi.waitFor(() => expect(mocks.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('新会话未能打开'), 'error'));
+    expect(mocks.create).toHaveBeenCalledOnce(); expect(opens()).toHaveLength(1);
   });
 
   it.each(['sessionId', 'projectId', 'nodeId', 'canvasRevision', 'pluginId', 'toolId', 'sourceDigest', 'revisionDigest', 'uiDigest'])(

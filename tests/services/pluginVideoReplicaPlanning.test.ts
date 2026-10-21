@@ -3,6 +3,7 @@ import { planPluginVideoReplica, type PluginVideoReplicaPlan } from '../../src/s
 import type { VideoModelCapability } from '../../src/types/aiTypes';
 import { resolveVideoModelCapability } from '../../src/services/ai/videoModelCapabilityResolver';
 import { useAppStore } from '../../src/store/useAppStore';
+import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
 
 const capability = (overrides: Partial<VideoModelCapability> = {}): VideoModelCapability => ({
   operations: ['text-to-video', 'image-to-video', 'video-to-video'], minDuration: 4, maxDuration: 30,
@@ -74,6 +75,42 @@ describe('pluginVideoReplicaPlanning', () => {
     expect(plan.segments[0].outPoint).toBe(8);
     expect(plan.generationCount).toBe(8);
     expectFullCoverage(plan);
+  });
+
+  it.each(['seedance-2', 'seedance-2-fast'])('plans %s control references without inventing an undeclared channel limit', (modelId) => {
+    const declared = TOAPIS_MODEL_MANIFEST.find((model) => model.id === modelId)!.videoCapability!;
+    const original = structuredClone(declared);
+    expect(declared.maxVideoReferences).toBeUndefined();
+    const plan = planPluginVideoReplica({ duration: 29.188, controls: ['depth'], capability: declared, hasAudio: true });
+    expect(plan.segments.map(({ inPoint, outPoint, generationDuration }) => [inPoint, outPoint, generationDuration]))
+      .toEqual([[0, 15, 15], [15, 29.188, 15]]);
+    expect(plan.segments.every((segment) => segment.references.length === 1)).toBe(true);
+    expect(plan.segments.every((segment) => segment.audioReferences.length === 0)).toBe(true);
+    expect(declared).toEqual(original);
+    expectFullCoverage(plan);
+  });
+
+  it('limits unknown reference counts to one local workspace interval instead of expanding a long generation', () => {
+    const plan = planPluginVideoReplica({ duration: 31, capability: capability({ maxVideoReferences: undefined }) });
+    expect(plan.segments.map(({ inPoint, outPoint }) => [inPoint, outPoint])).toEqual([[0, 15], [15, 30], [30, 31]]);
+    expect(plan.segments.every((segment) => segment.references.length === 1)).toBe(true);
+    expectFullCoverage(plan);
+  });
+
+  it('still honors per-video and aggregate duration limits when the video reference count is unknown', () => {
+    const plan = planPluginVideoReplica({ duration: 12, controls: ['depth', 'pose'], capability: capability({
+      maxVideoReferences: undefined,
+      inputConstraints: { referenceVideo: { durationSeconds: { max: 4 }, totalDurationSeconds: { max: 6 } } },
+    }) });
+    expect(plan.segments.map((segment) => segment.outPoint - segment.inPoint)).toEqual([3, 3, 3, 3]);
+    expectFullCoverage(plan);
+  });
+
+  it('does not infer video reference support from an absent count or override an explicit zero', () => {
+    expect(() => planPluginVideoReplica({ duration: 10, capability: capability({ operations: undefined, maxVideoReferences: undefined }) }))
+      .toThrow('未明确声明视频参考能力');
+    expect(() => planPluginVideoReplica({ duration: 10, capability: capability({ maxVideoReferences: 0 }) }))
+      .toThrow('最多支持 0 个参考视频');
   });
 
   it('pads short audio references without changing the original timeline', () => {

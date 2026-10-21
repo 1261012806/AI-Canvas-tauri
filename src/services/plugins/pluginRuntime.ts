@@ -841,7 +841,7 @@ function parseHostEffect(
 ): PluginNodeHostEffect {
   const raw = recordValue(rawEffect);
   const type = raw.type;
-  if (type === 'video.replicaJob.status' || type === 'video.replicaJob.cancel') {
+  if (type === 'video.replicaJob.status' || type === 'video.replicaJob.cancel' || type === 'video.replicaJob.restart') {
     if (Object.keys(raw).some((key) => !['type', 'jobId'].includes(key))
       || typeof raw.jobId !== 'string' || !/^video-replica-[a-zA-Z0-9-]{1,80}$/u.test(raw.jobId)) {
       throw new Error('复刻任务只接受当前会话登记的任务 ID');
@@ -1054,9 +1054,9 @@ function parseHostEffect(
 }
 
 /** UI Broker 的任务入口仍使用同一严格解析器；不接受原生路径或执行源码。 */
-export function parsePluginVideoReplicaEffect(value: unknown): Extract<PluginNodeHostEffect, { type: 'video.replicaJob.start' | 'video.replicaJob.status' | 'video.replicaJob.cancel' }> {
+export function parsePluginVideoReplicaEffect(value: unknown): Extract<PluginNodeHostEffect, { type: 'video.replicaJob.start' | 'video.replicaJob.status' | 'video.replicaJob.cancel' | 'video.replicaJob.restart' }> {
   const effect = parseHostEffect(value);
-  if (effect.type !== 'video.replicaJob.start' && effect.type !== 'video.replicaJob.status' && effect.type !== 'video.replicaJob.cancel') {
+  if (effect.type !== 'video.replicaJob.start' && effect.type !== 'video.replicaJob.status' && effect.type !== 'video.replicaJob.cancel' && effect.type !== 'video.replicaJob.restart') {
     throw new Error('复刻任务操作无效');
   }
   return effect;
@@ -1283,7 +1283,7 @@ async function executeHostEffect(
   };
   try {
     if (context.signal?.aborted) throw new Error('插件操作已取消');
-    if (effect.type === 'video.replicaJob.start' || effect.type === 'video.replicaJob.status' || effect.type === 'video.replicaJob.cancel') {
+    if (effect.type === 'video.replicaJob.start' || effect.type === 'video.replicaJob.status' || effect.type === 'video.replicaJob.cancel' || effect.type === 'video.replicaJob.restart') {
       throw new Error('完整复刻任务必须通过已绑定的插件界面会话执行');
     }
     if (effect.type === 'prompt.mentions') {
@@ -1705,6 +1705,9 @@ function dispatchPluginVideoBatch(identity: PluginInvocationIdentity, projectId:
   }
 }
 
+/** 宿主后台物料编排的显示位置；不从插件返回值或 UI JSON 解析。 */
+type PluginMaterialLayout = { position: { x: number; y: number }; nodeWidth: number; nodeHeight: number; gap: number };
+
 async function preparePluginNodeSet(options: {
   nodeSet: PluginNodeSetData;
   sourceNode: Node<BaseNodeData>;
@@ -1715,6 +1718,7 @@ async function preparePluginNodeSet(options: {
   identity?: PluginInvocationIdentity;
   models: PluginModelSummary[];
   resources: PluginInvocationResources;
+  materialLayout?: PluginMaterialLayout;
 }): Promise<PreparedPluginNodeSet> {
   const savedPaths: string[] = [];
   const originalReferenceData = options.nodeSet.nodes.map((item) => item.data);
@@ -1799,7 +1803,9 @@ async function preparePluginNodeSet(options: {
       if (!options.identity) throw new Error('视频产物缺少原生调用身份');
       videoBytes.set(artifact.key, await readNativeMediaArtifact(options.identity, artifact, options.assertFresh));
     }
+    const retainedArtifactKeys = new Set(options.nodeSet.nodes.flatMap((item) => item.artifactKey ? [item.artifactKey] : []));
     for (const artifact of options.artifacts ?? []) {
+      if (!retainedArtifactKeys.has(artifact.key)) continue;
       options.assertFresh();
       const saved = await saveBinaryToProjectData(videoBytes.get(artifact.key)!, options.projectId, `plugin-video-${artifact.key}.mp4`, { throwOnError: true });
       if (saved) savedPaths.push(saved.filePath);
@@ -1834,6 +1840,7 @@ async function preparePluginNodeSet(options: {
     // 保存含异步操作；提交前再次确认派生批次仍有效。
     validateImages();
     const base = derivedNodePlacement(options.sourceNode);
+    if (options.materialLayout) base.position = { ...options.materialLayout.position };
     const nodes = options.nodeSet.nodes.map((item) => {
       const image = savedImages.get(item.key);
       const video = item.artifactKey ? savedVideos.get(item.artifactKey) : undefined;
@@ -1914,6 +1921,7 @@ async function preparePluginNodeSet(options: {
           status: 'success',
           ...data,
           ...(item.generation ? { role: 'prompt', status: 'idle' } : {}),
+          ...(options.materialLayout ? { nodeWidth: options.materialLayout.nodeWidth, nodeHeight: options.materialLayout.nodeHeight } : {}),
         } as BaseNodeData,
       };
     });
@@ -1933,6 +1941,10 @@ async function preparePluginNodeSet(options: {
     let materialRight = base.position.x;
     const materials = nodes.filter((node) => !generatedNodeIds.has(node.id));
     for (const [index, node] of materials.entries()) {
+      if (options.materialLayout) {
+        node.position = { x: base.position.x, y: base.position.y + index * (options.materialLayout.nodeHeight + options.materialLayout.gap) };
+        continue;
+      }
       if (index > 0 && index % 4 === 0) {
         materialY += Math.max(280, materialRowHeight + 80);
         materialX = base.position.x;
@@ -1982,7 +1994,7 @@ export async function executeNodePluginTool(
     signal?: AbortSignal;
   },
   /** 仅宿主后台任务使用，不从插件 JSON、SDK 或 UI 请求反序列化。 */
-  hostTask?: { materialsOnly: true },
+  hostTask?: { materialsOnly: true; materialLayout?: PluginMaterialLayout },
 ): Promise<void | { nodes: Node<BaseNodeData>[]; edges: Edge[]; nodeIdsByKey: Record<string, string> }> {
   const before = useAppStore.getState();
   const projectId = before.currentProjectId;
@@ -2180,8 +2192,22 @@ export async function executeNodePluginTool(
         const assertFresh = () => {
           assertExecutionFresh();
         };
+        let nodeSet = result.nodeSet;
+        if (hostTask) {
+          if (nodeSet.nodes.some((item) => item.generation)
+            || !installedPlugin.manifest.requiredCapabilities?.includes('video.replicaPipeline')) {
+            throw new Error('后台素材调用不能提交生成，且必须声明全片任务能力');
+          }
+          // 已完整校验插件返回结构；丢弃显示节点前仍检查其资源租约，不将其图像另存到项目。
+          for (const item of nodeSet.nodes) if (item.resourceId) {
+            readPluginDerivedResourceForOutput(resourceReadContext(), item.resourceId, item.representation ?? 'original');
+          }
+          const nodes = nodeSet.nodes.filter((item) => item.nodeType === 'source-video' || item.nodeType === 'source-audio');
+          const keys = new Set(nodes.map((item) => item.key));
+          nodeSet = { nodes, edges: nodeSet.edges?.filter((edge) => keys.has(edge.sourceKey) && keys.has(edge.targetKey)) };
+        }
         const prepared = await preparePluginNodeSet({
-          nodeSet: result.nodeSet,
+          nodeSet,
           sourceNode,
           projectId,
           resourceContext: resourceReadContext(),
@@ -2190,6 +2216,7 @@ export async function executeNodePluginTool(
           identity: usesNativeMedia ? identity : undefined,
           models,
           resources,
+          ...(hostTask?.materialLayout ? { materialLayout: hostTask.materialLayout } : {}),
         });
         try {
           if (hostTask && (prepared.videoPreflight.length || !installedPlugin.manifest.requiredCapabilities?.includes('video.replicaPipeline'))) {

@@ -118,6 +118,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
   const openingWindowRef = useRef(false);
   const [frameSession, setFrameSession] = useState<PluginUiFrameSession | null>(null);
   const [frameDocument, setFrameDocument] = useState<PluginUiFrameDocument | null>(null);
+  const [frameEpoch, setFrameEpoch] = useState(0);
   const [uiLoading, setUiLoading] = useState(Boolean(dialog?.ui));
   const frameSessionRef = useRef<PluginUiFrameSession | null>(null);
   const frameDocumentRef = useRef<PluginUiFrameDocument | null>(null);
@@ -159,7 +160,16 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       nodeId,
       exportName,
       parameters: initialPluginParameters(pluginTool),
+      startNewReplica: frameEpoch > 0,
       onClose: () => onCloseRef.current(),
+      onRestart: () => {
+        if (cancelled) return;
+        setUiLoading(true);
+        setError(null);
+        setFrameSession(null);
+        setFrameDocument(null);
+        setFrameEpoch((current) => current + 1);
+      },
     }).then((session) => {
       if (cancelled) {
         session.dispose();
@@ -195,7 +205,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
         frameDocumentRef.current = null;
       }
     };
-  }, [dialog?.ui, nodeId, pluginTool, showToast]);
+  }, [dialog?.ui, frameEpoch, nodeId, pluginTool, showToast]);
 
   if (!dialog) return null;
 

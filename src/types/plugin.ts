@@ -544,7 +544,7 @@ export interface PluginPromptMentionPage {
 
 export type PluginNodeHostEffect =
   | PluginVideoReplicaStart
-  | { type: 'video.replicaJob.status' | 'video.replicaJob.cancel'; jobId: string }
+  | { type: 'video.replicaJob.status' | 'video.replicaJob.cancel' | 'video.replicaJob.restart'; jobId: string }
   | { type: 'prompt.mentions'; source: PluginPromptMentionSource; query?: string; offset?: number; preview?: boolean }
   | { type: 'network.request'; url: string; method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; headers?: Record<string, string>; body?: string }
   | { type: 'settings.get'; key: string }

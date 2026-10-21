@@ -21,7 +21,9 @@ vi.mock('react', async (original) => ({
   useState: <T,>(initial: T | (() => T)) => {
     const index = hooks.index++;
     if (!(index in hooks.values)) hooks.values[index] = typeof initial === 'function' ? (initial as () => T)() : initial;
-    return [hooks.values[index], (value: T) => { hooks.values[index] = value; }];
+    return [hooks.values[index], (value: T | ((previous: T) => T)) => {
+      hooks.values[index] = typeof value === 'function' ? (value as (previous: T) => T)(hooks.values[index] as T) : value;
+    }];
   },
 }));
 vi.mock('../../src/store/useAppStore', () => ({
@@ -165,6 +167,28 @@ describe('plugin dialog window button', () => {
     expect(elements(render()).some((item) => item.type === 'iframe')).toBe(true);
     clickWindowButton();
     await vi.waitFor(() => expect(mocks.open).toHaveBeenCalledTimes(2));
+  });
+
+  it('rebuilds an iframe session after host-authorized restart without closing the dialog or reusing the old document', async () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+    try {
+      await mount();
+      const oldFrame = elements(render()).find((item) => item.type === 'iframe')!;
+      const restart = mocks.frame.mock.calls[0][0].onRestart;
+      expect(mocks.frame.mock.calls[0][0].startNewReplica).toBe(false);
+      restart();
+      expect(mocks.close).not.toHaveBeenCalled();
+      expect(elements(render()).some((item) => item.type === 'iframe')).toBe(false);
+      cleanup.forEach((dispose) => dispose());
+      expect(mocks.dispose).toHaveBeenCalledOnce(); expect(revoke).toHaveBeenCalledOnce();
+      await mount();
+      expect(mocks.frame).toHaveBeenCalledTimes(2);
+      expect(mocks.frame.mock.calls[1][0]).toMatchObject({ startNewReplica: true, nodeId: 'video-1', exportName: 'review' });
+      expect(elements(render()).find((item) => item.type === 'iframe')!.props.src).not.toBe(oldFrame.props.src);
+      expect(mocks.close).not.toHaveBeenCalled(); expect(mocks.open).not.toHaveBeenCalled();
+      restart();
+      expect(elements(render()).some((item) => item.type === 'iframe')).toBe(true);
+    } finally { revoke.mockRestore(); }
   });
 
   it('disables unsupported desktop presentation and does not call native code', async () => {

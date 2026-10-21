@@ -65,6 +65,16 @@ describe('MCP 后台合成', () => {
     expect(mocks.inputDispose).toHaveBeenCalledTimes(1); expect(mocks.sourceDispose).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(result)).not.toMatch(/private|asset:|filePath/);
   });
+  it('keeps the completed output in the same parent group as its segment anchor', async () => {
+    Object.assign(mocks.store.nodes[0], { parentId: 'group' });
+    try {
+      const job = await startControlledExport(context(), request());
+      expect((await completed(job.jobId)).status).toBe('succeeded');
+      expect(mocks.store.addNodesWithEdges).toHaveBeenCalledWith([
+        expect.objectContaining({ parentId: 'group', position: { x: 390, y: 20 } }),
+      ], []);
+    } finally { Reflect.deleteProperty(mocks.store.nodes[0], 'parentId'); }
+  });
   it('deduplicates repeated request keys before and after completion, and rejects changed versions under a used key', async () => {
     const input = request(); const first = await startControlledExport(context(), input);
     const again = await startControlledExport(context(), input); expect(again.jobId).toBe(first.jobId);

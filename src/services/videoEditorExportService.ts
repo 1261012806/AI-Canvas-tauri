@@ -173,6 +173,7 @@ async function runExport(job: ExportJob, record: VideoEditorProjectRecord, conte
     const anchor = store.nodes.find((node) => node.id === record.nodeId)!;
     store.addNodesWithEdges([{ id: nodeId, type: 'source-video',
       position: { x: anchor.position.x + 380, y: anchor.position.y },
+      ...(anchor.parentId ? { parentId: anchor.parentId } : {}),
       data: { type: 'source-video', label: record.name, filePath: result.filePath, videoUrl: result.assetUrl,
         fileName, videoDuration: probe.duration, status: 'success' } }], []);
     useAppStore.getState().incrementRevision();

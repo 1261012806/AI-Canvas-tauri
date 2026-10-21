@@ -23,6 +23,8 @@ interface OpenWindowOptions {
   nodeId: string;
   exportName: string;
   parameters?: Record<string, PluginJsonValue>;
+  /** 仅宿主重开协调器设置；新会话仍复核后台任务状态并重新签发资源。 */
+  startNewReplica?: boolean;
   signal?: AbortSignal;
 }
 interface WindowRecord {
@@ -37,13 +39,26 @@ interface WindowRecord {
   opened: boolean;
   contextResponded: boolean;
   seenRequests: Set<string>;
+  replicaStatusRequests: number;
+  closeRequested: boolean;
   pending: number;
   awaitingClose?: boolean;
   closeTimer?: ReturnType<typeof setTimeout>;
 }
 const windows = new Map<string, WindowRecord>();
+const restarting = new Map<string, Promise<boolean>>();
 const REQUEST_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const REQUEST_KINDS = new Set<PluginUiRequestKind>(['context', 'effect', 'set-parameters', 'submit', 'close', 'toast']);
+const MAX_REQUESTS = 192;
+const MAX_REPLICA_STATUS_REQUESTS = 2048;
+
+function isReplicaStatusRequest(request: { kind: PluginUiRequestKind; payload: unknown }): boolean {
+  if (request.kind !== 'effect' || !request.payload || typeof request.payload !== 'object' || Array.isArray(request.payload)) return false;
+  const payload = request.payload as Record<string, unknown>;
+  const keys = Object.keys(payload);
+  return keys.length === 2 && keys.every((key) => key === 'type' || key === 'jobId') && payload.type === 'video.replicaJob.status'
+    && typeof payload.jobId === 'string' && /^video-replica-[a-zA-Z0-9-]{1,80}$/u.test(payload.jobId);
+}
 
 function sameBinding(value: unknown, expected: PluginUiWindowBinding): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -79,6 +94,28 @@ function disposeRecord(record: WindowRecord, closeWindow: boolean): void {
   if (closeWindow) void closeNative(record);
 }
 
+async function restartRecord(record: WindowRecord, options: OpenWindowOptions): Promise<void> {
+  if (record.disposed) return;
+  disposeRecord(record, false);
+  // 原生 open 可能尚在返回途中；确认旧绑定已关闭后，才允许相同目标重新创建窗口。
+  const closed = record.ready.catch(() => undefined).then(() => closeNative(record));
+  restarting.set(record.key, closed);
+  try {
+    if (!await closed) return;
+    const state = useAppStore.getState();
+    const plugin = state.installedPlugins.find((item) => item.id === options.plugin.id);
+    if (state.currentProjectId !== record.target.projectId || !plugin?.enabled
+      || plugin.sourceDigest !== options.plugin.sourceDigest || plugin.revisionDigest !== options.plugin.revisionDigest
+      || plugin.uiDigest !== options.plugin.uiDigest) throw new Error('插件重开身份已变化');
+    if (restarting.get(record.key) === closed) restarting.delete(record.key);
+    await openPluginUiWindow({ ...options, plugin, startNewReplica: true });
+  } catch {
+    useAppStore.getState().showToast('插件新会话未能打开，请从当前项目节点重新打开', 'error');
+  } finally {
+    if (restarting.get(record.key) === closed) restarting.delete(record.key);
+  }
+}
+
 async function receive(record: WindowRecord, event: PluginUiWindowEvent): Promise<void> {
   const session = record.session;
   if (record.disposed || !session) return;
@@ -91,14 +128,22 @@ async function receive(record: WindowRecord, event: PluginUiWindowEvent): Promis
     disposeRecord(record, false);
     return;
   }
+  // 只读状态查询不挤占普通操作额度；任务身份和查询间隔仍由主窗口 Broker 复核。
+  const replicaStatus = event.type === 'request' && isReplicaStatusRequest(event);
+  const ordinaryRequests = record.seenRequests.size - record.replicaStatusRequests - Number(record.closeRequested);
   if (event.type !== 'request' || !REQUEST_ID.test(event.requestId)
     || !REQUEST_KINDS.has(event.kind) || record.seenRequests.has(event.requestId)
-    || record.pending >= 8 || (record.seenRequests.size >= 192 && event.kind !== 'close')
-    || record.seenRequests.size >= 193) {
+    || record.pending >= 8
+    || (replicaStatus ? record.replicaStatusRequests >= MAX_REPLICA_STATUS_REQUESTS
+      : event.kind !== 'close' && ordinaryRequests >= MAX_REQUESTS)
+    || (event.kind === 'close' && record.closeRequested)
+    || record.seenRequests.size >= MAX_REQUESTS + MAX_REPLICA_STATUS_REQUESTS + 1) {
     disposeRecord(record, true);
     return;
   }
   record.seenRequests.add(event.requestId);
+  if (replicaStatus) record.replicaStatusRequests += 1;
+  if (event.kind === 'close') record.closeRequested = true;
   record.pending += 1;
   try {
     const reply = record.awaitingClose
@@ -177,6 +222,12 @@ export async function openPluginUiWindow(options: OpenWindowOptions): Promise<Pl
   if (!livePlugin?.enabled || livePlugin.sourceDigest !== options.plugin.sourceDigest
     || livePlugin.revisionDigest !== options.plugin.revisionDigest) throw new Error('插件 revision 已变化');
   const key = JSON.stringify([projectId, options.nodeId, options.plugin.id, options.tool.id]);
+  const closing = restarting.get(key);
+  if (closing) {
+    if (!await closing) throw new Error('旧插件窗口尚未确认关闭，请先手动关闭后重试');
+    if (useAppStore.getState().currentProjectId !== projectId) throw new Error('当前项目已变化');
+    return openPluginUiWindow(options);
+  }
   const existing = windows.get(key);
   if (existing) {
     const binding = await existing.ready;
@@ -200,7 +251,7 @@ export async function openPluginUiWindow(options: OpenWindowOptions): Promise<Pl
   const record: WindowRecord = {
     key, target: { projectId, nodeId: options.nodeId, pluginId: options.plugin.id, toolId: options.tool.id },
     channel, disposed: false, nativeStarted: false, opened: false, contextResponded: false,
-    seenRequests: new Set(), pending: 0,
+    seenRequests: new Set(), replicaStatusRequests: 0, closeRequested: false, pending: 0,
     // 推迟到 microtask，先完成登记；重复调用共享同一创建 Promise，不重复 mint。
     ready: Promise.resolve().then(async () => {
       try {
@@ -208,6 +259,7 @@ export async function openPluginUiWindow(options: OpenWindowOptions): Promise<Pl
         if (useAppStore.getState().currentProjectId !== projectId) throw new Error('当前项目已变化');
         const session = await createPluginUiNativeSession({
           ...options, onClose: () => disposeRecord(record, true),
+          onRestart: () => { void restartRecord(record, options); },
         });
         record.session = session;
         if (record.disposed || !session.isActive()) {

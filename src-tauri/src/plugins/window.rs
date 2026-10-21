@@ -26,6 +26,7 @@ use crate::plugin_registry::{plugin_private_dir, with_active_window_ui, PluginUi
 
 const MAX_SESSIONS: usize = 4;
 const MAX_REQUESTS: usize = 192;
+const MAX_REPLICA_STATUS_REQUESTS: usize = 2048;
 const MAX_PENDING: usize = 8;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_REPLY_BYTES: usize = 32 * 1024 * 1024;
@@ -151,6 +152,7 @@ struct Session {
     close_native: Arc<dyn Fn() + Send + Sync>,
     pending: BTreeMap<String, PendingRequest>,
     seen_requests: BTreeSet<String>,
+    replica_status_requests: usize,
     close_requested: bool,
     confirming_close: bool,
 }
@@ -256,6 +258,29 @@ impl WindowSessions {
     }
 }
 
+fn is_replica_status_request(request: &PluginWindowRequest) -> bool {
+    if request.kind != RequestKind::Effect {
+        return false;
+    }
+    let Some(payload) = request.payload.as_object() else {
+        return false;
+    };
+    if payload.len() != 2
+        || payload.get("type").and_then(Value::as_str) != Some("video.replicaJob.status")
+    {
+        return false;
+    }
+    payload
+        .get("jobId")
+        .and_then(Value::as_str)
+        .and_then(|id| id.strip_prefix("video-replica-"))
+        .is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix.len() <= 80
+                && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
 fn enqueue(
     session: &mut Session,
     request: &PluginWindowRequest,
@@ -269,8 +294,19 @@ fn enqueue(
     {
         return Err("插件请求无效、重复或超过大小限制".into());
     }
+    // 只拆分只读查询预算；绑定任务身份与查询间隔仍由主窗口 Broker 校验。
+    let replica_status = is_replica_status_request(request);
+    let ordinary_requests = session.seen_requests.len()
+        - session.replica_status_requests
+        - usize::from(session.close_requested);
+    let budget_exhausted = if replica_status {
+        session.replica_status_requests >= MAX_REPLICA_STATUS_REQUESTS
+    } else {
+        request.kind != RequestKind::Close && ordinary_requests >= MAX_REQUESTS
+    };
     if session.pending.len() >= MAX_PENDING
-        || (request.kind != RequestKind::Close && session.seen_requests.len() >= MAX_REQUESTS)
+        || budget_exhausted
+        || session.seen_requests.len() >= MAX_REQUESTS + MAX_REPLICA_STATUS_REQUESTS + 1
         || (request.kind == RequestKind::Close && session.close_requested)
         || (request.kind.exclusive() && session.pending.values().any(|pending| pending.exclusive))
     {
@@ -278,6 +314,9 @@ fn enqueue(
     }
     let (sender, receiver) = oneshot::channel();
     session.seen_requests.insert(request.request_id.clone());
+    if replica_status {
+        session.replica_status_requests += 1;
+    }
     session.close_requested |= request.kind == RequestKind::Close;
     session.pending.insert(
         request.request_id.clone(),
@@ -431,6 +470,7 @@ pub async fn open_plugin_ui_window<R: Runtime>(
                     }),
                     pending: BTreeMap::new(),
                     seen_requests: BTreeSet::new(),
+                    replica_status_requests: 0,
                     close_requested: false,
                     confirming_close: false,
                 },
@@ -769,6 +809,7 @@ mod tests {
             close_native: Arc::new(|| {}),
             pending: BTreeMap::new(),
             seen_requests: BTreeSet::new(),
+            replica_status_requests: 0,
             close_requested: false,
             confirming_close: false,
         }
@@ -986,6 +1027,51 @@ mod tests {
         assert!(enqueue(&mut session, &request(RequestKind::Context, 999)).is_err());
         assert!(enqueue(&mut session, &request(RequestKind::Close, 1000)).is_ok());
         assert!(enqueue(&mut session, &request(RequestKind::Close, 1001)).is_err());
+    }
+
+    #[test]
+    fn replica_status_budget_is_separate_bounded_and_preserves_replay_and_close_checks() {
+        let mut session = session();
+        for number in 0..MAX_REPLICA_STATUS_REQUESTS {
+            let mut poll = request(RequestKind::Effect, number);
+            poll.payload = json!({"type": "video.replicaJob.status", "jobId": "video-replica-task-1"});
+            assert!(enqueue(&mut session, &poll).is_ok());
+            session.pending.clear();
+        }
+        let mut replay = request(RequestKind::Effect, 0);
+        replay.payload = json!({"type": "video.replicaJob.status", "jobId": "video-replica-task-1"});
+        assert!(enqueue(&mut session, &replay).is_err());
+        let mut overflow = request(RequestKind::Effect, 3000);
+        overflow.payload = replay.payload;
+        assert!(enqueue(&mut session, &overflow).is_err());
+        for number in 4000..4000 + MAX_REQUESTS {
+            assert!(enqueue(&mut session, &request(RequestKind::Context, number)).is_ok());
+            session.pending.clear();
+        }
+        assert!(enqueue(&mut session, &request(RequestKind::Context, 5000)).is_err());
+        assert!(enqueue(&mut session, &request(RequestKind::Close, 5001)).is_ok());
+        assert!(enqueue(&mut session, &request(RequestKind::Close, 5002)).is_err());
+        assert_eq!(session.seen_requests.len(), MAX_REQUESTS + MAX_REPLICA_STATUS_REQUESTS + 1);
+    }
+
+    #[test]
+    fn only_exact_status_payloads_use_the_separate_budget() {
+        for payload in [
+            Value::Null,
+            json!({"type": "model.generate", "jobId": "video-replica-task-1"}),
+            json!({"type": "video.replicaJob.status", "jobId": "foreign"}),
+            json!({"type": "video.replicaJob.status", "jobId": "video-replica-"}),
+            json!({"type": "video.replicaJob.status", "jobId": "video-replica-task-1", "parameters": {}}),
+        ] {
+            let mut effect = request(RequestKind::Effect, 1);
+            effect.payload = payload;
+            assert!(!is_replica_status_request(&effect));
+        }
+        let mut poll = request(RequestKind::Context, 1);
+        poll.payload = json!({"type": "video.replicaJob.status", "jobId": "video-replica-task-1"});
+        assert!(!is_replica_status_request(&poll));
+        poll.kind = RequestKind::Effect;
+        assert!(is_replica_status_request(&poll));
     }
 
     #[tokio::test]

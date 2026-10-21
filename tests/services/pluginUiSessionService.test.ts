@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   startReplicaJob: vi.fn(),
   findReplicaJob: vi.fn(),
   getReplicaJob: vi.fn(),
+  getReplicaUi: vi.fn(),
   cancelReplicaJob: vi.fn(),
   messageHandler: undefined as ((event: MessageEvent) => void) | undefined,
 }));
@@ -61,6 +62,7 @@ vi.mock('../../src/services/plugins/pluginVideoReplicaJobService', () => ({
   startPluginVideoReplicaJob: mocks.startReplicaJob,
   findPluginVideoReplicaJob: mocks.findReplicaJob,
   getPluginVideoReplicaJob: mocks.getReplicaJob,
+  getPluginVideoReplicaJobUiParameters: mocks.getReplicaUi,
   cancelPluginVideoReplicaJob: mocks.cancelReplicaJob,
 }));
 
@@ -372,7 +374,7 @@ describe('pluginUiSessionService', () => {
   it('rejects foreign task IDs and all writes in an observation session', async () => {
     const session = await replicaNative();
     await session.request('effect', { type: 'video.replicaJob.start' });
-    for (const type of ['video.replicaJob.status', 'video.replicaJob.cancel']) {
+    for (const type of ['video.replicaJob.status', 'video.replicaJob.cancel', 'video.replicaJob.restart']) {
       expect(await session.request('effect', { type, jobId: 'another-job' })).toMatchObject({ ok: false, error: expect.stringContaining('绑定') });
     }
     for (const type of ['model.generate', 'resource.readRange', 'video.replicaJob.start']) {
@@ -399,6 +401,48 @@ describe('pluginUiSessionService', () => {
     expect(mocks.cancelReplicaJob).not.toHaveBeenCalled();
   });
 
+  it.each(['failed', 'cancelled', 'succeeded'] as const)('restarts a confirmed %s job through a fresh entry after replying, without minting on the old binding', async (status) => {
+    mocks.getState().installedPlugins = [replicaPlugin];
+    const onClose = vi.fn(); const onRestart = vi.fn();
+    const session = await createPluginUiNativeSession({ plugin: replicaPlugin, tool, nodeId: 'target', exportName: 'dialog', onClose, onRestart });
+    await session.request('effect', { type: 'video.replicaJob.start' });
+    mocks.getReplicaJob.mockResolvedValue({ ...replicaSummary, status });
+    expect(await session.request('effect', { type: 'video.replicaJob.restart', jobId: replicaSummary.jobId }))
+      .toMatchObject({ ok: true, value: { type: 'video.replicaJob.restart', ok: true, value: { status } } });
+    expect(onRestart).not.toHaveBeenCalled(); expect(session.isActive()).toBe(true);
+    expect(mocks.mintResources).toHaveBeenCalledTimes(1); expect(mocks.startReplicaJob).toHaveBeenCalledTimes(1);
+    session.finishRequest(); await Promise.resolve();
+    expect(session.isActive()).toBe(false); expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled(); expect(mocks.cancelReplicaJob).not.toHaveBeenCalled();
+    expect(mocks.clearResources).toHaveBeenCalledWith(session.binding.sessionId);
+  });
+
+  it.each(['preparing', 'generating', 'paused', 'unknown'] as const)('does not restart %s tasks even if the UI reports a failure', async (status) => {
+    mocks.getState().installedPlugins = [replicaPlugin];
+    const onRestart = vi.fn();
+    const session = await createPluginUiNativeSession({ plugin: replicaPlugin, tool, nodeId: 'target', exportName: 'dialog', onClose: vi.fn(), onRestart });
+    await session.request('effect', { type: 'video.replicaJob.start' });
+    mocks.getReplicaJob.mockResolvedValue({ ...replicaSummary, status });
+    expect(await session.request('effect', { type: 'video.replicaJob.restart', jobId: replicaSummary.jobId }))
+      .toMatchObject({ ok: false, error: expect.stringContaining('尚未确认结束') });
+    session.finishRequest(); await Promise.resolve();
+    expect(session.isActive()).toBe(true); expect(onRestart).not.toHaveBeenCalled();
+    expect(mocks.startReplicaJob).toHaveBeenCalledTimes(1); session.dispose();
+  });
+
+  it('only injects the editable restart marker for a host-authorized fresh terminal session', async () => {
+    mocks.getState().installedPlugins = [replicaPlugin];
+    mocks.findReplicaJob.mockResolvedValue({ ...replicaSummary, status: 'failed' });
+    const options = { plugin: replicaPlugin, tool, nodeId: 'target', exportName: 'dialog', onClose: vi.fn(), parameters: { replicaRestart: true } };
+    const ordinary = await createPluginUiNativeSession(options);
+    const context = await ordinary.request('context', null);
+    expect(JSON.stringify(context)).not.toContain('replicaRestart'); ordinary.dispose();
+    const restarted = await createPluginUiNativeSession({ ...options, startNewReplica: true });
+    expect(await restarted.request('context', null)).toMatchObject({ ok: true, value: { parameters: { replicaRestart: true, replicaLastJob: { status: 'failed' } }, resources } });
+    expect(restarted.binding.sessionId).not.toBe(ordinary.binding.sessionId);
+    expect(mocks.startReplicaJob).not.toHaveBeenCalled(); restarted.dispose();
+  });
+
   it('recovers the same task when reopened without minting new media grants', async () => {
     mocks.findReplicaJob.mockResolvedValue({ ...replicaSummary, status: 'paused', stage: '待核对' });
     const session = await replicaNative();
@@ -407,6 +451,35 @@ describe('pluginUiSessionService', () => {
     expect(await session.request('effect', { type: 'video.replicaJob.status', jobId: replicaSummary.jobId })).toMatchObject({ ok: true, value: { value: replicaSummary } });
     expect(mocks.startReplicaJob).not.toHaveBeenCalled();
     expect(await session.request('submit', {})).toMatchObject({ ok: false });
+    session.dispose();
+  });
+
+  it('restores display data with an active observer and keeps progress queries bound to its original job', async () => {
+    mocks.findReplicaJob.mockResolvedValue(replicaSummary);
+    const replicaUi = { version: 1, scene: '微调背景', duration: 29.188, frames: [{ format: 'jpeg', base64: 'AAAA', actualTime: 0 }] };
+    mocks.getReplicaUi.mockResolvedValue({ replicaUi });
+    const session = await replicaNative();
+    expect(await session.request('context', null)).toMatchObject({ ok: true, value: {
+      parameters: { replicaJob: replicaSummary, replicaUi }, resources: { self: [], incoming: [], derived: [] },
+    } });
+    expect(mocks.mintResources).not.toHaveBeenCalled();
+    expect(await session.request('effect', { type: 'model.generate' })).toMatchObject({ ok: false });
+    expect(await session.request('effect', { type: 'video.replicaJob.status', jobId: replicaSummary.jobId }))
+      .toMatchObject({ ok: true, value: { value: replicaSummary } });
+    expect(mocks.startReplicaJob).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it('recovers a task finished while the window was closed and mints a fresh session for an explicit new task', async () => {
+    const finished = { ...replicaSummary, status: 'failed', error: '视觉分析失败' };
+    mocks.findReplicaJob.mockResolvedValue(finished);
+    mocks.getReplicaUi.mockResolvedValue({ replicaUi: { version: 1, scene: '原要求', duration: 29.188 } });
+    const session = await replicaNative();
+    expect(await session.request('context', null)).toMatchObject({ ok: true, value: {
+      parameters: { replicaLastJob: finished, replicaUi: { scene: '原要求' } }, resources,
+    } });
+    expect(mocks.mintResources).toHaveBeenCalledTimes(1);
+    expect(mocks.startReplicaJob).not.toHaveBeenCalled();
     session.dispose();
   });
 
@@ -606,6 +679,7 @@ describe('pluginUiSessionService', () => {
     mocks.startReplicaJob.mockResolvedValue(replicaSummary);
     mocks.findReplicaJob.mockResolvedValue(undefined);
     mocks.getReplicaJob.mockResolvedValue(replicaSummary);
+    mocks.getReplicaUi.mockResolvedValue({});
     mocks.cancelReplicaJob.mockResolvedValue({ ...replicaSummary, status: 'cancelled', stage: '已取消' });
   });
 
