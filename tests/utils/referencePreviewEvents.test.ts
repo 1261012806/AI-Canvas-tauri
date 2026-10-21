@@ -55,6 +55,17 @@ describe('引用全屏预览事件', () => {
     expect(requests).toEqual([source]);
   });
 
+  it('保留胶囊事件目标并允许冒泡，供宿主区分全屏内导航和外部打开', () => {
+    const chip = new PreviewElement({ 'data-ref-id': 'source' });
+    const observed: Array<{ target: EventTarget | null; bubbles: boolean; source: ReferencePreviewSource }> = [];
+    chip.addEventListener(REFERENCE_PREVIEW_EVENT, (event) => observed.push({
+      target: event.target, bubbles: event.bubbles, source: (event as CustomEvent<ReferencePreviewSource>).detail,
+    }));
+    const source: ReferencePreviewSource = { kind: 'node', id: 'source', label: '正文来源' };
+    requestReferencePreview(source, chip as unknown as Element);
+    expect(observed).toEqual([{ target: chip, bubbles: true, source }]);
+  });
+
   it('匹配内层节点或库胶囊，保留单格与指定参考图身份', () => {
     const workflow = new PreviewElement({ 'data-wf-id': '6' });
     const value = workflow.append(new PreviewElement({ class: 'prompt-chip-wf-value' }));

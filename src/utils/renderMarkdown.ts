@@ -32,14 +32,54 @@ function isSafeMarkdownUrl(url: string, kind: MarkdownUrlKind): boolean {
     : scheme === 'http' || scheme === 'https';
 }
 
-export function renderMarkdown(md: string): string {
-  if (!md) return '';
+export interface MarkdownInlineRange { start: number; end: number }
+
+/** 只生成数字槽位，不允许调用方注入 HTML；代码、链接与原始标签内部保留原文。 */
+function protectInlineSlots(source: string, findRanges: (value: string) => readonly MarkdownInlineRange[]) {
+  const excluded: MarkdownInlineRange[] = [];
+  let remaining = source;
+  for (const pattern of [
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\1|$)/g,
+    /(`+)[\s\S]*?\1/g,
+    /!?\[[^\]\n]*\]\([^\n]*?\)/g,
+    /\b(?:https?:\/\/|mailto:)[^\s<>"']+/gi,
+    /<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi,
+  ]) {
+    excluded.push(...[...remaining.matchAll(pattern)].map((match) => ({ start: match.index, end: match.index + match[0].length })));
+    // 先屏蔽整段上下文，避免代码围栏的剩余反引号跨正文误匹配成行内代码。
+    remaining = remaining.replace(pattern, (match) => ' '.repeat(match.length));
+  }
+  const tokens: string[] = [];
+  let protectedSource = '';
+  let cursor = 0;
+  for (const range of findRanges(source)) {
+    if (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
+      || range.start < cursor || range.end <= range.start || range.end > source.length
+      || excluded.some((area) => range.start >= area.start && range.start < area.end)) continue;
+    protectedSource += source.slice(cursor, range.start) + `\x00INLINE_SLOT${tokens.length}\x00`;
+    tokens.push(source.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  return { source: protectedSource + source.slice(cursor), tokens };
+}
+
+function restoreInlineSlots(html: string, tokens: readonly string[]): string {
+  tokens.forEach((_, index) => {
+    html = html.replace(`\x00INLINE_SLOT${index}\x00`, `<span data-markdown-inline-slot="${index}"></span>`);
+  });
+  return html;
+}
+
+function renderMarkdownContent(md: string, findRanges?: (value: string) => readonly MarkdownInlineRange[]): { html: string; tokens: string[] } {
+  if (!md) return { html: '', tokens: [] };
 
   // ── 0. 剥离输入自带的 NUL ──
   // 下面的占位符用 \x00 作分隔符，第 3 步的转义靠「按 \x00 切分，只转义偶数段」实现。
   // 输入里混进一个 \x00 就会翻转奇偶性，让后面的原始 HTML 整段绕过转义（XSS）。
   // NUL 在 Markdown 里没有任何呈现意义，直接丢掉即可。
-  const source = md.split('\x00').join('').replace(/\r\n/g, '\n');
+  const normalized = md.split('\x00').join('').replace(/\r\n/g, '\n');
+  const slots = findRanges ? protectInlineSlots(normalized, findRanges) : { source: normalized, tokens: [] };
+  const source = slots.source;
 
   // ── 1. 提取代码块，用占位符保护 ──
   const codeBlocks: string[] = [];
@@ -205,5 +245,20 @@ export function renderMarkdown(md: string): string {
     html = html.replace(`\x00ICODE${i}\x00`, inlineCodes[i]);
   }
 
-  return html;
+  return { html: restoreInlineSlots(html, slots.tokens), tokens: slots.tokens };
+}
+
+export function renderMarkdown(md: string): string {
+  return renderMarkdownContent(md).html;
+}
+
+/** 预览宿主把数字槽位挂载为真实控件；默认 Markdown 渲染不受影响。 */
+export function renderMarkdownWithInlineSlots(md: string, findRanges: (value: string) => readonly MarkdownInlineRange[]) {
+  return renderMarkdownContent(md, findRanges);
+}
+
+/** 纯文本保持原始标点与换行，代码、URL 和标签属性沿用相同的槽位排除规则。 */
+export function renderTextWithInlineSlots(text: string, findRanges: (value: string) => readonly MarkdownInlineRange[]) {
+  const slots = protectInlineSlots(text.split('\x00').join('').replace(/\r\n/g, '\n'), findRanges);
+  return { html: restoreInlineSlots(escapeHtml(slots.source), slots.tokens), tokens: slots.tokens };
 }

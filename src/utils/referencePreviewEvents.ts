@@ -6,8 +6,9 @@ export const REFERENCE_PREVIEW_EVENT = 'ai-canvas:reference-preview-request';
 const REFERENCE_SELECTOR = '[data-ref-id],[data-drama-id],[data-asset-path],[data-wf-id],[data-skill-id],[data-model-ref-id],[data-chat-image-file-name],[data-chat-reference-raw]';
 const CHAT_IMAGE_NAME = /^chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp)$/;
 
-export function requestReferencePreview(source: ReferencePreviewSource, doc: Document = document): void {
-  doc.dispatchEvent(new CustomEvent<ReferencePreviewSource>(REFERENCE_PREVIEW_EVENT, { detail: source }));
+export function requestReferencePreview(source: ReferencePreviewSource, target: Document | Element = document): void {
+  // 从原胶囊冒泡，让宿主识别预览内导航；仍不把窗口或 DOM 放进引用数据。
+  target.dispatchEvent(new CustomEvent<ReferencePreviewSource>(REFERENCE_PREVIEW_EVENT, { detail: source, bubbles: true }));
 }
 
 function decodeLabel(value: string): string {

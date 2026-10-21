@@ -1,7 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
-import { GENERAL_MODEL_CATEGORY_LABELS } from '../types';
+import { GENERAL_MODEL_CATEGORY_LABELS, getNodeTypeConfig } from '../types';
 import type { ReferencePreviewContent, ReferencePreviewSource } from '../types/referencePreview';
-import { DRAMA_ASSET_KIND_LABEL, parseDramaMentionId } from '../types/dramaAssets';
+import { DRAMA_ASSET_KIND_LABEL, parseDramaMentionId, type DramaAsset } from '../types/dramaAssets';
 import { formatShotVideoPrompt, parseShotlistRowMentionId } from '../types/shotlist';
 import { gridBoundaries } from '../utils/storyboardGrid';
 import { defaultModelGroups, findMediaModelOption } from '../components/nodes/shared/defaultModels';
@@ -13,10 +13,152 @@ import { getAssetUrlFromPath, getFileCategory, readAssetTextFile } from './fileS
 import { readChatImageReference } from './chat/chatImageReferenceService';
 import { GENERAL_ASSISTANT_SCOPE_ID } from './chat/assistantScope';
 import { loadGlobalCharacterCards } from './characterLibraryService';
+import { getAssetIndexByPath } from './indexedDbService';
+import { formatSize } from '../utils/assetFormat';
+import { CHARACTER_REFERENCE_KIND_LABELS, CHARACTER_VOICE_KIND_LABELS } from '../components/character/characterReferencePresentation';
 
 type PreviewState = ReturnType<typeof useAppStore.getState>;
 type PreviewNode = PreviewState['nodes'][number];
 type PreviewKind = ReferencePreviewContent['kind'];
+type PreviewDetails = NonNullable<ReferencePreviewContent['details']>;
+
+function withDetails(preview: ReferencePreviewContent, details: PreviewDetails): ReferencePreviewContent {
+  const rows = new Map((preview.details ?? []).map((row) => [row.label, row]));
+  for (const row of details) rows.set(row.label, row);
+  return { ...preview, details: rows.size ? [...rows.values()] : undefined };
+}
+
+function addDetail(details: PreviewDetails, label: string, value: unknown): void {
+  if (typeof value !== 'string' || !value.trim()) return;
+  // 这里只投影展示字段；配置地址、文件位置与凭据不能变成右侧参数。
+  if (/(?:[a-z]:[\\/]|\\\\|(?:https?|file|asset):\/\/)|(?:^|\s)\/\S|(?:api[_-]?key|token|secret)\s*[:=]/i.test(value)) return;
+  details.push({ label, value: value.trim() });
+}
+
+function positive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function seconds(value: unknown): string | undefined {
+  return positive(value) ? `${Number(value.toFixed(2))} 秒` : undefined;
+}
+
+function pixelSize(width: unknown, height: unknown): string | undefined {
+  return positive(width) && positive(height) ? `${width} × ${height}` : undefined;
+}
+
+function nodeDetails(source: ReferencePreviewSource, state: PreviewState): PreviewDetails {
+  const shot = parseShotlistRowMentionId(source.id);
+  const cell = /^(.*)\/cell\/(\d+)$/.exec(source.id);
+  const node = state.nodes.find((item) => item.id === (shot?.nodeId || cell?.[1] || source.id));
+  const details: PreviewDetails = [{ label: '来源', value: '画布节点' }];
+  if (!node) return details;
+  const data = node.data;
+  const type = node.type || data.type;
+  const sourceLabels: Record<string, string> = { 'source-image': '源图像', 'source-video': '源视频', 'source-audio': '源音频', 'source-text': '源文本' };
+  addDetail(details, '节点类型', sourceLabels[type] || getNodeTypeConfig(type).label);
+  addDetail(details, '来源节点', nodeTitle(node, source.label));
+  if (Number.isSafeInteger(data.displayId) && data.displayId! >= 0) addDetail(details, '节点编号', `#${data.displayId}`);
+  const status = data.videoTaskState === 'paused' ? '查询已暂停'
+    : data.status ? { idle: '空闲', loading: '生成中', success: '已完成', error: '失败' }[data.status] : undefined;
+  addDetail(details, '状态', status);
+  if (data.model) {
+    const general = state.config.generalModels?.find((item) => item.id === data.model?.replace(/^general\//, ''));
+    const model = findMediaModelOption(data.model, state.config.generalModels, state.config, state.workflows)
+      || defaultModelGroups.flatMap((group) => group.models).find((item) => item.value === data.model);
+    addDetail(details, '模型', general?.name || model?.label);
+  }
+  if (shot) {
+    const row = data.shotlistRows?.find((item) => item.id === shot.rowId);
+    addDetail(details, '分镜表', nodeTitle(node, source.label));
+    if (row) {
+      addDetail(details, '镜头编号', row.shotNo);
+      addDetail(details, '镜头时长', seconds(row.duration));
+      addDetail(details, '景别', row.shotSize);
+      addDetail(details, '运镜', row.camera);
+    }
+    return details;
+  }
+  if (cell) {
+    const index = Number(cell[2]);
+    const cols = data.storyboardCols;
+    const rows = data.storyboardRows;
+    if (Number.isSafeInteger(index) && positive(cols) && Number.isSafeInteger(cols)
+      && positive(rows) && Number.isSafeInteger(rows) && index < cols * rows) {
+      addDetail(details, '宫格位置', `第 ${Math.floor(index / cols) + 1} 行 · 第 ${index % cols + 1} 列`);
+      addDetail(details, '宫格布局', `${cols} 列 × ${rows} 行`);
+      addDetail(details, '图片来源', data.storyboardOverrides?.[index] ? '该格覆盖图' : '源图裁片');
+    }
+    addDetail(details, '源宫格图尺寸', pixelSize(data.imageWidth, data.imageHeight));
+  } else if (type === 'ai-video' || type === 'source-video') {
+    addDetail(details, '视频尺寸', pixelSize(data.videoWidth, data.videoHeight));
+    addDetail(details, '视频时长', seconds(data.videoDuration));
+  } else addDetail(details, '图片尺寸', pixelSize(data.imageWidth, data.imageHeight));
+  if (type === 'ai-video' || type === 'source-video') {
+    addDetail(details, '请求分辨率', data.seedanceResolution);
+    addDetail(details, '请求比例', data.seedanceRatio);
+    addDetail(details, '请求时长', data.seedanceDuration === -1 ? '自动' : seconds(data.seedanceDuration));
+    if (positive(data.videoResolution)) addDetail(details, '视频分辨率参数', String(data.videoResolution));
+    if (positive(data.videoFps)) addDetail(details, '帧率参数', `${data.videoFps} fps`);
+    if (positive(data.videoFrames)) addDetail(details, '帧数参数', String(data.videoFrames));
+  } else if (['ai-image', 'source-image', 'ai-storyboard', 'ai-animation', 'ai-panorama'].includes(type)) {
+    addDetail(details, '生成尺寸参数', data.imageSize);
+    addDetail(details, '请求比例', data.aspectRatio);
+  } else if (type === 'ai-audio' || type === 'source-audio') {
+    addDetail(details, '音频格式', data.audioFormat);
+    addDetail(details, '音乐时长参数', seconds(data.musicDuration));
+  }
+  return details;
+}
+
+function dramaDetails(source: ReferencePreviewSource, asset: DramaAsset): PreviewDetails {
+  const { assetId, referenceImageId, voiceClipId, actionId, actionMediaId, mergeAll } = parseDramaMentionId(source.id);
+  const details: PreviewDetails = [
+    { label: '来源', value: assetId.startsWith('global/') ? '全局角色库' : '创作资产库' },
+    { label: '资产类型', value: DRAMA_ASSET_KIND_LABEL[asset.kind] },
+  ];
+  addDetail(details, '资产名称', asset.name);
+  addDetail(details, '简介', asset.summary);
+  addDetail(details, '外观约束', asset.visualNotes);
+  addDetail(details, '剧情作用', asset.storyRole);
+  if (asset.kind === 'character') {
+    addDetail(details, '身份', asset.identity);
+    addDetail(details, '默认服装', asset.wardrobeDefault);
+    addDetail(details, '声音约束', asset.voiceNotes);
+    const reference = referenceImageId !== undefined ? asset.referenceImages?.find((item) => item.id === referenceImageId)
+      : asset.referenceImages?.find((item) => item.id === asset.primaryReferenceImageId) || asset.referenceImages?.[0];
+    if (voiceClipId !== undefined) {
+      const voice = resolveDramaVoiceRef(asset, voiceClipId);
+      addDetail(details, '引用内容', '指定声音片段');
+      if (voice) {
+        addDetail(details, '声音用途', CHARACTER_VOICE_KIND_LABELS[voice.kind]);
+        addDetail(details, '音频时长', seconds(voice.durationSec));
+      }
+    } else if (actionId !== undefined) {
+      const action = asset.actions?.find((item) => item.id === actionId);
+      const media = resolveDramaActionMediaRef(asset, actionId, actionMediaId);
+      addDetail(details, '引用内容', '指定动作素材');
+      addDetail(details, '动作名称', action?.name);
+      addDetail(details, '动作素材', media?.name ? fileName(media.name) : undefined);
+    } else if (mergeAll) {
+      addDetail(details, '引用内容', '全部参考图');
+      if (asset.referenceImages) addDetail(details, '库内参考图数量', String(asset.referenceImages.length));
+    } else {
+      addDetail(details, '引用内容', referenceImageId !== undefined ? '指定参考图' : '默认参考图');
+      if (reference) addDetail(details, '参考图用途', CHARACTER_REFERENCE_KIND_LABELS[reference.kind]);
+    }
+  } else if (asset.kind === 'scene') {
+    addDetail(details, '场景类型', asset.placeType);
+    addDetail(details, '时段', asset.timeOfDay);
+    addDetail(details, '氛围', asset.atmosphere);
+    addDetail(details, '空间约束', asset.spatialNotes);
+  } else {
+    addDetail(details, '道具分类', asset.category);
+    addDetail(details, '归属', asset.ownerName);
+    addDetail(details, '道具作用', asset.significance);
+  }
+  return details;
+}
 
 function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('预览读取已取消', 'AbortError');
@@ -119,13 +261,13 @@ async function previewNode(source: ReferencePreviewSource, state: PreviewState, 
     return mediaPreview('image', title, data.imageUrl || data.filePath || data.thumbnailUrl, signal, extra);
   }
   const text = data.output || data.prompt;
-  if (!text && type === 'source-text' && data.filePath) return previewAsset({ kind: 'asset', id: data.filePath, label: title }, signal);
+  if (!text && type === 'source-text' && data.filePath) return previewAsset({ kind: 'asset', id: data.filePath, label: title }, state, signal);
   return text ? { kind: type === 'ai-markdown' ? 'markdown' : 'text', title, text, prompt: data.output ? data.prompt : undefined }
     : unavailable(title, '该节点尚无可预览的正文或生成结果');
 }
 
 async function previewDrama(source: ReferencePreviewSource, state: PreviewState, signal?: AbortSignal): Promise<ReferencePreviewContent> {
-  const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId, mergeAll } = parseDramaMentionId(source.id);
+  const { assetId } = parseDramaMentionId(source.id);
   let asset = findDramaAsset(state.dramaAssets, assetId, state.globalCharacters);
   if (!asset && assetId.startsWith('global/')) {
     // 直接从聊天或只读提示词打开时，角色面板可能尚未加载；临时读取，不改写窗口 Store。
@@ -133,7 +275,14 @@ async function previewDrama(source: ReferencePreviewSource, state: PreviewState,
     checkAbort(signal);
     asset = findDramaAsset(state.dramaAssets, assetId, characters);
   }
-  if (!asset) return unavailable(source.label, '引用的创作资产已不存在');
+  if (!asset) return withDetails(unavailable(source.label, '引用的创作资产已不存在'), [
+    { label: '来源', value: assetId.startsWith('global/') ? '全局角色库' : '创作资产库' },
+  ]);
+  return withDetails(await previewDramaContent(source, state, asset, signal), dramaDetails(source, asset));
+}
+
+async function previewDramaContent(source: ReferencePreviewSource, state: PreviewState, asset: DramaAsset, signal?: AbortSignal): Promise<ReferencePreviewContent> {
+  const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId, mergeAll } = parseDramaMentionId(source.id);
   const title = asset.name || source.label;
   const description = `${assetId.startsWith('global/') ? '全局角色库' : '创作资产库'} · ${DRAMA_ASSET_KIND_LABEL[asset.kind]}`;
   const text = formatDramaAssetTextBrief(asset);
@@ -170,16 +319,41 @@ async function previewDrama(source: ReferencePreviewSource, state: PreviewState,
   return image ? mediaPreview('image', title, image.imageUrl, signal, extra) : { kind: 'markdown', title, ...extra };
 }
 
-async function previewAsset(source: ReferencePreviewSource, signal?: AbortSignal): Promise<ReferencePreviewContent> {
+async function previewAsset(source: ReferencePreviewSource, state: PreviewState, signal?: AbortSignal): Promise<ReferencePreviewContent> {
   const title = source.label || fileName(source.id);
   const category = getFileCategory(fileName(source.id));
+  const details: PreviewDetails = [{ label: '来源', value: '素材库文件' }];
+  addDetail(details, '文件名称', fileName(source.id));
+  addDetail(details, '文件类型', { image: '图像', video: '视频', audio: '音频', text: '文本', other: '其他' }[category]);
+  let preview: ReferencePreviewContent;
   if (category === 'text') {
     const snapshot = await readAssetTextFile(source.id, signal);
     checkAbort(signal);
-    return { kind: /\.md$/i.test(source.id) ? 'markdown' : 'text', title, text: snapshot.content };
+    if (Number.isFinite(snapshot.size) && snapshot.size >= 0) addDetail(details, '文件大小', formatSize(snapshot.size));
+    preview = { kind: /\.md$/i.test(source.id) ? 'markdown' : 'text', title, text: snapshot.content };
+  } else {
+    preview = category === 'image' || category === 'video' || category === 'audio'
+      ? await mediaPreview(category, title, source.id, signal) : unavailable(title, '此文件格式暂不支持在应用内预览');
+    const key = source.id.replace(/\\/g, '/').replace(/\/+$/, '');
+    // 仅查已索引的精确路径，不扫描目录、登记资产或为预览探测原文件。
+    const indexed = await getAssetIndexByPath(key).catch(() => undefined);
+    checkAbort(signal);
+    if (indexed) {
+      if (Number.isFinite(indexed.size) && indexed.size >= 0) addDetail(details, '文件大小（已索引）', formatSize(indexed.size));
+      addDetail(details, '文件归属', { project: '项目文件', global: '全局素材', folder: '外部文件夹' }[indexed.source]);
+    }
+    const matches = state.nodes.filter((node) => [node.data.filePath, node.data.imageUrl, node.data.videoUrl, node.data.audioUrl]
+      .some((value) => typeof value === 'string' && value.replace(/\\/g, '/').replace(/\/+$/, '') === key));
+    if (matches.length === 1) {
+      const data = matches[0].data;
+      if (category === 'image') addDetail(details, '图片尺寸', pixelSize(data.imageWidth, data.imageHeight));
+      else if (category === 'video') {
+        addDetail(details, '视频尺寸', pixelSize(data.videoWidth, data.videoHeight));
+        addDetail(details, '视频时长', seconds(data.videoDuration));
+      }
+    }
   }
-  if (category === 'image' || category === 'video' || category === 'audio') return mediaPreview(category, title, source.id, signal);
-  return unavailable(title, '此文件格式暂不支持在应用内预览');
+  return withDetails(preview, details);
 }
 
 /** 仅识别完整的单个媒体引用；不执行工作流，也不解释普通文本中的指令。 */
@@ -232,9 +406,9 @@ function previewModel(source: ReferencePreviewSource, state: PreviewState): Refe
 async function resolveFromState(source: ReferencePreviewSource, state: PreviewState, signal?: AbortSignal): Promise<ReferencePreviewContent> {
   checkAbort(signal);
   switch (source.kind) {
-    case 'node': return previewNode(source, state, signal);
+    case 'node': return withDetails(await previewNode(source, state, signal), nodeDetails(source, state));
     case 'drama': return previewDrama(source, state, signal);
-    case 'asset': return previewAsset(source, signal);
+    case 'asset': return previewAsset(source, state, signal);
     case 'workflow': return previewWorkflow(source, state, signal);
     case 'model': return previewModel(source, state);
     case 'skill': {

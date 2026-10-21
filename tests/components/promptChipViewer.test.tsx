@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
-import { renderPromptWithChips } from '../../src/components/nodes/shared/PromptChipViewer';
+import { findPromptChipRanges, renderPromptWithChips } from '../../src/components/nodes/shared/PromptChipViewer';
+import { renderMarkdownWithInlineSlots } from '../../src/utils/renderMarkdown';
 
 type Element = ReactElement<Record<string, unknown> & { children?: unknown }>;
 
@@ -111,5 +112,41 @@ describe('renderPromptWithChips', () => {
     const broken = elements(renderPromptWithChips('@wf{6|正向|prompt}(未闭合 @skill{writer|写作}'));
     expect(broken.find((el) => el.props['data-wf-id'] === '6')?.props['data-wf-preview-value']).toBeUndefined();
     expect(broken.some((el) => el.props['data-skill-id'] === 'writer')).toBe(true);
+  });
+
+  it('Markdown 中的完整工作流值与引用标签不会被星号、管道和括号拆开', () => {
+    const workflow = '@wf{6|镜头*提示*|prompt}(人物(微笑)，保留 `代码` 和 @{inside:参考|图})';
+    const image = '@{after:角色**定稿**|三视图}';
+    const prepared = renderMarkdownWithInlineSlots(`| 提示词 | 参考 |\n| --- | --- |\n| ${workflow} | ${image} |`, findPromptChipRanges);
+    expect(prepared.tokens).toEqual([workflow, image]);
+    expect(prepared.html.match(/<td /g)).toHaveLength(2);
+    const rendered = elements(renderPromptWithChips(prepared.tokens.join('\n')));
+    expect(rendered.find((el) => el.props['data-wf-id'] === '6')?.props['data-wf-preview-value'])
+      .toBe('人物(微笑)，保留 `代码` 和 @{inside:参考|图}');
+    expect(rendered.find((el) => el.props['data-ref-id'] === 'after')?.props['data-ref-label']).toBe('角色**定稿**|三视图');
+  });
+
+  it('全局角色只读取全局展示素材，模型和聊天图片保留可再次预览的身份', () => {
+    const imageId = 'chat-ref-11111111-1111-1111-1111-111111111111.png';
+    const rendered = elements(renderPromptWithChips(`@drama{global/hero:全局人物} @model{general/h3|MiniMax H3} @image{${imageId}|聊天参考图}`, {
+      nodes: [{ id: 'local', data: { type: 'ai-image', imageUrl: 'wrong-local.png' } }],
+      dramaAssets: { version: 2, characters: [], scenes: [], props: [] },
+      globalCharacters: [{ id: 'hero', name: '全局人物', kind: 'character', imageNodeId: 'local', imageUrl: 'global.png' }] as never,
+    }));
+    expect(rendered.find((el) => el.props['data-drama-id'] === 'global/hero')).toBeDefined();
+    expect(rendered.some((el) => el.props.src === 'global.png')).toBe(true);
+    expect(rendered.some((el) => el.props.src === 'wrong-local.png')).toBe(false);
+    expect(rendered.find((el) => el.props['data-model-ref-id'] === 'general/h3')?.props['data-model-ref-label']).toBe('MiniMax H3');
+    expect(rendered.find((el) => el.props['data-chat-image-file-name'] === imageId)?.props['data-chat-image-label']).toBe('聊天参考图');
+  });
+
+  it('独立窗口缺少单镜完整元数据时保留标签和稳定身份，实际失效由主窗解析', () => {
+    const raw = '@{sheet/shot/row:镜12 · 分镜表}';
+    const rendered = elements(renderPromptWithChips(raw, {
+      nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', label: '缩略投影' } }], fallbackToTokenLabel: true,
+    }));
+    const chip = rendered.find((el) => el.props['data-ref-id'] === 'sheet/shot/row');
+    expect(chip?.props.title).toBe('镜12 · 分镜表');
+    expect(chip?.props['data-ref-label']).toBe('镜12 · 分镜表');
   });
 });

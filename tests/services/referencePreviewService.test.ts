@@ -8,6 +8,8 @@ import { getAssetUrlFromPath, readAssetTextFile } from '../../src/services/fileS
 import { readChatImageReference } from '../../src/services/chat/chatImageReferenceService';
 import { GENERAL_ASSISTANT_SCOPE_ID } from '../../src/services/chat/assistantScope';
 import { loadGlobalCharacterCards } from '../../src/services/characterLibraryService';
+import { getAssetIndexByPath } from '../../src/services/indexedDbService';
+import { defaultModelGroups } from '../../src/components/nodes/shared/defaultModels';
 
 vi.mock('../../src/services/fileService', async (original) => ({
   ...await original<typeof import('../../src/services/fileService')>(),
@@ -21,6 +23,10 @@ vi.mock('../../src/services/chat/chatImageReferenceService', async (original) =>
 vi.mock('../../src/services/characterLibraryService', async (original) => ({
   ...await original<typeof import('../../src/services/characterLibraryService')>(),
   loadGlobalCharacterCards: vi.fn(async () => []),
+}));
+vi.mock('../../src/services/indexedDbService', async (original) => ({
+  ...await original<typeof import('../../src/services/indexedDbService')>(),
+  getAssetIndexByPath: vi.fn(async () => undefined),
 }));
 
 const longText = '完整内容，不应裁成悬浮预览。'.repeat(100);
@@ -36,9 +42,154 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   vi.mocked(readAssetTextFile).mockReset();
   vi.mocked(loadGlobalCharacterCards).mockReset().mockResolvedValue([]);
+  vi.mocked(getAssetIndexByPath).mockReset().mockResolvedValue(undefined);
 });
 
 describe('引用大屏内容读取', () => {
+  it('节点详情白名单保留真实像素、成片时长与请求参数，模型使用展示名且不泄漏配置', async () => {
+    const state = useAppStore.getState();
+    useAppStore.setState({
+      config: { ...state.config, generalModels: [{ id: 'h3', name: 'H3 多参考图', modelId: 'private-model-id',
+        category: 'video', providerConfigId: 'private-provider-id' }] },
+      nodes: [node('movie', 'ai-video', { label: '第1镜成片', displayId: 49, status: 'success', model: 'general/h3',
+        videoUrl: 'https://media.test/movie.mp4', videoWidth: 1920, videoHeight: 1080, videoDuration: 8.27,
+        seedanceResolution: '768p', seedanceRatio: '16:9', seedanceDuration: 9, videoFps: 24, videoFrames: 216,
+        filePath: 'F:/private/movie.mp4', provider: 'private-provider-id', error: 'token=never-expose',
+        vendorResponse: { apiKey: 'never-expose', endpoint: 'https://private.vendor.test' },
+      }), node('pending', 'ai-video', { displayId: 50, status: 'loading', seedanceDuration: 9 })],
+    });
+    const snapshot = useAppStore.getState();
+    const preview = await resolveReferencePreview({ kind: 'node', id: 'movie', label: '旧标题' });
+    expect(preview.details).toEqual(expect.arrayContaining([
+      { label: '来源', value: '画布节点' }, { label: '节点类型', value: '生成视频' },
+      { label: '来源节点', value: '第1镜成片' }, { label: '节点编号', value: '#49' },
+      { label: '状态', value: '已完成' }, { label: '模型', value: 'H3 多参考图' },
+      { label: '视频尺寸', value: '1920 × 1080' }, { label: '视频时长', value: '8.27 秒' },
+      { label: '请求分辨率', value: '768p' }, { label: '请求比例', value: '16:9' }, { label: '请求时长', value: '9 秒' },
+    ]));
+    expect(JSON.stringify(preview.details)).not.toMatch(/private-|never-expose|https:|F:\//);
+    const pending = await resolveReferencePreview({ kind: 'node', id: 'pending', label: '待生成' });
+    expect(pending.unavailable).toBeTruthy();
+    expect(pending.details).toContainEqual({ label: '状态', value: '生成中' });
+    expect(pending.details?.some((row) => row.label === '视频尺寸' || row.label === '视频时长')).toBe(false);
+    expect(useAppStore.getState()).toBe(snapshot);
+  });
+
+  it('单镜与宫格详情归属真实来源，不把原图尺寸或生成时长冒充单镜结果', async () => {
+    useAppStore.setState({ nodes: [
+      node('sheet', 'ai-shotlist', { label: '第一集分镜', displayId: 47, shotlistRows: [
+        { id: 'row', shotNo: '3a', shotSize: '近景', camera: '固定', content: '画面', duration: 7.5 },
+      ] }),
+      node('grid', 'ai-storyboard', { displayId: 32, imageUrl: 'https://media.test/grid.png', imageWidth: 3000, imageHeight: 2000,
+        storyboardRows: 2, storyboardCols: 2, imageSize: '2K', aspectRatio: '3:2' }),
+    ] });
+    const shot = await resolveReferencePreview({ kind: 'node', id: 'sheet/shot/row', label: '旧镜号' });
+    expect(shot.details).toEqual(expect.arrayContaining([
+      { label: '节点编号', value: '#47' }, { label: '分镜表', value: '第一集分镜' },
+      { label: '镜头编号', value: '3a' }, { label: '镜头时长', value: '7.5 秒' }, { label: '景别', value: '近景' },
+    ]));
+    const cell = await resolveReferencePreview({ kind: 'node', id: 'grid/cell/2', label: '第三格' });
+    expect(cell.details).toEqual(expect.arrayContaining([
+      { label: '节点类型', value: '宫格分镜' }, { label: '节点编号', value: '#32' },
+      { label: '宫格位置', value: '第 2 行 · 第 1 列' }, { label: '宫格布局', value: '2 列 × 2 行' },
+      { label: '源宫格图尺寸', value: '3000 × 2000' }, { label: '图片来源', value: '源图裁片' },
+    ]));
+    expect(cell.details?.some((row) => row.label === '图片尺寸' || row.label === '裁片尺寸')).toBe(false);
+    const missing = await resolveReferencePreview({ kind: 'node', id: 'sheet/shot/deleted', label: '删除镜头' });
+    expect(missing.unavailable).toBeTruthy();
+    expect(missing.details).toContainEqual({ label: '分镜表', value: '第一集分镜' });
+    expect(missing.details?.some((row) => row.label === '镜头编号' || row.label === '镜头时长')).toBe(false);
+  });
+
+  it('文本节点模型使用通用目录或内置文本展示名，未知模型不显示原始配置值', async () => {
+    const builtin = defaultModelGroups.flatMap((group) => group.models).find((item) => item.nodeTypes.includes('ai-text'))!;
+    const state = useAppStore.getState();
+    useAppStore.setState({ config: { ...state.config, generalModels: [{ id: 'text-custom', name: '自定义文本模型',
+      modelId: 'private-model-id', category: 'text', providerConfigId: 'private-provider-id' }] },
+    nodes: [node('custom', 'ai-text', { model: 'general/text-custom', output: '正文' }),
+      node('builtin', 'ai-text', { model: builtin.value, output: '正文' }),
+      node('unknown', 'ai-text', { model: 'https://private.vendor.test?token=never-expose', output: '正文' })] });
+    expect((await resolveReferencePreview({ kind: 'node', id: 'custom', label: '文本' })).details)
+      .toContainEqual({ label: '模型', value: '自定义文本模型' });
+    expect((await resolveReferencePreview({ kind: 'node', id: 'builtin', label: '文本' })).details)
+      .toContainEqual({ label: '模型', value: builtin.label });
+    const unknown = await resolveReferencePreview({ kind: 'node', id: 'unknown', label: '文本' });
+    expect(unknown.details?.some((row) => row.label === '模型')).toBe(false);
+    expect(JSON.stringify(unknown.details)).not.toMatch(/private.vendor|never-expose/);
+  });
+
+  it('资产详情展示实际用途、简介与约束，冷加载全局角色也保留元信息', async () => {
+    const asset: DramaCharacter = { ...character(), wardrobeDefault: '白紫长裙', voiceNotes: '语气轻快', visualNotes: '白紫渐变长发',
+      referenceImages: [{ id: 'side', kind: 'turnaround', imageUrl: 'https://media.test/side.png', prompt: '侧面姿态', createdAt: 1, updatedAt: 1 }],
+      voiceClips: [{ id: 'voice', kind: 'line', label: '对白样本', transcript: '你好', audioUrl: 'https://media.test/voice.wav', durationSec: 2.25, createdAt: 1, updatedAt: 1 }],
+    };
+    vi.mocked(loadGlobalCharacterCards).mockResolvedValue([asset]);
+    const preview = await resolveReferencePreview({ kind: 'drama', id: 'global/character#side', label: '旧角色名' });
+    expect(preview.details).toEqual(expect.arrayContaining([
+      { label: '来源', value: '全局角色库' }, { label: '资产类型', value: '人物' }, { label: '资产名称', value: '小绘' },
+      { label: '参考图用途', value: '转面' }, { label: '引用内容', value: '指定参考图' },
+      { label: '简介', value: longText }, { label: '外观约束', value: '白紫渐变长发' }, { label: '默认服装', value: '白紫长裙' },
+    ]));
+    useAppStore.setState({ dramaAssets: { version: 2, characters: [asset], scenes: [], props: [] } });
+    const voice = await resolveReferencePreview({ kind: 'drama', id: buildDramaVoiceMentionId(asset.id, 'voice'), label: '声音' });
+    expect(voice.details).toContainEqual({ label: '声音用途', value: '台词样本' });
+    expect(voice.details).toContainEqual({ label: '音频时长', value: '2.25 秒' });
+    const missing = await resolveReferencePreview({ kind: 'drama', id: 'character#deleted', label: '旧图' });
+    expect(missing.details).toContainEqual({ label: '资产名称', value: '小绘' });
+    expect(missing.details?.some((row) => row.label === '参考图用途')).toBe(false);
+  });
+
+  it('文件只用授权读取或精确索引中已有的信息，不编造媒体尺寸与大小', async () => {
+    vi.mocked(readAssetTextFile).mockResolvedValue({ content: longText, digest: '', size: 2048, modified: null, bom: false, newline: 'LF' });
+    const text = await resolveReferencePreview({ kind: 'asset', id: 'F:/authorized/script.md', label: '剧本' });
+    expect(text.details).toContainEqual({ label: '文件大小', value: '2.0 KB' });
+    expect(text.details).toContainEqual({ label: '文件名称', value: 'script.md' });
+    vi.mocked(getAssetIndexByPath).mockResolvedValueOnce({ assetId: 'file', path: 'F:/authorized/movie.mp4',
+      source: 'folder', size: 4096, mtimeMs: 1, fingerprint: '4096:1', status: 'online', updatedAt: 1 });
+    useAppStore.setState({ nodes: [node('matching', 'source-video', { filePath: 'F:/authorized/movie.mp4',
+      videoWidth: 1280, videoHeight: 720, videoDuration: 6 })] });
+    const movie = await resolveReferencePreview({ kind: 'asset', id: 'F:\\authorized\\movie.mp4', label: '成片' });
+    expect(getAssetIndexByPath).toHaveBeenLastCalledWith('F:/authorized/movie.mp4');
+    expect(movie.details).toEqual(expect.arrayContaining([
+      { label: '文件大小（已索引）', value: '4.0 KB' }, { label: '文件归属', value: '外部文件夹' },
+      { label: '视频尺寸', value: '1280 × 720' }, { label: '视频时长', value: '6 秒' },
+    ]));
+    expect(JSON.stringify(movie.details)).not.toContain('F:');
+    const unknown = await resolveReferencePreview({ kind: 'asset', id: 'F:/authorized/unknown.png', label: '图片' });
+    expect(unknown.details?.some((row) => /大小|尺寸|时长/.test(row.label))).toBe(false);
+    vi.mocked(getAssetIndexByPath).mockRejectedValueOnce(new Error('index unavailable'));
+    expect((await resolveReferencePreview({ kind: 'asset', id: 'F:/authorized/unknown.png', label: '图片' })).mediaUrl).toBeTruthy();
+  });
+
+  it('未知数值和任意嵌套配置不进入节点元信息，工作流转引仍保留节点详情', async () => {
+    useAppStore.setState({ nodes: [node('image', 'source-image', { imageUrl: 'https://media.test/image.png',
+      imageWidth: Number.NaN, imageHeight: -1, aspectRatio: 'https://private.vendor.test', imageSize: 'apiKey=never-expose',
+      nested: { width: 1000, height: 1000, fileSize: 2048 },
+    })] });
+    const preview = await resolveReferencePreview({ kind: 'workflow', id: 'input', label: '图像输入', value: '@{image:引用图}' });
+    expect(preview.details).toContainEqual({ label: '节点类型', value: '源图像' });
+    expect(preview.details?.some((row) => /尺寸|大小|比例/.test(row.label))).toBe(false);
+    expect(JSON.stringify(preview.details)).not.toMatch(/private.vendor|never-expose|2048|1000/);
+  });
+
+  it('文件索引信息读取取消后不返回迟到结果，也不修改 Store', async () => {
+    let finish!: (value: Awaited<ReturnType<typeof getAssetIndexByPath>>) => void;
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => { started = resolve; });
+    vi.mocked(getAssetIndexByPath).mockImplementationOnce(() => new Promise((resolve) => {
+      finish = resolve;
+      started();
+    }));
+    const snapshot = useAppStore.getState();
+    const controller = new AbortController();
+    const pending = resolveReferencePreview({ kind: 'asset', id: 'F:/authorized/photo.png', label: '图片' }, { signal: controller.signal });
+    await reading;
+    controller.abort();
+    finish(undefined);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(useAppStore.getState()).toBe(snapshot);
+  });
+
   it('读取完整源文本和 Skill 正文，模型只投影安全资料，不改变 Store', async () => {
     const state = useAppStore.getState();
     useAppStore.setState({ nodes: [node('text', 'source-text', { output: longText })],

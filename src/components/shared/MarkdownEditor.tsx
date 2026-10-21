@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { renderMarkdown } from '../../utils/renderMarkdown';
 
@@ -12,6 +12,8 @@ export interface MarkdownEditorProps {
   onSave?: () => void;
   onBlur?: () => void;
   status?: string;
+  /** 仅替换预览面；源码、查找及编辑历史继续使用原始 value。 */
+  renderPreview?: (value: string, markdown: boolean) => ReactNode;
 }
 
 const FORMAT_TOOLS = [
@@ -28,7 +30,7 @@ const FORMAT_TOOLS = [
 ];
 
 /** UI Kit 受控编辑器：不读取文件、不访问 Store，保存策略由宿主决定。 */
-export default function MarkdownEditor({ value, onChange, markdown = true, initialMode = 'split', label = '文档内容', readOnly = false, onSave, onBlur, status }: MarkdownEditorProps) {
+export default function MarkdownEditor({ value, onChange, markdown = true, initialMode = 'split', label = '文档内容', readOnly = false, onSave, onBlur, status, renderPreview }: MarkdownEditorProps) {
   const [mode, setMode] = useState(initialMode);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -38,7 +40,7 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
   const textarea = useRef<HTMLTextAreaElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
   const deferred = useDeferredValue(value);
-  const html = useMemo(() => markdown ? renderMarkdown(deferred) : '', [deferred, markdown]);
+  const html = useMemo(() => markdown && !renderPreview ? renderMarkdown(deferred) : '', [deferred, markdown, renderPreview]);
   // 宿主切换文档或重新载入时，不把旧文档撤销栈带到新内容。
   if (history.values[history.index] !== value) setHistory({ values: [value], index: 0 });
 
@@ -153,7 +155,8 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
     <div className={`ui-markdown-editor__body${mode === 'split' && markdown ? ' is-split' : ''}`}>
       {mode !== 'preview' && <textarea ref={textarea} className="ui-markdown-editor__source text-selection-source" aria-label={label} value={value} readOnly={readOnly}
         onChange={(event) => change(event.target.value)} onBlur={onBlur} spellCheck={false} placeholder={markdown ? '# 开始写作' : '输入文本…'} />}
-      {mode !== 'source' && (markdown ? <div className="ui-markdown-editor__preview markdown-rendered" aria-label="Markdown 预览" tabIndex={0} dangerouslySetInnerHTML={{ __html: html || '<p>暂无内容</p>' }} />
+      {mode !== 'source' && (renderPreview ? <div className={`ui-markdown-editor__preview${markdown ? ' markdown-rendered' : ''}`} aria-label={markdown ? 'Markdown 预览' : '正文预览'} tabIndex={0}>{renderPreview(deferred, markdown)}</div>
+        : markdown ? <div className="ui-markdown-editor__preview markdown-rendered" aria-label="Markdown 预览" tabIndex={0} dangerouslySetInnerHTML={{ __html: html || '<p>暂无内容</p>' }} />
         : <pre className="ui-markdown-editor__preview" tabIndex={0}>{value || '暂无内容'}</pre>)}
     </div>
     <footer className="ui-markdown-editor__status"><span>{value.length.toLocaleString()} 字符 · {value.split('\n').length.toLocaleString()} 行</span><span role="status">{status}</span></footer>

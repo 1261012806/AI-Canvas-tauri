@@ -1,14 +1,13 @@
 import type { ReactNode } from 'react';
+import { Icon } from '@iconify/react';
 import type {
   CharacterReferenceImage,
   DramaAssetLibrary,
   DramaCharacter,
-  DramaProp,
-  DramaScene,
 } from '../../../types/dramaAssets';
 import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
-import { resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
+import { findDramaAsset, resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
 import { bestNodeThumb, getNodeChipIconPath, getNodeMetaMap, numberMediaReferenceLabels } from './mentionEditorDom';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 
@@ -39,8 +38,15 @@ const WF_IO_ICON: Record<string, string> = {
 export interface PromptChipRenderOptions {
   nodes?: Array<{ id: string; data?: Record<string, unknown> }>;
   dramaAssets?: DramaAssetLibrary;
+  globalCharacters?: readonly DramaCharacter[];
   nodeMetaMap?: ReturnType<typeof getNodeMetaMap>;
   emptyText?: string;
+  /** 独立窗口可能只同步缩略投影；缺少完整元数据时保留令牌中的标签。 */
+  fallbackToTokenLabel?: boolean;
+}
+
+function promptChipPattern() {
+  return /@asset\{([^}]+)\}|@drama\{([^:}]+):([^}]*)\}|@\{([^:}]+):([^}]*)\}|@wf\{([^|}]+)\|([^|}]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]*)\}|@model\{([^|}]+)\|([^}]*)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}]*)\}/g;
 }
 
 /** 与可编辑胶囊相同，按括号深度读取完整工作流值，保留其中的引用令牌。 */
@@ -57,6 +63,18 @@ function readWorkflowValue(prompt: string, start: number): { value?: string; end
   return depth === 0 ? { value: prompt.slice(start + 1, index - 1), end: index } : { end: start };
 }
 
+/** 为 Markdown 提供完整的原始引用范围，工作流括号值与头部保持原子身份。 */
+export function findPromptChipRanges(prompt: string): Array<{ start: number; end: number }> {
+  const regex = promptChipPattern();
+  const ranges: Array<{ start: number; end: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(prompt)) !== null) {
+    if (match[6] !== undefined) regex.lastIndex = readWorkflowValue(prompt, regex.lastIndex).end;
+    ranges.push({ start: match.index, end: regex.lastIndex });
+  }
+  return ranges;
+}
+
 /** 把包含 @提及标记的提示词渲染为与 MentionEditor 一致的彩色标签芯片 */
 export function renderPromptWithChips(
   prompt: string,
@@ -66,7 +84,7 @@ export function renderPromptWithChips(
     return options.emptyText ?? '暂无生成信息';
   }
 
-  const regex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]+)\}/g;
+  const regex = promptChipPattern();
   if (!regex.test(prompt)) {
     return prompt;
   }
@@ -88,9 +106,7 @@ export function renderPromptWithChips(
     } else if (scanMatch[2] !== undefined) {
       const dramaId = scanMatch[2];
       const { assetId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-      const asset = dramaAssets?.characters.find((item) => item.id === assetId)
-        || dramaAssets?.scenes.find((item) => item.id === assetId)
-        || dramaAssets?.props.find((item) => item.id === assetId);
+      const asset = dramaAssets ? findDramaAsset(dramaAssets, assetId, options.globalCharacters) : undefined;
       const action = actionId !== undefined ? resolveDramaActionMediaRef(asset, actionId, actionMediaId) : undefined;
       references.push({ kind: voiceClipId !== undefined ? 'audio' : action?.kind === 'video' ? 'video' : 'image', key: `drama:${dramaId}` });
     } else if (scanMatch[4] !== undefined) {
@@ -99,6 +115,8 @@ export function renderPromptWithChips(
       references.push(meta?.mediaReference || (meta?.imageReferenceKey
         ? { kind: 'image', key: meta.imageReferenceKey }
         : !meta && !parseShotlistRowMentionId(nodeId) ? { kind: 'image', key: `node:${nodeId}` } : undefined));
+    } else if (scanMatch[13] !== undefined) {
+      references.push({ kind: 'image', key: `chat-image:${scanMatch[13]}` });
     } else {
       references.push(undefined);
     }
@@ -145,9 +163,7 @@ export function renderPromptWithChips(
 
       if (dramaAssets) {
         const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-        const found = dramaAssets.characters.find((a: DramaCharacter) => a.id === assetId)
-          || dramaAssets.scenes.find((a: DramaScene) => a.id === assetId)
-          || dramaAssets.props.find((a: DramaProp) => a.id === assetId);
+        const found = findDramaAsset(dramaAssets, assetId, options.globalCharacters);
         if (voiceClipId !== undefined) {
           kind = 'voice';
           icon = '♪';
@@ -164,7 +180,7 @@ export function renderPromptWithChips(
             : undefined;
           if (picked) {
             thumb = picked.imageUrl;
-          } else if (found.imageNodeId && nodes) {
+          } else if (!assetId.startsWith('global/') && found.imageNodeId && nodes) {
             const node = nodes.find((n) => n.id === found.imageNodeId);
             thumb = bestNodeThumb(node?.data ?? {}) || found.imageUrl;
           } else {
@@ -202,13 +218,14 @@ export function renderPromptWithChips(
       const shot = parseShotlistRowMentionId(nodeId);
       const meta = metaMap.get(nodeId);
       const node = nodes?.find((n) => n.id === (shot?.nodeId || (nodeId.includes('/cell/') ? nodeId.split('/')[0] : nodeId)));
-      const nodeType = shot ? 'ai-shotlist' : meta?.type || (node?.data?.type as string) || 'ai-image';
+      const rawNodeType = shot ? 'ai-shotlist' : meta?.type || (node?.data?.type as string) || 'ai-image';
+      const nodeType = rawNodeType.replace(/^source-/, 'ai-');
       const iconPath = getNodeChipIconPath(nodeType);
       const thumbUrl = meta?.thumbnailUrl || (node ? bestNodeThumb(node.data ?? {}) || (node.data?.imageUrl as string) : undefined);
       const isMedia = nodeType === 'ai-image' || nodeType === 'ai-video' || nodeType === 'ai-storyboard';
       const showThumbnail = !iconPath && isMedia && !!thumbUrl;
       const displayId = shot ? undefined : meta?.displayId ?? (node?.data?.displayId as number | undefined);
-      const liveLabel = shot ? meta?.label || `${label}（镜头已失效）` : label;
+      const liveLabel = shot ? meta?.label || (options.fallbackToTokenLabel ? label : `${label}（镜头已失效）`) : label;
       const displayLabel = displayId != null ? `#${displayId}` : liveLabel;
       const title = displayId != null ? `${label} (#${displayId})` : liveLabel;
       const referenceLabel = referenceLabels[currentIdx];
@@ -264,6 +281,22 @@ export function renderPromptWithChips(
           <span className="prompt-chip-skill-name">{skillName.length > 20 ? `${skillName.slice(0, 18)}...` : skillName}</span>
         </span>,
       );
+      lastIndex = regex.lastIndex;
+    } else if (match[11] !== undefined) {
+      const label = match[12] || '模型';
+      elements.push(<span key={`model-${match.index}`} className="prompt-chip prompt-chip-node chip-text cursor-pointer"
+        data-model-ref-id={match[11]} data-model-ref-label={label} title={label} role="button" tabIndex={0}>
+        <span className="prompt-chip-icon" aria-hidden="true"><Icon icon="lucide:box" width={12} height={12} /></span><span className="prompt-chip-id">{label}</span>
+      </span>);
+      lastIndex = regex.lastIndex;
+    } else if (match[13] !== undefined) {
+      let label = match[14] || '助手参考图';
+      try { label = decodeURIComponent(label); } catch { /* 保留原值 */ }
+      elements.push(<span key={`chat-image-${match.index}`} className="prompt-chip prompt-chip-node chip-image cursor-pointer"
+        data-chat-image-file-name={match[13]} data-chat-image-label={label} title={label} role="button" tabIndex={0}>
+        <span className="prompt-chip-icon" aria-hidden="true">🖼</span><span className="prompt-chip-id">{label}</span>
+        {referenceLabels[currentIdx] !== undefined && <span className="prompt-chip-id prompt-chip-image-index prompt-chip-media-index text-canvas-text-secondary">{referenceLabels[currentIdx]}</span>}
+      </span>);
       lastIndex = regex.lastIndex;
     }
   }

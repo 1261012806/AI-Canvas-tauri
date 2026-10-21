@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Icon } from '@iconify/react';
-import type { ReferencePreviewContent } from '../../types/referencePreview';
+import type { ReferencePreviewContent, ReferencePreviewSource } from '../../types/referencePreview';
+import { parseShotlistRowMentionId } from '../../types/shotlist';
 import { cropImageByRanges } from '../nodes/shared/image/imageUtils';
 import ModalOverlay from './ModalOverlay';
 import ZoomableImage from './ZoomableImage';
 import VideoPlayer from './VideoPlayer';
 import MarkdownEditor from './MarkdownEditor';
 import { AudioTrackPlayer } from './CanvasAudioPreview';
+import ReferencePreviewBody from './ReferencePreviewBody';
 
 const KIND_LABELS: Record<ReferencePreviewContent['kind'], string> = {
   text: '文本', markdown: 'Markdown', image: '图片', video: '视频', audio: '音频',
@@ -15,6 +17,7 @@ const KIND_ICONS: Record<ReferencePreviewContent['kind'], string> = {
   text: 'lucide:file-text', markdown: 'lucide:file-code', image: 'lucide:image', video: 'lucide:video', audio: 'lucide:music',
 };
 const ignoreChange = () => undefined;
+const renderReferenceBody = (value: string, markdown: boolean) => <ReferencePreviewBody value={value} markdown={markdown} />;
 
 function PreviewMessage({ message, loading = false }: { message: string; loading?: boolean }) {
   return <div role={loading ? 'status' : 'alert'} className="flex h-full flex-col items-center justify-center gap-3 p-3 text-sm text-canvas-text-secondary">
@@ -73,8 +76,10 @@ function ReferenceAudio({ src }: { src: string }) {
 }
 
 /** 仅展示宿主已解析的内容；不写资产、节点、提示词或项目历史。宿主关闭时卸载。 */
-export default function ReferenceContentPreview({ content, onClose, loading = false }: {
+export default function ReferenceContentPreview({ content, source, onBack, onClose, loading = false }: {
   content: ReferencePreviewContent;
+  source?: ReferencePreviewSource;
+  onBack?: () => void;
   onClose: () => void;
   loading?: boolean;
 }) {
@@ -82,11 +87,14 @@ export default function ReferenceContentPreview({ content, onClose, loading = fa
   const images = content.images?.length ? content.images : content.mediaUrl ? [{ url: content.mediaUrl, label: content.title }] : [];
   const index = selection?.content === content ? Math.min(selection.index, Math.max(0, images.length - 1)) : 0;
   const image = images[index];
+  const ownerNodeId = source?.kind === 'node'
+    ? parseShotlistRowMentionId(source.id)?.nodeId || /^(.*)\/cell\/\d+$/.exec(source.id)?.[1] || source.id
+    : source?.ownerNodeId;
   const unavailable = content.unavailable || (content.kind === 'image' && !image ? '此引用暂无可用图片'
     : (content.kind === 'video' || content.kind === 'audio') && !content.mediaUrl ? '此引用暂无可播放内容' : undefined);
   return <ModalOverlay isOpen onClose={onClose} ariaLabel={`引用内容：${content.title}`} className="asset-image-preview reference-content-preview"
     zIndex={420} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
-    <div data-reference-preview-open="" className="asset-image-preview-layout">
+    <div data-reference-preview-open="" data-reference-owner-node-id={ownerNodeId} className="asset-image-preview-layout">
       <div className="asset-image-preview-stage">
         {loading ? <PreviewMessage message="正在读取引用内容…" loading />
           : unavailable ? <PreviewMessage message={unavailable} />
@@ -94,10 +102,14 @@ export default function ReferenceContentPreview({ content, onClose, loading = fa
           : content.kind === 'video' ? <VideoPlayer key={content.mediaUrl} src={content.mediaUrl} name={content.title} onEscape={onClose} />
           : content.kind === 'audio' && content.mediaUrl ? <ReferenceAudio key={content.mediaUrl} src={content.mediaUrl} />
           : <MarkdownEditor key={`${content.kind}:${content.title}`} value={content.text || ''} onChange={ignoreChange}
-            readOnly markdown={content.kind === 'markdown'} initialMode={content.kind === 'markdown' ? 'preview' : 'source'} label={content.title} status="引用内容 · 只读" />}
+            readOnly markdown={content.kind === 'markdown'} initialMode="preview" renderPreview={renderReferenceBody}
+            label={content.title} status="引用内容 · 只读" />}
       </div>
       <aside className="asset-image-preview-info" aria-label="引用详情">
         <header className="flex shrink-0 items-start gap-3">
+          {onBack && <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost shrink-0" aria-label="返回上一个引用" title="返回上一个引用（Esc）" onClick={onBack}>
+            <Icon icon="lucide:arrow-left" aria-hidden="true" />
+          </button>}
           <Icon icon={KIND_ICONS[content.kind]} className="mt-1 h-5 w-5 shrink-0 text-canvas-text-secondary" aria-hidden="true" />
           <div className="min-w-0 flex-1"><h1 className="break-words text-sm font-semibold text-canvas-text">{content.title}</h1>
             <p className="pt-1 text-xs text-canvas-text-muted">{KIND_LABELS[content.kind]}{content.kind === 'image' && images.length > 1 ? ` · ${index + 1} / ${images.length}` : ''}</p></div>
@@ -105,9 +117,16 @@ export default function ReferenceContentPreview({ content, onClose, loading = fa
         </header>
         <div className="asset-image-preview-info-content space-y-3">
           {content.description && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text-secondary">{content.description}</p>}
+          {!!content.details?.length && <section className="ui-card asset-image-preview-section p-3" aria-label="内容信息">
+            <h2 className="pb-2 text-xs font-medium text-canvas-text-secondary">相关信息</h2>
+            <dl className="space-y-3">{content.details.map((detail, position) => <div key={`${position}:${detail.label}`}>
+              <dt className="text-xs text-canvas-text-muted">{detail.label}</dt>
+              <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-canvas-text">{detail.value}</dd>
+            </div>)}</dl>
+          </section>}
           {content.text && ['image', 'video', 'audio'].includes(content.kind) && <section className="ui-card asset-image-preview-section p-3" aria-label="引用正文">
             <h2 className="pb-2 text-xs font-medium text-canvas-text-secondary">{content.kind === 'audio' ? '正文与台词' : '正文与简介'}</h2>
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{content.text}</p>
+            <ReferencePreviewBody value={content.text} />
           </section>}
           {!loading && !unavailable && content.kind === 'image' && images.length > 1 && <div className="asset-image-preview-references" aria-label="全部参考图">
             {images.map((item, position) => <div className="asset-image-preview-reference" key={`${position}:${item.url}`}>
@@ -117,13 +136,7 @@ export default function ReferenceContentPreview({ content, onClose, loading = fa
           </div>}
           {content.prompt && <section className="ui-card asset-image-preview-section p-3" aria-label="提示词">
             <h2 className="pb-2 text-xs font-medium text-canvas-text-secondary">提示词</h2>
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{content.prompt}</p>
-          </section>}
-          {!!content.details?.length && <section className="ui-card asset-image-preview-section p-3" aria-label="内容信息">
-            <dl className="space-y-3">{content.details.map((detail, position) => <div key={`${position}:${detail.label}`}>
-              <dt className="text-xs text-canvas-text-muted">{detail.label}</dt>
-              <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-canvas-text">{detail.value}</dd>
-            </div>)}</dl>
+            <ReferencePreviewBody value={content.prompt} />
           </section>}
         </div>
       </aside>
