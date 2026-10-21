@@ -471,6 +471,23 @@ export default function ComfyUISettings() {
       </div>
 
       <div>
+        <h3 className="text-sm font-medium text-canvas-text mb-2">{t('ComfyUI 工作流')}</h3>
+        <div className="bg-canvas-card border border-canvas-border rounded-lg p-2 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+            <Icon icon="lucide:workflow" width="18" height="18" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-canvas-text">{t('工作流管理')}</div>
+            <div className="text-[11px] text-canvas-text-muted mt-0.5">{t('已导入 {count} 个工作流', { count: workflows.length })}</div>
+          </div>
+          <AnimatedButton type="button" className="settings-save-btn shrink-0 text-xs flex items-center gap-1.5" onClick={openWorkflows} disabled={installOpen}>
+            {t('管理工作流')}
+            <Icon icon="lucide:chevron-right" width="14" height="14" />
+          </AnimatedButton>
+        </div>
+      </div>
+
+      <div>
         <h3 className="text-sm font-medium text-canvas-text mb-2">{t('ComfyUI 显存与缓存')}</h3>
         <div className="bg-canvas-card border border-canvas-border rounded-lg p-2 space-y-3">
           <div className="flex items-center gap-2">
@@ -656,22 +673,6 @@ export default function ComfyUISettings() {
         </div>
       </div>
 
-      <div>
-        <h3 className="text-sm font-medium text-canvas-text mb-2">{t('ComfyUI 工作流')}</h3>
-        <div className="bg-canvas-card border border-canvas-border rounded-lg p-2 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-            <Icon icon="lucide:workflow" width="18" height="18" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-canvas-text">{t('工作流管理')}</div>
-            <div className="text-[11px] text-canvas-text-muted mt-0.5">{t('已导入 {count} 个工作流', { count: workflows.length })}</div>
-          </div>
-          <AnimatedButton type="button" className="settings-save-btn shrink-0 text-xs flex items-center gap-1.5" onClick={openWorkflows} disabled={installOpen}>
-            {t('管理工作流')}
-            <Icon icon="lucide:chevron-right" width="14" height="14" />
-          </AnimatedButton>
-        </div>
-      </div>
       {installOpen && <Suspense fallback={null}><ComfyInstallDialog
         onClose={() => setInstallOpen(false)}
         onInstalled={syncInstallationMirror}
