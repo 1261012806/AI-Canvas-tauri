@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useT } from '../../i18n';
 import { formatSize } from '../../utils/assetFormat';
-import { cancelComfyInstall, chooseComfyInstallTarget, getComfyInstallInfo, installComfyPortable } from '../../services/comfyInstallService';
+import { cancelComfyInstall, chooseComfyInstallTarget, getBundledComfyInstallInfo, getComfyInstallInfo, installComfyPortable } from '../../services/comfyInstallService';
 import type { ComfyInstallInfo, ComfyInstallProgress, ComfyInstallResult, ComfyInstallTarget } from '../../types/comfyInstall';
 import DownloadProgress from '../shared/DownloadProgress';
 import ModalOverlay from '../shared/ModalOverlay';
@@ -23,7 +23,9 @@ interface Props {
 
 export default function ComfyInstallDialog({ onClose, onInstalled, onLaunch }: Props) {
   const t = useT();
-  const [info, setInfo] = useState<ComfyInstallInfo | null>(null);
+  const [info, setInfo] = useState<ComfyInstallInfo>(getBundledComfyInstallInfo);
+  const [detecting, setDetecting] = useState(true);
+  const [detectionError, setDetectionError] = useState('');
   const [variantId, setVariantId] = useState('');
   const [folderName, setFolderName] = useState('ComfyUI');
   const [target, setTarget] = useState<ComfyInstallTarget | null>(null);
@@ -40,16 +42,26 @@ export default function ComfyInstallDialog({ onClose, onInstalled, onLaunch }: P
   const selectingRef = useRef(false);
   const targetIdRef = useRef<string | null>(null);
   useEffect(() => {
-    let active = true;
     alive.current = true;
-    void getComfyInstallInfo().then((next) => {
-      if (!active) return;
-      setInfo(next); setVariantId(next.variants[0]?.id ?? ''); setError('');
-    }, (cause: unknown) => { if (active) setError(reason(cause)); });
     return () => {
-      active = false;
       alive.current = false;
       if (targetIdRef.current) void cancelComfyInstall(targetIdRef.current).catch(() => {});
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    void getComfyInstallInfo(controller.signal).then((next) => {
+      if (!active) return;
+      setInfo(next);
+      setVariantId((previous) => next.variants.some((entry) => entry.id === previous) ? previous : next.variants[0]?.id ?? '');
+      setDetectionError(''); setDetecting(false);
+    }, (cause: unknown) => {
+      if (active) { setDetectionError(reason(cause)); setDetecting(false); }
+    });
+    return () => {
+      active = false;
+      controller.abort();
     };
   }, [reload]);
   const close = () => {
@@ -97,7 +109,7 @@ export default function ComfyInstallDialog({ onClose, onInstalled, onLaunch }: P
     try { await cancelComfyInstall(targetIdRef.current); }
     catch (cause) { if (alive.current) { setError(reason(cause)); setCancelling(false); } }
   };
-  const variant = info?.variants.find((entry) => entry.id === variantId);
+  const variant = info.variants.find((entry) => entry.id === variantId);
   const phase = progress ? t(STAGES[progress.stage]) : t('准备安装…');
   const byteProgress = progress && ['downloading', 'verifying', 'extracting'].includes(progress.stage);
 
@@ -105,17 +117,21 @@ export default function ComfyInstallDialog({ onClose, onInstalled, onLaunch }: P
     ariaLabel={t('安装官方 ComfyUI')} zIndex={280}
     className="flex max-h-[calc(100vh-32px)] w-[calc(100vw-32px)] max-w-xl flex-col bg-canvas-surface">
     <header className="ui-row ui-row--between shrink-0 border-b border-canvas-border p-3">
-      <div className="ui-row"><Icon icon="lucide:package-plus" width={18} /><h2 className="text-sm font-semibold">{t('安装官方 ComfyUI')}</h2>{info && <span className="ui-badge ui-badge--outline">{info.version}</span>}</div>
+      <div className="ui-row"><Icon icon="lucide:package-plus" width={18} /><h2 className="text-sm font-semibold">{t('安装官方 ComfyUI')}</h2><span className="ui-badge ui-badge--outline">{info.version}</span></div>
       <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" disabled={busy || selecting} aria-label={t('关闭')} onClick={close}><Icon icon="lucide:x" width={16} /></button>
     </header>
     <div className="min-h-0 flex-1 space-y-3 p-3 ui-scroll">
-      {error && <div className="ui-alert ui-alert--danger" role="alert"><p className="ui-alert__body break-words">{error}</p>{!info && <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" onClick={() => setReload((value) => value + 1)}>{t('重试')}</button>}</div>}
-      {!info && !error && <p className="ui-hint" role="status">{t('正在读取官方安装选项…')}</p>}
-      {info && !info.supported && <div className="ui-alert ui-alert--info">{t('一键安装支持 Windows x64 / ARM64。其他系统请按 ComfyUI 官方文档安装，再通过“更换”选择安装目录。')}</div>}
-      {info?.supported && !result && <>
+      {error && <div className="ui-alert ui-alert--danger" role="alert"><p className="ui-alert__body break-words">{error}</p></div>}
+      {!busy && !result && detectionError && <div className="ui-alert ui-alert--warning" role="alert">
+        <div className="ui-alert__body space-y-1"><p>{t('自动检测运行环境失败，仍可手动选择下方的运行环境和安装位置。')}</p><p className="break-words select-text">{detectionError}</p></div>
+        <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={selecting} onClick={() => { setDetectionError(''); setDetecting(true); setReload((value) => value + 1); }}>{t('重试检测')}</button>
+      </div>}
+      {!busy && !result && detecting && <p className="ui-hint" role="status">{t('正在检测本机运行环境，可先选择安装位置…')}</p>}
+      {!info.supported && <div className="ui-alert ui-alert--info">{t('一键安装支持 Windows x64 / ARM64。其他系统请按 ComfyUI 官方文档安装，再通过“更换”选择安装目录。')}</div>}
+      {info.supported && !result && <>
         <div className="ui-alert ui-alert--info"><Icon icon="lucide:info" width={16} className="ui-alert__icon" /><p className="ui-alert__body">{t('下载 GitHub 官方便携版，包含 ComfyUI、独立 Python、PyTorch 和前端依赖。不会修改系统 Python 或覆盖已有安装。')}</p></div>
         <div className="ui-field"><label className="ui-label" htmlFor="comfy-install-variant">{t('运行环境')}</label>
-          <Select id="comfy-install-variant" fixedMenu value={variantId} disabled={busy || selecting} onChange={setVariantId}
+          <Select id="comfy-install-variant" fixedMenu value={variantId} placeholder={t('请选择与电脑匹配的运行环境')} disabled={busy || selecting} onChange={setVariantId}
             options={info.variants.map((entry) => ({ value: entry.id, label: t(entry.label) }))} />
           <p className="ui-hint">{variant ? t('预计下载 {size}，解压还需要额外磁盘空间。', { size: formatSize(variant.bytes) }) : ''}</p>
         </div>
@@ -144,7 +160,7 @@ export default function ComfyInstallDialog({ onClose, onInstalled, onLaunch }: P
     <footer className="ui-row justify-end shrink-0 border-t border-canvas-border p-3">
       {busy ? <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={cancelling || progress?.stage === 'committing'} onClick={() => void cancel()}>{cancelling ? t('正在取消…') : t('取消安装')}</button>
         : result ? <><button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" onClick={close}>{t('完成')}</button><button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!!error} onClick={onLaunch}><Icon icon="lucide:play" width={14} />{t('启动 ComfyUI')}</button></>
-          : <><button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={selecting} onClick={close}>{t('取消')}</button><button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!info?.supported || !variant || !target || selecting} onClick={() => void install()}><Icon icon="lucide:download" width={14} />{t('开始安装')}</button></>}
+          : <><button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={selecting} onClick={close}>{t('取消')}</button><button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!info.supported || !variant || !target || selecting} onClick={() => void install()}><Icon icon="lucide:download" width={14} />{t('开始安装')}</button></>}
     </footer>
   </ModalOverlay>;
 }
