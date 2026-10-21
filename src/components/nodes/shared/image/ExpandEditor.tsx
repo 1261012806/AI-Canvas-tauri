@@ -316,6 +316,7 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
       className="crop-overlay expand-overlay"
     >
       <motion.div
+        data-tauri-drag-region
         className="crop-content"
         initial={{ opacity: 0, scale: 0.94 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -361,7 +362,7 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
         </div>
 
         {/* ── 中部：预览舞台 ── */}
-        <div className="crop-stage expand-stage" ref={stageRef}>
+        <div data-tauri-drag-region className="crop-stage expand-stage" ref={stageRef}>
           {display && target && activePreviewSource && (
             <div
               className="expand-frame"

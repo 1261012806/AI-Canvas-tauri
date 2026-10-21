@@ -665,10 +665,11 @@ export default function ConnectedNodesPreview({
       >
         {fullscreenPreview && (
           <div
+            data-tauri-drag-region
             className="fixed inset-0 flex flex-col items-center justify-center gap-4 px-10 py-12"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-2xl">
+            <div data-tauri-drag-region className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-2xl">
               {fullscreenPreview.outputType === 'image' && (fullscreenPreview.mediaUrl || fullscreenPreview.thumbnailUrl) ? (
                 <img
                   src={fullscreenPreview.mediaUrl || fullscreenPreview.thumbnailUrl}

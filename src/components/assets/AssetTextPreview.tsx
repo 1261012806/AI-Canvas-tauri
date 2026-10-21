@@ -156,7 +156,7 @@ export default function AssetTextPreview({ file: sourceFile, projectId, onClose,
   ];
   return <ModalOverlay isOpen onClose={requestClose} ariaLabel="文本与文件信息" className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
-    <div className="asset-image-preview-layout">
+    <div data-tauri-drag-region className="asset-image-preview-layout">
       <div className="asset-image-preview-stage flex flex-col rounded-xl border border-canvas-border bg-canvas-bg">
         {loading ? <p role="status" className="p-3 text-sm text-canvas-text-secondary">正在读取文档…</p> : snapshot ?
           <MarkdownEditor key={reload} value={draft} onChange={(value) => { if (!renameInFlight.current) { setDraft(value); setStatus(''); } }} markdown={markdown} initialMode={markdown ? 'split' : 'source'}

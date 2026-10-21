@@ -433,6 +433,7 @@ export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave,
       className="crop-overlay"
     >
       <motion.div
+        data-tauri-drag-region={scale <= 1}
         className="crop-content"
         initial={{ opacity: 0, scale: 0.94 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -525,6 +526,7 @@ export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave,
         />
       </div>
       <div
+        data-tauri-drag-region={scale <= 1}
         className={`crop-stage${mode === 'pen' ? ' pen-mode' : ''}`}
         ref={stageRef}
         onDoubleClick={handleDoubleClick}

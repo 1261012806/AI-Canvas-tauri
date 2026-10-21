@@ -753,7 +753,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
 
   return (
     <FullscreenOverlay isOpen={isOpen} onClose={handleClose} title="多图编辑" hidePanel className="composer-overlay">
-      <div className={`composer-root${sideCollapsed ? ' side-collapsed' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div data-tauri-drag-region className={`composer-root${sideCollapsed ? ' side-collapsed' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="composer-toolbar-dock">
           <ComposerToolbar
             composer={cmp}
@@ -787,7 +787,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
           </div>
         )}
 
-        <div className="composer-body">
+        <div data-tauri-drag-region className="composer-body">
           <div
             className={`composer-stage-wrap${isDragOver ? ' drag-over' : ''}${tool !== 'select' ? ' drawing' : ''}`}
             ref={stageWrapRef}

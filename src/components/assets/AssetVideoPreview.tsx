@@ -35,7 +35,7 @@ export default function AssetVideoPreview({ src, querySrc, filePath, poster, nam
   return <ModalOverlay isOpen onClose={onClose} ariaLabel="视频与生成信息" className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
     {poster && <img className="asset-image-preview-backdrop" src={poster} alt="" aria-hidden="true" />}
-    <div className="asset-image-preview-layout">
+    <div data-tauri-drag-region className="asset-image-preview-layout">
       <div className="asset-image-preview-stage">
         <VideoPlayer key={src ?? 'unavailable'} src={src} poster={poster} name={name} autoPlay unavailable={unavailable}
           onError={() => { setFailed(src ?? null); onSourceError(); }} onEscape={onClose}

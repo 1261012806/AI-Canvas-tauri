@@ -66,18 +66,23 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
     if (event.target === event.currentTarget && scale <= MIN_SCALE) onClose?.();
   }, [scale, onClose]);
 
+  const handleMouseDownOrUp = (event: React.MouseEvent) => {
+    // 原始倍率的空白交给 Tauri 拖窗口；图片、控件与放大后的平移仍留在查看器。
+    if (event.target !== event.currentTarget || scale > MIN_SCALE) event.stopPropagation();
+  };
+
   return (
     <div
       ref={containerRef}
       className="zoomable-image-container"
-      data-tauri-drag-region="false"
+      data-tauri-drag-region={scale <= MIN_SCALE ? 'true' : 'false'}
       style={{ cursor }}
       onPointerDown={(event) => {
         event.stopPropagation();
         onPointerDown(event);
       }}
-      onMouseDown={(event) => event.stopPropagation()}
-      onMouseUp={(event) => event.stopPropagation()}
+      onMouseDown={handleMouseDownOrUp}
+      onMouseUp={handleMouseDownOrUp}
       onDoubleClick={handleDoubleClick}
       onClick={handleClick}
     >

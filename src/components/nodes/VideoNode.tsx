@@ -1024,7 +1024,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         title={(data.label as string) || t('视频预览')}
         className="fullscreen-overlay--image-preview"
       >
-        <div className="flex h-full w-full items-center justify-center bg-canvas-bg">
+        <div data-tauri-drag-region className="flex h-full w-full items-center justify-center bg-canvas-bg">
           {isFullscreen && (data.videoUrl ? (
             <div className="h-[92vh] w-[92vw] min-h-0 min-w-0 rounded bg-canvas-bg">
               <VideoPlayer

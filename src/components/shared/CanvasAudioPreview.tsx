@@ -48,6 +48,7 @@ export default function CanvasAudioPreview({ nodeId, openingProjectId, initialTi
   if (!valid || !active || !session.url) return null;
   return (
     <div
+      data-tauri-drag-region
       role="dialog" aria-modal="true" aria-label={t('音频播放器')}
       className="nodrag nopan nowheel flex h-full w-full flex-col overflow-y-auto bg-canvas-bg px-5 py-14 text-canvas-text sm:px-12"
       onPointerDown={(event) => event.stopPropagation()}
@@ -55,7 +56,7 @@ export default function CanvasAudioPreview({ nodeId, openingProjectId, initialTi
       onDoubleClick={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
-      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center gap-6">
+      <div data-tauri-drag-region className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center gap-6">
         <header className="min-w-0">
           <div className="mb-3 flex items-center gap-2 text-sm text-canvas-text-muted"><Music2 size={18} />{t('音乐播放器')} · {index + 1} / {tracks.length}</div>
           <h2 className="break-words text-xl font-semibold sm:text-3xl" aria-live="polite">

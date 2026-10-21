@@ -483,7 +483,7 @@ export default function MattingEditor({
         />
       </div>
 
-      <div className="matting-stage" ref={stageRef}>
+      <div data-tauri-drag-region className="matting-stage" ref={stageRef}>
         <div
           className="matting-zoom"
           style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}

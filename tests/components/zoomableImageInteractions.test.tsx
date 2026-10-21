@@ -112,11 +112,27 @@ describe('fullscreen image zoom controls', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it.each(['onMouseDown', 'onMouseUp'] as const)('blocks %s before it can trigger native window dragging', (handler) => {
-    const root = ZoomableImage({ src: 'asset://preview.png' });
-    const parent = { props: { [handler]: vi.fn() } } as unknown as Element;
-    dispatch([children(children(root)[0])[0], root, parent], handler);
-    expect(root.props['data-tauri-drag-region']).toBe('false');
-    expect(parent.props[handler]).not.toHaveBeenCalled();
+  it.each(['onMouseDown', 'onMouseUp'] as const)('keeps image and control %s inside the viewer at every scale', (handler) => {
+    for (const scale of [1, 1.4, 8]) {
+      gesture.scale = scale;
+      const root = ZoomableImage({ src: 'asset://preview.png' });
+      const parent = { props: { [handler]: vi.fn() } } as unknown as Element;
+      const image = children(children(root)[0])[0];
+      const controls = children(root).find((element) => element.props.className === 'zoom-controls')!;
+      dispatch([image, root, parent], handler);
+      dispatch([children(controls)[0], controls, root, parent], handler);
+      expect(parent.props[handler]).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['onMouseDown', 'onMouseUp'] as const)('allows backdrop %s to reach Tauri only at the default scale', (handler) => {
+    for (const scale of [1, 1.4, 8]) {
+      gesture.scale = scale;
+      const root = ZoomableImage({ src: 'asset://preview.png' });
+      const parent = { props: { [handler]: vi.fn() } } as unknown as Element;
+      dispatch([root, parent], handler);
+      expect(root.props['data-tauri-drag-region']).toBe(scale === 1 ? 'true' : 'false');
+      expect(parent.props[handler]).toHaveBeenCalledTimes(scale === 1 ? 1 : 0);
+    }
   });
 });

@@ -73,7 +73,7 @@ export default function CustomGridEditor({
         justDraggedRef.current = false;
         return;
       }
-      if (!imgRef.current) return;
+      if (e.target === e.currentTarget || !imgRef.current) return;
       const rect = imgRef.current.getBoundingClientRect();
       if (mode === 'h') {
         const yPct = ((e.clientY - rect.top) / rect.height) * 100;
@@ -211,7 +211,7 @@ export default function CustomGridEditor({
         </div>
 
         {/* ── 画布舞台：图像 + 叠加的线 ── */}
-        <div className="customgrid-stage" onClick={handleStageClick}>
+        <div data-tauri-drag-region className="customgrid-stage" onClick={handleStageClick}>
           <div className="customgrid-image-wrap">
             <img
               ref={imgRef}

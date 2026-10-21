@@ -297,7 +297,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
   return <ModalOverlay isOpen onClose={close} ariaLabel="图片与生成信息" className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
     <img className="asset-image-preview-backdrop" src={file.assetUrl} alt="" aria-hidden="true" />
-    <div className="asset-image-preview-layout">
+    <div data-tauri-drag-region className="asset-image-preview-layout">
       <div className="asset-image-preview-stage" onLoadCapture={(event) => {
         const image = event.target as HTMLImageElement;
         if (!referencePreview && image.tagName === 'IMG' && image.naturalWidth > 0 && image.naturalHeight > 0) {

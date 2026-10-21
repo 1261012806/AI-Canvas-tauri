@@ -67,7 +67,7 @@ export default function CanvasImagePreview({ nodeId, openingProjectId, src, onCl
   return (
     <>
       {failedSrc === displaySrc ? (
-        <div className="flex h-screen flex-col items-center justify-center gap-3 text-white/70">
+        <div data-tauri-drag-region className="flex h-screen flex-col items-center justify-center gap-3 text-white/70">
           <span className="text-sm">{t('图片加载失败')}</span>
           <button
             type="button"

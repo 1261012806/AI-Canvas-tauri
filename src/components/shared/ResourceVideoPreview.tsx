@@ -106,7 +106,7 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
           : <Icon icon="lucide:film" className="resource-video-placeholder" aria-hidden="true" />}
         <span className="resource-video-play"><Icon icon="lucide:play" width="20" aria-hidden="true" /></span>
       </button>
-      {presentation === 'fullscreen' && active && <Suspense fallback={<div className="fixed inset-0 z-[360] flex items-center justify-center bg-canvas-bg text-canvas-text-muted" role="status">加载视频预览…</div>}>
+      {presentation === 'fullscreen' && active && <Suspense fallback={<div data-tauri-drag-region className="fixed inset-0 z-[360] flex items-center justify-center bg-canvas-bg text-canvas-text-muted" role="status">加载视频预览…</div>}>
         <AssetVideoPreview key={identity} src={source} querySrc={src} filePath={filePath} poster={posterSource} name={name}
           projectId={projectId} historyRecord={historyRecord} size={size} unavailable={resolved?.identity === identity}
           onClose={() => { setClosing(false); setRequested(false); onExpandedChange(false); }}
