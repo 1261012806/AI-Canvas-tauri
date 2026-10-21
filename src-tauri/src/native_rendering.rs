@@ -6,6 +6,103 @@ use std::sync::{
 };
 use tauri::{Manager, Webview};
 
+#[cfg(any(target_os = "macos", test))]
+const LIFECYCLE_LOG_FILE: &str = "webview-lifecycle.jsonl";
+#[cfg(any(target_os = "macos", test))]
+const LIFECYCLE_LOG_LIMIT: u64 = 16 * 1024;
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LifecycleEvent {
+    AppStarted,
+    PageStarted,
+    PageFinished,
+    MainWebContentTerminated,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn append_lifecycle_record(
+    directory: &std::path::Path,
+    record: &serde_json::Value,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut line = record.to_string().into_bytes();
+    line.push(b'\n');
+    if line.len() as u64 > LIFECYCLE_LOG_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "webview lifecycle record exceeds limit",
+        ));
+    }
+    std::fs::create_dir_all(directory)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join(LIFECYCLE_LOG_FILE))?;
+    // 只保留一小段近期记录；即使旧文件异常变大，也不把它读进内存。
+    if file.metadata()?.len().saturating_add(line.len() as u64) > LIFECYCLE_LOG_LIMIT {
+        file = std::fs::File::create(directory.join(LIFECYCLE_LOG_FILE))?;
+    }
+    file.write_all(&line)
+}
+
+#[cfg(target_os = "macos")]
+fn record_lifecycle(app: &tauri::AppHandle, event: LifecycleEvent) {
+    let record = serde_json::json!({
+        "event": event,
+        "timeMs": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis(),
+        "processId": std::process::id(),
+        "version": app.package_info().version.to_string(),
+        "arch": std::env::consts::ARCH,
+    });
+    let Ok(directory) = app.path().app_log_dir() else {
+        eprintln!("[webview] lifecycle log directory unavailable");
+        return;
+    };
+    let state = app.state::<NativeRenderingState>();
+    let _lock = state
+        .write_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    // 事件很少、写入最多 16 KiB；同步串行落盘，避免恢复导航先于终止记录。
+    if append_lifecycle_record(&directory, &record).is_err() {
+        eprintln!("[webview] lifecycle log write failed");
+    }
+    if matches!(event, LifecycleEvent::MainWebContentTerminated) {
+        // 保留旧诊断入口，只在真正收到终止回调时生成；写入互不依赖。
+        let result = std::fs::create_dir_all(&directory).and_then(|()| {
+            std::fs::write(
+                directory.join("last-webview-termination.json"),
+                record.to_string(),
+            )
+        });
+        if result.is_err() {
+            eprintln!("[webview] termination log write failed");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn record_app_started(app: &tauri::AppHandle) {
+    record_lifecycle(app, LifecycleEvent::AppStarted);
+}
+
+#[cfg(target_os = "macos")]
+pub fn record_main_page_load(webview: &Webview, payload: &tauri::webview::PageLoadPayload<'_>) {
+    if webview.label() != "main" {
+        return;
+    }
+    let event = match payload.event() {
+        tauri::webview::PageLoadEvent::Started => LifecycleEvent::PageStarted,
+        tauri::webview::PageLoadEvent::Finished => LifecycleEvent::PageFinished,
+    };
+    // 不记录页面地址、项目内容或点击位置。
+    record_lifecycle(webview.app_handle(), event);
+}
+
 /// WebContent 终止与整个应用退出分开记录；主窗口回到安全启动页后再由用户选择恢复。
 #[cfg(target_os = "macos")]
 pub fn recover_web_content(webview: &Webview) {
@@ -13,25 +110,10 @@ pub fn recover_web_content(webview: &Webview) {
         let _ = webview.reload();
         return;
     }
-    let app = webview.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        // 只覆盖最近一条固定诊断，不记录项目名、文件路径、页面地址或模型输入。
-        if let Ok(directory) = app.path().app_log_dir() {
-            if std::fs::create_dir_all(&directory).is_ok() {
-                let record = serde_json::json!({
-                    "event": "main_web_content_terminated",
-                    "timeMs": std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default().as_millis(),
-                    "version": app.package_info().version.to_string(),
-                    "arch": std::env::consts::ARCH,
-                });
-                let _ = std::fs::write(
-                    directory.join("last-webview-termination.json"), record.to_string(),
-                );
-            }
-        }
-    });
+    record_lifecycle(
+        webview.app_handle(),
+        LifecycleEvent::MainWebContentTerminated,
+    );
     let recovered = webview.url().and_then(|mut url| {
         let mut pairs: Vec<(String, String)> = url
             .query_pairs()
@@ -213,6 +295,77 @@ pub fn sync_native_performance_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_log_creates_early_and_bounds_complete_records() {
+        let directory = std::env::temp_dir().join(format!(
+            "ai-canvas-lifecycle-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join(LIFECYCLE_LOG_FILE);
+        let events = [
+            LifecycleEvent::AppStarted,
+            LifecycleEvent::PageStarted,
+            LifecycleEvent::PageFinished,
+            LifecycleEvent::MainWebContentTerminated,
+        ];
+        for event in events {
+            append_lifecycle_record(&directory, &serde_json::json!({ "event": event })).unwrap();
+        }
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record["event"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "app_started",
+                "page_started",
+                "page_finished",
+                "main_web_content_terminated",
+            ]
+        );
+        assert!(!directory.join("last-webview-termination.json").exists());
+
+        // 旧文件再大也只看大小，下一条记录会直接开始新的有界文件。
+        std::fs::write(&path, vec![b'x'; LIFECYCLE_LOG_LIMIT as usize + 1]).unwrap();
+        append_lifecycle_record(&directory, &serde_json::json!({ "event": "page_finished" }))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"event\":\"page_finished\"}\n"
+        );
+        let oversized = serde_json::json!({ "event": "x".repeat(LIFECYCLE_LOG_LIMIT as usize) });
+        assert!(append_lifecycle_record(&directory, &oversized).is_err());
+        for time in 0..1000 {
+            append_lifecycle_record(
+                &directory,
+                &serde_json::json!({
+                    "event": LifecycleEvent::PageFinished,
+                    "timeMs": time,
+                }),
+            )
+            .unwrap();
+        }
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.len() as u64 <= LIFECYCLE_LOG_LIMIT);
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(records.len() < 1000);
+        assert_eq!(records.last().unwrap()["timeMs"], 999);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
     #[test]
     fn normal_window_is_unchanged_and_performance_preserves_other_options() {
         let mut normal = tauri::utils::config::WindowConfig::default();
