@@ -358,7 +358,7 @@ export function buildDramaChipEl(dramaId: string, name: string, kind: string, th
   return span;
 }
 
-function resolveDramaChipPresentation(dramaId: string): { kind: string; thumb?: string; hasAsset: boolean } {
+export function resolveDramaChipPresentation(dramaId: string): { kind: string; thumb?: string; hasAsset: boolean } {
   let kind = 'character';
   let thumb: string | undefined;
   let hasAsset = false;

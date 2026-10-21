@@ -11,13 +11,17 @@ import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import SendShortcutMenu from '../shared/SendShortcutMenu';
 import ModelSelector from '../nodes/shared/ModelSelector';
 import ContextUsageIndicator from './ContextUsageIndicator';
-import ChatComposerEditor, { type ChatComposerEditorHandle } from './ChatComposerEditor';
+import ChatComposerEditor, { type ChatComposerEditorHandle, type ChatComposerReference } from './ChatComposerEditor';
 import ChatImageAttachments from './ChatImageAttachments';
 import type { ChatImageReference } from '../../types/chat';
 import { parseChatImageReferences } from '../../services/chat/chatImageReferenceService';
 import MentionPicker, { type MentionPickerItem } from '../shared/MentionPicker';
 import { resolveDramaMentionItems } from '../nodes/shared/mentionEditorSources';
-import { bestNodeThumb } from '../nodes/shared/mentionEditorDom';
+import {
+  bestNodeThumb, buildChipEl, buildDramaChipEl, buildSkillChipEl, getNodeMetaMap,
+  resolveDramaChipPresentation, syncMediaReferenceLabels,
+} from '../nodes/shared/mentionEditorDom';
+import { buildReferenceChipEl } from '../shared/referenceChipDom';
 import type { BaseNodeData, GeneralModelConfig, ModelGroup, ModelOption, PromptSubmitShortcut } from '../../types';
 import type { SkillPickerOption } from '../../types/agentPackage';
 import type { ContextUsageStat } from '../../services/chat/contextManager';
@@ -62,6 +66,26 @@ const MEDIA_KIND_ICONS: Record<string, string> = {
 
 const REFERENCE_SUGGESTION_LIST_ID = 'chat-reference-suggestions';
 const SKILL_SUGGESTION_LIST_ID = 'chat-skill-suggestions';
+
+// 主/独立助手复用节点胶囊；构造时读取当前镜像，避免画布更新重建输入 DOM、打断光标。
+const CHAT_REFERENCE_PRESENTATION = {
+  createElement: (reference: ChatComposerReference) => {
+    if (reference.kind === 'node') {
+      return buildChipEl(reference.id, reference.label, getNodeMetaMap(useAppStore.getState().nodes));
+    }
+    if (reference.kind === 'skill') return buildSkillChipEl(reference.id, reference.label);
+    if (reference.kind === 'drama') {
+      const presentation = resolveDramaChipPresentation(reference.id);
+      return buildDramaChipEl(reference.id, reference.label, presentation.kind, presentation.thumb);
+    }
+    return buildReferenceChipEl(document, {
+      label: reference.label,
+      kind: reference.kind === 'image' ? 'image' : 'text',
+      iconText: reference.kind === 'image' ? '图' : 'M',
+    });
+  },
+  synchronize: (root: HTMLDivElement) => syncMediaReferenceLabels(root, getNodeMetaMap(useAppStore.getState().nodes)),
+};
 
 interface SkillPickerGroup {
   id: string;
@@ -654,6 +678,7 @@ export default function ChatInput({
             canSubmitEmpty={imageDrafts.length > 0}
             submitShortcut={submitShortcut}
             nodeDisplayIds={nodeDisplayIds}
+            referencePresentation={CHAT_REFERENCE_PRESENTATION}
             onMentionQueryChange={(query) => {
               setModelMenuOpen(query != null);
               setActiveSuggestionIndex(0);

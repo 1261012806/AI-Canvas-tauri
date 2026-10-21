@@ -11,6 +11,7 @@ import {
 import { useT } from '../../i18n';
 import type { PromptSubmitShortcut } from '../../types';
 import { resolvePromptEnterAction } from '../../utils/promptSubmitShortcut';
+import { buildReferenceChipEl } from '../shared/referenceChipDom';
 
 export type ChatComposerReference =
   | { kind: 'node'; id: string; label: string; displayId?: number }
@@ -53,14 +54,6 @@ const ZWSP = '\u200B';
 const REFERENCE_PATTERN = /@\{([^:}\r\n]+):([^}\r\n]+)\}|@model\{([^|}\r\n]+)\|([^}\r\n]*)\}|@skill\{([^|}\r\n]+)\|([^}\r\n]*)\}|@drama\{([^:}\r\n]+):([^}\r\n]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
 const REFERENCE_TEXT_PATTERN = /@\{[^:}\r\n]+:[^}\r\n]+\}|@model\{[^|}\r\n]+\|[^}\r\n]*\}|@skill\{[^|}\r\n]+\|[^}\r\n]*\}|@drama\{[^:}\r\n]+:[^}\r\n]+\}|@image\{chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp)\|[^}\r\n]*\}/;
 
-/** 芯片配色：边框 / 底色 / 文字 / 竖条 */
-const REFERENCE_STYLES: Record<ChatComposerReference['kind'], { chip: string; accent: string }> = {
-  node: { chip: 'border-indigo-400/25 bg-indigo-400/10 text-indigo-100', accent: 'bg-indigo-300/70' },
-  model: { chip: 'border-sky-400/25 bg-sky-400/10 text-sky-100', accent: 'bg-sky-300/70' },
-  skill: { chip: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-100', accent: 'bg-emerald-300/70' },
-  drama: { chip: 'border-violet-400/25 bg-violet-400/10 text-violet-100', accent: 'bg-violet-300/70' },
-  image: { chip: 'border-canvas-border bg-canvas-hover text-canvas-text', accent: 'bg-canvas-text-secondary' },
-};
 const REFERENCE_ARIA_PREFIX: Record<ChatComposerReference['kind'], string> = {
   node: '节点',
   model: '模型',
@@ -149,7 +142,12 @@ function ensureCaretSlotBefore(referenceElement: HTMLElement): void {
 }
 
 function buildReferenceElement(reference: ParsedReference, presentation?: ChatComposerEditorProps['referencePresentation']): HTMLSpanElement {
-  const element = presentation?.createElement(reference) ?? document.createElement('span');
+  const element = presentation?.createElement(reference) ?? buildReferenceChipEl(document, {
+    label: reference.kind === 'skill' ? `/${reference.label}` : reference.label,
+    kind: reference.kind === 'image' || reference.kind === 'drama' ? 'image' : 'text',
+    badge: reference.kind === 'node' && reference.displayId != null ? `#${reference.displayId}` : undefined,
+    iconText: reference.kind === 'model' ? 'M' : reference.kind === 'skill' ? '✦' : '@',
+  });
   element.contentEditable = 'false';
   element.setAttribute('role', 'button');
   element.tabIndex = 0;
@@ -171,30 +169,9 @@ function buildReferenceElement(reference: ParsedReference, presentation?: ChatCo
     element.setAttribute('data-chat-image-file-name', reference.id);
     element.setAttribute('data-chat-image-label', reference.label);
   }
-  const style = REFERENCE_STYLES[reference.kind];
   element.setAttribute('aria-label', `${REFERENCE_ARIA_PREFIX[reference.kind]} ${reference.label}${
     reference.kind === 'node' && reference.displayId != null ? `，编号 ${reference.displayId}` : ''
   }`);
-  if (presentation) return element;
-  element.className = `mx-0.5 inline-flex max-w-[min(100%,18rem)] select-none items-center align-middle
-    rounded-[7px] border px-2 py-1 text-[12px] font-medium leading-none shadow-sm ${style.chip}`;
-
-  const accent = document.createElement('span');
-  accent.setAttribute('aria-hidden', 'true');
-  accent.className = `mr-1.5 h-3 w-0.5 shrink-0 rounded-full ${style.accent}`;
-  element.appendChild(accent);
-
-  const label = document.createElement('span');
-  label.className = 'max-w-[12rem] truncate';
-  label.textContent = reference.kind === 'skill' ? `/${reference.label}` : reference.label;
-  element.appendChild(label);
-
-  if (reference.kind === 'node' && reference.displayId != null) {
-    const displayId = document.createElement('span');
-    displayId.className = 'ml-1.5 shrink-0 border-l border-indigo-300/20 pl-1.5 text-[10px] font-semibold tabular-nums text-indigo-200/65';
-    displayId.textContent = `#${reference.displayId}`;
-    element.appendChild(displayId);
-  }
   return element;
 }
 

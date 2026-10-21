@@ -44,6 +44,7 @@
   user-select: none;
   pointer-events: auto;
   cursor: grab;
+  z-index: 1;
 }
 
 .canvas-group-title::before {
@@ -262,6 +263,13 @@
   border: 1px solid var(--theme-border);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
 }
+.canvas-group-expanded-colors {
+  width: max-content;
+  left: auto;
+  right: 0;
+  transform: none;
+  z-index: 20;
+}
 .canvas-group-swatch {
   width: 14px;
   height: 14px;
@@ -331,4 +339,7 @@
 }
 .canvas-group-folder-photo:first-child {
   margin-top: 8px;
+}
+.canvas-group-folder-photo--placeholder:first-child {
+  margin-top: 0;
 }

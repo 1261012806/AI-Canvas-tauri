@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../../src/types';
-import { getGroupChildImageKey } from '../../src/utils/groupChildImageKey';
+import { getGroupChildImageKey, type GroupCoverItem } from '../../src/utils/groupChildImageKey';
 
 function node(id: string, parentId?: string, imageUrl?: string, thumbnailUrl?: string): Node<BaseNodeData> {
   return { id, parentId, position: { x: 0, y: 0 }, data: { label: id, type: 'ai-image', imageUrl, thumbnailUrl } };
+}
+
+function covers(nodes: readonly Node<BaseNodeData>[], groupId: string): GroupCoverItem[] {
+  const key = getGroupChildImageKey(nodes, groupId);
+  return key ? JSON.parse(key) : [];
 }
 
 describe('分组封面共享索引', () => {
@@ -12,36 +17,57 @@ describe('分组封面共享索引', () => {
     const nodes = [node('a', 'g', 'full-a', 'thumb-a'), node('b', 'other', 'other'),
       node('c', 'g', 'full-c', ''), node('d', 'g'), node('e', 'g', 'full-c'),
       node('f', 'nested', 'grandchild'), node('outside', undefined, 'outside')];
-    expect(getGroupChildImageKey(nodes, 'g')).toBe('thumb-a|full-c|full-c');
+    expect(covers(nodes, 'g')).toEqual([
+      { id: 'a', kind: 'image', url: 'thumb-a' },
+      { id: 'c', kind: 'image', url: 'full-c' },
+      { id: 'e', kind: 'image', url: 'full-c' },
+    ]);
     expect(getGroupChildImageKey(nodes, 'missing')).toBe('');
     expect(getGroupChildImageKey([], 'g')).toBe('');
+  });
+
+  it('视频始终使用图标候选，不把缩略图或视频地址当成图片，无缩略图也保留', () => {
+    const video = node('video', 'g', 'stale-image', 'video.mp4');
+    video.type = 'ai-video';
+    video.data.type = 'ai-video';
+    video.data.videoUrl = 'video.mp4';
+    const sourceVideo = node('source-video', 'g');
+    sourceVideo.data.type = 'source-video';
+    sourceVideo.data.videoUrl = 'source.mp4';
+    expect(covers([node('image', 'g', 'image.png'), video, sourceVideo], 'g')).toEqual([
+      { id: 'image', kind: 'image', url: 'image.png' },
+      { id: 'video', kind: 'video' },
+      { id: 'source-video', kind: 'video' },
+    ]);
   });
 
   it('多个分组及无关状态更新复用同一轮扫描', () => {
     const nodes = [node('a', 'g1', 'one'), node('b', 'g2', 'two')];
     const iterate = vi.spyOn(nodes, Symbol.iterator);
     for (let i = 0; i < 40; i++) {
-      expect(getGroupChildImageKey(nodes, 'g1')).toBe('one');
-      expect(getGroupChildImageKey(nodes, 'g2')).toBe('two');
+      expect(covers(nodes, 'g1')).toEqual([{ id: 'a', kind: 'image', url: 'one' }]);
+      expect(covers(nodes, 'g2')).toEqual([{ id: 'b', kind: 'image', url: 'two' }]);
     }
     expect(iterate).toHaveBeenCalledOnce();
   });
 
   it('节点数组变化后更新图片、归组与删除，切换项目不保留旧封面', () => {
     const original = [node('a', 'g1', 'one'), node('b', 'g2', 'two')];
-    expect(getGroupChildImageKey(original, 'g1')).toBe('one');
+    expect(covers(original, 'g1')).toEqual([{ id: 'a', kind: 'image', url: 'one' }]);
     const updated = [node('a', 'g2', 'new', 'new-thumb')];
     expect(getGroupChildImageKey(updated, 'g1')).toBe('');
-    expect(getGroupChildImageKey(updated, 'g2')).toBe('new-thumb');
-    expect(getGroupChildImageKey([node('new-project', 'g1', 'project-image')], 'g1')).toBe('project-image');
-    expect(getGroupChildImageKey(original, 'g2')).toBe('two');
+    expect(covers(updated, 'g2')).toEqual([{ id: 'a', kind: 'image', url: 'new-thumb' }]);
+    expect(covers([node('new-project', 'g1', 'project-image')], 'g1')).toEqual([
+      { id: 'new-project', kind: 'image', url: 'project-image' },
+    ]);
+    expect(covers(original, 'g2')).toEqual([{ id: 'b', kind: 'image', url: 'two' }]);
   });
 
   it('只读取完整 Store 节点，不修改节点数据或生成持久化缓存', () => {
     const source = node('a', 'g', 'full', 'thumb');
     Object.freeze(source.data); Object.freeze(source);
     const nodes = Object.freeze([source]);
-    expect(getGroupChildImageKey(nodes, 'g')).toBe('thumb');
+    expect(covers(nodes, 'g')).toEqual([{ id: 'a', kind: 'image', url: 'thumb' }]);
     expect(source.data).toEqual({ label: 'a', type: 'ai-image', imageUrl: 'full', thumbnailUrl: 'thumb' });
   });
 });
