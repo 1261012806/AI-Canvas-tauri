@@ -47,7 +47,10 @@ export function prepareShotlistProduction(scope: ShotlistScope, nodeId: string, 
       data.prompt = row.dialogue!.trim();
       data.audioPurpose = 'speech';
     } else if (kind === 'video') {
-      data.prompt = buildShotFramePrompt(row);
+      data.prompt = [buildShotFramePrompt(row),
+        row.dialogue?.trim() ? `对白：${row.dialogue.trim()}` : '',
+        row.audio?.trim() ? `音效/音乐：${row.audio.trim()}` : '',
+      ].filter(Boolean).join('\n');
       data.seedanceDuration = resolveShotVideoDuration(row.duration);
       data.shotlistProductionSource = { nodeId, rowId: row.id, kind, durationSync: 'auto' };
       const frame = state.nodes.find((item) => item.id === row.frame?.nodeId
@@ -69,9 +72,8 @@ export function prepareShotlistProduction(scope: ShotlistScope, nodeId: string, 
       data.directorStatus = 'idle';
     }
     nodes.push({ id: targetId, type: data.type, parentId: sheet.parentId, position: { ...position }, data });
-    // 导演台读取分镜要求；视频、配音仍作为制作成果回连。
+    // 视频和配音通过镜头来源关联成果，不作为分镜表的上游输入。
     if (kind === 'director') connect(nodeId, targetId);
-    else connect(targetId, nodeId);
     return { rowId: row.id, nodeId: targetId, status: 'created' as const };
   });
   if (nodes.length) {

@@ -153,7 +153,7 @@ interface FrameSourceNodeLike {
   data: Record<string, unknown>;
 }
 
-/** 一个可选画面：连到这张表、且已经出图/出片的节点 */
+/** 一个可选画面：本表的输入素材或由本表派生的视频；未完成时显示占位。 */
 export interface ShotFrameCandidate {
   nodeId: string;
   label: string;
@@ -171,7 +171,7 @@ export function readShotFrameSource(node: FrameSourceNodeLike): { kind: 'image' 
 }
 
 /**
- * 连线进这张表的图像/视频节点，供画面格直接挑选。
+ * 本表的输入素材和按镜头来源关联的视频，供画面格直接挑选。
  * 还没出图的节点也列出来（url 为空显示占位），否则用户会以为连线没生效。
  */
 export function collectShotFrameCandidates(
@@ -181,7 +181,11 @@ export function collectShotFrameCandidates(
 ): ShotFrameCandidate[] {
   const sourceIds = new Set(edges.filter((edge) => edge.target === shotlistId).map((edge) => edge.source));
   return nodes
-    .filter((node) => sourceIds.has(node.id) && SHOTLIST_FRAME_SOURCE_TYPES.includes(node.type ?? ''))
+    .filter((node) => {
+      const production = node.data.shotlistProductionSource as ShotlistProductionSource | undefined;
+      return SHOTLIST_FRAME_SOURCE_TYPES.includes(node.type ?? '')
+        && (sourceIds.has(node.id) || (production?.kind === 'video' && production.nodeId === shotlistId));
+    })
     .map((node) => ({
       nodeId: node.id,
       label: (node.data.label as string) || (node.data.fileName as string) || node.id,

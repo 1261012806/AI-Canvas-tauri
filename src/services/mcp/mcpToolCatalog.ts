@@ -22,7 +22,7 @@ export const MCP_CATALOG_MAX_BYTES = 64 * 1024;
 const MAX_SEARCH_RESULTS = 8;
 const MAX_DESCRIBE_TOOLS = 3;
 
-const MCP_CONNECTION_RULES = `素材引用优先级：先查 drama_asset_list/get，已入库的角色、场景、道具优先使用返回的 @drama 引用（多图用精确参考图 mention），无需创建节点或连线。imageReady=false 时先生成并用 drama_reference_image_add 绑定；新建资产参考图可在 canvas_create_nodes 传 dramaAssetId。只有未入库素材或真实节点依赖才引用节点。画布连线规则：sourceId（提供内容）→ targetId（消费内容），右出左入（sourceHandle=right、targetHandle=left）。${AGENT_NODE_LAYOUT_GUIDANCE}分镜表 → 导演台，镜头说明 → 导演台，不要把导演台反接回分镜表。创建或制作工具可能自动连线，prompt 中的 @ 节点引用也会在创建时自动连线，不要重复连接。操作前后用 canvas_query(detail=true) 核对实际方向、端口与 layout.warning，发现异常先修正再继续。`;
+const MCP_CONNECTION_RULES = `素材引用优先级：先查 drama_asset_list/get，已入库的角色、场景、道具优先使用返回的 @drama 引用（多图用精确参考图 mention），无需创建节点或连线。imageReady=false 时先生成并用 drama_reference_image_add 绑定；新建资产参考图可在 canvas_create_nodes 传 dramaAssetId。只有未入库素材或真实节点依赖才引用节点。画布连线规则：sourceId（提供内容）→ targetId（消费内容），右出左入（sourceHandle=right、targetHandle=left）。${AGENT_NODE_LAYOUT_GUIDANCE}分镜表 → 导演台，镜头说明 → 导演台，不要把导演台反接回分镜表。分镜表按行准备视频和配音，通过镜头来源关联成果，不把制作节点反接回所属分镜表输入，也不把整表作为每个视频的普通输入。创建或制作工具可能自动连线，prompt 中的 @ 节点引用也会在创建时自动连线，不要重复连接。操作前后用 canvas_query(detail=true) 核对实际方向、端口与 layout.warning，发现异常先修正再继续。`;
 
 // 只补类别词汇；具体工具的名称、说明和 schema 全部来自注册中心。
 const categories: Record<string, { title: string; keywords: string }> = {

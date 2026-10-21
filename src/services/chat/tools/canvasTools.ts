@@ -1498,7 +1498,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '兼容旧参数 sourceId；sourceId 与 sourceIds 必须且只能提供一种。方向固定为输出节点 → 接收节点。',
         `端口固定为右出左入（sourceHandle=right、targetHandle=left），不会自动移动节点。连接前先用 canvas_query(detail=true) 检查位置：上游放左、下游放右，目标左边界应在源节点右边界之后并预留至少 ${AGENT_NODE_LAYOUT.columnGap} 画布单位；保持紧凑，不要把正常间距拉大。连接后检查返回的 layout.warning，确需调整时用 canvas_update_nodes。`,
         '连线会把上游节点的输出作为下游生成节点的参考输入，所以 targetId 必须是生成器节点：',
-        'source-* 与 comment 只能作为输出节点。导演台不能反接回它所属的分镜表；批量连接只支持可见的普通节点，不含分组、笔记和插件节点。',
+        'source-* 与 comment 只能作为输出节点。镜头制作节点不能反接回它所属的分镜表，成果通过镜头来源关联；批量连接只支持可见的普通节点，不含分组、笔记和插件节点。',
         '返回 connections 中每条线的实际端口、是否已连接和布局提醒，以及 createdCount、skippedCount；单源同时保留旧的 sourceId、layout 返回字段。',
       ].join(''),
       inputSchema: {
@@ -1542,10 +1542,9 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const message = `目标节点「${targetNode.data.label}」是素材节点，只能作为输出节点；请核对输出节点列表与接收节点是否写反`;
           return { status: 'error', summary: message, modelContent: message };
         }
-        if (targetNode.data.type === 'ai-shotlist' && sources.some((node) => node!.data.type === 'ai-director'
-          && node!.data.shotlistProductionSource?.kind === 'director'
-          && node!.data.shotlistProductionSource.nodeId === input.targetId)) {
-          const message = '导演台不能反接回它所属的分镜表，请使用分镜表 → 导演台';
+        if (targetNode.data.type === 'ai-shotlist' && sources.some((node) =>
+          node!.data.shotlistProductionSource?.nodeId === input.targetId)) {
+          const message = '镜头制作节点不能反接回它所属的分镜表，视频与配音成果通过镜头来源关联；导演台使用分镜表 → 导演台';
           return { status: 'error', summary: message, modelContent: message };
         }
         if (sourceIds.length > 1 && [...sources, targetNode].some((node) => !isBatchConnectableNode(node!)

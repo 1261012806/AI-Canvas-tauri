@@ -127,6 +127,17 @@ describe('画面格的候选与生成提示词', () => {
       .toBe('t.png');
   });
 
+  it('本表派生的视频无需反接即可选用，不混入其他表的成果，也不重复收录', () => {
+    const produced = (id: string, nodeId: string) => ({ id, type: 'ai-video', data: {
+      label: id, videoUrl: `${id}.mp4`, shotlistProductionSource: { nodeId, rowId: 'row', kind: 'video' },
+    } });
+    const candidates = collectShotFrameCandidates([
+      produced('own', 'table'), produced('linked', 'table'), produced('other', 'another-table'),
+    ], [{ source: 'linked', target: 'table' }], 'table');
+    expect(candidates.map((item) => item.nodeId)).toEqual(['own', 'linked']);
+    expect(candidates[0]).toMatchObject({ kind: 'video', url: 'own.mp4' });
+  });
+
   it('生成提示词用景别、运镜修饰内容，空字段不留空档', () => {
     expect(buildShotFramePrompt(row({ shotSize: '特写', camera: '', content: '手铐扣紧' })))
       .toBe('特写，手铐扣紧');

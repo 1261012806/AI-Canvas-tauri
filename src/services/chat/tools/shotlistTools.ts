@@ -57,7 +57,7 @@ export function registerShotlistAgentTools(): Array<() => void> {
     }),
     registerAgentTool<{ nodeId: string; rowIds: string[]; kind: ShotlistProductionKind }>({
       id: 'shotlist_prepare_production', title: '准备镜头制作节点', effect: 'canvas_write',
-      description: '为指定镜头创建 voiceover 配音、video 视频或 director 导演台节点，不调用模型、不启动程序。配音只放对白并标记语音用途，视频继承画面引用和向上取整的分镜时长，并自动跟随之后的分镜时长修改；单独修改视频时长后保留手动值。导演台附带可读镜头说明。每镜同类已有节点则复用且不覆盖人工修改。返回真实节点 ID；之后仍须按生成规则选择模型和音色。',
+      description: '为指定镜头创建 voiceover 配音、video 视频或 director 导演台节点，不调用模型、不启动程序。配音只放对白并标记语音用途；视频继承本镜画面描述、对白、音效/音乐、画面引用和向上取整的分镜时长，并自动跟随之后的分镜时长修改；单独修改视频时长后保留手动值。视频与配音通过镜头来源关联成果，不反接回分镜表输入。导演台附带可读镜头说明。每镜同类已有节点则复用且不覆盖人工修改。返回真实节点 ID；之后仍须按生成规则选择模型和音色。',
       inputSchema: { type: 'object', required: ['nodeId', 'rowIds', 'kind'], additionalProperties: false, properties: {
         nodeId: idSchema, rowIds: { type: 'array', minItems: 1, maxItems: MAX_SHOTLIST_PRODUCTION_BATCH, items: idSchema },
         kind: { type: 'string', enum: ['voiceover', 'video', 'director'] },

@@ -54,6 +54,7 @@ describe('MCP tool catalog', () => {
       expect(descriptor.description).toContain('水平间距通常为 48–64');
       expect(descriptor.description).toContain('常规新建省略 x/y');
       expect(descriptor.description).toContain('分镜表 → 导演台');
+      expect(descriptor.description).toContain('通过镜头来源关联成果');
       expect(descriptor.description).toContain('不要重复连接');
       expect(descriptor.description).toContain('canvas_query(detail=true)');
       expect(descriptor.description).toContain('layout.warning');
@@ -76,6 +77,7 @@ describe('MCP tool catalog', () => {
       expect(serialized.startsWith('{"hint":"素材引用优先级：')).toBe(true);
       const decoded = JSON.parse(serialized);
       expect(decoded.hint).toContain('不要把导演台反接回分镜表');
+      expect(decoded.hint).toContain('不把制作节点反接回所属分镜表输入');
       expect(decoded.tools).toEqual(result.tools);
       if (result.hint) expect(decoded.hint.endsWith(result.hint)).toBe(true);
       expect(result.hint?.startsWith('素材引用优先级：')).not.toBe(true);

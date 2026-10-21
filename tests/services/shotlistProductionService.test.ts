@@ -12,8 +12,8 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({ currentProjectId: 'ep', projectLoadStatus: 'ready', showToast: vi.fn(),
     projects: [{ id: 'ep', name: '集', createdAt: 1, updatedAt: 1, settings: { defaultModels: { audio: 'general/tts', video: 'general/video' } } }],
-    nodes: [{ id: 'sheet', type: 'ai-shotlist', position: { x: 0, y: 0 }, data: { type: 'ai-shotlist', label: '镜头', shotlistRows: [
-      { id: 'r1', shotNo: '1', content: '林夏站在月台', dialogue: '终于等到你了', camera: '推近', duration: 4,
+    nodes: [{ id: 'sheet', type: 'ai-shotlist', position: { x: 0, y: 0 }, data: { type: 'ai-shotlist', label: '镜头', prompt: '保留剧本引用', shotlistRows: [
+      { id: 'r1', shotNo: '1', content: '林夏站在月台', dialogue: '终于等到你了', audio: '列车进站声', camera: '推近', duration: 4,
         frame: { nodeId: 'frame', kind: 'image', url: 'PRIVATE_URL', filePath: 'PRIVATE_PATH' } },
       { id: 'r2', shotNo: '2', content: '列车驶入' },
     ] } }, { id: 'frame', type: 'source-image', position: { x: -300, y: 0 }, data: { type: 'source-image', label: '参考画面', imageUrl: 'PRIVATE_URL' } }],
@@ -80,6 +80,8 @@ describe('镜头制作准备', () => {
     expect(node.data).toMatchObject({ type: 'ai-audio', status: 'idle', prompt: '终于等到你了', audioPurpose: 'speech', model: 'general/tts',
       shotlistProductionSource: { nodeId: 'sheet', rowId: 'r1', kind: 'voiceover' } });
     expect(commit).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().edges).not.toContainEqual(expect.objectContaining({ source: node.id, target: 'sheet' }));
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'sheet')!.data.prompt).toBe('保留剧本引用');
     useAppStore.getState().updateNodeDataTransient(node.id, { prompt: '人工对白' });
     expect(prepareShotlistProduction(scope(), 'sheet', ['r1'], 'voiceover')[0]).toMatchObject({ nodeId: node.id, status: 'reused' });
     expect(useAppStore.getState().nodes.find((item) => item.id === node.id)!.data.prompt).toBe('人工对白');
@@ -91,9 +93,13 @@ describe('镜头制作准备', () => {
     const state = useAppStore.getState();
     const node = state.nodes.find((item) => item.id === result.nodeId)!;
     expect(node.data.prompt).toContain('推近，林夏站在月台');
+    expect(node.data.prompt).toContain('对白：终于等到你了');
+    expect(node.data.prompt).toContain('音效/音乐：列车进站声');
     expect(node.data.prompt).toContain('@{frame:参考画面}');
     expect(node.data.prompt).not.toContain('PRIVATE_');
     expect(state.edges).toContainEqual(expect.objectContaining({ source: 'frame', target: node.id }));
+    expect(state.edges).not.toContainEqual(expect.objectContaining({ source: node.id, target: 'sheet' }));
+    expect(state.nodes.find((item) => item.id === 'sheet')!.data.prompt).toBe('保留剧本引用');
     expect(node.data.model).toBe('general/video');
   });
 

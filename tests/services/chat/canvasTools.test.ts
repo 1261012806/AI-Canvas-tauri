@@ -1040,17 +1040,22 @@ describe('canvas agent tools', () => {
     expect(useAppStore.getState().getCurrentRevision()).toBe(revision);
   });
 
-  it.each(['sourceId', 'sourceIds'] as const)('rejects a director feeding its own shotlist through %s', async (field) => {
+  it.each([
+    ['director', 'ai-director', 'sourceId'], ['director', 'ai-director', 'sourceIds'],
+    ['video', 'ai-video', 'sourceId'], ['video', 'ai-video', 'sourceIds'],
+    ['voiceover', 'ai-audio', 'sourceId'], ['voiceover', 'ai-audio', 'sourceIds'],
+  ] as const)('rejects %s production (%s) feeding its own shotlist through %s', async (kind, type, field) => {
     useAppStore.setState({ nodes: [
       node('sheet', { type: 'ai-shotlist' }),
-      node('director', { type: 'ai-director', shotlistProductionSource: { nodeId: 'sheet', rowId: 'row', kind: 'director' } }),
+      node('production', { type, shotlistProductionSource: { nodeId: 'sheet', rowId: 'row', kind } }),
       node('other'),
     ], edges: [] });
     const result = await getAgentTool('canvas_connect_nodes')!.execute(context(), {
-      ...(field === 'sourceId' ? { sourceId: 'director' } : { sourceIds: ['other', 'director'] }), targetId: 'sheet',
+      ...(field === 'sourceId' ? { sourceId: 'production' } : { sourceIds: ['other', 'production'] }), targetId: 'sheet',
     });
     expect(result.status).toBe('error');
     expect(result.summary).toContain('分镜表 → 导演台');
+    expect(result.summary).toContain('视频与配音成果通过镜头来源关联');
     expect(useAppStore.getState().edges).toEqual([]);
     expect(useAppStore.getState().history).toEqual([]);
   });
