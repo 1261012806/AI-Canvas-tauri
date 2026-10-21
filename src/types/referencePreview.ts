@@ -8,6 +8,19 @@ export interface ReferencePreviewSource {
   ownerNodeId?: string;
 }
 
+/** 引用胶囊的即时悬浮信息；节点、单镜和资产库共用同一展示字段。 */
+export interface MentionChipPreview {
+  label: string;
+  displayId?: number;
+  outputType: 'image' | 'video' | 'audio' | 'text';
+  thumbnailUrl?: string;
+  thumbnailUrls?: string[];
+  sprite?: { backgroundSize: string; backgroundPosition: string };
+  text: string;
+  missing: boolean;
+  description?: string;
+}
+
 /** 各类引用与资源库共用大屏展示，内容由当前窗口按真实引用读取。 */
 export interface ReferencePreviewContent {
   kind: 'text' | 'markdown' | 'image' | 'video' | 'audio';

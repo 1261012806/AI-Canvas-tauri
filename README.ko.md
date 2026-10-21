@@ -10,9 +10,9 @@
 
 AI Canvas Tauri는 텍스트, 이미지, 비디오, 오디오, 프레임 단위 애니메이션, Markdown, 샷 리스트, 360° 파노라마, 손글씨 노트를 연결 가능한 캔버스 노드로 구성합니다. 하나의 프로젝트 안에서 생성 파이프라인을 구성하고, 캐릭터 라이브러리와 로컬 에셋을 관리하고, ComfyUI 워크플로를 실행하고, 대화형 어시스턴트로 캔버스를 조회·수정하고, 미디어를 생성하고, 읽기 전용 하위 에이전트를 파견하고, 허가된 파일을 읽고, 프로젝트 메모리를 축적할 수 있습니다. 프로젝트는 시리즈와 에피소드로 나눌 수 있으며, 숏폼 드라마의 각 회차는 하나의 캔버스를 갖고 캐릭터 라이브러리와 에셋은 시리즈 전체에서 공유합니다.
 
-**v0.10.12:** 대규모 캔버스 저장과 간결한 노드 배치를 개선했습니다. 캔버스 밖의 일반 대화와 외부 MCP 연결을 지원하고, ComfyUI 진행 상태, 영상 대기 표시와 macOS 이미지 확대를 개선했습니다.
+**v0.10.13:** 참조 캡슐을 두 번 클릭해 전체 화면으로 보고 샷 단위로 참조할 수 있습니다. 영상 재현의 캐릭터 참조와 작업 복원, 에셋 로딩, 그룹 조작 및 ComfyUI 설치 화면을 개선했습니다.
 
-![Version](https://img.shields.io/badge/version-0.10.12-6366f1)
+![Version](https://img.shields.io/badge/version-0.10.13-6366f1)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![React Flow](https://img.shields.io/badge/React_Flow-12-ff0072)

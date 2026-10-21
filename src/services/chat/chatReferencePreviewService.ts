@@ -21,7 +21,7 @@ let cancelClientRequest: (() => void) | null = null;
 
 function abortError(): DOMException { return new DOMException('引用内容读取已取消', 'AbortError'); }
 
-function supportedSource(source: ReferencePreviewSource | undefined): source is ReferencePreviewSource {
+function supportedSource(source: ReferencePreviewSource | undefined): boolean {
   return !!source && ['node', 'drama', 'model', 'skill', 'chat-image'].includes(source.kind)
     && typeof source.id === 'string' && source.id.length > 0 && source.id.length <= 4096
     && typeof source.label === 'string' && source.label.length <= 4096;

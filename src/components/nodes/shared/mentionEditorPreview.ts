@@ -8,18 +8,15 @@ import {
   resolveDramaAssetImageRef,
   resolveDramaVoiceRef,
 } from '../../../services/dramaAssetPrompt';
-import type { resolveMentionPreview } from './connectedNodesPreviewInteractions';
+import type { MentionChipPreview } from '../../../types/referencePreview';
+
+export type { MentionChipPreview } from '../../../types/referencePreview';
 
 export interface MentionPreviewSource {
   kind: 'node' | 'drama' | 'asset';
   id: string;
   label: string;
 }
-
-export type MentionChipPreview = ReturnType<typeof resolveMentionPreview> & {
-  description?: string;
-  thumbnailUrls?: string[];
-};
 
 /** 读取胶囊自己的引用身份，库资产不冒充画布节点。 */
 export function readMentionPreviewSource(element: Pick<HTMLElement, 'getAttribute'>): MentionPreviewSource | null {

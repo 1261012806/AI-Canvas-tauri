@@ -1,4 +1,5 @@
 import type { BaseNodeData } from '../../../types';
+import type { MentionChipPreview } from '../../../types/referencePreview';
 import { cellBackgroundStyle, gridBoundaries } from '../../../utils/storyboardGrid';
 import { formatShotVideoPrompt, parseShotlistRowMentionId } from '../../../types/shotlist';
 
@@ -64,7 +65,7 @@ export function resolveMentionPreview(
   id: string,
   fallbackLabel: string,
   thumbnailUrl?: string,
-) {
+): MentionChipPreview {
   const shot = parseShotlistRowMentionId(id);
   if (shot) {
     const sheet = nodes.find((item) => item.id === shot.nodeId && item.data.type === 'ai-shotlist');

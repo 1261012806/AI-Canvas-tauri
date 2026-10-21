@@ -104,11 +104,14 @@ describe('独立窗口按需引用预览桥接', () => {
     for (const kind of ['asset', 'workflow'] as const) {
       handleDetachedChatAction({ type: 'preview_reference', requestId: `unsupported-${kind}`, projectId: 'project',
         source: { kind, id: 'not-a-chat-reference', label: '不支持' } }, vi.fn());
+      await vi.waitFor(() => expect(results().some((frame) => (frame.payload as ChatReferencePreviewResponse).requestId === `unsupported-${kind}`)).toBe(true));
     }
     handleDetachedChatAction({ type: 'preview_reference', requestId: 'wrong-project', projectId: 'other', source: image }, vi.fn());
+    await vi.waitFor(() => expect(results()).toHaveLength(3));
     useAppStore.setState({ chatPanelDetached: false });
     handleDetachedChatAction({ type: 'preview_reference', requestId: 'closed-window', projectId: 'project', source: image }, vi.fn());
-    await vi.waitFor(() => expect(results()).toHaveLength(4));
+    await vi.waitFor(() => expect(results().map((frame) => (frame.payload as ChatReferencePreviewResponse).requestId))
+      .toEqual(['unsupported-asset', 'unsupported-workflow', 'wrong-project', 'closed-window']));
     for (const frame of results()) expect((frame.payload as ChatReferencePreviewResponse).content.unavailable).toBeTruthy();
     expect(readChatImageReference).not.toHaveBeenCalled();
   });

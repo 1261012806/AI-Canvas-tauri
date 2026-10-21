@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="AI Canvas 0.10.12 操作说明书：多连线画布性能、小地图点击定位、ComfyUI 模型去重与运行控制台、节点快捷指令与引用搜索，AI 应用节点的创建、使用、状态保存与 MCP 动作，自定义接口 JSON 编辑、视频预设、图片批量反推，附首次生成、资源整理、工作流及逐镜制作教程。">
-<title>AI Canvas 0.10.12 · 操作说明书</title>
+<meta name="description" content="AI Canvas 0.10.13 操作说明书：引用胶囊双击全屏预览、稳定镜头引用、视频复刻参考图与任务恢复、资源增量加载及 ComfyUI 安装，附首次生成、素材整理、工作流、逐镜制作与 MCP 控制步骤。">
+<title>AI Canvas 0.10.13 · 操作说明书</title>
 <style>
 /* Standalone document: a small copy of the application's base.css color tokens. */
 :root{color-scheme:dark;--theme-bg:#0a0a0f;--theme-surface:#14141c;--theme-card:#1a1a26;--theme-border:#2a2a3a;--theme-hover:#252535;--theme-text:#dddde4;--theme-text-secondary:#8888a0;--brand:#6366f1;--brand-light:#818cf8;--brand-pale:#a5b4fc;--node-markdown:#a855f7;--success:#22c55e;--success-bg:rgba(16,185,129,.15);--warning:#f97316;--warning-bg:rgba(249,115,22,.15);--danger:#ef4444;--white:#fff;--black-alpha-30:rgba(0,0,0,.3)}
@@ -34,7 +34,7 @@ dialog .character-actions-shot{width:1912px}
 <body>
 <a class="skip" href="#main">跳到正文</a>
 <nav class="toc" aria-label="说明书目录">
-<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.12 · 操作说明书<br>从素材整理到逐镜制作</small>
+<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.13 · 操作说明书<br>从素材整理到逐镜制作</small>
 <a class="back" href="index.html">← 返回软件首页</a>
 <label for="search">查找章节或操作</label><input id="search" type="search" placeholder="如：文件夹、回收站、视频批次" autocomplete="off" aria-describedby="search-status" aria-controls="search-results toc-links">
 <p id="search-status" class="search-status" role="status">支持空格分隔关键词；Ctrl + F 查找全文。</p>
@@ -54,9 +54,10 @@ dialog .character-actions-shot{width:1912px}
 <div class="eyebrow">AI CANVAS · USER MANUAL</div>
 <h1>AI Canvas 操作说明书<br>从首次生成到完整创作</h1>
 <p>从启动页选择项目，在资源库整理素材，再用无限画布连接文本、图像、视频与音频。按步骤完成首次出图、剧本分集、逐镜生成和剪辑；需要接入自己的服务时，查阅接口与工作流示例。</p>
-<span class="badge">0.10.12 说明书</span><span class="badge">2026-10-20 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
+<span class="badge">0.10.13 说明书</span><span class="badge">2026-10-21 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
 </header>
 <div class="actions"><button class="action" id="print" type="button">打印 / 保存为 PDF</button><button class="action" id="theme" type="button" aria-pressed="false">切换深色阅读</button><a class="action" href="#project-settings">先看项目设置 →</a><a class="action" href="#connection">直接看自定义接口 →</a></div>
+<aside class="tip"><b>0.10.13 新增：</b>引用胶囊可<a href="#reference-fullscreen">双击全屏查看完整内容</a>；<a href="#shotlist-production">视频节点按稳定镜头引用读取分镜</a>，生成时融合本镜对白、景别、运镜与时长。<a href="#video-replica">视频复刻</a>同时分析用户参考图和原片关键帧联系表，按指定角色改写镜头描述，关闭插件窗口后重开可恢复界面和进度。视频复刻插件 <b>0.2.1</b> 要求 AI Canvas <b>0.10.13 或更高版本</b>，请先升级应用，再升级插件。</aside>
 <aside class="tip"><b>0.10.12 新增：</b>改善 macOS 媒体与滚轮稳定性；可调整<a href="#appearance-layout">画布布局和玻璃材质</a>、<a href="#assistant-images">上传助手参考图</a>、<a href="#skill-archives">导入 Skill 压缩包</a>，并在<a href="#episode-naming">创建分集时命名</a>。首次进入画布可跟随<a href="#canvas-entry-guide">入口引导</a>查看项目设置、分集与保存位置。<b>0.10.10 新增：</b>新增 <a href="#provider-sites">ToAPIs 与 RunningHub 站点切换</a>；ToAPIs 两站共用 Key，RunningHub 两站分别填写。Windows 可<a href="#comfy-install">安装官方 ComfyUI 便携版</a>；公开 GitHub 下载超时会尝试一次国内加速。视频超时或未能保存时，按<a href="#video-recovery">暂停与重试步骤</a>续取原任务。自定义连接还可使用<a href="#image-quick-templates">图片快速模板</a>及<a href="#connection-transfer">JSON 文件导入导出</a>。<b>0.10.9 重要优化：</b>多连线画布采用视口范围绘制，减少缩放与拖拽时的卡顿和闪烁。右下角连线按钮支持直角、曲线、隐藏切换；小地图支持点击定位并保持倍率。修复剧集整体归档遗漏分集画布和 macOS 最大化遮挡。<b>0.10.8 源码补充：</b>ComfyUI 管理页增加模型内容去重、链接替换与恢复历史、运行控制台和管理信息缓存；重复模型处理需先停止服务并由用户确认。图片、视频、文本与音频工具栏统一快捷指令管理入口，提示词框提供对应类型的 / 菜单。引用标签与搜索、模型菜单、图片/SVG 外观背景和下载进度沿用共用界面；视频模型配置错误提示及桌面文件行为同步修复。<b>0.10.7 源码补充：</b>视频查询超时后可继续查询同一个远端任务，重启后保留恢复记录；图片/视频新建节点继承同模型参数，项目输出默认值优先，切换模型后重置。历史图片可以应用并撤销；快捷指令支持文件夹。节点与助手统一输入布局和发送快捷键，发送按钮右键可调整；MCP 在启动页也能查询、打开和切换项目。自定义接口表单与 JSON 使用一致变量布局，原接口文档导入界面已移除，改用手动接口配置。<b>0.10.6 补充：</b>性能模式收紧闲置媒体缓存并渐进恢复画布媒体，独立资源搜索与助手窗口同步开关；保留 Windows 现有抗闪烁配置。生成文件使用普通名称，同名顺延序号。修复独立助手窗口打开，提示词编辑使用独立临时撤销历史，优化输入栏布局与参数状态。<b>0.10.5 补充：</b>助手按当前上下文预算分页读取 Skill，支持参考资料关键词检索。模型接口返回的推理内容单独折叠展示；它是当前会话的临时参考信息，不进入续聊摘要。回复失败保留已收到正文，暂停/失败的继续按钮在收起步骤后仍可见。压缩有独立状态与计时。<b>0.10.4 补充：</b>逐模型图片/视频参数能力、完整参考素材协议校验、无项目 MCP 厂商设置、CCC 全部分组删除、共享 Skill 目录与自定义画布缩放范围。模型参数编辑后需先保存连接；分享配置不携带专用 API Key。<b>0.10.3 补充：</b><a href="#prompt-input-updates">节点发送快捷键、模型清除与完整素材引用</a>。0.10.2 已补充：<a href="#ccc-group-keys">CCC 统一管理与分组 Key 自动匹配</a>。此前已补充：<a href="#ai-app">由 Agent / MCP 创建的 AI 应用节点</a>与<a href="#mcp-ai-app">无界面动作调用</a>。0.10.2 说明另含<a href="#protocol-json-editor">JSON 变量插入与共用预览</a>、<a href="#protocol-video-presets">视频协议预设</a>、<a href="#async-download">完成后下载文件</a>、<a href="#asset-image-reverse">单图反推与标签</a>、<a href="#asset-image-batch-reverse">批量反推</a>、<a href="#provider-model-updates">内置模型更新</a>；版本与核对范围见<a href="#about">文末说明</a>。</aside>
 
 <section id="reading" class="reading-routes" aria-label="按需求阅读"><h2>先找到你要做的事</h2>
@@ -812,9 +813,11 @@ dialog .character-actions-shot{width:1912px}
 <p>这些按钮都<b>先准备对话草稿</b>，不会自动发送、重建整表或生成媒体。复核显示的是文本变化范围，不能代替语义判断；来源快照会持续保留，因此“剧本已修改”也不等于助手一定尚未处理过。确认修改后再检查表格和素材绑定。</p>
 
 <h3 id="shotlist-production">16.4 · 准备配音、视频和导演台节点</h3>
+<p>新准备的视频使用指定镜头的<b>稳定引用胶囊</b>。每次生成时读取该镜的景别、运镜、画面与动作、对白、音效和时长，再解析其中的角色与素材引用；调整镜头顺序后仍指向原来的镜头。可以在胶囊外补充本次要求，手动设置视频时长时以实际参数为准。被引用镜头已删除或素材失效时应先修复，不会退回整张表生成。</p>
 <ol class="steps"><li>点击分镜表顶部或单镜行的<b>镜头制作准备</b>。</li><li>勾选要处理的镜头，每次最多 12 镜，再选择<b>配音节点</b>、<b>视频节点</b>或<b>导演台节点</b>。</li><li>应用会定位新建或已有的同类制作节点。分别检查内容，再选择模型、音色、参考素材或导演运行时。</li><li>需要媒体时，在相应节点实际生成并试听/预览；需要 3D 构图时，再打开导演台编辑。</li></ol>
-<div class="table-scroll"><table><thead><tr><th>制作类型</th><th>准备内容</th><th>仍需完成</th></tr></thead><tbody><tr><td>配音</td><td>使用镜头对白作为朗读文本；没有对白的镜头不能创建该配音批次。</td><td>选择语音模型和音色，实际生成并试听。画面、运镜与音效说明不会一起当作对白朗读。</td></tr><tr><td>视频</td><td>填入镜头画面要求；已有真实画面绑定时添加相应引用。</td><td>检查模型支持的图生/视频参考、比例和时长，生成视频后按需要换绑到分镜表。</td></tr><tr><td>导演台</td><td>建立导演台节点及独立镜头说明。</td><td>自行打开运行时、布景和调整摄影机；不会自动构造完整 3D 场景。</td></tr></tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th>制作类型</th><th>准备内容</th><th>仍需完成</th></tr></thead><tbody><tr><td>配音</td><td>使用镜头对白作为朗读文本；没有对白的镜头不能创建该配音批次。</td><td>选择语音模型和音色，实际生成并试听。画面、运镜与音效说明不会一起当作对白朗读。</td></tr><tr><td>视频</td><td>插入指定镜头的稳定引用；生成时读取本镜内容和可用的显式素材引用。</td><td>检查模型支持的图生/视频参考、比例和时长，生成视频后按需要换绑到分镜表。</td></tr><tr><td>导演台</td><td>建立导演台节点及独立镜头说明。</td><td>自行打开运行时、布景和调整摄影机；不会自动构造完整 3D 场景。</td></tr></tbody></table></div>
 <p>重复准备同镜头、同类型时优先复用已有节点，不覆盖人工修改；改完剧本后也应自己核对已有制作节点内容。同一镜头出现多个同类来源时，先在画布处理重复关系，再继续操作。</p>
+<p>旧视频中的静态提示词不会自动变成稳定镜头引用。需要同步使用本镜内容时，以精确镜头胶囊替换旧复制正文，把人工附加要求保留在胶囊外，并检查模型参数和参考素材；修改提示词不会重新生成已有视频。</p>
 
 <h3 id="shotlist-grid">16.5 · 从宫格分镜裁出一张真实画面</h3>
 <ol class="steps"><li>在同一画布准备已有图片的<b>宫格分镜节点</b>，核对分割方式与实际画面。它与记录镜头行的“分镜表”是不同节点。</li><li>打开目标镜头的画面选择器，点击<b>从宫格取画面</b>。</li><li>选择宫格节点，以及“第几行、第几列”的位置。均分网格、自定义分割线和已有单格覆盖图按当前宫格设置处理。</li><li>点击<b>裁片并绑定镜头</b>。已有画面时按钮为<b>裁片并替换画面</b>，先核对替换对象。</li><li>检查新图片节点和分镜缩略图。原宫格与原画面节点保留，当前镜头绑定改为裁出的图片。</li></ol>
@@ -848,6 +851,9 @@ dialog .character-actions-shot{width:1912px}
 <p>Python 插件作为<b>可信本机代码</b>运行，具有当前用户权限。只安装信任的来源，并按原生确认窗口审核。遇到按钮缺失，先确认插件启用状态以及它适用的节点类型。</p>
 <p>已安装插件卡片的地址、权限等信息收在<b>详细信息</b>里，点击展开查看。节点右键菜单的插件操作集中在<b>插件工具 → 具体工具</b>二级菜单中；鼠标移入或点击即可展开。支持多语言的插件可跟随宿主语言切换，具体翻译内容仍由插件提供。</p>
 <p>支持相应能力的插件可以把当前画面或本地线稿作为参考，调用已配置的图像模型并生成画布节点。实际入口与输入要求以该插件说明为准；先核对目标模型、当前画面和返回结果，不是所有插件都会提供此功能。</p>
+<h3 id="video-replica">视频复刻：指定角色与恢复任务</h3>
+<ol class="steps"><li>先将 AI Canvas 升级到 <b>0.10.13 或更高版本</b>，再在插件设置安装或更新<b>视频复刻 0.2.1</b>，核对来源、权限与原生确认，并准备插件所需运行环境。</li><li>从源视频节点的插件工具入口打开视频复刻。把目标角色图导入画布或资产库，在<b>替换角色</b>中用 <b>@</b> 选择该图，再填写角色、场景与风格要求。只写文件名不会建立图片引用；多视图设定图按同一个角色使用。</li><li>选择支持相应参考素材的视频模型、可选视觉分析模型及控制类型，核对时间轴切点、声音选项、比例和分辨率，确认后点击<b>一键复刻</b>。分析会把关键帧拼成带时间标注的联系表，并同时读取替换参考图：目标角色的面容、发型、服装依据用户图，原片提供动作、构图和运镜。</li><li>查看分段与最终成片，确认角色外观、镜头顺序和声音符合要求。新任务只创建控制视频、音频、生成片段与完整成片，按段排列；旧任务已经创建的节点不会自动删除。</li></ol>
+<p>只关闭插件面板或独立窗口时，主应用可在后台继续任务；从同一项目的同一源视频节点重新打开，恢复本轮表单和进度，不会重复提交。已确认失败或停止后可点击<b>重新开始</b>，重新选择引用、检查设置，再明确启动新任务。已提交状态不确定或暂停时先<b>查询任务状态</b>并核对已有片段，不自动重投；退出整个应用后仅恢复任务摘要并暂停或待核对，不自动续跑。真实角色替换效果、模型费用与运行环境仍需用户检查实际结果。</p>
 <h3>让外部工具通过 MCP 操作 AI Canvas</h3><ol class="steps"><li>打开<b>设置 → MCP 控制</b>，默认显示排在前面的<b>外部控制本应用</b>；<b>助手连接外部服务</b>在另一页签。默认页签不代表自动启动会话，仍需手动开启，或明确配置自动开启。</li><li>同一电脑上的客户端优先使用<b>stdio</b>，复制应用生成的配置到支持 MCP 的客户端。按该客户端要求完成配置。</li><li>保持 AI Canvas 主应用运行。会话重启、端口或令牌变化后，重新复制当前配置，必要时重连客户端。</li><li>先让外部工具读取项目或列出画布内容，确认连接到正确项目，再给出具体的编辑任务。</li></ol>
 <aside class="hold"><b>MCP 会话按自主模式执行。</b>持有令牌的客户端可以自动调用已开放的读写和媒体生成工具；选择题仍由用户回答。令牌相当于控制凭据，不放入说明书、截图或公开仓库。</aside>
 <p>远程 <b>Streamable HTTP</b> 是另一种传输，开启前需要确认。它当前是明文 HTTP，只用于受信网络或隔离环境；令牌鉴权不等于传输加密。同机接入无需为了使用 MCP 而改成远程传输。</p>
@@ -887,6 +893,9 @@ dialog .character-actions-shot{width:1912px}
 <p>在<b>设置 → 快捷键</b>选择节点提示词的发送方式：<kbd>Enter</kbd>、<kbd>Shift+Enter</kbd>、<kbd>Ctrl+Enter</kbd>或<kbd>Alt+Enter</kbd>；也可右键发送按钮修改。使用 Enter 发送时，Shift+Enter 换行；使用组合键发送时，Enter 换行。输入框底部会显示当前提示。</p>
 <p>点击模型名称重新选择模型，点击右侧<b>×</b>清除当前节点选择；清除后生成前需重新选择。输入 <b>@</b> 可按人物、场景、道具等分类查看完整素材列表，缩略图随滚动按需加载。音频、视频和文本引用使用对应图标。</p>
 <p>按住引用胶囊拖动，可调整它在提示词中的位置，也可插入文字之间或移到其他行。按住 <kbd>Ctrl</kbd> 或 <kbd>Alt</kbd> 拖动并松开鼠标，会在目标位置复制一份，原胶囊保留；拖动时显示插入线。按 <kbd>Esc</kbd>、移出输入框后松开或窗口失焦会取消操作。工作流值区仍支持正常选择文字，拖动其前缀可移动整枚胶囊。</p>
+<h3 id="reference-fullscreen">双击引用胶囊查看完整内容</h3>
+<p>在节点提示词、分镜字段、角色库、资源详情或助手中，<b>双击引用胶囊</b>打开完整内容；只读区域聚焦胶囊后也可按 <kbd>Enter</kbd>。预览可显示文本、Markdown、图片、多图、对应宫格裁片、视频、音频和指定镜头，右侧按实际来源展示节点编号、镜头、模型参数或素材尺寸。打开预览不会生成媒体，也不修改节点内容。</p>
+<p>预览正文中的引用可以继续打开，用返回按钮或 <kbd>Esc</kbd> 回到上一项，点击关闭按钮退出整个预览。失效或已删除的引用会说明原因，不会改为其他素材；切换项目会取消旧读取。悬浮小卡片仍用于快速查看，胶囊拖动和单击定位沿用原有操作。</p>
 <p>在 Win10 上，如果 WebView 无法复制图片，会改用系统文件剪贴板；目标应用需要支持粘贴文件，具体粘贴形式由目标应用决定。</p>
 <p>以下为 Windows 常用快捷键。创建节点的数字键在画布操作状态使用；输入提示词时正常输入文字。分镜表快捷键为 <kbd>Alt + 6</kbd>；其他快捷键也可在<b>设置 → 快捷键</b>查看。</p>
 <div class="table-scroll"><table><thead><tr><th>操作</th><th>快捷键</th></tr></thead><tbody><tr><td>文本 / 图像 / 视频 / 音频生成节点</td><td><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd></td></tr><tr><td>全景 / 动画 / 3D 导演台</td><td><kbd>5</kbd> / <kbd>6</kbd> / <kbd>7</kbd></td></tr><tr><td>文本 / 图像 / 视频 / 音频 / Markdown 源节点</td><td><kbd>Alt + 1</kbd> / <kbd>Alt + 2</kbd> / <kbd>Alt + 3</kbd> / <kbd>Alt + 4</kbd> / <kbd>Alt + 5</kbd></td></tr><tr><td>编辑单个内容节点</td><td><kbd>Space</kbd></td></tr><tr><td>保存</td><td><kbd>Ctrl + S</kbd></td></tr><tr><td>撤销 / 重做</td><td><kbd>Ctrl + Z</kbd> / <kbd>Ctrl + Y</kbd> 或 <kbd>Ctrl + Shift + Z</kbd></td></tr><tr><td>复制 / 粘贴节点</td><td><kbd>Ctrl + C</kbd> / <kbd>Ctrl + V</kbd></td></tr><tr><td>删除所选</td><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td></tr><tr><td>分组 / 取消分组</td><td><kbd>Ctrl + G</kbd></td></tr><tr><td>适配全部 / 小地图</td><td><kbd>F</kbd> / <kbd>M</kbd></td></tr><tr><td>关闭菜单或弹窗</td><td><kbd>Esc</kbd></td></tr><tr><td>打开 / 收起左侧资产库</td><td><kbd>Tab</kbd>（画布操作状态）</td></tr><tr><td>全屏图片上一张 / 下一张</td><td><kbd>↑</kbd> / <kbd>↓</kbd>，也支持 <kbd>←</kbd> / <kbd>→</kbd></td></tr><tr><td>素材搜索</td><td><kbd>Alt + Space</kbd> 或 <kbd>Ctrl + Shift + Space</kbd></td></tr></tbody></table></div>
@@ -943,16 +952,16 @@ dialog .character-actions-shot{width:1912px}
 </section>
 
 <section id="about"><h2>说明书范围与版本</h2>
-<p>本说明书面向 <b>0.10.12</b>，<b>2026-10-20</b> 按源码补齐 macOS 媒体与滚轮、画布布局和玻璃材质、助手参考图、Skill 压缩包、分集命名与首次入口引导。安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.12">对应 GitHub Release</a>为准。旧的 ToAPIs、ComfyUI 安装、模型模板与协议编辑章节继续适用，截图来自此前构建；看不到新入口时先核对实际安装版本。</p>
-<p>正文与内嵌资源进行静态核对；发版自动化检查及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-20-release-0.10.12.md">0.10.12 发布计划</a>。本次未进行浏览器或 Tauri 功能实机验收。真实模型生成、ComfyUI 大包安装、各平台播放与项目保存仍待桌面验证；本地费用核算不等于官方扣费。</p>
-<h3 id="source-updates">0.10.12 增量范围与兼容提示</h3>
-<ul><li>图片 / 视频显示已等待时长，角色参考图的<b>图片提示词</b>支持素材引用；动作提示词入口仍按原有方式编辑。</li><li>远端 ComfyUI 视频取回检查输出类型并显示续取原因；视频播放器区分读取、网络、解码和格式问题。已有上游任务优先续取，避免重复生成。</li><li>macOS 页面异常退出后可重新打开已保存项目；这不代表所有未保存改动均已恢复，也不会自动重新提交生成任务。</li><li>本版只生成 Apple Silicon Mac 安装包，不生成新的 Intel Mac 包；已公开的 0.10.10 Intel 文件仍在旧 Release，按实际平台选择。</li><li>标题栏最大化与还原按钮采用圆角空心图标；沿用原有窗口操作。</li></ul>
+<p>本说明书面向 <b>0.10.13</b>，<b>2026-10-21</b> 按源码补齐引用双击全屏预览、稳定镜头引用、视频复刻参考图与任务恢复，以及资源增量加载、分组操作和 ComfyUI 安装表单说明。安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.13">对应 GitHub Release</a>为准。顶部保留 0.10.12 等历史变化；旧的 ToAPIs、模型模板与协议编辑章节继续适用，截图来自此前构建，看不到新入口时先核对实际安装版本。</p>
+<p>正文与内嵌资源进行静态核对；发版自动化检查及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-21-release-0.10.13.md">0.10.13 发布计划</a>。本次未进行浏览器或 Tauri 功能实机验收。真实付费模型生成、角色替换效果、ComfyUI 大包安装、各平台播放、保存与升级仍待桌面验证；本地费用核算不等于官方扣费。</p>
+<h3 id="source-updates">0.10.13 增量范围与兼容提示</h3>
+<ul><li>引用胶囊双击预览完整内容，显示来源信息并支持逐层返回；助手输入、消息正文和独立窗口沿用统一胶囊。</li><li>新视频可精确引用稳定镜头，生成时读取本镜内容、对白、景别、运镜和实际时长；旧静态提示词不自动迁移，已生成媒体不自动重做。</li><li>视频复刻分析同时使用用户替换图和原片联系表，生成不再额外连接原片首帧；新媒体按段排列，不自动清理已有旧节点。插件 0.2.1 要求宿主至少 0.10.13，请先应用后插件。</li><li>资源按扫描批次展示，同范围刷新保留已有卡片；ComfyUI 安装检测失败时保留环境和位置表单，可手动选择并重试检测。</li><li>macOS 鼠标与触控板输入分别处理，全屏弹窗蒙层可拖动窗口；分组色板点击外部关闭。本版只生成 Apple Silicon Mac 安装包，历史 Intel Mac 文件仍在对应旧 Release。</li></ul>
 <p>AI 应用节点当前为首版，只读绑定材料并保存自身状态；画布写入、结果节点及模型 / 文件编排仍待后续实现。已有 macOS 桌面核心验收记录，Windows / Linux 原生界面和真实外部 MCP 客户端联调仍待补充；本次说明书更新不扩大功能验收范围。</p>
-<p>共十一张内嵌截图：保留原有九张界面示意，新增当前构建的自定义视频协议 JSON 编辑器和批量反推窗口。新增截图只展示未保存的示例草稿与待执行队列，没有启动模型调用。旧截图来自此前构建，用于位置与空状态示意；按钮可用性仍取决于资料、分集和模型配置。</p>
+<p>共十一张内嵌截图，均沿用此前构建，其中包含自定义视频协议 JSON 编辑器和批量反推窗口。相关截图只展示未保存的示例草稿与待执行队列，当时没有启动模型调用。截图用于位置与空状态示意；按钮可用性仍取决于资料、分集和模型配置。</p>
 <p>内容依据当前版本的启动页、资源库、设置界面、应用帮助与相关操作实现核对。接口示例用于本地配置校验，<b>未调用真实厂商接口</b>；所有 example.com 地址与示例模型 ID 均为占位内容。按钮准备草稿、创建节点、实际模型生成和媒体保存是不同步骤，请按各章检查实际结果。</p>
 <p class="small">页面所需样式、脚本和十一张截图均在当前 HTML 内，无外部字体或 CDN 依赖。可直接双击离线打开；点击“返回软件首页”需同时保留 site 目录中的首页。打印按钮使用浏览器打印功能，可选择保存为 PDF。</p>
 </section>
-<footer>AI Canvas · 0.10.12 操作说明书 · 2026-10-20 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
+<footer>AI Canvas · 0.10.13 操作说明书 · 2026-10-21 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
 </main>
 <dialog id="zoom" aria-label="放大界面截图"><button class="action" id="zoom-close" type="button">关闭放大图（Esc）</button><div class="zoom-box"></div></dialog>
 <script>
