@@ -5,7 +5,7 @@
  * 拖拽分组时 React Flow 自动同步所有子节点位置，无卡顿。
  * 支持拖拽右下角调整大小。
  */
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { NodeResizer, Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { Icon } from '@iconify/react';
@@ -83,6 +83,20 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
   const editingRef = useRef(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const [showColors, setShowColors] = useState(false);
+  const colorButtonRef = useRef<HTMLButtonElement>(null);
+  const colorPaletteRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showColors) return;
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (colorButtonRef.current?.contains(target) || colorPaletteRef.current?.contains(target)) return;
+      setShowColors(false);
+    };
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+  }, [showColors]);
+
   // 订阅成字符串，避免每次渲染返回新数组
   const childImageKey = useAppStore((s) => getGroupChildImageKey(s.nodes, id));
   // 组内媒体随机抽 2-3 项当封面；候选变化时重抽
@@ -131,6 +145,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
   const folderStyle = { '--group-color': color } as React.CSSProperties;
   const colorButton = (
     <AnimatedButton
+      ref={colorButtonRef}
       data-tooltip={t('分组颜色')}
       aria-label={t('分组颜色')}
       aria-expanded={showColors}
@@ -141,7 +156,8 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
     </AnimatedButton>
   );
   const colorPalette = showColors && (
-    <div className={`canvas-group-folder-colors nodrag nowheel${groupCollapsed ? '' : ' canvas-group-expanded-colors'}`}
+    <div ref={colorPaletteRef}
+      className={`canvas-group-folder-colors nodrag nowheel${groupCollapsed ? '' : ' canvas-group-expanded-colors'}`}
       role="group" aria-label={t('分组颜色')}>
       {GROUP_COLOR_PALETTE.map((swatch) => (
         <button
