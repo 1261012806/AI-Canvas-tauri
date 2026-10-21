@@ -1080,7 +1080,7 @@ export default function CharacterLibraryPanel() {
           isOpen={actionLibraryOpen}
           onClose={closeActionLibrary}
           ariaLabel={t('「{name}」的动作库', { name: selectedCharacter.name })}
-          className="h-[min(820px,calc(100vh-32px))] w-[min(1180px,calc(100vw-32px))] border-canvas-border bg-canvas-surface text-canvas-text"
+          className="ui-dialog-surface h-[min(820px,calc(100vh-32px))] w-[min(1180px,calc(100vw-32px))] border-canvas-border text-canvas-text"
           motionPreset="quick"
         >
           <header className="flex items-center gap-3 border-b border-canvas-border px-2.5 py-2">
