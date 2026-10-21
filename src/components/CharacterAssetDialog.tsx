@@ -1222,7 +1222,7 @@ function CharacterAssetEditorDialog({
       isOpen={isOpen}
       onClose={onClose}
       ariaLabel={character ? '编辑角色' : '新建角色'}
-      className="character-dialog"
+      className="character-dialog ui-dialog-surface"
     >
       <header className="character-dialog-header">
         <div>

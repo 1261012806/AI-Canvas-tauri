@@ -74,6 +74,9 @@ export interface MentionEditorProps {
   onChange: (value: string, previousValue?: string) => void;
   onSubmit?: () => void;
   placeholder?: string;
+  ariaLabel?: string;
+  /** 滚动表格等裁剪容器内，将引用选择面板挂到 body。 */
+  portalDropdown?: boolean;
   nodeId?: string;
   selectedWorkflowId?: string;
   canSubmit?: boolean;
@@ -99,6 +102,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   onChange,
   onSubmit,
   placeholder = '输入提示词开始创作   (Enter 生成，Shift+Enter 换行)',
+  ariaLabel,
+  portalDropdown = false,
   nodeId,
   selectedWorkflowId,
   canSubmit = true,
@@ -454,7 +459,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   useEffect(() => {
     if (!showMention) return;
     const handler = (e: MouseEvent) => {
-      if (editorRef.current && !editorRef.current.parentElement?.contains(e.target as Node)) {
+      if (editorRef.current && !editorRef.current.parentElement?.contains(e.target as Node)
+        && !mentionDropdownRef.current?.contains(e.target as Node)) {
         setShowMention(false);
       }
     };
@@ -1557,13 +1563,13 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       12,
     );
     const nextPosition = {
-      left: Math.round(safePosition.left - wrapRect.left),
-      top: Math.round(safePosition.top - wrapRect.top),
+      left: Math.round(safePosition.left - (portalDropdown ? 0 : wrapRect.left)),
+      top: Math.round(safePosition.top - (portalDropdown ? 0 : wrapRect.top)),
     };
     setMentionDropdownPosition((current) => (
       current.left === nextPosition.left && current.top === nextPosition.top ? current : nextPosition
     ));
-  }, []);
+  }, [portalDropdown]);
 
   const handleMentionHeightChange = useCallback((height: number, animated: boolean) => {
     mentionDropdownHeightRef.current = height;
@@ -1606,12 +1612,19 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     updateMentionDropdownPosition,
   ]);
 
+  const renderMentionDropdown = (dropdown: React.ReactElement) => (
+    portalDropdown ? createPortal(dropdown, document.body) : dropdown
+  );
+
   return (
     <div ref={mentionEditorWrapRef} className={`mention-editor-wrap relative ${className}`}>
       <div
         ref={editorRef}
         contentEditable
         suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        aria-label={ariaLabel}
         className={`ui-ai-input__editor prompt-editor${!prompt ? ' is-empty' : ''}`}
         data-placeholder={placeholder}
         onInput={handleInput}
@@ -1702,10 +1715,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       )}
 
       {/* @ Mention Dropdown */}
-      {showMention && (
+      {showMention && renderMentionDropdown(
         <div
           ref={mentionDropdownRef}
-          className={`mention-dropdown${mentionDropdownResizing ? ' is-resizing' : ''} absolute w-[336px] max-w-[calc(100vw-24px)] z-50 [&>.mention-picker]:max-h-[calc(100vh-24px)] [&>.mention-picker]:overflow-hidden [&_.mention-picker-grid]:min-h-0`}
+          className={`mention-dropdown${mentionDropdownResizing ? ' is-resizing' : ''} ${portalDropdown ? 'fixed z-[10000]' : 'absolute z-50'} w-[336px] max-w-[calc(100vw-24px)] [&>.mention-picker]:max-h-[calc(100vh-24px)] [&>.mention-picker]:overflow-hidden [&_.mention-picker-grid]:min-h-0`}
           style={{ left: mentionDropdownPosition.left, top: mentionDropdownPosition.top }}
         >
           <MentionPicker

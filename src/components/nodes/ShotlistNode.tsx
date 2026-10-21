@@ -66,7 +66,7 @@ interface ResolvedFrame {
   dangling: boolean;
 }
 
-/** 纯文本列：直接一个多行输入框 */
+/** 多行文本列；内容列另外复用节点提示词的引用编辑器。 */
 const TEXT_COLUMNS: ShotlistColumnKey[] = ['content', 'dialogue', 'audio', 'note'];
 
 const FIXED_COLUMN_WIDTHS: Partial<Record<ShotlistColumnKey, number>> = { shotNo: 48, duration: 84 };
@@ -683,6 +683,25 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               patchRow(row.id, { [column]: selectedValue ? options[Number(selectedValue.slice(7))] : '' } as Partial<ShotRow>);
               commitToHistory();
             }}
+          />
+        </div>
+      );
+    }
+
+    if (column === 'content') {
+      return (
+        <div className="ui-input-group shot-input nodrag nowheel" onMouseDown={(event) => event.stopPropagation()}>
+          <MentionEditor
+            nodeId={id}
+            value={row.content ?? ''}
+            onChange={(content) => patchRow(row.id, { content })}
+            onBlur={commitToHistory}
+            ariaLabel={SHOTLIST_COLUMN_LABELS.content}
+            portalDropdown
+            placeholder=""
+            canSubmit={false}
+            submitShortcut="ctrl-enter"
+            className="shot-content-editor w-full"
           />
         </div>
       );

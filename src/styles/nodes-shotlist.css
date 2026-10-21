@@ -248,6 +248,17 @@
   resize: none;
 }
 
+.shot-content-editor {
+  font-size: var(--ui-font-input);
+}
+
+.shot-content-editor .prompt-editor {
+  min-height: 52px;
+  max-height: 52px;
+  padding: 8px 10px;
+  font-size: inherit;
+}
+
 /* ── 画面格 ── */
 .shot-frame {
   position: relative;

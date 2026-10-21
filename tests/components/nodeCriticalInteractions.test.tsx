@@ -569,6 +569,27 @@ describe('critical canvas node interactions', () => {
     },
   );
 
+  it('edits shot content with shared mention chips while preserving serialized references and row bindings', async () => {
+    const content = '参考 @drama{scene-1:工作室} 与 @{image-1:参考图}';
+    const frame = { nodeId: 'frame-1', mediaType: 'image' };
+    const { tree, store } = await setupShotlistWidths(undefined, [
+      { id: 'row-1', shotNo: '1', content, dialogue: '原台词', frame, duration: 3 },
+      { id: 'row-2', shotNo: '2', content: '第二镜', duration: 4 },
+    ]);
+    const editor = findElement(tree, (element) => element.props.value === content
+      && element.props.className === 'shot-content-editor w-full');
+    expect(editor.props).toMatchObject({ nodeId: 'shotlist', ariaLabel: '内容', portalDropdown: true, canSubmit: false, submitShortcut: 'ctrl-enter' });
+    expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
+    (editor.props.onChange as (value: string) => void)(`${content}\n补充动作`);
+    expect(store.nodes[0].data.shotlistRows).toEqual([
+      { id: 'row-1', shotNo: '1', content: `${content}\n补充动作`, dialogue: '原台词', frame, duration: 3 },
+      { id: 'row-2', shotNo: '2', content: '第二镜', duration: 4 },
+    ]);
+    expect(store.commitToHistory).not.toHaveBeenCalled();
+    (editor.props.onBlur as () => void)();
+    expect(store.commitToHistory).toHaveBeenCalledOnce();
+  });
+
   it('keeps custom shotlist options editable and stores real values when selecting UI Kit presets', async () => {
     const { tree, store } = await setupShotlistWidths(undefined, [{
       id: 'row-1', shotNo: '1', shotSize: '特写', camera: '手持跟拍并轻微晃动', duration: 3,
