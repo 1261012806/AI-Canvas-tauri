@@ -35,15 +35,15 @@ export default function CanvasZoomRangeSettings({ onPersist }: { onPersist: () =
           {t('恢复默认范围')}
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="ui-field">
-          <label className="ui-label" htmlFor={minId}>{t('最小缩放比例')}</label>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex items-center gap-2">
+          <label className="ui-label whitespace-nowrap" htmlFor={minId}>{t('最小缩放比例')}</label>
           <NumberStepper id={minId} value={minPercent} min={MIN_CANVAS_ZOOM * 100} max={maxPercent}
             step={1} unit="%" disabled={!hydrated} aria-label={t('最小缩放比例')}
             onChange={(value) => changeRange(value / 100, maxZoom)} />
         </div>
-        <div className="ui-field">
-          <label className="ui-label" htmlFor={maxId}>{t('最大缩放比例')}</label>
+        <div className="flex items-center gap-2">
+          <label className="ui-label whitespace-nowrap" htmlFor={maxId}>{t('最大缩放比例')}</label>
           <NumberStepper id={maxId} value={maxPercent} min={minPercent} max={MAX_CANVAS_ZOOM * 100}
             step={1} unit="%" disabled={!hydrated} aria-label={t('最大缩放比例')}
             onChange={(value) => changeRange(minZoom, value / 100)} />
