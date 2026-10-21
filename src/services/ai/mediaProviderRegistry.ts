@@ -29,6 +29,8 @@ export interface VideoProviderRequest {
   prompt: string;
   resolveReferenceInput: () => Promise<VideoGenerationReferenceInput>;
   signal?: AbortSignal;
+  /** 参考素材准备完成后、实际付费提交前复核宿主输入与执行租约。 */
+  beforeSubmit?: () => void | Promise<void>;
 }
 
 export interface AudioProviderRequest {

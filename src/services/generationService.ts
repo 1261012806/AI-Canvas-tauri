@@ -31,6 +31,8 @@ import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDeriva
 import { videoInputFingerprint } from './videoBatchPlanning';
 import { completeVideoNodeTask, getPendingTasksForProject, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from './pollManager';
 import { resolveGenerationNodeData } from '../utils/nodeGeneration';
+import { expandShotlistRowMentions } from './shotlistPromptService';
+import { buildGenerationCameraPrompt } from '../components/nodes/shared/image/cameraStudio';
 
 export interface GenerationResult {
   success: boolean;
@@ -42,6 +44,9 @@ export interface GenerationLease {
   signal?: AbortSignal;
   assertFresh: () => void | Promise<void>;
 }
+
+/** 仅保留本进程内的提交身份，避免旧任务清理或覆盖同节点的新请求。 */
+const videoSubmissionOwners = new Map<string, symbol>();
 
 export async function executeGeneration(
   nodeId: string,
@@ -123,7 +128,7 @@ export async function executeGeneration(
   const projectSettings = store.projects.find(
     (project) => project.id === store.currentProjectId,
   )?.settings;
-  const effectivePrompt = resolveProjectGenerationPrompt({
+  let effectivePrompt = resolveProjectGenerationPrompt({
     prompt: rawPrompt,
     data,
     settings: projectSettings,
@@ -143,6 +148,18 @@ export async function executeGeneration(
     store.showToast('请先在底部模型选择器中选择一个模型', 'error');
     return { success: false, message: '未选择模型' };
   }
+  if (nodeType === 'ai-video') {
+    const cameraPrompt = buildGenerationCameraPrompt(data.cameraSettings);
+    if (cameraPrompt) effectivePrompt += `\n\nCamera settings: ${cameraPrompt}.`;
+    try {
+      const controls = resolveVideoSubmissionControls({ ...data, provider: nodeProvider, workflowId });
+      effectivePrompt = expandShotlistRowMentions(effectivePrompt, store.nodes, { durationSeconds: controls.seedanceDuration });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '镜头引用无效';
+      store.showToast(message, 'error');
+      return { success: false, message };
+    }
+  }
 
   const submittingProjectId = store.currentProjectId;
   if (nodeType === 'ai-video') {
@@ -158,11 +175,22 @@ export async function executeGeneration(
   let cloudGuard = guardedSubmission ? registerCanvasDerivation(store, nodeId) : null;
   const videoNode = store.nodes.find((n) => n.id === nodeId);
   const videoFingerprint = nodeType === 'ai-video' && videoNode
-    ? videoInputFingerprint({ ...videoNode, data }, store) : undefined;
+    ? videoInputFingerprint({ ...videoNode, data: { ...data, prompt: rawPrompt } }, store) : undefined;
+  const hasShotReference = nodeType === 'ai-video'
+    && `${rawPrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes('/shot/');
+  const submissionKey = JSON.stringify([submittingProjectId, nodeId]);
+  const videoOwner = nodeType === 'ai-video' ? Symbol(nodeId) : undefined;
+  if (videoOwner) videoSubmissionOwners.set(submissionKey, videoOwner);
+  const promptOverride = overridePrompt === undefined ? {} : { prompt: rawPrompt };
   const isStillCurrentSubmission = () => {
     const s = useAppStore.getState();
+    const currentVideo = hasShotReference ? s.nodes.find((node) => node.id === nodeId) : undefined;
     return leaseValid && !lease?.signal?.aborted && s.currentProjectId === submittingProjectId && s.nodes.some((n) => n.id === nodeId)
-      && (!guardedSubmission || (!!cloudGuard && isCanvasDerivationFresh(cloudGuard, s)));
+      && (!guardedSubmission || (!!cloudGuard && isCanvasDerivationFresh(cloudGuard, s)))
+      && (!videoOwner || videoSubmissionOwners.get(submissionKey) === videoOwner)
+      && (!hasShotReference || (!!currentVideo
+        && (overridePrompt === undefined || currentVideo.data.prompt === videoNode?.data.prompt)
+        && videoInputFingerprint({ ...currentVideo, data: { ...currentVideo.data, ...promptOverride } }, s) === videoFingerprint));
   };
 
   store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined, videoTaskState: undefined });
@@ -317,7 +345,13 @@ export async function executeGeneration(
         await assertLease();
         if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
       }
-      const result = lease ? await generateVideo(videoOptions, lease.signal, assertLease) : await generateVideo(videoOptions);
+      const assertVideoSubmission = async () => {
+        if (lease) await assertLease();
+        if (!isStillCurrentSubmission()) throw new Error('镜头或生成输入已变化，请重新生成');
+      };
+      const result = lease || hasShotReference
+        ? await generateVideo(videoOptions, lease?.signal, assertVideoSubmission)
+        : await generateVideo(videoOptions);
       videoResultReceived = true;
       videoTaskId = submittingProjectId ? getPendingTasksForProject(submittingProjectId).find((task) => task.nodeId === nodeId)?.taskId : undefined;
       if (lease) await assertLease();
@@ -347,7 +381,7 @@ export async function executeGeneration(
         nodeId, nodeLabel: data.label, timestamp: Date.now(), prompt: effectivePrompt,
         output: persisted.sourceUrl, nodeType: 'ai-video', model: nodeModel, provider: nodeProvider,
         status: 'success', mediaUrl: persisted.mediaUrl, filePath: persisted.filePath,
-        params: { videoResolution, videoFps, videoFrames, seedanceResolution, seedanceRatio, seedanceDuration, generateAudio: genAudio },
+        params: { videoResolution, videoFps, videoFrames, seedanceResolution, seedanceRatio, seedanceDuration, generateAudio: genAudio, cameraSettings: data.cameraSettings },
       }, true);
       store.showToast('视频生成完成');
     } else if (nodeType === 'ai-audio') {
@@ -451,6 +485,15 @@ export async function executeGeneration(
     store.showToast(msg, 'error');
     return { success: false, message: msg };
   } finally {
+    const current = useAppStore.getState();
+    const currentVideo = hasShotReference ? current.nodes.find((node) => node.id === nodeId) : undefined;
+    if (videoOwner && videoSubmissionOwners.get(submissionKey) === videoOwner
+      && current.currentProjectId === submittingProjectId && currentVideo?.data.status === 'loading'
+      && (!cloudGuard || !isCanvasDerivationFresh(cloudGuard, current)
+        || videoInputFingerprint({ ...currentVideo, data: { ...currentVideo.data, ...promptOverride } }, current) !== videoFingerprint)) {
+      current.updateNodeDataTransient(nodeId, { status: 'error', error: '镜头或参考素材已变化，请核对后重新生成' });
+    }
+    if (videoOwner && videoSubmissionOwners.get(submissionKey) === videoOwner) videoSubmissionOwners.delete(submissionKey);
     if (cloudGuard) completeCanvasDerivation(cloudGuard);
   }
 }

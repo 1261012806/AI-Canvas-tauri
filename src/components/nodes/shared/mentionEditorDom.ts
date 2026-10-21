@@ -12,6 +12,7 @@ import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
 import { buildReferenceChipEl } from '../../shared/referenceChipDom';
+import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 export const ZWSP = '\u200B';
@@ -22,6 +23,7 @@ const CHIP_STYLE: Record<string, string> = {
   'ai-audio': 'chip-audio',
   'ai-markdown': 'chip-markdown',
   'ai-storyboard': 'chip-image',
+  'ai-shotlist': 'chip-text',
 };
 const NODE_CHIP_ICON_PATHS: Record<string, string> = {
   'ai-text': 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5',
@@ -31,7 +33,7 @@ const NODE_CHIP_ICON_PATHS: Record<string, string> = {
 
 /** 编辑器与生成信息共用引用图标，源节点和 Markdown 沿用对应类型。 */
 export function getNodeChipIconPath(nodeType: string): string | undefined {
-  const type = nodeType === 'ai-markdown' ? 'ai-text' : nodeType.replace(/^source-/, 'ai-');
+  const type = nodeType === 'ai-markdown' || nodeType === 'ai-shotlist' ? 'ai-text' : nodeType.replace(/^source-/, 'ai-');
   return NODE_CHIP_ICON_PATHS[type];
 }
 
@@ -58,6 +60,8 @@ const IMAGE_REFERENCE_NODE_TYPES = new Set([
 
 type NodeMeta = {
   type: string;
+  /** 子资源的实时展示标题；引用序列化仍保留原标签。 */
+  label?: string;
   displayId?: number;
   thumbnailUrl?: string;
   imageReferenceKey?: string;
@@ -113,6 +117,13 @@ export function getNodeMetaMap(nodes: AppState['nodes']) {
       imageReferenceKey,
       mediaReference,
     });
+    if (type === 'ai-shotlist') {
+      node.data.shotlistRows?.forEach((row, index) => {
+        map.set(buildShotlistRowMentionId(node.id, row.id), {
+          type: 'ai-shotlist', label: `镜${row.shotNo || index + 1} · ${node.data.label || '分镜表'}`,
+        });
+      });
+    }
     if (node.data.type !== 'ai-storyboard') continue;
     const cols = Math.max(1, (node.data.storyboardCols as number) || 3);
     const rows = Math.max(1, (node.data.storyboardRows as number) || 3);
@@ -255,8 +266,10 @@ export function buildChipEl(
 ): HTMLSpanElement {
   const meta = metaMap.get(nodeId);
   const nodeType = meta?.type || 'ai-text';
+  const isShot = !!parseShotlistRowMentionId(nodeId);
+  const displayLabel = isShot ? meta?.label || `${label}（镜头已失效）` : label;
   const span = buildReferenceChipEl(document, {
-    label,
+    label: displayLabel,
     kind: (CHIP_STYLE[nodeType] || CHIP_STYLE['ai-text']).replace('chip-', '') as 'text' | 'image' | 'video' | 'audio' | 'markdown',
     badge: meta?.displayId != null ? `#${meta.displayId}` : undefined,
     iconPath: getNodeChipIconPath(nodeType),
@@ -264,9 +277,22 @@ export function buildChipEl(
   });
   span.setAttribute('data-ref-id', nodeId);
   span.setAttribute('data-ref-label', label);
-  span.title = meta?.displayId != null ? `${label} (#${meta.displayId})` : label;
+  span.title = meta?.displayId != null ? `${displayLabel} (#${meta.displayId})` : displayLabel;
 
   return span;
+}
+
+/** 镜头重排或改号只刷新胶囊展示，不改变引用、编辑历史或光标。 */
+export function syncShotlistReferenceChips(root: HTMLElement, metaMap: Map<string, NodeMeta>): void {
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-ref-id*="/shot/"]'))) {
+    const id = chip.getAttribute('data-ref-id') || '';
+    if (!parseShotlistRowMentionId(id)) continue;
+    const label = metaMap.get(id)?.label || `${chip.getAttribute('data-ref-label') || '镜头'}（镜头已失效）`;
+    const visible = chip.querySelector<HTMLElement>('.prompt-chip-id');
+    if (visible && visible.textContent !== label) visible.textContent = label;
+    if (chip.title !== label) chip.title = label;
+    if (chip.getAttribute('aria-label') !== label) chip.setAttribute('aria-label', label);
+  }
 }
 
 export function buildAssetChipEl(path: string, assetUrl?: string): HTMLSpanElement {

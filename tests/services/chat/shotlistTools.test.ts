@@ -30,7 +30,7 @@ describe('分镜工具', () => {
     expect(result.status).toBe('success');
     expect(result.modelContent).not.toMatch(/SECRET_|PRIVATE_ANALYSIS/);
     const data = JSON.parse(result.modelContent);
-    expect(data.rows[0]).toMatchObject({ id: 'r1', frame: { nodeId: 'pic', kind: 'image' }, truncatedFields: ['content'] });
+    expect(data.rows[0]).toMatchObject({ id: 'r1', mention: '@{sheet/shot/r1:分镜 · 镜1}', frame: { nodeId: 'pic', kind: 'image' }, truncatedFields: ['content'] });
     expect(data.rows[0].content).toHaveLength(400);
     const next = await read.execute(context(), { nodeId: 'sheet', textOffset: 400 });
     expect(JSON.parse(next.modelContent).rows[0].content).toHaveLength(200);

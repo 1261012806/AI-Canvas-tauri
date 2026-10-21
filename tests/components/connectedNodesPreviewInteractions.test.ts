@@ -99,6 +99,21 @@ describe('ConnectedNodesPreview 交互', () => {
     expect(resolveMentionPreview(nodes, 'sb/cell/9', '不存在的格子').thumbnailUrl).toBeUndefined();
   });
 
+  it('单镜预览读取实时融合提示词，按 ID 跟随改号，删除时不退回整表内容', () => {
+    const data = { type: 'ai-shotlist', label: '新表名', output: '旧整表输出', shotlistRows: [
+      { id: 'row/a', shotNo: '7', content: '站在门口', dialogue: '先别开灯。', audio: '脚步声' },
+      { id: 'another', shotNo: '8', content: '其他镜头内容' },
+    ] } as BaseNodeData;
+    const preview = resolveMentionPreview([{ id: 'sheet', data }], 'sheet/shot/row%2Fa', '旧表名 · 镜1');
+    expect(preview).toMatchObject({ label: '镜7 · 新表名', outputType: 'text', missing: false, thumbnailUrl: undefined });
+    for (const text of ['站在门口', '先别开灯。', '脚步声']) expect(preview.text).toContain(text);
+    expect(preview.text).not.toContain('旧整表输出');
+    expect(preview.text).not.toContain('其他镜头内容');
+    expect(resolveMentionPreview([{ id: 'sheet', data }], 'sheet/shot/deleted', '已删除镜头'))
+      .toMatchObject({ missing: true, text: '', description: '分镜表 · 镜头已删除或引用失效' });
+    expect(resolveMentionPreview([], 'sheet/shot/row%2Fa', '已删除镜头表')).toMatchObject({ missing: true, text: '' });
+  });
+
   it('2.5 倍悬浮时把相邻缩略图推开并保留原间距', () => {
     expect(CONNECTED_PREVIEW_THUMB_SIZE).toBe(48);
     const maxScale = 2.5;

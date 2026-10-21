@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { getNodeMetaMap, numberMediaReferenceLabels } from '../../src/components/nodes/shared/mentionEditorDom';
+import { getNodeMetaMap, numberMediaReferenceLabels, syncShotlistReferenceChips } from '../../src/components/nodes/shared/mentionEditorDom';
 import { renderPromptWithChips } from '../../src/components/nodes/shared/PromptChipViewer';
 
 describe('mention editor media reference indices', () => {
@@ -35,6 +35,25 @@ describe('mention editor media reference indices', () => {
     expect(meta.get('video')?.mediaReference).toEqual({ kind: 'video', key: 'node:video' });
     expect(meta.get('audio')?.mediaReference).toEqual({ kind: 'audio', key: 'node:audio' });
     expect(meta.get('empty')?.mediaReference).toBeUndefined();
+  });
+
+  it('镜头编号更新只刷新胶囊展示，不改序列化标签或误标为图片参考', () => {
+    const attributes: Record<string, string> = { 'data-ref-id': 'sheet/shot/row', 'data-ref-label': '旧表名 · 镜1' };
+    const visible = { textContent: '旧表名 · 镜1' };
+    const chip = { title: '', getAttribute: (name: string) => attributes[name] ?? null,
+      setAttribute: (name: string, value: string) => { attributes[name] = value; }, querySelector: () => visible };
+    const root = { querySelectorAll: () => [chip] } as unknown as HTMLElement;
+    const metadata = getNodeMetaMap([{ id: 'sheet', data: { type: 'ai-shotlist', label: '新表名',
+      shotlistRows: [{ id: 'row', shotNo: '3', content: '镜头正文' }],
+    } }] as never);
+    expect(metadata.get('sheet/shot/row')?.mediaReference).toBeUndefined();
+    syncShotlistReferenceChips(root, metadata);
+    expect(visible.textContent).toBe('镜3 · 新表名');
+    expect(chip.title).toBe('镜3 · 新表名');
+    expect(attributes['data-ref-label']).toBe('旧表名 · 镜1');
+    syncShotlistReferenceChips(root, new Map());
+    expect(visible.textContent).toBe('旧表名 · 镜1（镜头已失效）');
+    expect(attributes['data-ref-label']).toBe('旧表名 · 镜1');
   });
 
   it('生成信息的胶囊与编辑器共用编号，文本引用不影响媒体顺序', () => {

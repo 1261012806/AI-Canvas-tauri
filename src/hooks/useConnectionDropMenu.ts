@@ -111,8 +111,11 @@ const CONNECTION_MENU_MAP: Record<string, ConnectionMenuOption[]> = {
     { label: '生成图像', type: 'ai-image' },
   ],
   'ai-markdown': [],
-  // 分镜表的下游产物是时间轴，不是再生成一个媒体节点
-  'ai-shotlist': [],
+  'ai-shotlist': [
+    { label: '生成文本', type: 'ai-text' },
+    { label: '生成图像', type: 'ai-image' },
+    { label: '生成视频', type: 'ai-video' },
+  ],
 };
 
 const CONNECTION_NODE_LABELS: Partial<Record<NodeType, string>> = {

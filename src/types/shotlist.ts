@@ -200,6 +200,35 @@ export function buildShotFramePrompt(row: ShotRow): string {
     .join('，');
 }
 
+/** 精确镜头引用以稳定行 ID 定位，镜号只用于显示。 */
+export function buildShotlistRowMentionId(nodeId: string, rowId: string): string {
+  return `${nodeId}/shot/${encodeURIComponent(rowId)}`;
+}
+
+export function parseShotlistRowMentionId(referenceId: string): { nodeId: string; rowId: string } | null {
+  const match = /^([^{}:]+)\/shot\/([^/{}:]+)$/.exec(referenceId);
+  if (!match) return null;
+  try {
+    const rowId = decodeURIComponent(match[2]);
+    return rowId ? { nodeId: match[1], rowId } : null;
+  } catch { return null; }
+}
+
+/** 单镜视频描述保留字段语义和对白原文，交给各模型的既有编译入口。 */
+export function formatShotVideoPrompt(row: ShotRow): string {
+  return [
+    row.shotNo?.trim() ? `镜头：${row.shotNo.trim()}` : '',
+    row.shotSize?.trim() ? `景别：${row.shotSize.trim()}` : '',
+    row.camera?.trim() ? `运镜：${row.camera.trim()}` : '',
+    row.content?.trim() ? `画面与动作：\n${row.content.trim()}` : '',
+    row.dialogue?.trim() ? `角色对白（按说话人顺序演绎，保留原文，与画面动作配合）：\n${row.dialogue.trim()}` : '',
+    row.audio?.trim() ? `音效/音乐：${row.audio.trim()}` : '',
+    typeof row.duration === 'number' && Number.isFinite(row.duration) && row.duration > 0
+      ? `镜头时长：${row.duration}秒` : '',
+    row.note?.trim() ? `补充要求：${row.note.trim()}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 /** 该行是否连一个字都没有 —— 推时间线时整行跳过 */
 export function isShotRowBlank(row: ShotRow): boolean {
   if (row.frame) return false;

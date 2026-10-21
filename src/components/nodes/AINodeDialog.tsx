@@ -14,7 +14,7 @@ import type { AnimationAction, BaseNodeData, CameraGenerationSettings, ImagePost
 import { ANIMATION_FRAME_GRIDS } from '../../types';
 import { generateShotlistRows } from '../../services/shotlistService';
 import { MAX_IMAGE_BATCH_COUNT, type AudioSpeechSettings, type AudioSpeechReference, type AudioOutputFormat, type AudioTtsVoice, type VideoReferenceItem } from '../../types/aiTypes';
-import { generateText, generateImage, generateImagesBatch, generateVideo, generateAudio, buildPanoramaPrompt } from '../../services/aiService';
+import { generateText, generateImage, generateImagesBatch, generateAudio, buildPanoramaPrompt } from '../../services/aiService';
 import { removeAudioSpeechReference } from '../../services/ai/audioSpeechSettings';
 import { persistAudioGenerationResult } from '../../services/ai/generateAudio';
 import { persistMediaUrlToProjectData } from '../../services/fileService';
@@ -45,11 +45,10 @@ import {
   buildAnimationSpritePrompt,
   resolveAnimationSheetAspectRatio,
 } from '../../services/ai/animationPrompt';
-import { resolveVideoSubmissionControls } from '../../services/ai/videoRequestResolver';
 import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
-import { getPendingTasksForProject, resumeComfyUINodeTask, resumeRunningHubNodeTask, updatePendingTask, removePendingTask, completeVideoNodeTask, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../../services/pollManager';
+import { getPendingTasksForProject, resumeComfyUINodeTask, resumeRunningHubNodeTask, updatePendingTask, removePendingTask } from '../../services/pollManager';
 import VideoTaskStatus from './shared/VideoTaskStatus';
 import { isCloudWorkflow, getCloudWorkflowPersistedOutput, workflowExecution } from '../../services/workflowExecutionService';
 import { completeWorkflowApiNodeTask, stopWorkflowApiNodeTask } from '../../services/workflowApi/workflowApiAdapter';
@@ -364,17 +363,20 @@ function AINodeDialog() {
       showToast(t('节点不存在'), 'error');
       return;
     }
-    if (latestData.type === 'ai-director') {
-      const { executeGeneration } = await import('../../services/generationService');
-      const live = useAppStore.getState();
-      if (live.currentProjectId !== store.currentProjectId || live.nodes.find((item) => item.id === latestNode!.id)?.data !== latestData) return;
-      await executeGeneration(latestNode!.id, overridePrompt);
-      return;
-    }
-    if (store.currentProjectId && getPendingTasksForProject(store.currentProjectId).some((task) => (
+    if (latestData.type !== 'ai-director' && store.currentProjectId && getPendingTasksForProject(store.currentProjectId).some((task) => (
       task.nodeId === activeNodeId && task.taskType === 'comfyui' && task.comfyRecoveryState
     ))) {
       showToast(t('该节点还有未确认结束的 ComfyUI 任务，请先继续查询或终止任务'), 'error');
+      return;
+    }
+    if (latestData.type === 'ai-director' || latestData.type === 'ai-video') {
+      // 源视频的生成映射会创建新对象，异步加载后仍核对原始节点身份。
+      const originalData = latestNode!.data;
+      const originalProjectId = store.currentProjectId;
+      const { executeGeneration } = await import('../../services/generationService');
+      const live = useAppStore.getState();
+      if (live.currentProjectId !== originalProjectId || live.nodes.find((item) => item.id === latestNode!.id)?.data !== originalData) return;
+      await executeGeneration(latestNode!.id, overridePrompt);
       return;
     }
     const rawPrompt = overridePrompt ?? (latestData.prompt as string) ?? '';
@@ -393,7 +395,7 @@ function AINodeDialog() {
       customStyles: store.customStyles,
     });
     const cameraPrompt = buildGenerationCameraPrompt(latestData.cameraSettings);
-    const effectivePrompt = cameraPrompt && (nodeType === 'ai-image' || nodeType === 'ai-video')
+    const effectivePrompt = cameraPrompt && nodeType === 'ai-image'
       ? `${projectPrompt}\n\nCamera settings: ${cameraPrompt}.`
       : projectPrompt;
     const nodeModel = latestData?.model;
@@ -405,15 +407,8 @@ function AINodeDialog() {
     }
     const submittingNodeId = activeNodeId!;
     const submittingProjectId = currentProjectId;
-    if (nodeType === 'ai-video') {
-      try { prepareVideoNodeGeneration(submittingNodeId); }
-      catch (error) {
-        showToast(error instanceof Error ? error.message : t('生成失败'), 'error');
-        return;
-      }
-    }
     const runningHubTask = cloudWorkflow || latestData.provider === 'runninghub';
-    const guardedSubmission = runningHubTask || (['ai-animation', 'ai-video'].includes(latestData.type) && !!submittingProjectId);
+    const guardedSubmission = runningHubTask || (latestData.type === 'ai-animation' && !!submittingProjectId);
     let cloudGuard = guardedSubmission ? registerCanvasDerivation(store, submittingNodeId) : null;
     const isStillCurrentSubmission = () => {
       const state = useAppStore.getState();
@@ -425,8 +420,6 @@ function AINodeDialog() {
     };
     updateNodeDataTransient(activeNodeId!, { status: 'loading', error: undefined, videoTaskState: undefined });
     let batchNodeIds: string[] | undefined;
-    let videoResultReceived = false;
-    let videoTaskId: string | undefined;
     try {
       const batchCount = cloudWorkflow ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(Number(latestData.batchCount) || 1)));
       if (nodeType === 'ai-image' && batchCount > 1) {
@@ -613,83 +606,6 @@ function AINodeDialog() {
           params: { imageSize, aspectRatio },
         });
         showToast(t('全景图生成完成'));
-      } else if (nodeType === 'ai-video') {
-        const {
-          videoResolution,
-          videoFps,
-          videoFrames,
-          seedanceResolution,
-          seedanceRatio,
-          seedanceDuration,
-        } = resolveVideoSubmissionControls({
-          provider: nodeProvider,
-          workflowId: latestData.workflowId,
-          videoResolution: latestData.videoResolution as number | undefined,
-          videoFps: latestData.videoFps as number | undefined,
-          videoFrames: latestData.videoFrames as number | undefined,
-          seedanceResolution: latestData.seedanceResolution as string | undefined,
-          seedanceRatio: latestData.seedanceRatio as string | undefined,
-          seedanceDuration: latestData.seedanceDuration as number | undefined,
-        });
-        const generateAudio = latestData.generateAudio as boolean | undefined;
-        const result = await generateVideo({
-          prompt: effectivePrompt,
-          model: nodeModel,
-          provider: nodeProvider,
-          videoResolution,
-          videoFps,
-          videoFrames,
-          seedanceResolution,
-          seedanceRatio,
-          seedanceDuration,
-          generateAudio,
-          workflowId: latestData.workflowId,
-          workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
-          nodeId: activeNodeId ?? undefined,
-        });
-        videoResultReceived = true;
-        videoTaskId = submittingProjectId ? getPendingTasksForProject(submittingProjectId).find((task) => task.nodeId === submittingNodeId)?.taskId : undefined;
-        if (!isStillCurrentSubmission()) {
-          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId, undefined, 'canvas_changed');
-          return;
-        }
-        // 下载远程 URL 到本地项目目录
-        const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (currentProjectId
-          ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-video', nodeLabel)
-          : { mediaUrl: result.url, sourceUrl: result.url });
-        if (!isStillCurrentSubmission()) {
-          if (videoTaskId) pauseVideoNodeTask(submittingNodeId, videoTaskId, undefined, 'canvas_changed');
-          return;
-        }
-        const mediaUrl = persisted.mediaUrl;
-        updateNodeData(activeNodeId!, {
-          videoUrl: mediaUrl,
-          sourceUrl: persisted.sourceUrl,
-          filePath: persisted.filePath,
-          thumbnailUrl: mediaUrl,
-          output: persisted.sourceUrl,
-          status: 'success',
-          videoTaskState: undefined,
-        });
-        completeVideoNodeTask(submittingNodeId, videoTaskId);
-        if (result.workflowApiTaskId) completeWorkflowApiNodeTask(submittingNodeId, result.workflowApiTaskId);
-        if (runningHubTask) completeRunningHubNodeTask(submittingNodeId);
-        if (result.workflowApiTaskId) completeWorkflowApiNodeTask(submittingNodeId, result.workflowApiTaskId);
-        recordOutputHistory(activeNodeId!, {
-          nodeId: activeNodeId!,
-          nodeLabel: nodeLabel,
-          timestamp: Date.now(),
-          prompt: effectivePrompt,
-          output: persisted.sourceUrl,
-          nodeType: 'ai-video',
-          model: nodeModel,
-          provider: nodeProvider,
-          status: 'success',
-          mediaUrl,
-          filePath: persisted.filePath,
-          params: { videoResolution, videoFps, videoFrames, seedanceResolution, seedanceRatio, seedanceDuration, generateAudio, cameraSettings: latestData.cameraSettings },
-        });
-        showToast(t('视频生成完成'));
       } else if (nodeType === 'ai-audio') {
         const result = await generateAudio({
           prompt: effectivePrompt,
@@ -791,8 +707,6 @@ function AINodeDialog() {
         }
       }
     } catch (err) {
-      if (err instanceof VideoPollingPausedError) return;
-      if (videoResultReceived && videoTaskId && pauseVideoNodeTask(submittingNodeId, videoTaskId, err, 'delivery_pending')) return;
       const msg = err instanceof Error ? err.message : (typeof err === 'string' && err.trim() ? err : t('生成失败'));
       if (
         (err instanceof DOMException && err.name === 'AbortError')

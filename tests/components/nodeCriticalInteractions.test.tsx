@@ -1342,8 +1342,60 @@ describe('critical canvas node interactions', () => {
     expect(store.nodes[0]).toMatchObject({ id: 'source-node', type, position: { x: 12, y: 34 },
       data: { type, role: 'source', assetId: 'asset-1', status: 'success' } });
     expect(store.recordOutputHistory).toHaveBeenCalledWith('source-node', expect.objectContaining({ nodeType: generationType }),
-      ...(entry === 'toolbar' && generationType === 'ai-video' ? [true] : []));
+      ...(generationType === 'ai-video' ? [true] : []));
     vi.doUnmock('../../src/services/projectSettingsService');
+  });
+
+  describe('AINodeDialog shared video generation', () => {
+    afterEach(() => {
+      vi.doUnmock('../../src/services/generationService');
+    });
+
+    it.each(['ai-video', 'source-video'].flatMap((type) => (
+      ['submit', 'project-switch', 'node-replaced', 'comfy-recovery'].map((scenario) => ({ type, scenario }))
+    )))('delegates $type safely after loading the executor: $scenario', async ({ type, scenario }) => {
+      const store = createStore([{
+        id: 'video-node', type, position: { x: 0, y: 0 },
+        data: { type, label: '视频', prompt: '旧提示词', model: 'general/video', provider: 'general' },
+      }], () => 1);
+      store.activeNodeId = 'video-node';
+      const executeGeneration = vi.fn().mockResolvedValue({ success: true });
+      await installReactHookDriver();
+      installStoreMock(store);
+      vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+      vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+      vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({
+        default: function PromptPanelMock() { return null; },
+      }));
+      vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+      vi.doMock('../../src/services/pollManager', () => ({
+        getPendingTasksForProject: () => scenario === 'comfy-recovery'
+          ? [{ nodeId: 'video-node', taskType: 'comfyui', comfyRecoveryState: 'pending' }] : [],
+      }));
+      vi.doMock('../../src/services/generationService', () => ({ executeGeneration }));
+      const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+      const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
+      const overridePrompt = '@{sheet/shot/stable-row:第1镜} 保留附加要求';
+      const submission = (panel.props.onSubmit as (prompt: string) => Promise<void>)(overridePrompt);
+      if (scenario === 'comfy-recovery') {
+        await submission;
+        expect(store.showToast).toHaveBeenCalledWith('该节点还有未确认结束的 ComfyUI 任务，请先继续查询或终止任务', 'error');
+      } else {
+        // onSubmit 已捕获原始节点；在动态 import 的 await 边界切换输入。
+        if (scenario === 'project-switch') store.currentProjectId = 'project-b';
+        if (scenario === 'node-replaced') {
+          store.nodes[0] = { ...store.nodes[0], data: { ...store.nodes[0].data, prompt: '新提示词' } };
+        }
+        await submission;
+      }
+      if (scenario === 'submit') {
+        expect(executeGeneration).toHaveBeenCalledExactlyOnceWith('video-node', overridePrompt);
+      } else {
+        expect(executeGeneration).not.toHaveBeenCalled();
+      }
+      expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
+      expect(store.recordOutputHistory).not.toHaveBeenCalled();
+    });
   });
 
   it('AINodeDialog submits the latest video parameters and resolved project prompt', async () => {
@@ -1361,6 +1413,7 @@ describe('critical canvas node interactions', () => {
       seedanceDuration: 5,
       generateAudio: false,
       style: 'old-style',
+      cameraSettings: { lens: '85mm', aperture: 'f/2.8' },
     };
     const store = createStore([{
       id: 'video-node',
@@ -1376,6 +1429,7 @@ describe('critical canvas node interactions', () => {
 
     await installReactHookDriver();
     installStoreMock(store);
+    vi.doUnmock('../../src/services/generationService');
     vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
     vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }));
     vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({
@@ -1405,7 +1459,10 @@ describe('critical canvas node interactions', () => {
       CANVAS_PAN_DURATION_MS: 200,
       requestCanvasPanBy: vi.fn(),
     }));
-    vi.doMock('../../src/services/projectSettingsService', () => ({ resolveProjectGenerationPrompt }));
+    vi.doMock('../../src/services/projectSettingsService', async () => ({
+      ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
+      resolveProjectGenerationPrompt,
+    }));
     vi.doMock('../../src/services/pollManager', () => ({
       getPendingTasksForProject: () => [],
       prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
@@ -1481,7 +1538,7 @@ describe('critical canvas node interactions', () => {
       customStyles: store.customStyles,
     }));
     expect(generateVideo).toHaveBeenCalledWith({
-      prompt: 'resolved:latest prompt:latest-style',
+      prompt: 'resolved:latest prompt:latest-style\n\nCamera settings: 85mm portrait lens, f/2.8 aperture, soft background separation.',
       model: 'latest-model',
       provider: 'latest-provider',
       videoResolution: 1280,
@@ -1499,6 +1556,9 @@ describe('critical canvas node interactions', () => {
       videoUrl: 'https://example.com/result.mp4',
       status: 'success',
     }));
+    expect(store.recordOutputHistory).toHaveBeenCalledWith('video-node', expect.objectContaining({
+      params: expect.objectContaining({ cameraSettings: originalData.cameraSettings }),
+    }), true);
   });
 
   it.each(['success', 'failure', 'project-switch'])('AINodeDialog ComfyUI stop and recovery: %s', async (outcome) => {

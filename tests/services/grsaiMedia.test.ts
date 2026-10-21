@@ -23,9 +23,9 @@ import { getGrsaiVideoCapability, GRSAI_H3_PROTOCOL } from '../../src/services/a
 import { pollResolvedModelProtocol, validateModelExecutionProtocol } from '../../src/services/ai/modelProtocol';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-function generate(overrides: Partial<AIVideoGenParams> = {}, input: Partial<VideoGenerationReferenceInput> = {}, signal?: AbortSignal) {
+function generate(overrides: Partial<AIVideoGenParams> = {}, input: Partial<VideoGenerationReferenceInput> = {}, signal?: AbortSignal, beforeSubmit?: () => void | Promise<void>) {
   return grsaiMediaProviderAdapter.generateVideo!({
-    params: { provider: 'grsai', model: 'grsai/minimax-h3', prompt: '短片', nodeId: 'node', ...overrides }, prompt: '短片', signal,
+    params: { provider: 'grsai', model: 'grsai/minimax-h3', prompt: '短片', nodeId: 'node', ...overrides }, prompt: '短片', signal, beforeSubmit,
     resolveReferenceInput: async () => ({ prompt: '短片', operation: 'text-to-video', imageUrls: [], videoUrls: [], audioUrls: [], ...input }),
   });
 }
@@ -33,6 +33,18 @@ beforeEach(() => { vi.clearAllMocks(); mocks.fetch.mockReset(); mocks.state.conf
 afterEach(() => { vi.useRealTimers(); });
 
 describe('GRSAI H3 独立视频合同', () => {
+  it('rechecks the shot after reference uploads and rejects changed input before the paid request', async () => {
+    let uploaded = false;
+    mocks.images.mockImplementationOnce(async () => { uploaded = true; return ['https://uploads.example/ref.png']; });
+    const beforeSubmit = vi.fn(() => {
+      expect(uploaded).toBe(true);
+      throw new Error('镜头已修改');
+    });
+    await expect(generate({}, { imageUrls: ['asset://ref.png'] }, undefined, beforeSubmit)).rejects.toThrow('镜头已修改');
+    expect(beforeSubmit).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.savePendingTask).not.toHaveBeenCalled();
+  });
   it('keeps the H3 query descriptor after a gateway timeout without resubmitting', async () => {
     vi.useFakeTimers();
     mocks.fetch.mockResolvedValueOnce(json({ id: 'slow-h3', status: 'running' })).mockResolvedValue(json({}, 504));

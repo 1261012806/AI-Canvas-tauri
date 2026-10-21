@@ -5,6 +5,7 @@ import { updateShotlistRows } from '../../src/services/shotlistService';
 import { clearAgentToolRegistryForTests, getAgentTool, getAvailableAgentTools, prepareAgentToolCall, type AgentToolContext } from '../../src/services/chat/toolRegistry';
 import { registerShotlistAgentTools } from '../../src/services/chat/tools/shotlistTools';
 import { searchMcpToolCatalog } from '../../src/services/mcp/mcpToolCatalog';
+import { expandShotlistRowMentions } from '../../src/services/shotlistPromptService';
 
 const scope = () => ({ projectId: 'ep', baseRevision: useAppStore.getState().getCurrentRevision() });
 const context = (): AgentToolContext => ({ ...scope(), conversationId: 'mcp-control-ep', taskId: '', mode: 'autonomous', signal: new AbortController().signal });
@@ -88,19 +89,26 @@ describe('镜头制作准备', () => {
     expect(commit).toHaveBeenCalledTimes(1);
   });
 
-  it('视频引用真实画面节点，不把快照路径复制进提示词', () => {
+  it('视频保存精确镜头胶囊，生成时读取最新字段和真实图片，不复制快照路径', () => {
     const [result] = prepareShotlistProduction(scope(), 'sheet', ['r1'], 'video');
     const state = useAppStore.getState();
     const node = state.nodes.find((item) => item.id === result.nodeId)!;
-    expect(node.data.prompt).toContain('推近，林夏站在月台');
-    expect(node.data.prompt).toContain('对白：终于等到你了');
-    expect(node.data.prompt).toContain('音效/音乐：列车进站声');
-    expect(node.data.prompt).toContain('@{frame:参考画面}');
+    expect(node.data.prompt).toBe('@{sheet/shot/r1:镜头 · 镜1}');
+    const resolved = expandShotlistRowMentions(node.data.prompt!, state.nodes);
+    expect(resolved).toContain('运镜：推近');
+    expect(resolved).toContain('林夏站在月台');
+    expect(resolved).toContain('终于等到你了');
+    expect(resolved).toContain('音效/音乐：列车进站声');
+    expect(resolved).toContain('@{frame:参考画面}');
     expect(node.data.prompt).not.toContain('PRIVATE_');
-    expect(state.edges).toContainEqual(expect.objectContaining({ source: 'frame', target: node.id }));
+    expect(state.edges).toContainEqual(expect.objectContaining({ source: 'sheet', target: node.id }));
+    expect(state.edges.filter((edge) => edge.target === node.id)).toHaveLength(1);
     expect(state.edges).not.toContainEqual(expect.objectContaining({ source: node.id, target: 'sheet' }));
     expect(state.nodes.find((item) => item.id === 'sheet')!.data.prompt).toBe('保留剧本引用');
     expect(node.data.model).toBe('general/video');
+    updateShotlistRows(scope(), 'sheet', 'update', [{ id: 'r1', camera: '固定机位', dialogue: '先等一下。' }]);
+    expect(expandShotlistRowMentions(node.data.prompt!, useAppStore.getState().nodes)).toContain('先等一下。');
+    expect(useAppStore.getState().nodes.find((item) => item.id === node.id)!.data.prompt).toBe(node.data.prompt);
   });
 
   it('导演台带独立镜头说明且位置不重叠，不伪造场景或成果', async () => {

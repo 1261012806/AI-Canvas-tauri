@@ -8,7 +8,8 @@ import { useAppStore } from '../../../store/useAppStore';
 import { isBatchConnectableNode } from '../../../store/store.nodes';
 import { generateId } from '../../../store/store.utils';
 import type { BaseNodeData, NodeType } from '../../../types';
-import { resolveShotVideoDuration } from '../../../types/shotlist';
+import { parseShotlistRowMentionId, resolveShotVideoDuration } from '../../../types/shotlist';
+import { resolveSingleShotlistRowReference } from '../../shotlistPromptService';
 import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import type {
@@ -225,7 +226,7 @@ const DEFAULT_NODE_WIDTH = 280;
 const DEFAULT_NODE_HEIGHT = 160;
 const COMMENT_NODE_HEIGHT = 120;
 const MAX_LOCAL_LAYOUT_CANDIDATES = 32;
-const NODE_REFERENCE_PATTERN = /@\{([^:}\r\n]+):[^}\r\n]+\}/g;
+const NODE_REFERENCE_PATTERN = /@\{([^:}\r\n]+):[^}\r\n]*\}/g;
 
 interface QueryNodesInput extends NodeTargetInput {
   detail?: boolean;
@@ -989,9 +990,11 @@ function describeConnectionLayout(sourceId: string, targetId: string, nodes: Nod
   };
 }
 
-/** 宫格分镜单元格是虚拟引用，画布连线仍连接到真实的分镜节点。 */
+/** 宫格与精确镜头都是虚拟引用，画布边仍连接真实的来源节点。 */
 function resolvePromptReferenceSourceId(rawNodeId: string): string {
   const nodeId = rawNodeId.trim();
+  const shot = parseShotlistRowMentionId(nodeId);
+  if (shot) return shot.nodeId;
   if (!nodeId.includes('/cell/')) return nodeId;
   const parts = nodeId.split('/cell/');
   const sourceId = parts[0]?.trim();
@@ -1022,6 +1025,13 @@ function buildPromptReferenceEdges(
       if (!sourceNode) {
         const message = `新节点「${targetNode.data.label}」引用的节点「${rawSourceId}」不存在，请重新查询画布后再创建`;
         return { edges: [], error: message };
+      }
+      if (rawSourceId.includes('/shot/')) {
+        const reference = parseShotlistRowMentionId(rawSourceId);
+        if (!reference || sourceNode.data.type !== 'ai-shotlist'
+          || !sourceNode.data.shotlistRows?.some((row) => row.id === reference.rowId)) {
+          return { edges: [], error: '引用的分镜表或镜头不存在，请重新读取镜头行后创建' };
+        }
       }
       if ((sourceNode.type ?? sourceNode.data.type) === 'group') {
         const message = `新节点「${targetNode.data.label}」引用的「${sourceNode.data.label}」是分组，不能作为内容来源`;
@@ -1110,8 +1120,9 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '为已有资产新建参考图时传 dramaAssetId（仅项目 ai-image），生成成功后自动回填库条目；已有图用 drama_reference_image_add 绑定。先完成绑图再创建下游，不能把只有文字设定的库条目当图片。',
         'type 按这个节点最终要产出什么来选，不要因为内容是文字描述就一律建文本节点：',
         '产物是画面的（角色设定图、场景图、道具图、关键帧、单张分镜）用 ai-image，把画面描述写进 prompt；',
-        '产物是镜头的用 ai-video，配乐旁白用 ai-audio，多宫格图片也用 ai-image，镜头表用 ai-shotlist。',
-        '按剧本或分镜导入视频时，必须把来源中明确的每镜秒数传入 videoDuration，不能只写在 prompt 中；小数秒向上取整到实际生成时长。未提供时保留项目默认值，不猜测提示词中的数字。软件内分镜优先用 shotlist_prepare_production，保留自动时长关联。',
+        '产物是镜头的用 ai-video，配乐旁白用 ai-audio，多宫格图片也用 ai-image。分镜表不是视频生成的必建前置；仅需直接制作视频时不额外创建 ai-shotlist 或剧本快照，只有需要逐镜审稿、统一时长或按表剪辑时才建表，并先查询复用已有表。',
+        '从外部剧本或分镜导入视频时，必须把来源中明确的每镜秒数传入 videoDuration，不能只写在 prompt 中；小数秒向上取整到实际生成时长。未提供时保留项目默认值，不猜测提示词中的数字。已明确使用软件内现有分镜表制作时，用 shotlist_prepare_production，保留镜头来源和自动时长关联；不默认额外复制每镜全文为文本节点。',
+        '直接引用软件内某镜创建视频时，先用 shotlist_read 取得该行 mention，再原样放入 prompt，附加要求写在胶囊外；自动读取最新景别、运镜、画面、对白和音效。省略 videoDuration 跟随该镜时长，明确传入则视为手动覆盖；只连接所属表，不引用整表或编造虚拟镜头 ID。',
         '已确定的模型、图片尺寸/批量、视频长边、语音或音乐参数请在创建时一并传入；本地工作流长边像素用 videoLongSide（如 832），API 画质档位用 videoResolution（如 720p）。未提供的字段沿用项目或模型默认值。音频参考素材用 @ 引用，工作流特有参数仍在工作流配置中设置。',
         'ai-storyboard 是把已有图片进行宫格裁切后产生的素材节点，本工具不能直接创建，也不能给它提示词或运行生成。',
         '产物本身就是文字的用 ai-text（markdown 排版用 ai-markdown）。',
@@ -1243,6 +1254,21 @@ export function registerCanvasAgentTools(): Array<() => void> {
         if (edgePlan.error) {
           return { status: 'error', summary: edgePlan.error, modelContent: edgePlan.error };
         }
+        for (let index = 0; index < nodes.length; index++) {
+          const node = nodes[index];
+          if (node.data.type !== 'ai-video') continue;
+          try {
+            const source = resolveSingleShotlistRowReference(node.data.prompt || '', referenceState.nodes);
+            if (!source) continue;
+            const explicitDuration = input.nodes[index].videoDuration !== undefined;
+            node.data.shotlistProductionSource = { nodeId: source.nodeId, rowId: source.rowId,
+              kind: 'video', durationSync: explicitDuration ? 'manual' : 'auto' };
+            if (!explicitDuration) node.data.seedanceDuration = resolveShotVideoDuration(source.row.duration);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : '镜头引用无效';
+            return { status: 'error', summary: message, modelContent: message };
+          }
+        }
         const store = useAppStore.getState();
         store.addNodesWithEdges(nodes, edgePlan.edges);
         // 项目默认值用于填空；MCP 同一次创建中明确给出的参数必须保留，
@@ -1261,6 +1287,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
           if (node.data.type === 'ai-video') {
             explicit.nodeWidth = node.data.nodeWidth;
             explicit.nodeHeight = node.data.nodeHeight;
+            if (node.data.shotlistProductionSource?.durationSync === 'auto') delete explicit.seedanceDuration;
           }
           if (Object.keys(explicit).length) store.updateNodeDataTransient(node.id, explicit);
         }

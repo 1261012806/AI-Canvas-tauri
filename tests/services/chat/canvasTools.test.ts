@@ -59,6 +59,37 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('creates a video from a stable shot reference with one real sheet edge and respects explicit duration', async () => {
+    useAppStore.setState({ projectLoadStatus: 'ready', nodes: [node('sheet', {
+      type: 'ai-shotlist', label: '分镜', shotlistRows: [{ id: 'r', shotNo: '1', content: '她合上书', duration: 4.3 }],
+    })], edges: [] });
+    const tool = getAgentTool('canvas_create_nodes')!;
+    expect((await tool.execute(context(), { nodes: [
+      { type: 'ai-video', label: '跟随分镜', prompt: '@{sheet/shot/r:镜1}' },
+      { type: 'ai-video', label: '手动时长', prompt: '@{sheet/shot/r:镜1}', videoDuration: 12 },
+    ] })).status).toBe('success');
+    const videos = useAppStore.getState().nodes.filter((item) => item.data.type === 'ai-video');
+    expect(videos[0].data).toMatchObject({ prompt: '@{sheet/shot/r:镜1}', seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'r', kind: 'video', durationSync: 'auto' } });
+    expect(videos[1].data).toMatchObject({ seedanceDuration: 12, shotlistProductionSource: { durationSync: 'manual' } });
+    expect(useAppStore.getState().edges.map((edge) => [edge.source, edge.target])).toEqual(videos.map((video) => ['sheet', video.id]));
+    useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: [{ id: 'r', shotNo: '1', content: '她合上书', duration: 8.1 }] });
+    const current = useAppStore.getState().nodes.filter((item) => item.data.type === 'ai-video');
+    expect(current.map((video) => video.data.seedanceDuration)).toEqual([9, 12]);
+  });
+
+  it('rejects a batch containing a deleted shot reference without writing partial nodes', async () => {
+    useAppStore.setState({ nodes: [node('sheet', { type: 'ai-shotlist', shotlistRows: [{ id: 'r', shotNo: '1', content: '有效镜头' }] })], edges: [] });
+    const before = useAppStore.getState().nodes;
+    const result = await getAgentTool('canvas_create_nodes')!.execute(context(), { nodes: [
+      { type: 'ai-video', prompt: '@{sheet/shot/r:镜1}' },
+      { type: 'ai-video', prompt: '@{sheet/shot/deleted:镜2}' },
+    ] });
+    expect(result.status).toBe('error');
+    expect(useAppStore.getState().nodes).toBe(before);
+    expect(useAppStore.getState().edges).toEqual([]);
+  });
+
   it('prefers exact library images in MCP prompts and avoids their automatic edges while preserving other dependencies', async () => {
     useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), props: [{
       id: 'prop-1', kind: 'prop', name: '茶壶', key: '茶壶', summary: '', visualNotes: '',

@@ -10,6 +10,7 @@ import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
 import { bestNodeThumb, getNodeChipIconPath, getNodeMetaMap, numberMediaReferenceLabels } from './mentionEditorDom';
+import { parseShotlistRowMentionId } from '../../../types/shotlist';
 
 const CHIP_STYLE: Record<string, string> = {
   'ai-text': 'chip-text',
@@ -18,6 +19,7 @@ const CHIP_STYLE: Record<string, string> = {
   'ai-audio': 'chip-audio',
   'ai-markdown': 'chip-markdown',
   'ai-storyboard': 'chip-image',
+  'ai-shotlist': 'chip-text',
 };
 
 const WF_IO_STYLE: Record<string, string> = {
@@ -83,7 +85,7 @@ export function renderPromptWithChips(
       const meta = metaMap.get(nodeId);
       references.push(meta?.mediaReference || (meta?.imageReferenceKey
         ? { kind: 'image', key: meta.imageReferenceKey }
-        : !meta ? { kind: 'image', key: `node:${nodeId}` } : undefined));
+        : !meta && !parseShotlistRowMentionId(nodeId) ? { kind: 'image', key: `node:${nodeId}` } : undefined));
     } else {
       references.push(undefined);
     }
@@ -185,16 +187,18 @@ export function renderPromptWithChips(
     } else if (match[4] !== undefined) {
       const nodeId = match[4];
       const label = match[5] || '生成图像';
+      const shot = parseShotlistRowMentionId(nodeId);
       const meta = metaMap.get(nodeId);
-      const node = nodes?.find((n) => n.id === (nodeId.includes('/cell/') ? nodeId.split('/')[0] : nodeId));
-      const nodeType = meta?.type || (node?.data?.type as string) || 'ai-image';
+      const node = nodes?.find((n) => n.id === (shot?.nodeId || (nodeId.includes('/cell/') ? nodeId.split('/')[0] : nodeId)));
+      const nodeType = shot ? 'ai-shotlist' : meta?.type || (node?.data?.type as string) || 'ai-image';
       const iconPath = getNodeChipIconPath(nodeType);
       const thumbUrl = meta?.thumbnailUrl || (node ? bestNodeThumb(node.data ?? {}) || (node.data?.imageUrl as string) : undefined);
       const isMedia = nodeType === 'ai-image' || nodeType === 'ai-video' || nodeType === 'ai-storyboard';
       const showThumbnail = !iconPath && isMedia && !!thumbUrl;
-      const displayId = meta?.displayId ?? (node?.data?.displayId as number | undefined);
-      const displayLabel = displayId != null ? `#${displayId}` : label;
-      const title = displayId != null ? `${label} (#${displayId})` : label;
+      const displayId = shot ? undefined : meta?.displayId ?? (node?.data?.displayId as number | undefined);
+      const liveLabel = shot ? meta?.label || `${label}（镜头已失效）` : label;
+      const displayLabel = displayId != null ? `#${displayId}` : liveLabel;
+      const title = displayId != null ? `${label} (#${displayId})` : liveLabel;
       const referenceLabel = referenceLabels[currentIdx];
       const canPreview = isMedia && !!thumbUrl && !!options.onPreviewImage;
 

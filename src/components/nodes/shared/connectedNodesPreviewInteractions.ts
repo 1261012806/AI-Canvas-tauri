@@ -1,5 +1,6 @@
 import type { BaseNodeData } from '../../../types';
 import { cellBackgroundStyle, gridBoundaries } from '../../../utils/storyboardGrid';
+import { formatShotVideoPrompt, parseShotlistRowMentionId } from '../../../types/shotlist';
 
 export const CONNECTED_PREVIEW_THUMB_SIZE = 48;
 export const CONNECTED_PREVIEW_GAP = 6;
@@ -64,6 +65,19 @@ export function resolveMentionPreview(
   fallbackLabel: string,
   thumbnailUrl?: string,
 ) {
+  const shot = parseShotlistRowMentionId(id);
+  if (shot) {
+    const sheet = nodes.find((item) => item.id === shot.nodeId && item.data.type === 'ai-shotlist');
+    const rows = sheet?.data.shotlistRows ?? [];
+    const index = rows.findIndex((row) => row.id === shot.rowId);
+    const row = rows[index];
+    return {
+      label: row ? `镜${row.shotNo || index + 1} · ${sheet!.data.label || '分镜表'}` : fallbackLabel,
+      displayId: undefined, outputType: 'text' as const, thumbnailUrl: undefined, sprite: undefined,
+      text: row ? formatShotVideoPrompt(row).slice(0, 240) : '', missing: !row,
+      description: row ? '分镜表 · 单镜预览，时长以视频参数为准' : '分镜表 · 镜头已删除或引用失效',
+    };
+  }
   const cell = id.match(/^(.*)\/cell\/(\d+)$/);
   const node = nodes.find((item) => item.id === (cell?.[1] ?? id));
   const data = node?.data;

@@ -231,7 +231,7 @@ export const apimartMediaProviderAdapter: MediaProviderAdapter = {
     );
   },
 
-  async generateVideo({ params, prompt, resolveReferenceInput, signal }) {
+  async generateVideo({ params, prompt, resolveReferenceInput, signal, beforeSubmit }) {
     const { apiKey, baseUrl } = resolveApimartConnection();
     const modelName = extractModelName(params.model, params.provider);
     const referenceInput = await resolveReferenceInput();
@@ -239,6 +239,9 @@ export const apimartMediaProviderAdapter: MediaProviderAdapter = {
       if (referenceInput.operation === 'video-to-video') {
         throw new Error(`APIMart 视频模型 "${modelName}" 暂不支持视频到视频生成`);
       }
+      signal?.throwIfAborted();
+      if (beforeSubmit) await beforeSubmit();
+      signal?.throwIfAborted();
       return generateApimartVideo(apiKey, baseUrl, modelName, prompt, params.nodeId, {}, signal);
     }
     if (
@@ -340,6 +343,9 @@ export const apimartMediaProviderAdapter: MediaProviderAdapter = {
         { signal },
       );
     }
+    signal?.throwIfAborted();
+    if (beforeSubmit) await beforeSubmit();
+    signal?.throwIfAborted();
     return generateApimartVideo(apiKey, baseUrl, modelName, referenceInput.prompt, params.nodeId, {
       resolution: params.seedanceResolution,
       ratio: params.seedanceRatio,

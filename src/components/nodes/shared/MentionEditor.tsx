@@ -32,6 +32,7 @@ import {
   buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
 import type { CharacterReferenceImage } from '../../../types/dramaAssets';
+import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import {
@@ -48,6 +49,7 @@ import {
   renderPromptToNodes,
   serializeDOM,
   syncGlobalCharacterReferenceChips,
+  syncShotlistReferenceChips,
   syncImageReferenceLabels,
   ZWSP,
 } from './mentionEditorDom';
@@ -206,6 +208,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     // IME 组合输入期间保留浏览器的文本节点，结束后再通过输入基线合并新引用。
     if (composingRef.current) return;
     syncGlobalCharacterReferenceChips(el);
+    syncShotlistReferenceChips(el, nodeMetaMap);
     syncImageReferenceLabels(el, nodeMetaMap);
     const previousPrompt = syncedPromptRef.current;
     syncedPromptRef.current = prompt;
@@ -343,6 +346,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const previousPrompt = syncedPromptRef.current;
     restoreMentionEditorSnapshot(el, snapshot);
     syncGlobalCharacterReferenceChips(el);
+    syncShotlistReferenceChips(el, nodeMetaMap);
     syncImageReferenceLabels(el, nodeMetaMap);
     syncedPromptRef.current = snapshot.prompt;
     lastFocusedWfValueRef.current = (document.activeElement as HTMLElement | null)?.closest<HTMLSpanElement>('.prompt-chip-wf-value') ?? null;
@@ -1150,7 +1154,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     if (key === lastHoverKeyRef.current) return; // 同一芯片，跳过避免抖动
     handleEditorMouseLeave();
     lastHoverKeyRef.current = key;
-    if (source?.kind === 'node') useAppStore.getState().setHoveredMentionNodeId(source.id);
+    if (source?.kind === 'node') useAppStore.getState().setHoveredMentionNodeId(parseShotlistRowMentionId(source.id)?.nodeId || source.id);
     if (el && source && key) {
       chipHoverTimer.current = setTimeout(() => {
         chipHoverTimer.current = null;

@@ -12,7 +12,7 @@ import type { MediaProviderAdapter } from '../mediaProviderRegistry';
 
 export const grsaiMediaProviderAdapter: MediaProviderAdapter = {
   providerId: 'grsai', capabilities: ['video'],
-  async generateVideo({ params, resolveReferenceInput, signal: externalSignal }) {
+  async generateVideo({ params, resolveReferenceInput, signal: externalSignal, beforeSubmit }) {
     const provider = useAppStore.getState().config.providers.grsai;
     if (!provider?.apiKey) throw new Error('请先配置 GRSAI 的 API Key');
     const baseUrl = provider.baseUrl?.trim() || GRSAI_BASE_URL;
@@ -49,6 +49,8 @@ export const grsaiMediaProviderAdapter: MediaProviderAdapter = {
       const imageUrls = await resolveImageUrlArray(images, 'grsai', signal);
       const audioUrls: string[] = [];
       for (const url of audios) audioUrls.push(await resolveMediaReferenceUrl(url, { provider: 'grsai', kind: 'audio', signal }));
+      signal?.throwIfAborted();
+      if (beforeSubmit) await beforeSubmit();
       signal?.throwIfAborted();
       const submitted = await submitModelProtocol({ apiKey: provider.apiKey, baseUrl, protocol: GRSAI_H3_PROTOCOL, signal,
         variables: { model, prompt: input.prompt, resolution, duration, aspectRatio: ratio === '9:16' ? 'portrait' : 'landscape', imageUrls, audioUrls },

@@ -21,6 +21,7 @@ import type { BaseNodeData, ImageAnnotationLayer, ShotRow, StoryboardCellOverrid
 import type { MediaReference } from '../../types/aiTypes';
 import { mergeMediaReferences, toLegacyReferenceMedia, getMediaReferenceUrls } from './connectedReferenceMedia';
 import { parseChatImageReferences, readChatImageReference } from '../chat/chatImageReferenceService';
+import { expandShotlistRowMentions } from '../shotlistPromptService';
 
 interface PromptImageEntry {
   url: string;
@@ -164,6 +165,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
 }> {
   const store = useAppStore.getState();
   const { nodes } = store;
+  rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   // groups: 1=@asset  2,3=@drama  4,5=@node
   const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
   const imageEntries: PromptImageEntry[] = [];
@@ -451,6 +453,7 @@ export function collectPromptNodeMediaUrls(
   rawPrompt: string,
 ): Pick<PromptMediaReferences, 'references' | 'videoUrls' | 'audioUrls'> {
   const { nodes, dramaAssets, globalCharacters } = useAppStore.getState();
+  rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   const references: MediaReference[] = [];
 
   for (const match of rawPrompt.matchAll(/@drama\{([^:]+):([^}]+)\}|@\{([^:]+):[^}]+\}/g)) {
@@ -511,6 +514,7 @@ async function resolvePromptReferences(
 ): Promise<PromptMediaReferences> {
   const store = useAppStore.getState();
   const { nodes } = store;
+  rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   const imageEntries: PromptImageEntry[] = [];
   const mediaReferences: MediaReference[] = [];
   // groups: 1=@asset  2,3=@drama  4,5=@node

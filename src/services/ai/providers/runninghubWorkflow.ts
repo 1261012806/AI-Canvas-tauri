@@ -107,6 +107,7 @@ export async function queryRunningHubWorkflow(
 export async function executeRunningHubWorkflow(params: {
   workflowId: string; prompt: string; kind: RunningHubMediaKind; nodeId?: string;
   workflowInputs?: Record<string, string>; references?: RunningHubReferences;
+  beforeSubmit?: () => void | Promise<void>;
   runninghubTaskContext?: import('../../../types/runninghub').RunningHubTaskContext;
 }, externalSignal?: AbortSignal): Promise<RunningHubOutput[]> {
   const store = useAppStore.getState();
@@ -133,6 +134,7 @@ export async function executeRunningHubWorkflow(params: {
     stage('上传素材');
     if (!fresh()) throw new Error('当前项目或对话已变化，未提交任务');
     const nodeInfoList = await buildRunningHubInputs(connection, manifest, params.prompt, params.workflowInputs, params.references, signal);
+    if (params.beforeSubmit) await params.beforeSubmit();
     if (!fresh()) throw new Error('画布已变化，请重新生成');
     stage('提交任务');
     if (trackingId && projectId) savePendingTask({ nodeId: trackingId, projectId, nodeType: workflow.category, provider: 'runninghubwf', providerConfigId: manifest.connectionId, taskType: 'runninghub-workflow', taskId: '', submitted: false, runninghubSite: runningHubSiteId(connection.baseUrl), runninghubRecoveryState: 'submit_unknown', runninghubOutputNodeIds: manifest.outputNodeIds, runninghubWorkflowId: workflow.id, runninghubMessage: context });

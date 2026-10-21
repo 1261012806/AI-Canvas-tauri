@@ -40,9 +40,9 @@ beforeEach(() => {
 
 describe('MCP tool catalog', () => {
   it('shows library preference and connection rules before initial discovery and full-mode creation tools', () => {
-    for (const id of ['tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production']) register(id);
+    for (const id of ['tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production', 'episode_create_shotlist']) register(id);
     const descriptors = [MCP_CALL_DESCRIPTOR, ...[
-      'tools_search', 'tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production',
+      'tools_search', 'tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production', 'episode_create_shotlist',
     ].map((id) => toMcpToolDescriptor(getAgentTool(id)!))];
     for (const descriptor of descriptors) {
       expect(descriptor.description.startsWith('素材引用优先级：')).toBe(true);
@@ -55,6 +55,10 @@ describe('MCP tool catalog', () => {
       expect(descriptor.description).toContain('常规新建省略 x/y');
       expect(descriptor.description).toContain('分镜表 → 导演台');
       expect(descriptor.description).toContain('通过镜头来源关联成果');
+      expect(descriptor.description).toContain('分镜表不是视频生成的必建前置');
+      expect(descriptor.description).toContain('并先查询复用已有表');
+      expect(descriptor.description).toContain('canvas_bind_shotlist_frame');
+      expect(descriptor.description).toContain('生成时融合其最新景别、运镜、内容、对白');
       expect(descriptor.description).toContain('不要重复连接');
       expect(descriptor.description).toContain('canvas_query(detail=true)');
       expect(descriptor.description).toContain('layout.warning');
@@ -78,6 +82,8 @@ describe('MCP tool catalog', () => {
       const decoded = JSON.parse(serialized);
       expect(decoded.hint).toContain('不要把导演台反接回分镜表');
       expect(decoded.hint).toContain('不把制作节点反接回所属分镜表输入');
+      expect(decoded.hint).toContain('分镜表不是视频生成的必建前置');
+      expect(decoded.hint).toContain('video_editor_create 的 shotlistNodeId');
       expect(decoded.tools).toEqual(result.tools);
       if (result.hint) expect(decoded.hint.endsWith(result.hint)).toBe(true);
       expect(result.hint?.startsWith('素材引用优先级：')).not.toBe(true);

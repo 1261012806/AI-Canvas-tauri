@@ -47,3 +47,60 @@ it('preserves imported old video before generation and stops if its history cann
   expect(useAppStore.getState().nodes[0].data.videoUrl).toBe('old.mp4');
   expect(history.mock.calls[0]).toEqual(['v', expect.objectContaining({ mediaUrl: 'old.mp4' }), true]);
 });
+
+it('expands the selected shot with camera, dialogue and the actual video duration before submission', async () => {
+  const state = useAppStore.getState();
+  useAppStore.setState({ nodes: [...state.nodes, { id: 'sheet', type: 'ai-shotlist', position: { x: 0, y: 0 }, data: {
+    type: 'ai-shotlist', label: '分镜', shotlistRows: [
+      { id: 'r1', shotNo: '1', shotSize: '特写', camera: '缓慢推近', content: '她合上书', dialogue: '小绘：等一下。', duration: 4 },
+      { id: 'r2', shotNo: '2', content: '无关镜头' },
+    ],
+  } }] });
+  state.updateNodeDataTransient('v', { prompt: '@{sheet/shot/r1:镜1}\n补充：暖光', seedanceDuration: 12 });
+  expect((await executeGeneration('v')).success).toBe(true);
+  const params = mocks.generate.mock.calls[0][0];
+  expect(params.seedanceDuration).toBe(12);
+  for (const value of ['景别：特写', '运镜：缓慢推近', '小绘：等一下。', '镜头时长：12秒', '补充：暖光']) expect(params.prompt).toContain(value);
+  expect(params.prompt).not.toMatch(/无关镜头|\/shot\//);
+});
+
+it('checks the actual override shot again before submitting and does not leave an edited shot loading', async () => {
+  useAppStore.setState({ nodes: [...useAppStore.getState().nodes, { id: 'sheet', type: 'ai-shotlist', position: { x: 0, y: 0 }, data: {
+    type: 'ai-shotlist', label: '分镜', shotlistRows: [{ id: 'r', shotNo: '1', content: '本次提交画面' }],
+  } }] });
+  mocks.generate.mockImplementation(async (params, _signal, beforeSubmit) => {
+    expect(params.prompt).toContain('本次提交画面');
+    useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: [{ id: 'r', shotNo: '1', content: '上传期间已修改' }] });
+    useAppStore.getState().incrementRevision();
+    await beforeSubmit();
+    return { url: 'must-not-be-used.mp4' };
+  });
+  expect((await executeGeneration('v', '@{sheet/shot/r:镜1}')).success).toBe(false);
+  expect(mocks.persist).not.toHaveBeenCalled();
+  const video = useAppStore.getState().nodes.find((node) => node.id === 'v')!;
+  expect(video.data.status).toBe('error');
+  expect(video.data.videoUrl).toBeUndefined();
+});
+
+it('rejects a deleted shot before starting generation', async () => {
+  expect((await executeGeneration('v', '@{missing/shot/r:已删除}')).success).toBe(false);
+  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(useAppStore.getState().nodes[0].data.status).not.toBe('loading');
+});
+
+it('guards a shot reference supplied only through workflow inputs before the paid submit', async () => {
+  useAppStore.setState({ nodes: [...useAppStore.getState().nodes, { id: 'sheet', type: 'ai-shotlist', position: { x: 0, y: 0 }, data: {
+    type: 'ai-shotlist', label: '分镜', shotlistRows: [{ id: 'r', shotNo: '1', camera: '固定机位', content: '书桌前' }],
+  } }] });
+  useAppStore.getState().updateNodeDataTransient('v', { workflowInputs: { prompt: '@{sheet/shot/r:镜1}' } });
+  mocks.generate.mockImplementation(async (_params, _signal, beforeSubmit) => {
+    useAppStore.getState().updateNodeDataTransient('sheet', {
+      shotlistRows: [{ id: 'r', shotNo: '1', camera: '缓慢推近', content: '书桌前' }],
+    });
+    await beforeSubmit();
+    return { url: 'must-not-be-used.mp4' };
+  });
+  expect((await executeGeneration('v')).success).toBe(false);
+  expect(mocks.persist).not.toHaveBeenCalled();
+  expect(useAppStore.getState().nodes.find((node) => node.id === 'v')?.data.status).toBe('error');
+});

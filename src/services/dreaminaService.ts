@@ -266,6 +266,7 @@ export async function generateDreaminaVideo(opts: {
   ratio?: string;
   duration?: number;
   resolution?: string;
+  beforeSubmit?: () => void | Promise<void>;
 }, externalSignal?: AbortSignal): Promise<{ url: string }> {
   const nodeSignal = opts.nodeId ? registerNodePolling(opts.nodeId) : undefined;
   const signal = nodeSignal && externalSignal
@@ -273,6 +274,7 @@ export async function generateDreaminaVideo(opts: {
     : nodeSignal ?? externalSignal;
   try {
     const params = buildDreaminaVideoParams(opts);
+    if (opts.beforeSubmit) await opts.beforeSubmit();
 
     // 预存待续任务（在 invoke 之前），确保关窗重启后能恢复
     if (opts.nodeId) {

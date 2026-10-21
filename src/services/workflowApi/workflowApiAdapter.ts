@@ -324,6 +324,7 @@ export async function executeWorkflowApi(params: {
   workflowId: string; nodeId?: string; prompt: string;
   taskContext?: import('../../types/workflowApi').CloudWorkflowTaskContext;
   inputs?: WorkflowApiInputValues; references?: WorkflowApiReferences;
+  beforeSubmit?: () => void | Promise<void>;
 }, externalSignal?: AbortSignal): Promise<CloudWorkflowOutput[]> {
   const store = useAppStore.getState();
   const workflow = store.workflows.find((item) => item.id === params.workflowId);
@@ -366,6 +367,7 @@ export async function executeWorkflowApi(params: {
     stage('准备素材');
     const variables = manifest.version === 2 ? await prepareDeclaredWorkflowVariables(manifest, params.prompt, params.inputs, params.references, signal) : undefined;
     const body = manifest.version === 1 ? await buildWorkflowApiInputs(manifest, params.prompt, params.inputs, params.references, signal) : undefined;
+    if (params.beforeSubmit) await params.beforeSubmit();
     if (!fresh()) throw new Error('画布已变化，未提交工作流');
     stage('提交任务');
     savePendingTask({ nodeId: trackingId, projectId, nodeType, provider: 'workflow-api',

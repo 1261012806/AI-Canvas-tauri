@@ -7,6 +7,7 @@ import type { AppState } from '../../../store/useAppStore';
 import type { BaseNodeData, NodeType, StoryboardCellOverride, WorkflowIONodeType } from '../../../types';
 import { bestNodeThumb } from './mentionEditorDom';
 import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { buildShotlistRowMentionId } from '../../../types/shotlist';
 
 export interface CanvasMentionItem {
   id: string;
@@ -96,6 +97,19 @@ export function resolveCanvasMentionNodes(
   const expanded: CanvasMentionItem[] = [];
   for (const item of list) {
     expanded.push(item);
+    if (item.type === 'ai-shotlist') {
+      const sheet = nodes.find((node) => node.id === item.id);
+      sheet?.data.shotlistRows?.forEach((row, index) => {
+        const id = buildShotlistRowMentionId(item.id, row.id);
+        const shotLabel = `镜${row.shotNo || index + 1}`;
+        expanded.push({
+          id, label: `${shotLabel} · ${item.label}`, type: 'ai-shotlist',
+          displayId: undefined, hasOutput: true, outputType: 'text', thumbnailUrl: undefined, isSelf: false,
+          searchValues: [...(item.searchValues ?? []), id, row.id, row.shotNo, shotLabel, `第${index + 1}镜`, row.content, row.dialogue],
+        });
+      });
+      continue;
+    }
     if (item.type !== 'ai-storyboard') continue;
     const storyboard = nodes.find((node) => node.id === item.id);
     if (!storyboard) continue;

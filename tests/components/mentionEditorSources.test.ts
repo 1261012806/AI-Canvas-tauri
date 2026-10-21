@@ -165,6 +165,24 @@ describe('mentionEditorSources', () => {
     expect(candidates[0]).toMatchObject({ isSelf: true, outputType: 'image' });
   });
 
+  it('按稳定镜头 ID 展开分镜表，可按当前镜号和对白搜索，重排不改变引用身份', () => {
+    const sheet = node('sheet', 'ai-shotlist', { label: '第一场', displayId: 47, shotlistRows: [
+      { id: 'row-a', shotNo: '1', content: '走入房间', dialogue: '你回来了。' },
+      { id: 'row/b', shotNo: '2', content: '关上门', dialogue: '先别开灯。' },
+    ] });
+    const target = node('target', 'ai-video');
+    const edges = [{ id: 'e', source: 'sheet', target: 'target' }];
+    const candidates = resolveCanvasMentionNodes('target', [sheet, target], edges);
+    expect(candidates.map((item) => item.id)).toEqual(['sheet', 'sheet/shot/row-a', 'sheet/shot/row%2Fb']);
+    expect(candidates[2]).toMatchObject({ label: '镜2 · 第一场', outputType: 'text', displayId: undefined, hasOutput: true });
+    expect(matchesMentionQuery('#47 第2镜 先别开灯', candidates[2].searchValues ?? [])).toBe(true);
+    const reordered = { ...sheet, data: { ...sheet.data, shotlistRows: [
+      { ...sheet.data.shotlistRows![1], shotNo: '1' }, { ...sheet.data.shotlistRows![0], shotNo: '2' },
+    ] } };
+    expect(resolveCanvasMentionNodes('target', [reordered, target], edges)[2])
+      .toMatchObject({ id: 'sheet/shot/row-a', label: '镜2 · 第一场' });
+  });
+
   it('maps workflow IO nodes only when a workflow is selected', () => {
     const ioNodes = [{ nodeId: '12', title: '提示词', type: 'prompt' as const }];
 

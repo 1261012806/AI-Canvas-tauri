@@ -61,4 +61,19 @@ describe('renderPromptWithChips', () => {
     expect(rendered.some((el) => el.props['data-skill-id'] === 'gen')).toBe(true);
     expect(rendered.some((el) => el.props['data-wf-id'] === 'io-1')).toBe(true);
   });
+
+  it('单镜胶囊显示实时镜号和表名，保持稳定引用且不占图片编号，失效可辨认', () => {
+    const nodes = [{ id: 'sheet', data: { type: 'ai-shotlist', label: '新表名', displayId: 47,
+      shotlistRows: [{ id: 'row/a', shotNo: '9', content: '新内容' }],
+    } }];
+    const rendered = elements(renderPromptWithChips('@{sheet/shot/row%2Fa:旧表名 · 镜1}', { nodes }));
+    const chip = rendered.find((el) => el.props['data-ref-id'] === 'sheet/shot/row%2Fa');
+    expect(chip?.props.title).toBe('镜9 · 新表名');
+    expect(chip?.props['data-ref-label']).toBe('旧表名 · 镜1');
+    expect(chip?.props.className).toContain('chip-text');
+    expect(rendered.some((el) => String(el.props.className).includes('prompt-chip-image-index'))).toBe(false);
+    const missing = elements(renderPromptWithChips('@{sheet/shot/gone:删除镜头}', { nodes }))
+      .find((el) => el.props['data-ref-id'] === 'sheet/shot/gone');
+    expect(missing?.props.title).toBe('删除镜头（镜头已失效）');
+  });
 });

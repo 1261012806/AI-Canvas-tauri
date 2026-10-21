@@ -210,7 +210,7 @@ export async function queryRunningHubModel(connection: RunningHubConnection, tas
 }
 
 type ModelParams = AIImageGenParams | AIVideoGenParams | AIAudioGenParams;
-export async function executeRunningHubModel(params: ModelParams, kind: RunningHubMediaKind, prompt: string, references: RunningHubRoleAwareReferences, count = 1, externalSignal?: AbortSignal, connectionOverride?: RunningHubConnection): Promise<RunningHubOutput[]> {
+export async function executeRunningHubModel(params: ModelParams, kind: RunningHubMediaKind, prompt: string, references: RunningHubRoleAwareReferences, count = 1, externalSignal?: AbortSignal, connectionOverride?: RunningHubConnection, beforeSubmit?: () => void | Promise<void>): Promise<RunningHubOutput[]> {
   const store = useAppStore.getState();
   const explicitImage = getRunningHubModel(params.model, true)?.parameters.some((field) => field.binding === 'image' && params.runninghubModelParameters?.[field.name]?.trim());
   let definition = getRunningHubModel(params.model, !!references.image?.length || explicitImage);
@@ -251,6 +251,7 @@ export async function executeRunningHubModel(params: ModelParams, kind: RunningH
     }
     const body = await buildRunningHubModelRequest(connection, definition, prompt, parameters, references, signal);
     if (count > 1 && ['n', 'imageNum', 'numImages', 'maxImages'].some((key) => Number(body[key]) > 1)) throw new Error('请仅使用一处数量设置：节点批量数量或模型产物数量');
+    if (beforeSubmit) await beforeSubmit();
     if (!fresh()) throw new Error('画布已变化，未提交任务');
     if (trackingId && projectId) savePendingTask({ nodeId: trackingId, projectId, nodeType: store.nodes.find((node) => node.id === nodeId)?.data.type ?? `ai-${kind}`, provider: 'runninghub', providerConfigId: 'runninghub-model', taskType: 'runninghub-model', taskId: '', taskIds: [], submitted: false, runninghubSite: runningHubSiteId(connection.baseUrl), runninghubRecoveryState: 'submit_unknown', runninghubModelId: params.model, runninghubMessage: context, batchCount: count });
     for (let index = 0; index < count; index++) {
@@ -295,7 +296,7 @@ export const runninghubMediaProviderAdapter: MediaProviderAdapter = {
     const dimensions = mapImageDimensions(params.imageSize ?? '2K', params.aspectRatio ?? '1:1');
     return { requestedCount, failedCount: Math.max(0, requestedCount - outputs.length), results: outputs.map((output) => ({ url: output.url, ...dimensions, runninghubOutputs: outputs })) };
   },
-  generateVideo: async ({ params, resolveReferenceInput, signal }) => {
+  generateVideo: async ({ params, resolveReferenceInput, signal, beforeSubmit }) => {
     const input = await resolveReferenceInput();
     const references = input.references ?? [];
     const imageReferences = references.filter((reference) => reference.kind === 'image');
@@ -304,7 +305,7 @@ export const runninghubMediaProviderAdapter: MediaProviderAdapter = {
       imageRoles: references.length ? imageReferences.map((reference) => reference.role) : undefined,
       video: references.length ? getMediaReferenceUrls(references, 'video', 'local') : input.videoUrls,
       audio: references.length ? getMediaReferenceUrls(references, 'audio', 'local') : input.audioUrls,
-    }, 1, signal);
+    }, 1, signal, undefined, beforeSubmit);
     return { url: outputs[0].url, runninghubOutputs: outputs };
   },
   generateAudio: async ({ params, prompt, referenceAudioUrls, referenceMedia, signal }) => {

@@ -187,6 +187,105 @@ it('动画帧编排与导入原图一起撤销和重做', async () => {
   expect(useAppStore.getState().nodes[0].data).toMatchObject({ imageUrl: 'asset://new.png', animationSheet: { frameCount: 6 }, animationLoop: false, animationEdits: [{ sourceIndex: 2, offsetX: 3 }] });
 });
 
+describe('precise shot duration references', () => {
+  const source = () => node('sheet', { type: 'ai-shotlist', shotlistRows: [
+    { id: 'row-1', shotNo: '1', content: '走入房间', duration: 4.3 },
+    { id: 'row-2', shotNo: '2', content: '抬头看向窗外', duration: 7.2 },
+  ] });
+  const video = () => useAppStore.getState().nodes.find((item) => item.id === 'video')!.data;
+
+  it('associates a single shot while preserving prose and media, and follows later duration edits', () => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video', prompt: '视频补充要求', videoUrl: 'keep.mp4' })] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 视频补充要求' });
+    expect(video()).toMatchObject({ seedanceDuration: 5, videoUrl: 'keep.mp4', prompt: '@{sheet/shot/row-1:第1镜} 视频补充要求',
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', kind: 'video', durationSync: 'auto' } });
+    useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: [
+      { id: 'row-1', shotNo: '1', content: '走入房间', duration: 8.1 },
+      { id: 'row-2', shotNo: '2', content: '抬头看向窗外', duration: 7.2 },
+    ] });
+    expect(video().seedanceDuration).toBe(9);
+    expect(video().videoUrl).toBe('keep.mp4');
+  });
+
+  it('replaces an auto-mentioned whole sheet with the selected shot while keeping other references and prose', () => {
+    useAppStore.setState({ nodes: [source(), node('other', { type: 'ai-shotlist' }),
+      node('video', { type: 'ai-video', prompt: '保留补充要求 @{other:其他表}' })] });
+    useAppStore.getState().onConnect({ source: 'sheet', target: 'video', sourceHandle: 'right', targetHandle: 'left' });
+    expect(video().prompt).toContain('@{sheet:sheet}');
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: `${video().prompt} @{sheet/shot/row-1:第1镜}` });
+    expect(video().prompt).not.toContain('@{sheet:');
+    expect(video().prompt).toContain('@{sheet/shot/row-1:第1镜}');
+    expect(video().prompt).toContain('保留补充要求 @{other:其他表}');
+    expect(video()).toMatchObject({ seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
+  });
+
+  it('keeps same-shot manual timing, uses the new shot after switching, and honors an explicit duration patch', () => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video' })] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜}' });
+    useAppStore.getState().updateNodesDataBatch(['video'], { seedanceDuration: 12 });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 新要求' });
+    expect(video().seedanceDuration).toBe(12);
+    expect(video().shotlistProductionSource?.durationSync).toBe('manual');
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-2:第2镜} 新要求' });
+    expect(video().seedanceDuration).toBe(8);
+    expect(video().shotlistProductionSource).toMatchObject({ rowId: 'row-2', durationSync: 'auto' });
+    useAppStore.getState().updateNodeData('video', { prompt: '@{sheet/shot/row-1:第1镜}', seedanceDuration: 3 });
+    expect(video().seedanceDuration).toBe(3);
+    expect(video().shotlistProductionSource).toMatchObject({ rowId: 'row-1', durationSync: 'manual' });
+  });
+
+  it.each([
+    '只留补充要求', '@{sheet/shot/row-1:第1镜} @{sheet/shot/row-2:第2镜}', '@{sheet/shot/missing:已删镜头}',
+  ])('clears reference-managed timing when the prompt has no unique valid shot: %s', (prompt) => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video' })] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜}' });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt });
+    expect(video().prompt).toBe(prompt);
+    expect(video().shotlistProductionSource).toBeUndefined();
+    expect(video().seedanceDuration).toBe(5);
+  });
+
+  it('preserves legacy production sources that never used a precise shot capsule', () => {
+    const legacy = { nodeId: 'sheet', rowId: 'row-1', kind: 'video' as const, durationSync: 'auto' as const };
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video', prompt: '旧式镜头全文', shotlistProductionSource: legacy })] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '人工修改旧式提示词' });
+    expect(video().shotlistProductionSource).toEqual(legacy);
+  });
+
+  it('supports imported video shot timing without changing its source type or media', () => {
+    useAppStore.setState({ nodes: [source(), node('video', {
+      type: 'source-video', role: 'source', videoUrl: 'imported.mp4', output: 'imported.mp4',
+    })] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜}' });
+    expect(video()).toMatchObject({ type: 'source-video', role: 'source', videoUrl: 'imported.mp4', seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
+    useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: [
+      { id: 'row-1', shotNo: '1', content: '走入房间', duration: 8.1 },
+    ] });
+    expect(video().seedanceDuration).toBe(9);
+    useAppStore.getState().updateNodeDataTransient('video', { seedanceDuration: 12 });
+    useAppStore.getState().updateNodeDataTransient('sheet', { shotlistRows: [
+      { id: 'row-1', shotNo: '1', content: '走入房间', duration: 10 },
+    ] });
+    useAppStore.getState().updateNodeDataTransient('video', { prompt: '@{sheet/shot/row-1:第1镜} 保留导入视频的要求' });
+    expect(video()).toMatchObject({ type: 'source-video', role: 'source', videoUrl: 'imported.mp4', seedanceDuration: 12,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'manual' } });
+  });
+
+  it('undoes and redoes the prompt reference with its duration association', async () => {
+    useAppStore.setState({ nodes: [source(), node('video', { type: 'ai-video', prompt: '原补充要求', seedanceDuration: 3 })] });
+    useAppStore.getState().updateNodeData('video', { prompt: '@{sheet/shot/row-1:第1镜} 原补充要求' });
+    expect(video().seedanceDuration).toBe(5);
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(video()).toMatchObject({ prompt: '原补充要求', seedanceDuration: 3 });
+    expect(video().shotlistProductionSource).toBeUndefined();
+    expect(await useAppStore.getState().redo()).toBe(true);
+    expect(video()).toMatchObject({ prompt: '@{sheet/shot/row-1:第1镜} 原补充要求', seedanceDuration: 5,
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'row-1', durationSync: 'auto' } });
+  });
+});
+
 describe('automatic connection mentions', () => {
   const targetPrompt = () => useAppStore.getState().nodes.find((item) => item.id === 'target')?.data.prompt;
   const connect = () => useAppStore.getState().onConnect({
@@ -211,6 +310,26 @@ describe('automatic connection mentions', () => {
     useAppStore.setState({ edges: [] });
     connect();
     expect(targetPrompt()).toBe('@{source:旧名称} 描述');
+  });
+
+  it('keeps precise shot references instead of appending a whole-table reference', () => {
+    const prompt = '@{source/shot/row-1:分镜表 · 第1镜} 保留视频要求';
+    useAppStore.setState({ nodes: [node('source', { type: 'ai-shotlist' }), node('target', { type: 'ai-video', prompt })] });
+    connect();
+    expect(targetPrompt()).toBe(prompt);
+    expect(useAppStore.getState().edges[0]).toMatchObject({ source: 'source', target: 'target' });
+  });
+
+  it('materializes a shot source as its real sheet even when auto mentioning is disabled', () => {
+    useAppStore.setState({ nodes: [node('source', { type: 'ai-shotlist' }), node('target', { type: 'ai-video' })],
+      config: { ...useAppStore.getState().config, autoMentionOnConnect: false } });
+    useAppStore.getState().onConnect({ source: 'source/shot/row-1', target: 'target', sourceHandle: 'right', targetHandle: 'left' });
+    expect(useAppStore.getState().edges[0]).toMatchObject({ source: 'source', target: 'target' });
+    expect(targetPrompt()).toBeUndefined();
+    useAppStore.getState().addNodesWithEdges([node('new', { type: 'ai-video' })], [
+      { id: 'new-edge', source: 'source/shot/row-2', target: 'new' },
+    ]);
+    expect(useAppStore.getState().edges[1]).toMatchObject({ source: 'source', target: 'new' });
   });
 
   it('leaves prompts untouched when disabled, including batch creation', () => {
@@ -302,6 +421,20 @@ describe('automatic connection mentions', () => {
     expect(targetPrompt()).toBe('保留描述\n @{other:素材} \n@asset{library} @wf{6|提示词|prompt}(内容)');
     expect(useAppStore.getState().edges.map((edge) => edge.id)).toEqual(['other-edge']);
     expect(useAppStore.getState().history).toHaveLength(1);
+  });
+
+  it('removes only the disconnected sheet shot references after its last connection', () => {
+    const prompt = '@{source/shot/row-1:第1镜} @{source/shot/row-2:第2镜} @{other/shot/row-3:其他表} 保留要求';
+    useAppStore.setState({ nodes: [node('source', { type: 'ai-shotlist' }), node('other', { type: 'ai-shotlist' }),
+      node('target', { type: 'ai-video', prompt })], edges: [
+      { id: 'first', source: 'source', target: 'target' }, { id: 'second', source: 'source', target: 'target' },
+      { id: 'other-edge', source: 'other', target: 'target' },
+    ] });
+    useAppStore.getState().onEdgesChange([{ type: 'remove', id: 'first' }]);
+    expect(targetPrompt()).toBe(prompt);
+    useAppStore.getState().onEdgesChange([{ type: 'remove', id: 'second' }]);
+    expect(targetPrompt()).toBe('  @{other/shot/row-3:其他表} 保留要求');
+    expect(useAppStore.getState().edges.map((edge) => edge.id)).toEqual(['other-edge']);
   });
 
   it('clears references after the setting is disabled and leaves another target untouched', () => {

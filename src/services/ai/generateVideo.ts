@@ -10,6 +10,7 @@ import { parseWorkflowApiFields } from '../workflowApi/workflowApiConfig';
 import { getPendingTasksForProject } from '../pollManager';
 import { DEFAULT_BASE_URLS } from '../../constants/api';
 import { resolveNodeReferences } from '../nodeReferenceService';
+import { expandShotlistRowMentions } from '../shotlistPromptService';
 import { generateDreaminaVideo } from '../dreaminaService';
 import { executeComfyUIVideoGenerate } from '../comfyWorkflowService';
 import type { BaseNodeData } from '../../types';
@@ -583,7 +584,14 @@ export async function generateVideo(
         : videoFramesFromDuration(seedanceDuration, videoFps, maxDuration),
     };
   }
-  const { prompt: rawPrompt, model, provider } = params;
+  const { model, provider } = params;
+  // 同一次请求只读取一次镜头行，延迟编译或上传期间改表不混入新版本。
+  const rawPrompt = expandShotlistRowMentions(params.prompt, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration });
+  params = { ...params, prompt: rawPrompt,
+    ...(params.workflowInputs ? { workflowInputs: Object.fromEntries(Object.entries(params.workflowInputs)
+      .map(([key, value]) => [key, typeof value === 'string'
+        ? expandShotlistRowMentions(value, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration }) : value])) } : {}),
+  };
   // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
   const prompt = resolveNodeReferences(rawPrompt);
 
@@ -599,7 +607,7 @@ export async function generateVideo(
     const references = referenceInput.references ?? [];
     const videoUrls = getMediaReferenceUrls(references, 'video', 'local');
     if (workflow?.adapterType === 'workflow-api') {
-      const outputs = await executeWorkflowApi({ workflowId: params.workflowId, nodeId: params.nodeId,
+      const outputs = await executeWorkflowApi({ workflowId: params.workflowId, nodeId: params.nodeId, beforeSubmit,
         taskContext: params.workflowApiTaskContext, prompt: referenceInput.prompt, inputs: {
           ...parseWorkflowApiFields(params.workflowInputs, workflow.workflowApi),
           ...(workflow.workflowApi?.version === 2 || params.seedanceDuration === undefined ? {} : { duration: params.seedanceDuration }),
@@ -616,7 +624,7 @@ export async function generateVideo(
     }
     if (provider === 'workflow-api' || (workflow?.adapterType && !['comfyui', 'runninghub'].includes(workflow.adapterType))) throw new Error('工作流定义缺失或执行类型不支持');
     if (isRunningHubWorkflow(workflow)) {
-      const outputs = await executeRunningHubWorkflow({ ...params, workflowId: params.workflowId, prompt: referenceInput.prompt, kind: 'video', references: {
+      const outputs = await executeRunningHubWorkflow({ ...params, workflowId: params.workflowId, beforeSubmit, prompt: referenceInput.prompt, kind: 'video', references: {
         image: getMediaReferenceUrls(references, 'image', 'local'), video: videoUrls, audio: getMediaReferenceUrls(references, 'audio', 'local'),
       } }, signal);
       return { url: outputs[0].url, runninghubOutputs: outputs };
@@ -649,6 +657,7 @@ export async function generateVideo(
         });
       },
       signal,
+      beforeSubmit,
     });
   }
 
@@ -660,6 +669,7 @@ export async function generateVideo(
     const capability = getDreaminaVideoCapability(model);
     assertVideoReferenceLimits(referenceInput, capability, '即梦当前视频模型');
     return generateDreaminaVideo({
+      beforeSubmit,
       prompt: dreaminaPrompt,
       model,
       references: referenceInput.references ?? [],

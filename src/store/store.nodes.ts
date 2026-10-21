@@ -25,7 +25,7 @@ import type {
 } from '../types';
 import { createCanvasNoteData, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
 import type { MediaGenerationIntent, MediaGenerationResult } from '../types/media';
-import { resolveShotVideoDuration } from '../types/shotlist';
+import { parseShotlistRowMentionId, resolveShotVideoDuration } from '../types/shotlist';
 import { generateId, getNextDisplayId } from './store.utils';
 import { BATCH_NODE_LIMIT } from './store.chat';
 import * as fileService from '../services/fileService';
@@ -40,6 +40,7 @@ import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDeriva
 import { AI_APP_COPY_MESSAGE, AI_APP_CREATION_MESSAGE, assertAiAppNodeInsertion, isAiAppNode } from '../services/aiApps/aiAppCreation';
 import { getGenerationNodeType } from '../utils/nodeGeneration';
 import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
+import { normalizeShotlistPromptReferences, resolveSingleShotlistRowReference } from '../services/shotlistPromptService';
 
 interface GroupNodeDataAccess {
   groupId: string;
@@ -79,6 +80,11 @@ const AUTO_MENTION_TARGET_TYPES = new Set([
   'ai-markdown', 'ai-shotlist',
 ]);
 
+/** 镜头胶囊仍依赖所属真实节点，不把虚拟 ID 持久化成连线端点。 */
+function mentionSourceNodeId(id: string): string {
+  return parseShotlistRowMentionId(id)?.nodeId ?? id;
+}
+
 /** 与新连线一起写入真实提示词，编辑器、持久化与撤销共用同一个状态。 */
 function appendConnectionMentions(
   nodes: Node<BaseNodeData>[],
@@ -86,10 +92,11 @@ function appendConnectionMentions(
   enabled: boolean | undefined,
   activeNodeId: string | null,
 ): { nodes: Node<BaseNodeData>[]; edges: Edge[] } {
-  if (enabled === false || edges.length === 0) return { nodes, edges: [...edges] };
+  const materializedEdges = edges.map((edge) => ({ ...edge, source: mentionSourceNodeId(edge.source) }));
+  if (enabled === false || materializedEdges.length === 0) return { nodes, edges: materializedEdges };
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const sourcesByTarget = new Map<string, Node<BaseNodeData>[]>();
-  for (const edge of edges) {
+  for (const edge of materializedEdges) {
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
     if (!source || !target || source.id === target.id || target.type === 'group'
@@ -106,7 +113,7 @@ function appendConnectionMentions(
     const sources = sourcesByTarget.get(node.id);
     if (!sources?.length) return node;
     let prompt = node.data.prompt ?? '';
-    const mentioned = new Set([...prompt.matchAll(/@\{([^:]+):[^}]+\}/g)].map((match) => match[1]));
+    const mentioned = new Set([...prompt.matchAll(/@\{([^:]+):[^}]*\}/g)].map((match) => mentionSourceNodeId(match[1])));
     let changed = false;
     for (const source of sources) {
       if (mentioned.has(source.id)) continue;
@@ -121,11 +128,11 @@ function appendConnectionMentions(
   });
   return {
     nodes: nextNodes,
-    edges: [...edges],
+    edges: materializedEdges,
   };
 }
 
-/** 删除最后一条上游连接时，同步移除该素材及其宫格子图引用。 */
+/** 删除最后一条上游连接时，同步移除该素材及其宫格/镜头引用。 */
 function removeDisconnectedMentions(
   nodes: Node<BaseNodeData>[],
   removedEdges: readonly Edge[],
@@ -148,12 +155,12 @@ function removeDisconnectedMentions(
       }
     }
     if (disconnected.size === 0) return node;
-    const prompt = node.data.prompt.replace(/@\{([^:]+):[^}]+\}/g, (token, id: string) => (
-      disconnected.has(id.replace(/\/cell\/\d+$/, '')) ? '' : token
+    const prompt = node.data.prompt.replace(/@\{([^:]+):[^}]*\}/g, (token, id: string) => (
+      disconnected.has(mentionSourceNodeId(id).replace(/\/cell\/\d+$/, '')) ? '' : token
     ));
-    return prompt !== node.data.prompt
-      ? { ...node, data: { ...node.data, prompt: prompt.trim() ? prompt : '' } }
-      : node;
+    if (prompt === node.data.prompt) return node;
+    const patch = { prompt: prompt.trim() ? prompt : '' };
+    return { ...node, data: mergeShotlistReferenceSource(node.data, { ...node.data, ...patch }, patch, nodes) };
   });
 }
 
@@ -191,15 +198,15 @@ function newBatchEdges(
 }
 
 function normalizeCanvasConnection(connection: Connection): Connection | null {
-  if (!isCanvasConnectionValid(connection)) return null;
   const draggedFromInput = connection.sourceHandle === 'left' && connection.targetHandle === 'right';
-  if (!draggedFromInput) return connection;
-  return {
+  const directed = draggedFromInput ? {
     source: connection.target,
     target: connection.source,
     sourceHandle: connection.targetHandle,
     targetHandle: connection.sourceHandle,
-  };
+  } : connection;
+  const materialized = { ...directed, source: mentionSourceNodeId(directed.source) };
+  return isCanvasConnectionValid(materialized) ? materialized : null;
 }
 
 function hasMaterializedNodeOutput(data: BaseNodeData, nodeType: string | undefined): boolean {
@@ -523,7 +530,7 @@ function mergeNodeData(previous: BaseNodeData, patch: Partial<BaseNodeData>): Ba
     throw new Error(AI_APP_CREATION_MESSAGE);
   }
   const next = withGenerationTiming({ ...previous, ...patch } as BaseNodeData, previous);
-  if (previous.type === 'ai-video' && previous.shotlistProductionSource?.kind === 'video'
+  if (getGenerationNodeType(previous.type) === 'ai-video' && previous.shotlistProductionSource?.kind === 'video'
     && 'seedanceDuration' in patch && patch.seedanceDuration !== previous.seedanceDuration) {
     next.shotlistProductionSource = { ...previous.shotlistProductionSource, durationSync: 'manual' };
   }
@@ -540,16 +547,54 @@ function mergeNodeData(previous: BaseNodeData, patch: Partial<BaseNodeData>): Ba
   return 'seedanceRatio' in patch ? alignEmptyVideoNodeDimensions(next) : next;
 }
 
+/** 单镜胶囊建立稳定时长关联；不覆盖用户手动时长或旧格式来源。 */
+function mergeShotlistReferenceSource(
+  previous: BaseNodeData,
+  next: BaseNodeData,
+  patch: Partial<BaseNodeData>,
+  nodes: Node<BaseNodeData>[],
+): BaseNodeData {
+  if (getGenerationNodeType(next.type) !== 'ai-video' || !('prompt' in patch)) return next;
+  const prompt = normalizeShotlistPromptReferences(next.prompt ?? '');
+  if (prompt !== next.prompt) next = { ...next, prompt };
+  const oldSource = previous.shotlistProductionSource;
+  let reference: ReturnType<typeof resolveSingleShotlistRowReference>;
+  try {
+    reference = resolveSingleShotlistRowReference(next.prompt ?? '', nodes);
+  } catch {
+    // 编辑过程中允许保留未完成或已失效的胶囊，实际生成时再由解析器明确报错。
+    reference = undefined;
+  }
+  if (!reference) {
+    const wasReferenced = oldSource?.kind === 'video' && [...(previous.prompt ?? '').matchAll(/@\{([^:}]+):[^}]*\}/g)]
+      .some((match) => {
+        const source = parseShotlistRowMentionId(match[1]);
+        return source?.nodeId === oldSource.nodeId && source.rowId === oldSource.rowId;
+      });
+    return wasReferenced ? { ...next, shotlistProductionSource: undefined } : next;
+  }
+  const sameSource = oldSource?.kind === 'video' && oldSource.nodeId === reference.nodeId && oldSource.rowId === reference.rowId;
+  const manual = 'seedanceDuration' in patch || (sameSource && oldSource.durationSync === 'manual');
+  const duration = manual ? undefined : resolveShotVideoDuration(reference.row.duration);
+  return {
+    ...next,
+    ...(duration === undefined ? {} : { seedanceDuration: duration }),
+    shotlistProductionSource: {
+      nodeId: reference.nodeId, rowId: reference.rowId, kind: 'video', durationSync: manual ? 'manual' : 'auto',
+    },
+  };
+}
+
 /** 在同一次 Store 更新中同步稳定关联的镜头时长，沿用调用方的历史快照。 */
 function mergeNodeDataWithShotDurations(nodes: Node<BaseNodeData>[], targetIds: Set<string>, patch: Partial<BaseNodeData>) {
   const next = nodes.map((node) => targetIds.has(node.id)
-    ? { ...node, data: mergeNodeData(node.data, patch) } : node);
+    ? { ...node, data: mergeShotlistReferenceSource(node.data, mergeNodeData(node.data, patch), patch, nodes) } : node);
   if (!Array.isArray(patch.shotlistRows)) return next;
   const sheets = new Map(nodes.filter((node) => targetIds.has(node.id) && node.data.type === 'ai-shotlist')
     .map((node) => [node.id, node.data.shotlistRows ?? []]));
   return next.map((node) => {
     const source = node.data.shotlistProductionSource;
-    if (node.data.type !== 'ai-video' || source?.kind !== 'video' || source.durationSync === 'manual'
+    if (getGenerationNodeType(node.data.type) !== 'ai-video' || source?.kind !== 'video' || source.durationSync === 'manual'
       || targetIds.has(node.id)) return node;
     const previousRows = sheets.get(source.nodeId);
     if (!previousRows) return node;

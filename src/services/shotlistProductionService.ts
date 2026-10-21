@@ -2,7 +2,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { BaseNodeData, NodeType } from '../types';
 import type { ShotlistProductionKind } from '../types/shotlist';
-import { buildShotFramePrompt, formatShotRowBrief, resolveShotVideoDuration } from '../types/shotlist';
+import { buildShotFramePrompt, buildShotlistRowMentionId, formatShotRowBrief, resolveShotVideoDuration } from '../types/shotlist';
 import { generateId } from '../store/store.utils';
 import { getShotlist, type ShotlistScope } from './shotlistService';
 
@@ -47,19 +47,11 @@ export function prepareShotlistProduction(scope: ShotlistScope, nodeId: string, 
       data.prompt = row.dialogue!.trim();
       data.audioPurpose = 'speech';
     } else if (kind === 'video') {
-      data.prompt = [buildShotFramePrompt(row),
-        row.dialogue?.trim() ? `对白：${row.dialogue.trim()}` : '',
-        row.audio?.trim() ? `音效/音乐：${row.audio.trim()}` : '',
-      ].filter(Boolean).join('\n');
+      const label = `${sheet.data.label || '分镜表'} · 镜${row.shotNo}`.replace(/[{}:\r\n]/g, ' ').slice(0, 100);
+      data.prompt = `@{${buildShotlistRowMentionId(nodeId, row.id)}:${label}}`;
       data.seedanceDuration = resolveShotVideoDuration(row.duration);
       data.shotlistProductionSource = { nodeId, rowId: row.id, kind, durationSync: 'auto' };
-      const frame = state.nodes.find((item) => item.id === row.frame?.nodeId
-        && ['ai-image', 'source-image', 'ai-video', 'source-video'].includes(item.type ?? ''));
-      if (frame) {
-        const safeLabel = (frame.data.label || '画面').replace(/[{}:\r\n]/g, ' ').slice(0, 80);
-        data.prompt += `\n参考画面：@{${frame.id}:${safeLabel}}`;
-        connect(frame.id, targetId);
-      }
+      connect(nodeId, targetId);
     } else {
       const briefId = `node-${generateId()}`;
       nodes.push({ id: briefId, type: 'source-text', parentId: sheet.parentId, position: { ...position }, data: {
@@ -72,7 +64,7 @@ export function prepareShotlistProduction(scope: ShotlistScope, nodeId: string, 
       data.directorStatus = 'idle';
     }
     nodes.push({ id: targetId, type: data.type, parentId: sheet.parentId, position: { ...position }, data });
-    // 视频和配音通过镜头来源关联成果，不作为分镜表的上游输入。
+    // 视频消费精确镜头引用，配音通过镜头来源关联成果，均不反接到表输入。
     if (kind === 'director') connect(nodeId, targetId);
     return { rowId: row.id, nodeId: targetId, status: 'created' as const };
   });

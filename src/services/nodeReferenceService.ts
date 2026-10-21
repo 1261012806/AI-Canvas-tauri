@@ -4,13 +4,14 @@
 import { useAppStore } from '../store/useAppStore';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef } from './dramaAssetPrompt';
 import { parseDramaMentionId } from '../types/dramaAssets';
+import { expandShotlistRowMentions } from './shotlistPromptService';
 
 /** 解析 workflowInputs 值中的 @{nodeId:label} / @drama{id:name} 引用，替换为对应输出内容 */
 export function resolveNodeReferences(value: string): string {
   const store = useAppStore.getState();
   const { nodes } = store;
   // 文件资产引用在工作流文本输入中不适用，直接移除标记
-  let cleaned = value.replace(/@asset\{[^}]+\}/g, '');
+  let cleaned = expandShotlistRowMentions(value, nodes).replace(/@asset\{[^}]+\}/g, '');
 
   cleaned = cleaned.replace(/@drama\{([^:]+):([^}]+)\}/g, (_match, dramaId: string, dramaName: string) => {
     // 延迟 require 形状的 import 在顶部已有 store；简介格式与 promptResolver 一致
