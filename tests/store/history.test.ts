@@ -1206,4 +1206,25 @@ describe('batch canvas history', () => {
       referenceImageId: 'reference-1',
     }]);
   });
+
+  it('undoes RefMod bindings within the same workflow without changing model files', async () => {
+    useAppStore.setState({ nodes: [node('h3', { workflowId: 'wf-a', provider: 'comfyui', model: 'comfyui/workflow' })], history: [], historyIndex: -1 });
+    const reference = { endpointFingerprint: 'a'.repeat(64), loaderType: 'minimax-h3' as const, fileName: 'Alice', strength: 0.8,
+      loaderNodeId: '1', slot: 1, workflowId: 'wf-a', originalFileName: '(none)', replaceExisting: true };
+    useAppStore.getState().updateNodeData('h3', { comfyRefmods: [reference] });
+    await expect(useAppStore.getState().undo()).resolves.toBe(true);
+    expect(useAppStore.getState().nodes[0].data.comfyRefmods).toBeUndefined();
+    await expect(useAppStore.getState().redo()).resolves.toBe(true);
+    expect(useAppStore.getState().nodes[0].data.comfyRefmods).toEqual([reference]);
+  });
+
+  it('does not transplant an old RefMod slot replacement when undo keeps the current workflow', async () => {
+    const reference = { endpointFingerprint: 'a'.repeat(64), loaderType: 'minimax-h3' as const, fileName: 'Alice', strength: 1,
+      loaderNodeId: '1', slot: 1, workflowId: 'wf-a', originalFileName: 'Bob', replaceExisting: true };
+    useAppStore.setState({ nodes: [node('h3', { workflowId: 'wf-a', provider: 'comfyui', model: 'comfyui/workflow', comfyRefmods: [reference] })], history: [], historyIndex: -1 });
+    useAppStore.getState().updateNodeData('h3', { workflowId: 'wf-b', comfyRefmods: undefined });
+    await useAppStore.getState().undo();
+    expect(useAppStore.getState().nodes[0].data.workflowId).toBe('wf-b');
+    expect(useAppStore.getState().nodes[0].data.comfyRefmods).toBeUndefined();
+  });
 });

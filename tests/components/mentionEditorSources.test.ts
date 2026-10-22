@@ -7,6 +7,8 @@ import {
   resolveCanvasMentionNodes,
   resolveDramaMentionItems,
   resolveWorkflowMentionNodes,
+  filterWorkflowMentions,
+  workflowMentionFilterChips,
 } from '../../src/components/nodes/shared/mentionEditorSources';
 
 function node(
@@ -25,6 +27,29 @@ function node(
 }
 
 describe('mentionEditorSources', () => {
+  it('ComfyUI 输入按图片、视频、音乐和文本筛选，全部保留原有顺序', () => {
+    const items = resolveWorkflowMentionNodes('workflow', [
+      { nodeId: 'text', title: '角色提示词', type: 'prompt' },
+      { nodeId: 'image', title: '参考图片', type: 'image' },
+      { nodeId: 'audio-a', title: '角色声音', type: 'audio' },
+      { nodeId: 'video', title: '动作视频', type: 'video' },
+      { nodeId: 'audio-b', title: '背景音乐', type: 'audio' },
+    ]);
+    expect(workflowMentionFilterChips(items)).toEqual([
+      { id: 'all', label: '全部', count: 5 }, { id: 'image', label: '图片', count: 1 },
+      { id: 'video', label: '视频', count: 1 }, { id: 'audio', label: '音乐', count: 2 },
+      { id: 'prompt', label: '文本', count: 1 },
+    ]);
+    expect(filterWorkflowMentions(items, 'all')).toBe(items);
+    expect(filterWorkflowMentions(items, 'audio').map((item) => item._ioNodeId)).toEqual(['audio-a', 'audio-b']);
+    expect(filterWorkflowMentions(items, 'prompt')[0]._ioNodeId).toBe('text');
+    const searched = items.filter((item) => matchesMentionQuery('角色', [item.label, item._ioNodeId]));
+    const displayed = filterWorkflowMentions(searched, 'audio');
+    // MentionEditor 的卡片与 Enter 首项都消费 displayed，搜索后不再选择隐藏的文本输入。
+    expect(displayed.map((item) => item._ioNodeId)).toEqual(['audio-a']);
+    expect(displayed.find(() => true)?._ioNodeId).toBe('audio-a');
+    expect(workflowMentionFilterChips(searched)[0].count).toBe(2);
+  });
   it('按节点编号、实际 ID 和文件名分词匹配，兼容全角与大小写', () => {
     const values = ['node-uuid-39', '角色参考', 39, '#39', '角色形象.PNG'];
     expect(matchesMentionQuery('  ＃３９  形象.png  ', values)).toBe(true);

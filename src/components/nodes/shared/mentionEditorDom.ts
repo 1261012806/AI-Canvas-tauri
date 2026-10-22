@@ -13,6 +13,8 @@ import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
 import { buildReferenceChipEl } from '../../shared/referenceChipDom';
 import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
+import { buildComfyRefmodMention, parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
+import { comfyRefmodKey } from '../../../utils/comfyRefmod';
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 export const ZWSP = '\u200B';
@@ -154,6 +156,7 @@ export function isChipEl(node: Node | null | undefined): node is HTMLElement {
     || element.hasAttribute('data-asset-path')
     || element.hasAttribute('data-drama-id')
     || element.hasAttribute('data-wf-id')
+    || element.hasAttribute('data-refmod-raw')
     || element.hasAttribute('data-skill-id');
 }
 
@@ -171,7 +174,7 @@ export function ensureCaretSlotBeforeChip(chip: Node): void {
 }
 
 export function normalizeChipSlots(root: HTMLElement): void {
-  const chips = root.querySelectorAll('[data-ref-id],[data-asset-path],[data-drama-id],[data-wf-id],[data-skill-id]');
+  const chips = root.querySelectorAll('[data-ref-id],[data-asset-path],[data-drama-id],[data-wf-id],[data-skill-id],[data-refmod-raw]');
   for (const chip of Array.from(chips)) ensureCaretSlotBeforeChip(chip);
 }
 
@@ -234,7 +237,13 @@ export function serializeDOM(root: HTMLElement): string {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const element = node as HTMLElement;
-    if (element.hasAttribute('data-ref-id')) {
+    if (element.hasAttribute('data-refmod-raw')) {
+      const raw = element.getAttribute('data-refmod-raw') || '';
+      try {
+        const mention = parseComfyRefmodMentions(raw).mentions[0];
+        result += mention ? buildComfyRefmodMention(mention.selection, mention.label) : raw;
+      } catch { result += raw; }
+    } else if (element.hasAttribute('data-ref-id')) {
       result += `@{${element.getAttribute('data-ref-id') || ''}:${element.getAttribute('data-ref-label') || ''}}`;
     } else if (element.hasAttribute('data-drama-id')) {
       result += `@drama{${element.getAttribute('data-drama-id') || ''}:${element.getAttribute('data-drama-label') || ''}}`;
@@ -450,6 +459,51 @@ export function buildSkillChipEl(skillId: string, skillName: string): HTMLSpanEl
   return span;
 }
 
+/** RefMod 只引用模型文件，不参加图片/音频素材编号。 */
+export function buildComfyRefmodChipEl(raw: string, thumbnailUrl?: string): HTMLSpanElement {
+  const parsed = parseComfyRefmodMentions(raw);
+  const mention = parsed.mentions[0];
+  if (!mention || parsed.mentions.length !== 1 || mention.token !== raw || parsed.prompt.trim()) throw new Error('ComfyUI 角色引用无效');
+  const isLab = mention.selection.loaderType === 'refmods-lab';
+  const label = isLab ? mention.label : `${mention.label} · ${mention.selection.strength}`;
+  const span = buildReferenceChipEl(document, { label, kind: 'image', thumbnailUrl,
+    iconText: '人' });
+  span.setAttribute('data-refmod-raw', buildComfyRefmodMention(mention.selection, mention.label));
+  span.setAttribute('data-refmod-label', mention.label);
+  span.title = `${mention.label} · ComfyUI 角色 · ${isLab ? '强度沿用 Combine' : `强度 ${mention.selection.strength}`}（双击设置）`;
+  span.setAttribute('aria-label', span.title);
+  return span;
+}
+
+/** 预览图只取已关联角色，不读取模型目录或给 RefMod 编造媒体文件。 */
+export function resolveComfyRefmodChipPresentation(raw: string): { thumbnailUrl?: string; label: string } | null {
+  try {
+    const mention = parseComfyRefmodMentions(raw).mentions[0];
+    if (!mention) return null;
+    const state = useAppStore.getState();
+    const key = comfyRefmodKey(mention.selection);
+    const character = [...state.dramaAssets.characters, ...state.globalCharacters]
+      .find((item) => item.refmods?.some((reference) => comfyRefmodKey(reference) === key));
+    return { label: mention.label, thumbnailUrl: character ? resolveDramaAssetImageRef(character, state.nodes)?.imageUrl : undefined };
+  } catch { return null; }
+}
+
+export function syncComfyRefmodReferenceChips(root: HTMLElement): void {
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-refmod-raw]'))) {
+    const presentation = resolveComfyRefmodChipPresentation(chip.getAttribute('data-refmod-raw') || '');
+    const icon = chip.querySelector('.prompt-chip-icon');
+    if (!presentation || !icon) continue;
+    const image = icon.querySelector('img');
+    if (presentation.thumbnailUrl) {
+      if (image?.getAttribute('src') === presentation.thumbnailUrl) continue;
+      const next = document.createElement('img');
+      next.src = presentation.thumbnailUrl; next.alt = ''; next.draggable = false;
+      next.className = 'ui-reference-chip__thumb prompt-chip-thumb';
+      icon.replaceChildren(next); icon.classList.add('has-thumbnail');
+    } else if (image) { icon.replaceChildren(document.createTextNode('人')); icon.classList.remove('has-thumbnail'); }
+  }
+}
+
 function buildWorkflowChipIconEl(): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', '14');
@@ -510,7 +564,7 @@ function pushTextWithBreaks(nodes: Node[], text: string) {
 }
 
 export function renderPromptToNodes(text: string, metaMap: Map<string, NodeMeta>): Node[] {
-  const regex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]+)\}/g;
+  const regex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@wf\{([^|]+)\|([^|]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]+)\}|@refmod\{([^}]*)\}/g;
   const nodes: Node[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -567,6 +621,10 @@ export function renderPromptToNodes(text: string, metaMap: Map<string, NodeMeta>
       let name = match[10];
       try { name = decodeURIComponent(match[10]); } catch { /* 保留原值 */ }
       pushChip(buildSkillChipEl(match[9], name));
+      lastIndex = regex.lastIndex;
+    } else if (match[11] !== undefined) {
+      try { pushChip(buildComfyRefmodChipEl(match[0], resolveComfyRefmodChipPresentation(match[0])?.thumbnailUrl)); }
+      catch { pushTextWithBreaks(nodes, match[0]); }
       lastIndex = regex.lastIndex;
     }
   }

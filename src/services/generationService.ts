@@ -178,17 +178,19 @@ export async function executeGeneration(
     ? videoInputFingerprint({ ...videoNode, data: { ...data, prompt: rawPrompt } }, store) : undefined;
   const hasShotReference = nodeType === 'ai-video'
     && `${rawPrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes('/shot/');
+  const hasProtectedVideoInputs = hasShotReference || (nodeType === 'ai-video'
+    && (Boolean(data.comfyRefmods?.length) || `${effectivePrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes('@refmod')));
   const submissionKey = JSON.stringify([submittingProjectId, nodeId]);
   const videoOwner = nodeType === 'ai-video' ? Symbol(nodeId) : undefined;
   if (videoOwner) videoSubmissionOwners.set(submissionKey, videoOwner);
   const promptOverride = overridePrompt === undefined ? {} : { prompt: rawPrompt };
   const isStillCurrentSubmission = () => {
     const s = useAppStore.getState();
-    const currentVideo = hasShotReference ? s.nodes.find((node) => node.id === nodeId) : undefined;
+    const currentVideo = hasProtectedVideoInputs ? s.nodes.find((node) => node.id === nodeId) : undefined;
     return leaseValid && !lease?.signal?.aborted && s.currentProjectId === submittingProjectId && s.nodes.some((n) => n.id === nodeId)
       && (!guardedSubmission || (!!cloudGuard && isCanvasDerivationFresh(cloudGuard, s)))
       && (!videoOwner || videoSubmissionOwners.get(submissionKey) === videoOwner)
-      && (!hasShotReference || (!!currentVideo
+      && (!hasProtectedVideoInputs || (!!currentVideo
         && (overridePrompt === undefined || currentVideo.data.prompt === videoNode?.data.prompt)
         && videoInputFingerprint({ ...currentVideo, data: { ...currentVideo.data, ...promptOverride } }, s) === videoFingerprint));
   };
@@ -339,6 +341,7 @@ export async function executeGeneration(
         videoResolution, videoFps, videoFrames, seedanceResolution, seedanceRatio,
         seedanceDuration, generateAudio: genAudio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
+        comfyRefmods: data.comfyRefmods,
       };
       // 异步哈希/版本检查完成后再提交付费请求；撤销的租约不写失败历史。
       if (lease) {
@@ -349,7 +352,7 @@ export async function executeGeneration(
         if (lease) await assertLease();
         if (!isStillCurrentSubmission()) throw new Error('镜头或生成输入已变化，请重新生成');
       };
-      const result = lease || hasShotReference
+      const result = lease || hasProtectedVideoInputs
         ? await generateVideo(videoOptions, lease?.signal, assertVideoSubmission)
         : await generateVideo(videoOptions);
       videoResultReceived = true;
@@ -486,7 +489,7 @@ export async function executeGeneration(
     return { success: false, message: msg };
   } finally {
     const current = useAppStore.getState();
-    const currentVideo = hasShotReference ? current.nodes.find((node) => node.id === nodeId) : undefined;
+    const currentVideo = hasProtectedVideoInputs ? current.nodes.find((node) => node.id === nodeId) : undefined;
     if (videoOwner && videoSubmissionOwners.get(submissionKey) === videoOwner
       && current.currentProjectId === submittingProjectId && currentVideo?.data.status === 'loading'
       && (!cloudGuard || !isCanvasDerivationFresh(cloudGuard, current)

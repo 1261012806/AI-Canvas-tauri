@@ -8,7 +8,7 @@ import { extractComfyUIIONodes } from './comfyUIWindowService';
 import { isRemoteMediaUrl } from '../utils/mediaUrl';
 import { useAppStore } from '../store/useAppStore';
 import { comfyBaseUrlFor } from './comfyServers';
-import type { WorkflowIONode, WorkflowIONodeType } from '../types';
+import type { WorkflowDefinition, WorkflowIONode, WorkflowIONodeType } from '../types';
 import type { AIAudioGenParams, AIImageGenParams, AIVideoGenParams, AudioSpeechSettings } from '../types/aiTypes';
 import { mapImageDimensions, mapVideoDimensions, resolveVideoDurationSeconds } from './aiDimensions';
 import { resolveNodeReferences } from './nodeReferenceService';
@@ -27,6 +27,9 @@ import { corsSafeFetch } from './ai/httpTransport';
 import { resolveComfyOutputUrl } from './comfyOutputs';
 import { createComfyProgressSession, type ComfyProgressSession } from './comfyProgress';
 import { maybeAutoReleaseComfyMemory } from './comfyMemory';
+import { applyComfyRefmodsToWorkflow, assertComfyRefmodSubmissionFresh, assertComfyRefmodSubmissionTargetFresh } from './comfyRefmodWorkflow';
+import type { ComfyRefmodSelection } from '../types/comfyRefmod';
+import { videoInputFingerprint } from './videoBatchPlanning';
 
 /** ComfyUI 已注册的节点类型；同一次会话里短暂缓存，装完插件重开也能很快看到变化 */
 let nodeClassCache: { baseUrl: string; classes: Set<string>; fetchedAt: number } | null = null;
@@ -1282,7 +1285,8 @@ async function submitComfyUIWorkflow(
   /** 提示词框里引用的图片/视频，按同类顺序填充工作流上传 IO 节点 */
   promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
   speech?: { settings?: AudioSpeechSettings },
-): Promise<{ baseUrl: string; promptId: string; workflowObj: Record<string, Record<string, unknown>> }> {
+  refmods?: ComfyRefmodSelection[],
+): Promise<{ baseUrl: string; promptId: string; workflowObj: Record<string, Record<string, unknown>>; workflow: WorkflowDefinition }> {
   const baseUrl = getComfyUIConfig(workflowId);
 
   // 从 store 中获取工作流定义
@@ -1299,6 +1303,10 @@ async function submitComfyUIWorkflow(
   } catch {
     throw new Error('工作流 JSON 解析失败');
   }
+
+  // 模型文件按服务端原始名称绑定，不进入普通媒体上传，也不改原工作流。
+  await applyComfyRefmodsToWorkflow(wf, workflowObj, refmods, signal);
+  if (refmods?.length) await assertComfyRefmodSubmissionFresh(wf, refmods, baseUrl);
 
   const speechControls = speech ? resolveAudioSpeechWorkflow(wf) : undefined;
   if (speechControls) {
@@ -1363,7 +1371,7 @@ async function submitComfyUIWorkflow(
   await pruneUnfilledOptionalMediaBranches(workflowObj, ioNodes, baseUrl);
 
   // 返回 workflowObj 让调用方注入尺寸/视频参数后再提交
-  return { baseUrl, promptId: '', workflowObj };
+  return { baseUrl, promptId: '', workflowObj, workflow: wf };
 }
 
 /**
@@ -1418,11 +1426,13 @@ async function promptComfyUIWorkflow(
   signal?: AbortSignal,
   progressSession?: ComfyProgressSession,
   beforeSubmit?: () => void | Promise<void>,
+  finalCheck?: () => void,
 ): Promise<string> {
   await progressSession?.waitUntilReady();
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
   if (beforeSubmit) await beforeSubmit();
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+  finalCheck?.();
   const promptRes = await comfyFetch(`${baseUrl}/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1582,6 +1592,27 @@ export async function executeComfyUIVideoGenerate(
     // 画面比例决定注入工作流的 width/height；未设置时按 16:9
     seedanceRatio = '16:9',
   } = params;
+  let checkRefmodNode: (() => void) | undefined;
+  if (params.comfyRefmods?.length) {
+    const captured = useAppStore.getState();
+    const nodeId = params.nodeId;
+    const source = captured.nodes.find((node) => node.id === nodeId);
+    const sourceProjectId = captured.currentProjectId;
+    if (!sourceProjectId || !source || source.type !== 'ai-video' || source.data.role === 'source') {
+      throw new Error('ComfyUI 角色引用需要项目中的视频生成节点');
+    }
+    const sourceRevision = captured.getCurrentRevision();
+    const sourceFingerprint = videoInputFingerprint(source, captured);
+    checkRefmodNode = () => {
+      const current = useAppStore.getState();
+      const node = current.nodes.find((item) => item.id === nodeId);
+      if (current.currentProjectId !== sourceProjectId || current.getCurrentRevision() !== sourceRevision || !node
+        || node.type !== 'ai-video' || node.data.role === 'source'
+        || videoInputFingerprint(node, current) !== sourceFingerprint) {
+        throw new Error('项目、视频节点或角色引用已变化，请重新生成');
+      }
+    };
+  }
   const comfyUrl = comfyBaseUrlFor(workflowId);
   assertComfyNodeCanSubmit(params.nodeId);
   const nodeSignal = params.nodeId ? registerNodePolling(params.nodeId) : undefined;
@@ -1610,13 +1641,15 @@ export async function executeComfyUIVideoGenerate(
       }
     }
 
-    const { baseUrl, workflowObj } = await submitComfyUIWorkflow(
+    const { baseUrl, workflowObj, workflow: capturedWorkflow } = await submitComfyUIWorkflow(
       workflowId!,
       workflowInputs,
       prompt,
       signal,
       referenceAudioUrls,
       promptMedia,
+      undefined,
+      params.comfyRefmods,
     );
 
     // 注入视频参数（比例/档位这类 combo 要先问过节点声明才敢写）
@@ -1635,7 +1668,16 @@ export async function executeComfyUIVideoGenerate(
     }
 
     // 提交工作流
-    const promptId = await promptComfyUIWorkflow(baseUrl, workflowObj, signal, progressSession, beforeSubmit);
+    const refmodBeforeSubmit = params.comfyRefmods?.length ? async () => {
+      await beforeSubmit?.();
+      await assertComfyRefmodSubmissionFresh(capturedWorkflow, params.comfyRefmods!, baseUrl);
+    } : beforeSubmit;
+    const finalNodeCheck = checkRefmodNode;
+    const finalCheck = finalNodeCheck ? () => {
+      assertComfyRefmodSubmissionTargetFresh(capturedWorkflow, baseUrl);
+      finalNodeCheck();
+    } : undefined;
+    const promptId = await promptComfyUIWorkflow(baseUrl, workflowObj, signal, progressSession, refmodBeforeSubmit, finalCheck);
     submittedTaskId = promptId;
 
     // 回填 promptId，标记为已提交

@@ -77,6 +77,7 @@ import type { AssetImageBatchEntry } from '../types/assetImage';
 const AssetTextPreview = lazy(() => import('./assets/AssetTextPreview'));
 const DramaAssetsPanel = lazy(() => import('./DramaAssetsPanel'));
 const VolcengineAssetLibraryPanel = lazy(() => import('./volcengine/VolcengineAssetLibraryPanel'));
+const RefModAssetsPanel = lazy(() => import('./assets/RefModAssetsPanel'));
 const AssetImageBatchReverseDialog = lazy(() => import('./assets/AssetImageBatchReverseDialog'));
 
 /** 仅磁盘真实文件可拖拽（排除节点引用的 node:// / virtual:// 虚拟路径）*/
@@ -90,7 +91,7 @@ function isLocalAssetFile(file: AssetFileEntry): boolean {
 }
 
 type FileTabKey = 'project' | 'permanent';
-type TabKey = FileTabKey | 'drama' | 'ark' | 'nodes';
+type TabKey = FileTabKey | 'drama' | 'ark' | 'nodes' | 'refmods';
 
 /** 单页渲染数量（增量加载步长）— 限制 DOM 规模 */
 const PAGE_SIZE = 48;
@@ -168,8 +169,11 @@ export default function AssetsPanel() {
 
   const [activeTab, setActiveTab] = useState<FileTabKey>('project');
   const [arkLibraryOpen, setArkLibraryOpen] = useState(false);
+  const [refmodLibraryOpen, setRefmodLibraryOpen] = useState(false);
+  const [refmodCount, setRefmodCount] = useState(0);
   const [nodeListOpen, setNodeListOpen] = useState(false);
-  const visibleTab: TabKey = dramaAssetsPanelOpen ? 'drama' : nodeListOpen ? 'nodes' : arkLibraryOpen ? 'ark' : activeTab;
+  const visibleTab: TabKey = dramaAssetsPanelOpen ? 'drama' : nodeListOpen ? 'nodes' : arkLibraryOpen ? 'ark' : refmodLibraryOpen ? 'refmods' : activeTab;
+  const isFileTab = visibleTab === 'project' || visibleTab === 'permanent';
   const isNodeList = visibleTab === 'nodes';
   // 只在节点页订阅标识和内容；移动节点不改变 data，避免位置更新重绘整个资产面板。
   const canvasNodeIds = useAppStore(useShallow((s) => assetsPanelOpen && isNodeList ? s.nodes.map((node) => node.id) : []));
@@ -286,7 +290,8 @@ export default function AssetsPanel() {
   if (assetsPanelRequest !== previousRequest) {
     setPreviousRequest(assetsPanelRequest);
     if (assetsPanelOpen && assetsPanelRequest) {
-      setActiveTab(assetsPanelRequest.tab);
+      if (assetsPanelRequest.tab !== 'refmods') setActiveTab(assetsPanelRequest.tab);
+      setRefmodLibraryOpen(assetsPanelRequest.tab === 'refmods');
       setSelectedProjectId(assetsPanelRequest.projectId ?? null);
       setFolderSelection(assetsPanelRequest.folder ?? { kind: 'all' });
       setArkLibraryOpen(false);
@@ -522,7 +527,7 @@ export default function AssetsPanel() {
   }, [activeTab, currentProjectId, baseDataDir, viewProjectIds, folders]);
 
   useEffect(() => {
-    if (assetsPanelOpen) {
+    if (assetsPanelOpen && isFileTab) {
       // 异步读取外部文件和 IndexedDB 标签；setState 发生在 Promise 完成后。
       // eslint-disable-next-line react-hooks/set-state-in-effect
       void loadFiles().then(loadTags);
@@ -532,7 +537,7 @@ export default function AssetsPanel() {
       loadRequestRef.current += 1;
       loadControllerRef.current?.abort();
     };
-  }, [assetsPanelOpen, loadFiles, loadTags]);
+  }, [assetsPanelOpen, isFileTab, loadFiles, loadTags]);
 
   useEffect(() => () => { folderOperationRef.current?.abort(); }, [assetsPanelOpen, activeTab, currentProjectId]);
 
@@ -1270,6 +1275,7 @@ export default function AssetsPanel() {
 
   const switchTab = useCallback((tab: TabKey) => {
     setNodeListOpen(tab === 'nodes');
+    setRefmodLibraryOpen(tab === 'refmods');
     if (tab === 'drama') {
       setDramaAssetsPanelOpen(true);
       setArkLibraryOpen(false);
@@ -1277,7 +1283,7 @@ export default function AssetsPanel() {
       setArkLibraryOpen(true);
       setDramaAssetsPanelOpen(false);
     } else {
-      if (tab !== 'nodes') setActiveTab(tab);
+      if (tab === 'project' || tab === 'permanent') setActiveTab(tab);
       setArkLibraryOpen(false);
       setDramaAssetsPanelOpen(false);
     }
@@ -1331,7 +1337,7 @@ export default function AssetsPanel() {
                 <h2 className="assets-panel-title">
                   {isPage ? '资源库' : isDrawer ? '资产库' : '资产管理'}
                   {!isDrawer && !isPage && <span className="assets-panel-subtitle">
-                    {visibleTab === 'drama' ? '管理人物、场景和道具简介与绑图' : visibleTab === 'ark' ? '管理火山方舟虚拟人像素材' : isNodeList ? '查看当前画布中的全部节点' : '拖拽卡片到画布即可添加节点'}
+                    {visibleTab === 'drama' ? '管理人物、场景和道具简介与绑图' : visibleTab === 'ark' ? '管理火山方舟虚拟人像素材' : visibleTab === 'refmods' ? '引用 ComfyUI 中的 H3 角色参考包' : isNodeList ? '查看当前画布中的全部节点' : '拖拽卡片到画布即可添加节点'}
                   </span>}
                 </h2>
                 {isDrawer ? (
@@ -1349,6 +1355,7 @@ export default function AssetsPanel() {
                     { value: 'permanent', label: '全局资产', count: permanentFiles.length },
                     { value: 'drama', label: '创作资产', count: dramaAssetCount },
                     { value: 'ark', label: '方舟素材库', count: arkAssetCount },
+                    { value: 'refmods', label: 'ComfyUI 角色', count: refmodCount },
                     { value: 'nodes', label: '节点列表', count: canvasNodeCount },
                   ] satisfies TabItem<TabKey>[]}
                   value={visibleTab}
@@ -1358,7 +1365,7 @@ export default function AssetsPanel() {
                 />
 
                 {/* Toolbar: 搜索 + 添加 */}
-              {visibleTab !== 'drama' && visibleTab !== 'ark' ? <div className="assets-toolbar ml-auto">
+              {visibleTab !== 'drama' && visibleTab !== 'ark' && visibleTab !== 'refmods' ? <div className="assets-toolbar ml-auto">
                 {visibleTab === 'project' && (
                   <Select
                     className="assets-project-select-wrap"
@@ -1507,6 +1514,10 @@ export default function AssetsPanel() {
                     onCountChange={setArkAssetCount}
                     onOpenProviderSettings={() => useAppStore.getState().openApiKeySettings('volcengine')}
                   />
+                </Suspense>
+              ) : visibleTab === 'refmods' ? (
+                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">正在加载角色参考包...</div>}>
+                  <RefModAssetsPanel compact={isDrawer} onCountChange={setRefmodCount} />
                 </Suspense>
               ) : (
                 <div className="assets-file-browser">

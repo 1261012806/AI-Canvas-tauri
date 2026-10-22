@@ -30,6 +30,7 @@ import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../services
 import { migrateLegacyAppearance } from '../services/appearance/appearanceMigration';
 import { syncPerformanceModeRuntime } from '../services/performanceModeRuntime';
 import { hydrateRunningHubAliases, isRunningHubCredentialAlias } from '../services/runninghubSiteCredentials';
+import { normalizeComfyRefmodAssets } from '../utils/comfyRefmod';
 
 const defaultConfig: AppConfig = {
   providers: {},
@@ -435,6 +436,7 @@ export const createConfigSlice: StateCreator<AppState, [], [], ConfigSlice> = (r
     if (areSettingsMutationsFrozen()) return;
     set((state) => {
       const config = { ...state.config, ...partial };
+      if ('comfyRefmodAssets' in partial) config.comfyRefmodAssets = normalizeComfyRefmodAssets(partial.comfyRefmodAssets);
       if ('canvasViewportMinZoom' in partial || 'canvasViewportMaxZoom' in partial || 'canvasViewportZoom' in partial) {
         const { minZoom, maxZoom } = getCanvasZoomRange(config);
         config.canvasViewportMinZoom = minZoom;
@@ -741,6 +743,7 @@ export const createConfigSlice: StateCreator<AppState, [], [], ConfigSlice> = (r
     const cfg = saved
       ? (() => {
           const merged = migrateLegacyGeneralModels({ ...defaultConfig, ...migrateLegacyPerformanceMode(saved as AppConfig) });
+          if (merged.comfyRefmodAssets !== undefined) merged.comfyRefmodAssets = normalizeComfyRefmodAssets(merged.comfyRefmodAssets);
           return { ...merged, appearance: saved.appearance
             ? normalizeAppearanceTheme(merged.appearance)
             : migrateLegacyAppearance(merged) };

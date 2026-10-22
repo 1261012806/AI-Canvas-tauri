@@ -468,6 +468,8 @@ export interface VideoGenerationReferenceInput {
 }
 
 export interface AIVideoGenParams {
+  /** 仅本地 ComfyUI 使用，绑定目标服务器的 RefMod 相对文件引用。 */
+  comfyRefmods?: import('./comfyRefmod').ComfyRefmodSelection[];
   workflowApiTaskContext?: import('./workflowApi').CloudWorkflowTaskContext;
   runninghubModelParameters?: Record<string, string>;
   runninghubTaskContext?: import('./runninghub').RunningHubTaskContext;

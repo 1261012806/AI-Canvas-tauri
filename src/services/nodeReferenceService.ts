@@ -5,6 +5,7 @@ import { useAppStore } from '../store/useAppStore';
 import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef } from './dramaAssetPrompt';
 import { parseDramaMentionId } from '../types/dramaAssets';
 import { expandShotlistRowMentions } from './shotlistPromptService';
+import { assertNoComfyRefmodMentions } from '../utils/comfyRefmodMention';
 
 /** 解析 workflowInputs 值中的 @{nodeId:label} / @drama{id:name} 引用，替换为对应输出内容 */
 export function resolveNodeReferences(value: string): string {
@@ -12,6 +13,7 @@ export function resolveNodeReferences(value: string): string {
   const { nodes } = store;
   // 文件资产引用在工作流文本输入中不适用，直接移除标记
   let cleaned = expandShotlistRowMentions(value, nodes).replace(/@asset\{[^}]+\}/g, '');
+  assertNoComfyRefmodMentions(cleaned);
 
   cleaned = cleaned.replace(/@drama\{([^:]+):([^}]+)\}/g, (_match, dramaId: string, dramaName: string) => {
     // 延迟 require 形状的 import 在顶部已有 store；简介格式与 promptResolver 一致
@@ -48,7 +50,7 @@ export function resolveNodeReferences(value: string): string {
   });
 
   const chipRegex = /@\{([^:]+):([^}]+)\}/g;
-  return cleaned.replace(chipRegex, (_match, nodeId: string) => {
+  const resolved = cleaned.replace(chipRegex, (_match, nodeId: string) => {
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return _match;
     // 文本节点的输出在 data.output 中
@@ -69,4 +71,6 @@ export function resolveNodeReferences(value: string): string {
     // 无法解析，保留原文
     return _match;
   });
+  assertNoComfyRefmodMentions(resolved);
+  return resolved;
 }

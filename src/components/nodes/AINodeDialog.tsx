@@ -816,6 +816,7 @@ function AINodeDialog() {
         ...(nodeType === 'ai-director' ? { directorPrevisModel: model.value, directorPrevisProvider: model.provider } : {}),
         audioPurpose: model.audioPurpose,
         runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined, workflowId: undefined,
+        ...(modelChanged ? { comfyRefmods: undefined } : {}),
         ...(nodeType === 'ai-image' && modelChanged ? {
           imageSize: imageCapability?.defaultResolution || '2K',
           aspectRatio,
@@ -838,12 +839,15 @@ function AINodeDialog() {
 
   const onWorkflowSelect = useCallback(
     (workflowId: string | undefined) => {
-      const workflow = useAppStore.getState().workflows.find((item) => item.id === workflowId);
+      const state = useAppStore.getState();
+      const workflow = state.workflows.find((item) => item.id === workflowId);
+      const previousWorkflowId = state.nodes.find((item) => item.id === activeNodeId)?.data.workflowId;
       updateNodeData(activeNodeId!, {
         workflowId,
+        ...(previousWorkflowId !== workflowId ? { comfyRefmods: undefined } : {}),
         workflowInputs: undefined, runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined,
         workflowApiOutputs: undefined, workflowApiStage: undefined,
-        ...(workflow ? { ...workflowExecution(workflow), batchCount: 1, audioPurpose: undefined } : {}),
+        ...(workflow ? { ...workflowExecution(workflow, previousWorkflowId), batchCount: 1, audioPurpose: undefined } : {}),
       });
     },
     [activeNodeId, updateNodeData]
@@ -856,6 +860,7 @@ function AINodeDialog() {
       provider: undefined,
       workflowId: undefined,
       workflowInputs: undefined,
+      comfyRefmods: undefined,
       audioPurpose: undefined,
       runninghubModelParameters: undefined,
       runninghubOutputs: undefined,

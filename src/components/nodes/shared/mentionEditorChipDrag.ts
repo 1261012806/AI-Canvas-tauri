@@ -1,6 +1,6 @@
 import { ensureCaretSlotBeforeChip, serializeDOM } from './mentionEditorDom';
 
-const CHIP_SELECTOR = '[data-ref-id],[data-asset-path],[data-drama-id],[data-wf-id],[data-skill-id]';
+const CHIP_SELECTOR = '[data-ref-id],[data-asset-path],[data-drama-id],[data-wf-id],[data-skill-id],[data-refmod-raw]';
 
 /** 工作流值区保留文字选择，内部引用仍可单独拖动。 */
 export function findDraggableMentionChip(root: HTMLElement, target: EventTarget | null): HTMLElement | null {
@@ -35,7 +35,7 @@ export function getMentionChipDropRange(root: HTMLElement, source: HTMLElement, 
   const element = container.nodeType === Node.ELEMENT_NODE ? container as Element : container.parentElement;
   let chip = element?.closest<HTMLElement>(CHIP_SELECTOR);
   const value = element?.closest('.prompt-chip-wf-value');
-  if (value && chip?.contains(value) && !source.hasAttribute('data-wf-id')) chip = null;
+  if (value && chip?.contains(value) && !source.hasAttribute('data-wf-id') && !source.hasAttribute('data-refmod-raw')) chip = null;
   if (chip && root.contains(chip)) {
     const rect = chip.getBoundingClientRect();
     if (x < rect.left + rect.width / 2) range.setStartBefore(chip);
@@ -51,7 +51,7 @@ export function commitMentionChipDrop(root: HTMLElement, source: HTMLElement, ra
   // 外层工作流不能被放进自己的值区，也不能嵌套到另一个工作流中。
   const container = range.startContainer;
   const element = container.nodeType === Node.ELEMENT_NODE ? container as Element : container.parentElement;
-  if (source.hasAttribute('data-wf-id') && element?.closest('.prompt-chip-wf-value')) return false;
+  if ((source.hasAttribute('data-wf-id') || source.hasAttribute('data-refmod-raw')) && element?.closest('.prompt-chip-wf-value')) return false;
   const chip = copy ? source.cloneNode(true) as HTMLElement : source;
   chip.classList.remove('is-chip-drag-source');
   range.insertNode(chip);

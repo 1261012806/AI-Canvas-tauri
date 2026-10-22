@@ -27,6 +27,7 @@ import { persistMediaUrlToProjectData } from '../services/fileService';
 import { animationProcessing, animationResultPatch } from '../services/animationService';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation, type CanvasDerivationGuard } from '../services/canvasDerivationGuard';
 import { completeVideoNodeTask, getPendingTasksForProject, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../services/pollManager';
+import { videoInputFingerprint } from '../services/videoBatchPlanning';
 
 export interface BatchContext {
   commitToHistory: () => void;
@@ -75,6 +76,10 @@ async function executeOneNode(
     catch { return false; }
   }
   const prompt = (d.prompt as string) || '';
+  const rawVideoInputs = `${prompt}\n${JSON.stringify(d.workflowInputs ?? {})}`;
+  const hasProtectedVideoInputs = nt === 'ai-video' && (Boolean(d.comfyRefmods?.length)
+    || rawVideoInputs.includes('@refmod') || rawVideoInputs.includes('/shot/'));
+  const refmodFingerprint = hasProtectedVideoInputs ? videoInputFingerprint(node, useAppStore.getState()) : undefined;
   let videoResultReceived = false;
   let videoTaskId: string | undefined;
   let animationGuard: CanvasDerivationGuard | null = null;
@@ -87,7 +92,10 @@ async function executeOneNode(
   }
   const isFresh = async () => {
     if (!guarded) return true;
-    return !!animationGuard && isCanvasDerivationFresh(animationGuard, useAppStore.getState());
+    const state = useAppStore.getState();
+    const current = hasProtectedVideoInputs ? state.nodes.find((item) => item.id === node.id) : undefined;
+    return !!animationGuard && isCanvasDerivationFresh(animationGuard, state)
+      && (!hasProtectedVideoInputs || (!!current && videoInputFingerprint(current, state) === refmodFingerprint));
   };
 
   ctx.updateNodeDataTransient(node.id, { status: 'loading', error: undefined, videoTaskState: undefined });
@@ -237,7 +245,7 @@ async function executeOneNode(
         seedanceRatio: d.seedanceRatio as string | undefined,
         seedanceDuration: d.seedanceDuration as number | undefined,
       });
-      const result = await generateVideo({
+      const videoOptions = {
         prompt,
         model: d.model!,
         provider: d.provider!,
@@ -245,8 +253,12 @@ async function executeOneNode(
         generateAudio: d.generateAudio as boolean | undefined,
         workflowId: d.workflowId,
         workflowInputs: d.workflowInputs,
+        comfyRefmods: d.comfyRefmods,
         nodeId: node.id,
-      });
+      };
+      const result = hasProtectedVideoInputs ? await generateVideo(videoOptions, undefined, async () => {
+        if (!await isFresh()) throw new Error('项目、视频输入或角色引用已变化，请重新生成');
+      }) : await generateVideo(videoOptions);
       videoResultReceived = true;
       videoTaskId = ctx.currentProjectId ? getPendingTasksForProject(ctx.currentProjectId).find((task) => task.nodeId === node.id)?.taskId : undefined;
       if (!await isFresh()) {

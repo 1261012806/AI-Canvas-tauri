@@ -65,7 +65,7 @@ export function videoInputFingerprint(node: Node<BaseNodeData>, state: Workspace
     }) : [];
   const payload = JSON.stringify([d.prompt, input.text, input.error, d.model, d.provider, d.workflowId, d.workflowInputs,
     d.videoResolution, d.videoFrames, d.videoFps, d.seedanceDuration, d.seedanceRatio, d.seedanceResolution,
-    d.generateAudio, d.videoReferences, d.runninghubModelParameters, d.cameraSettings, refs, dramaRefs,
+    d.generateAudio, d.videoReferences, d.runninghubModelParameters, d.comfyRefmods, d.cameraSettings, refs, dramaRefs,
     state.projects.find((p) => p.id === state.currentProjectId)?.settings]);
   let hash = 2166136261;
   for (let i = 0; i < payload.length; i++) hash = Math.imul(hash ^ payload.charCodeAt(i), 16777619);

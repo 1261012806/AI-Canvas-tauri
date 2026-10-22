@@ -10,6 +10,7 @@ import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { findDramaAsset, resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
 import { bestNodeThumb, getNodeChipIconPath, getNodeMetaMap, numberMediaReferenceLabels } from './mentionEditorDom';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
+import { parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
 
 const CHIP_STYLE: Record<string, string> = {
   'ai-text': 'chip-text',
@@ -46,7 +47,7 @@ export interface PromptChipRenderOptions {
 }
 
 function promptChipPattern() {
-  return /@asset\{([^}]+)\}|@drama\{([^:}]+):([^}]*)\}|@\{([^:}]+):([^}]*)\}|@wf\{([^|}]+)\|([^|}]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]*)\}|@model\{([^|}]+)\|([^}]*)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}]*)\}/g;
+  return /@asset\{([^}]+)\}|@drama\{([^:}]+):([^}]*)\}|@\{([^:}]+):([^}]*)\}|@wf\{([^|}]+)\|([^|}]+)\|([^|}]+)\}|@skill\{([^|}]+)\|([^}]*)\}|@model\{([^|}]+)\|([^}]*)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}]*)\}|@refmod\{([^}]*)\}/g;
 }
 
 /** 与可编辑胶囊相同，按括号深度读取完整工作流值，保留其中的引用令牌。 */
@@ -297,6 +298,20 @@ export function renderPromptWithChips(
         <span className="prompt-chip-icon" aria-hidden="true">🖼</span><span className="prompt-chip-id">{label}</span>
         {referenceLabels[currentIdx] !== undefined && <span className="prompt-chip-id prompt-chip-image-index prompt-chip-media-index text-canvas-text-secondary">{referenceLabels[currentIdx]}</span>}
       </span>);
+      lastIndex = regex.lastIndex;
+    } else if (match[15] !== undefined) {
+      try {
+        const mention = parseComfyRefmodMentions(match[0]).mentions[0];
+        if (!mention) throw new Error('引用无效');
+        const ref = mention.selection;
+        const title = `${mention.label} · ComfyUI 角色 · 加载节点 #${ref.loaderNodeId} / 槽位 ${ref.slot}${ref.loaderType === 'refmods-lab' ? '' : ` · 强度 ${ref.strength}`}`;
+        elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title={title}>
+          <span className="prompt-chip-icon" aria-hidden="true">R</span>
+          <span className="prompt-chip-id">{mention.label}</span>
+        </span>);
+      } catch {
+        elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title="请在本地 ComfyUI 视频节点中重新选择角色引用">ComfyUI 角色（引用无效）</span>);
+      }
       lastIndex = regex.lastIndex;
     }
   }

@@ -13,13 +13,15 @@ import type { MentionChipPreview } from '../../../types/referencePreview';
 export type { MentionChipPreview } from '../../../types/referencePreview';
 
 export interface MentionPreviewSource {
-  kind: 'node' | 'drama' | 'asset';
+  kind: 'node' | 'drama' | 'asset' | 'refmod';
   id: string;
   label: string;
 }
 
 /** 读取胶囊自己的引用身份，库资产不冒充画布节点。 */
 export function readMentionPreviewSource(element: Pick<HTMLElement, 'getAttribute'>): MentionPreviewSource | null {
+  const refmod = element.getAttribute('data-refmod-raw');
+  if (refmod) return { kind: 'refmod', id: refmod, label: element.getAttribute('data-refmod-label') || 'ComfyUI 角色' };
   const nodeId = element.getAttribute('data-ref-id');
   if (nodeId) return { kind: 'node', id: nodeId, label: element.getAttribute('data-ref-label') || '节点' };
   const dramaId = element.getAttribute('data-drama-id');

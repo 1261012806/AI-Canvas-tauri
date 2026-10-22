@@ -39,6 +39,19 @@ it('inherits project video workflow defaults using the same model contract as ge
   expect(result.duration).toBe(5);
 });
 
+it('RefMod 文件、服务器与强度变化都会使视频预检指纹失效', () => {
+  const state = useAppStore.getState();
+  const original = videoInputFingerprint(state.nodes[0], state);
+  const data = { ...state.nodes[0].data, comfyRefmods: [{ endpointFingerprint: 'a'.repeat(64), loaderType: 'minimax-h3' as const,
+    fileName: 'character/alice', strength: 0.6, loaderNodeId: '12', slot: 1 }] };
+  const bound = { ...state.nodes[0], data };
+  const first = videoInputFingerprint(bound, state);
+  expect(first).not.toBe(original);
+  for (const patch of [{ fileName: 'character/bob' }, { strength: 0.8 }, { endpointFingerprint: 'b'.repeat(64) }]) {
+    expect(videoInputFingerprint({ ...bound, data: { ...data, comfyRefmods: [{ ...data.comfyRefmods[0], ...patch }] } }, state)).not.toBe(first);
+  }
+});
+
 function configureShotReference(content = '@{img:参考图} 角色推开门') {
   const state = useAppStore.getState();
   useAppStore.setState({ nodes: [

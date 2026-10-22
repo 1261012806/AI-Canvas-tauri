@@ -3,6 +3,9 @@
  * 详见 doc/plans/2026-07-20-drama-asset-extract-schema.md
  */
 
+import type { ComfyRefmodSelection } from './comfyRefmod';
+import { normalizeCharacterRefmods } from '../utils/comfyRefmod';
+
 export type DramaAssetKind = 'character' | 'scene' | 'prop';
 export type DramaAssetImportance = 'main' | 'supporting' | 'minor';
 export type DramaAssetSource = 'ai' | 'manual' | 'merge';
@@ -166,6 +169,8 @@ export interface DramaCharacter extends DramaAssetBase {
   /** 主音色片段 id，配音与音色参考默认取它 */
   primaryVoiceClipId?: string;
   volcengineBinding?: VolcengineCharacterBinding;
+  /** ComfyUI 角色参考包；仅绑定文件身份，不携带工作流槽位。 */
+  refmods?: ComfyRefmodSelection[];
   /** 与角色绑定的动作库。 */
   actions?: CharacterAction[];
 }
@@ -503,6 +508,7 @@ export function normalizeDramaCharacter(character: DramaCharacter): DramaCharact
     voiceClips,
     primaryVoiceClipId,
     actions,
+    refmods: normalizeCharacterRefmods(character.refmods),
   };
 }
 

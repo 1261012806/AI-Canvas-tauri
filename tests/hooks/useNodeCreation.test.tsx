@@ -24,6 +24,7 @@ vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({
   onDragDropEvent: async (handler: (event: DropEvent) => void) => { driver.onDrag = handler; return vi.fn(); },
 }) }));
 import { useNodeCreation } from '../../src/hooks/useNodeCreation';
+import { COMFY_REFMOD_MIME } from '../../src/utils/comfyRefmod';
 let cleanups: Array<void | (() => void)>;
 beforeEach(async () => {
   driver.effects = []; driver.ids = 0; driver.onDrag = undefined;
@@ -44,6 +45,20 @@ function drag(type: DropEvent['payload']['type'], path = '/external/source.mp4')
   driver.onDrag!({ payload: { type, paths: [path], position: { x: 20, y: 30 } } });
 }
 describe('成功导入后的最近使用记录', () => {
+  it('RefMod 的语义拖放留给视频节点，不显示文件导入或创建媒体节点', async () => {
+    const creation = useNodeCreation();
+    const event = {
+      dataTransfer: { types: [COMFY_REFMOD_MIME], files: [] },
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+    } as unknown as React.DragEvent;
+    creation.onDragEnter(event);
+    creation.onDragOver(event);
+    await creation.onDrop(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(driver.state.addNode).not.toHaveBeenCalled();
+    expect(driver.copy).not.toHaveBeenCalled();
+  });
   it('Retina Mac 的文件节点出现在原生逻辑落点，不重复除以屏幕倍率', async () => {
     vi.stubGlobal('navigator', { platform: 'MacIntel' });
     window.devicePixelRatio = 2;

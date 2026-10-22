@@ -29,6 +29,20 @@ export interface WorkflowMentionItem {
   _ioType: WorkflowIONodeType;
 }
 
+export type WorkflowMentionFilter = 'all' | WorkflowIONodeType;
+const WORKFLOW_FILTER_LABELS: Array<{ id: WorkflowMentionFilter; label: string }> = [
+  { id: 'all', label: '全部' }, { id: 'image', label: '图片' }, { id: 'video', label: '视频' },
+  { id: 'audio', label: '音乐' }, { id: 'prompt', label: '文本' },
+];
+
+export function filterWorkflowMentions(items: WorkflowMentionItem[], filter: WorkflowMentionFilter): WorkflowMentionItem[] {
+  return filter === 'all' ? items : items.filter((item) => item._ioType === filter);
+}
+
+export function workflowMentionFilterChips(items: WorkflowMentionItem[]): Array<{ id: WorkflowMentionFilter; label: string; count: number }> {
+  return WORKFLOW_FILTER_LABELS.map((filter) => ({ ...filter, count: filterWorkflowMentions(items, filter.id).length }));
+}
+
 /** 每个查询词可匹配不同字段，兼容全角字符与节点编号。 */
 export function matchesMentionQuery(
   query: string,

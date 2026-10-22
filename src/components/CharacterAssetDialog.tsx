@@ -41,6 +41,10 @@ import {
   voiceClipTitle,
 } from './character/characterReferencePresentation';
 import { readAudioDuration, readAudioFile } from './character/characterVoiceMedia';
+import ComfyRefmodPicker from './assets/ComfyRefmodPicker';
+import { comfyRefmodKey, normalizeCharacterRefmods } from '../utils/comfyRefmod';
+import type { ComfyRefmodSelection } from '../types/comfyRefmod';
+import { comfyServerName } from '../services/comfyServers';
 
 type CharacterLibraryScope = 'project' | 'global';
 
@@ -171,6 +175,7 @@ function cloneCharacter(character: DramaCharacter): DramaCharacter {
     referenceImages: character.referenceImages?.map((reference) => ({ ...reference })) ?? [],
     voiceClips: character.voiceClips?.map((clip) => ({ ...clip })) ?? [],
     avatarCrop: character.avatarCrop ? { ...character.avatarCrop } : undefined,
+    refmods: normalizeCharacterRefmods(character.refmods),
   };
 }
 
@@ -969,6 +974,7 @@ function CharacterAssetEditorDialog({
   );
   const [playingVoiceClipId, setPlayingVoiceClipId] = useState<string | null>(null);
   const [volcenginePickerMode, setVolcenginePickerMode] = useState<'image' | null>(null);
+  const [refmodPickerOpen, setRefmodPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const voiceInputRef = useRef<HTMLInputElement>(null);
@@ -985,6 +991,11 @@ function CharacterAssetEditorDialog({
 
   const patchDraft = (patch: Partial<DramaCharacter>) => {
     setDraft((current) => ({ ...current, ...patch, updatedAt: Date.now() }));
+  };
+
+  const applyRefmods = (items: ComfyRefmodSelection[]) => {
+    patchDraft({ refmods: normalizeCharacterRefmods([...(draft.refmods ?? []), ...items]) });
+    setRefmodPickerOpen(false);
   };
 
   const applyVolcengineAsset = (items: VolcengineAssetSelection[]) => {
@@ -1551,6 +1562,35 @@ function CharacterAssetEditorDialog({
           </div>
         </section>
 
+        <section className="ui-card p-3" aria-label="ComfyUI 角色参考包">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-medium text-canvas-text">ComfyUI 角色参考包（RefMod）</h3>
+              <p className="mt-1 text-xs text-canvas-text-secondary">关联已制作的参考包，方便 H3 多人物参考；文件仍由对应 ComfyUI 服务加载。</p>
+            </div>
+            <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={(draft.refmods?.length ?? 0) >= 16} onClick={() => setRefmodPickerOpen(true)}>关联参考包</button>
+          </div>
+          {(draft.refmods ?? []).length === 0 ? <p className="mt-2 text-xs text-canvas-text-muted">尚未关联，可选；不会自动把角色照片转换为 RefMod。</p> : (
+            <ul className="mt-2 space-y-2">
+              {draft.refmods!.map((reference) => (
+                <li key={comfyRefmodKey(reference)} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-canvas-border p-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="break-all text-sm text-canvas-text">{reference.fileName}</p>
+                    <p className="text-xs text-canvas-text-secondary">{reference.serverId ? comfyServerName(reference.serverId) || '原服务已移除' : '默认服务器'} · {reference.loaderType === 'refmods-lab' ? 'RefMods Lab' : reference.loaderType === 'h3-refmods' ? 'Francky' : 'MiniMax H3'}</p>
+                  </div>
+                  {reference.loaderType !== 'refmods-lab' && <label className="flex items-center gap-2 text-xs text-canvas-text-secondary">默认强度
+                    <input type="number" aria-label={`${reference.fileName} 默认强度`} className="ui-input w-20" min={0} max={reference.loaderType === 'minimax-h3' ? 1 : 10} step={0.05} value={reference.strength} onChange={(event) => {
+                      const value = event.target.valueAsNumber;
+                      if (Number.isFinite(value)) patchDraft({ refmods: (draft.refmods ?? []).map((item) => comfyRefmodKey(item) === comfyRefmodKey(reference) ? { ...item, strength: Math.min(reference.loaderType === 'minimax-h3' ? 1 : 10, Math.max(0, value)) } : item) });
+                    }} />
+                  </label>}
+                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => patchDraft({ refmods: draft.refmods?.filter((item) => comfyRefmodKey(item) !== comfyRefmodKey(reference)) })}>解除关联</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
         <section className="character-dialog-fields character-volcengine-binding" aria-label="火山方舟角色绑定">
           <div className="character-field character-field-wide">
             <span>火山方舟视觉资产绑定（可选）</span>
@@ -1593,6 +1633,13 @@ function CharacterAssetEditorDialog({
         maxSelections={1}
         onClose={() => setVolcenginePickerMode(null)}
         onConfirm={applyVolcengineAsset}
+      />
+      <ComfyRefmodPicker
+        isOpen={refmodPickerOpen}
+        selectedKeys={(draft.refmods ?? []).map(comfyRefmodKey)}
+        maxSelections={16 - (draft.refmods?.length ?? 0)}
+        onClose={() => setRefmodPickerOpen(false)}
+        onConfirm={applyRefmods}
       />
     </ModalOverlay>
   );

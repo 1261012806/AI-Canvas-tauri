@@ -2,6 +2,8 @@
  * ai/generateVideo — 视频生成入口
  */
 import { isRemoteMediaUrl } from '../../utils/mediaUrl';
+import { resolveComfyRefmodMentionInputs } from '../../utils/comfyRefmodMention';
+import { videoInputData, videoInputFingerprint } from '../videoBatchPlanning';
 import { useAppStore } from '../../store/useAppStore';
 import { isRunningHubWorkflow } from '../workflowExecutionService';
 import { executeRunningHubWorkflow } from './providers/runninghubWorkflow';
@@ -585,13 +587,47 @@ export async function generateVideo(
     };
   }
   const { model, provider } = params;
-  // 同一次请求只读取一次镜头行，延迟编译或上传期间改表不混入新版本。
-  const rawPrompt = expandShotlistRowMentions(params.prompt, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration });
+  // 镜头行与所有 IO 文本先展开，再统一提取本地模型引用，避免 token 进入媒体上传或其他厂商。
+  const expandedPrompt = expandShotlistRowMentions(params.prompt, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration });
+  const expandedInputs = params.workflowInputs && Object.fromEntries(Object.entries(params.workflowInputs)
+    .map(([key, value]) => [key, typeof value === 'string'
+      ? expandShotlistRowMentions(value, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration }) : value]));
+  const refmodInputs = resolveComfyRefmodMentionInputs({ prompt: expandedPrompt, workflowInputs: expandedInputs, manual: params.comfyRefmods });
+  const rawPrompt = refmodInputs.prompt;
   params = { ...params, prompt: rawPrompt,
-    ...(params.workflowInputs ? { workflowInputs: Object.fromEntries(Object.entries(params.workflowInputs)
-      .map(([key, value]) => [key, typeof value === 'string'
-        ? expandShotlistRowMentions(value, useAppStore.getState().nodes, { durationSeconds: params.seedanceDuration }) : value])) } : {}),
+    ...(expandedInputs ? { workflowInputs: refmodInputs.workflowInputs } : {}),
+    ...(refmodInputs.comfyRefmods.length ? { comfyRefmods: refmodInputs.comfyRefmods } : {}),
   };
+  if (params.comfyRefmods?.length) {
+    const captured = useAppStore.getState();
+    const workflow = captured.workflows.find((item) => item.id === params.workflowId);
+    if (!workflow || (workflow.adapterType && workflow.adapterType !== 'comfyui')) {
+      throw new Error('RefMod 仅能用于本地 ComfyUI 工作流，请切换工作流或移除 RefMod');
+    }
+    if (params.comfyRefmods.some((ref) => ref.workflowId !== undefined && ref.workflowId !== workflow.id)) {
+      throw new Error('ComfyUI 角色引用属于其他工作流，请删除后重新 @ 选择');
+    }
+    const capturedNodeId = params.nodeId;
+    const capturedNode = captured.nodes.find((node) => node.id === capturedNodeId);
+    const projectId = captured.currentProjectId;
+    if (!capturedNode || capturedNode.type !== 'ai-video' || capturedNode.data.role === 'source' || !projectId
+      || videoInputData(capturedNode, captured).workflowId !== params.workflowId) {
+      throw new Error('ComfyUI 角色引用需要项目中的视频生成节点，请先选择本地视频工作流');
+    }
+    const revision = captured.getCurrentRevision();
+    const fingerprint = videoInputFingerprint(capturedNode, captured);
+    const previousBeforeSubmit = beforeSubmit;
+    beforeSubmit = async () => {
+      await previousBeforeSubmit?.();
+      const current = useAppStore.getState();
+      const node = current.nodes.find((item) => item.id === capturedNodeId);
+      if (current.currentProjectId !== projectId || current.getCurrentRevision() !== revision || !node
+        || node.type !== 'ai-video' || node.data.role === 'source'
+        || videoInputFingerprint(node, current) !== fingerprint) {
+        throw new Error('项目、视频节点或角色引用已变化，请重新生成');
+      }
+    };
+  }
   // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
   const prompt = resolveNodeReferences(rawPrompt);
 

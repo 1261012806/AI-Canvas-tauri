@@ -31,6 +31,7 @@ const STRUCTURAL_NODE_DATA_KEYS = [
   'shotlistScriptSource',
   'shotlistProductionSource',
   'characterLibraryLinks',
+  'comfyRefmods',
   'hiddenByCharacterLibrary',
   'groupCollapsed',
   'note',
@@ -242,6 +243,9 @@ function restoreStructuralNode(
     }
   }
   for (const key of STRUCTURAL_NODE_DATA_KEYS) {
+    // 结构撤销不恢复模型选择；旧图的槽位覆盖不能随引用移植到当前工作流。
+    if (key === 'comfyRefmods' && (target.data.workflowId !== current.data.workflowId
+      || target.data.provider !== current.data.provider || target.data.model !== current.data.model)) continue;
     if (Object.prototype.hasOwnProperty.call(target.data, key)) {
       data[key] = target.data[key] as never;
     } else {

@@ -45,6 +45,21 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 
 ## 3. 数据模型
 
+### RefMod 角色参考包
+
+资源库新增独立的角色参考包目录，复用 `comfyFetch` 从所选服务器的节点定义读取精确文件名；可选描述接口只摘取展示字段，丢弃本地路径。`comfyRefmodService.ts` 管理三类普通加载器 schema，`comfyRefmodWorkflow.ts` 校验并修改提交副本，`comfyRefmodNodeService.ts` 统一资源库与拖放的画布写入守卫。
+
+提示词入口位于 `@ → ComfyUI`，分「工作流输入」与「ComfyUI 角色」；工作流输入可筛选图片、视频、音乐和文本。角色引用以 `@refmod` 胶囊随提示词保存，槽位与强度在紧凑设置中编辑，删除胶囊即取消该引用，提示词下方不再常驻大面板。视频提交前提取并移除标记，与节点上的手工绑定去重，冲突拒绝提交；普通图片、音频和文本入口拒绝未解析标记，不把模型引用当作普通素材上传。
+
+| 加载器 | 绑定与强度 |
+|---|---|
+| 原版 `MiniMaxH3RefModsLoader` | 最多八槽，逐槽文件与强度按实际节点声明校验 |
+| Francky `H3RefModLoader` | 单槽，使用插件声明的视觉／音频权重，不能把不同插件的同名文件混用 |
+| Lab `H3RefModLabLoad` | 单槽、独立格式；组合权重沿用原工作流 Combine 节点，不伪造加载强度 |
+| Fantastic `MiniMaxH3RefModStack` | 专有 JSON 暂不自动改写，在 ComfyUI 中完成选择 |
+
+节点的 `comfyRefmods` 保存服务 ID、端点指纹、格式、相对文件名、加载节点及槽位；运行前重新读取目录，服务删除、地址变更、文件缺失、链接输入或槽位冲突均失败关闭，不沿用默认服务器。显式槽位选择才可替换原有普通值，拖入只分配空槽或同一文件槽；未选择时保留原工作流。角色卡关联去除槽位与覆盖授权，资源库只保存元数据、不复制模型文件。已补充回归测试源码，本次未运行测试，待 Tauri 桌面验收；完整范围与步骤见 [RefMod 接入计划](./plans/2026-10-22-comfyui-refmod-library.md)。
+
 工作流定义见 [types/index.ts](../src/types/index.ts)：
 
 | 字段 | 说明 |

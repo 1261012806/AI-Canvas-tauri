@@ -43,25 +43,26 @@ export function isCloudWorkflow(workflow?: WorkflowDefinition): boolean {
   return isRunningHubWorkflow(workflow) || isWorkflowApi(workflow);
 }
 
-export function workflowExecution(workflow: WorkflowDefinition) {
+export function workflowExecution(workflow: WorkflowDefinition, currentWorkflowId?: string) {
+  const refmodReset = currentWorkflowId === workflow.id ? {} : { comfyRefmods: undefined };
   if (workflow.adapterType && !['comfyui', 'runninghub', 'workflow-api'].includes(workflow.adapterType)) {
     throw new Error('不支持的工作流执行类型');
   }
   if (isRunningHubWorkflow(workflow)) {
     if (!workflow.runninghub) throw new Error('RunningHub 工作流定义不完整，请重新导入');
-    return { provider: 'runninghubwf', model: `runninghubwf/${workflow.id}`, workflowId: workflow.id };
+    return { ...refmodReset, provider: 'runninghubwf', model: `runninghubwf/${workflow.id}`, workflowId: workflow.id };
   }
   if (isWorkflowApi(workflow)) {
     if (!workflow.workflowApi) throw new Error('工作流 API 定义不完整，请重新选择模板');
-    if (workflow.workflowApi.version === 2) return { provider: 'workflow-api', model: `workflow-api/${workflow.id}`, workflowId: workflow.id,
+    if (workflow.workflowApi.version === 2) return { ...refmodReset, provider: 'workflow-api', model: `workflow-api/${workflow.id}`, workflowId: workflow.id,
       workflowInputs: {}, seedanceDuration: undefined, seedanceResolution: undefined, seedanceRatio: undefined,
       videoResolution: undefined, videoFps: undefined, videoFrames: undefined, generateAudio: undefined };
     const values = resolveWorkflowApiInputValues(workflow.workflowApi.defaults);
-    return { provider: 'workflow-api', model: `workflow-api/${workflow.id}`, workflowId: workflow.id,
+    return { ...refmodReset, provider: 'workflow-api', model: `workflow-api/${workflow.id}`, workflowId: workflow.id,
       seedanceDuration: values.duration, seedanceResolution: values.resolution, seedanceRatio: values.ratio,
       videoResolution: undefined, videoFps: undefined, videoFrames: undefined, generateAudio: undefined };
   }
-  return { provider: 'comfyui', model: 'comfyui/workflow', workflowId: workflow.id };
+  return { ...refmodReset, provider: 'comfyui', model: 'comfyui/workflow', workflowId: workflow.id };
 }
 
 export function mediaProviderConfigId(provider: string, workflow?: WorkflowDefinition): string {

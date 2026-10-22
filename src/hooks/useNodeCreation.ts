@@ -11,6 +11,7 @@ import type { BaseNodeData } from '../types';
 import { isExternalDropCaptured } from '../utils/dropCapture';
 import { nativeDropClientPosition } from '../utils/nativeDropPosition';
 import { textNodeHeight } from '../utils/num';
+import { COMFY_REFMOD_MIME } from '../utils/comfyRefmod';
 
 // ── File type constants ──
 
@@ -187,6 +188,7 @@ export function useNodeCreation() {
   // ===========================
 
   const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer?.types ?? []).includes(COMFY_REFMOD_MIME)) return;
     e.preventDefault();
     e.stopPropagation();
     if (useAppStore.getState().workflowPanelOpen || isExternalDropCaptured()) return;
@@ -195,12 +197,14 @@ export function useNodeCreation() {
   }, []);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer?.types ?? []).includes(COMFY_REFMOD_MIME)) return;
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   }, []);
 
   const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer?.types ?? []).includes(COMFY_REFMOD_MIME)) return;
     e.preventDefault();
     e.stopPropagation();
     enterCount.current--;
@@ -212,6 +216,7 @@ export function useNodeCreation() {
 
   const onDrop = useCallback(
     async (e: React.DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes(COMFY_REFMOD_MIME)) return;
       e.preventDefault();
       e.stopPropagation();
       setIsDragOver(false);

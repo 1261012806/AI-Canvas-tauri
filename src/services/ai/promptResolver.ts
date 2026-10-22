@@ -22,6 +22,7 @@ import type { MediaReference } from '../../types/aiTypes';
 import { mergeMediaReferences, toLegacyReferenceMedia, getMediaReferenceUrls } from './connectedReferenceMedia';
 import { parseChatImageReferences, readChatImageReference } from '../chat/chatImageReferenceService';
 import { expandShotlistRowMentions } from '../shotlistPromptService';
+import { assertNoComfyRefmodMentions } from '../../utils/comfyRefmodMention';
 
 interface PromptImageEntry {
   url: string;
@@ -166,6 +167,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
   const store = useAppStore.getState();
   const { nodes } = store;
   rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
+  assertNoComfyRefmodMentions(rawPrompt);
   // groups: 1=@asset  2,3=@drama  4,5=@node
   const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
   const imageEntries: PromptImageEntry[] = [];
@@ -399,6 +401,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
   }
 
   const textContent = parts.join('').trim();
+  assertNoComfyRefmodMentions(textContent);
 
   if (imageEntries.length === 0) {
     return { content: textContent || rawPrompt.trim(), textContent: textContent || rawPrompt.trim() };
@@ -515,6 +518,7 @@ async function resolvePromptReferences(
   const store = useAppStore.getState();
   const { nodes } = store;
   rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
+  assertNoComfyRefmodMentions(rawPrompt);
   const imageEntries: PromptImageEntry[] = [];
   const mediaReferences: MediaReference[] = [];
   // groups: 1=@asset  2,3=@drama  4,5=@node
@@ -882,6 +886,7 @@ async function resolvePromptReferences(
     });
     segments.push(prompt.slice(position));
   }
+  assertNoComfyRefmodMentions(resolvedPrompt);
   return {
     prompt: resolvedPrompt,
     references: media.references,

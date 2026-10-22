@@ -18,7 +18,7 @@ export interface UISlice {
   recentAssetsRevision: number;
   markAssetUsed: (file: Pick<AssetFileEntry, 'path' | 'assetId'>) => Promise<boolean>;
   /** 当前运行期入口请求，不进入项目或配置持久化。 */
-  assetsPanelRequest: { tab: 'project' | 'permanent'; projectId?: string; folder?: AssetFolderSelection } | null;
+  assetsPanelRequest: { tab: 'project' | 'permanent' | 'refmods'; projectId?: string; folder?: AssetFolderSelection; targetNodeId?: string } | null;
   saveAssetImageDetails: (file: AssetFileEntry, input: AssetImageSaveInput, options?: FileTransferOptions) => Promise<AssetImageRecord>;
   settingsOpen: boolean;
   /** 打开设置时要激活的标签页；SettingsPanel 消费后清空 */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { findPromptChipRanges, renderPromptWithChips } from '../../src/components/nodes/shared/PromptChipViewer';
 import { renderMarkdownWithInlineSlots } from '../../src/utils/renderMarkdown';
+import { buildComfyRefmodMention } from '../../src/utils/comfyRefmodMention';
 
 type Element = ReactElement<Record<string, unknown> & { children?: unknown }>;
 
@@ -13,6 +14,21 @@ function elements(value: unknown): Element[] {
 }
 
 describe('renderPromptWithChips', () => {
+  it('RefMod 只显示角色名及只读参数，不展示内部编码或占用图片编号', () => {
+    const token = buildComfyRefmodMention({ endpointFingerprint: 'a'.repeat(64), loaderType: 'minimax-h3', fileName: 'people/Alice', strength: 0.8,
+      workflowId: 'wf', loaderNodeId: '12', slot: 1, originalFileName: '(none)' }, '女主');
+    const prompt = `${token} @{image:场景}`;
+    const tree = renderPromptWithChips(prompt);
+    const rendered = elements(tree);
+    expect(rendered.find((el) => String(el.props.title).includes('ComfyUI 角色'))?.props.title).toContain('强度 0.8');
+    expect(rendered.some((el) => el.props.children === '女主')).toBe(true);
+    expect(rendered.filter((el) => String(el.props.className).includes('prompt-chip-image-index')).map((el) => el.props.children)).toEqual(['(图1)']);
+    expect(Array.isArray(tree) && tree.some((item) => typeof item === 'string' && item.includes('@refmod{'))).toBe(false);
+    expect(findPromptChipRanges(prompt)[0]).toEqual({ start: 0, end: token.length });
+    const broken = elements(renderPromptWithChips('@refmod{invalid}'));
+    expect(broken.some((el) => el.props.children === 'ComfyUI 角色（引用无效）')).toBe(true);
+  });
+
   it('returns plain text unchanged when there are no mention tags', () => {
     expect(renderPromptWithChips('夕阳下的街道')).toBe('夕阳下的街道');
     expect(renderPromptWithChips('', { emptyText: '无提示词' })).toBe('无提示词');

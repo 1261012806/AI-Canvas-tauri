@@ -234,7 +234,10 @@ export function applyProjectDefaultsToNodeData(
     next.provider = projectModel.provider;
     next.workflowId = projectModel.workflowId;
     // 不把旧工作流的输入绑定带到项目默认模型。
-    if (data.workflowId !== projectModel.workflowId) next.workflowInputs = undefined;
+    if (data.workflowId !== projectModel.workflowId) {
+      next.workflowInputs = undefined;
+      next.comfyRefmods = undefined;
+    }
     if (projectModel.workflowId) next.batchCount = 1;
   }
 

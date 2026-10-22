@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { serializeDOM } from '../../src/components/nodes/shared/mentionEditorDom';
+import { buildComfyRefmodChipEl, isChipEl, renderPromptToNodes, serializeDOM } from '../../src/components/nodes/shared/mentionEditorDom';
 import { commitMentionChipDrop, findDraggableMentionChip, getMentionChipDropRange, startMentionChipDrag } from '../../src/components/nodes/shared/mentionEditorChipDrag';
+import { buildComfyRefmodMention } from '../../src/utils/comfyRefmodMention';
+
+const refmodSelection = {
+  endpointFingerprint: 'a'.repeat(64), loaderType: 'minimax-h3' as const, fileName: '人物/女主角.safetensors',
+  strength: 0.65, loaderNodeId: '42', slot: 1, workflowId: 'workflow', originalFileName: 'None',
+};
 
 // 最小 DOM/Range 驱动：验证顺序、引用身份、取消和事件生命周期，不启动原生文件拖放。
 class TestNode extends EventTarget {
@@ -145,6 +151,34 @@ beforeEach(() => {
 });
 
 describe('引用胶囊拖动', () => {
+  it('RefMod 胶囊往返保留服务、槽位和强度，额外路径字段在 DOM 构建时清除', () => {
+    const canonical = buildComfyRefmodMention(refmodSelection, '女主角');
+    const untrusted = `@refmod{${encodeURIComponent(JSON.stringify({ v: 1, ref: { ...refmodSelection, path: 'private-extra-field' }, label: '女主角' }))}}`;
+    const built = buildComfyRefmodChipEl(untrusted);
+    expect(built.getAttribute('data-refmod-raw')).toBe(canonical);
+    expect(isChipEl(built)).toBe(true);
+    root.childNodes = [];
+    for (const node of renderPromptToNodes(`左 ${canonical} 右`, new Map())) root.append(node as unknown as TestNode);
+    expect(prompt()).toBe(`左 ${canonical} 右`);
+    const broken = '@refmod{%bad}';
+    root.childNodes = [];
+    for (const node of renderPromptToNodes(broken, new Map())) root.append(node as unknown as TestNode);
+    expect(prompt()).toBe(broken);
+  });
+  it('RefMod 可以移动或复制，但不会成为工作流输入值区的一部分', () => {
+    const token = buildComfyRefmodMention(refmodSelection, '女主角');
+    const refmod = buildComfyRefmodChipEl(token) as unknown as TestElement;
+    root.append(refmod);
+    expect(findDraggableMentionChip(html(root), refmod)).toBe(refmod);
+    expect(commitMentionChipDrop(html(root), html(refmod), range(root, 0), true)).toBe(true);
+    expect(prompt().split(token)).toHaveLength(3);
+    const workflow = doc.createElement('span'); workflow.setAttribute('data-wf-id', '1');
+    const value = doc.createElement('span'); value.className = 'prompt-chip-wf-value'; workflow.append(value); root.append(workflow);
+    expect(commitMentionChipDrop(html(root), html(refmod), range(value), false)).toBe(false);
+    doc.caretRangeFromPoint!.mockImplementation(() => new TestRange(value));
+    const drop = getMentionChipDropRange(html(root), html(refmod), 50, 40)!;
+    expect(drop.startContainer).toBe(root);
+  });
   it('移动保留原引用身份和文字顺序，不增加副本', () => {
     expect(commitMentionChipDrop(html(root), html(a), range(root, 3), false)).toBe(true);
     expect(prompt()).toBe('说明@{b:B}@{a:A}');

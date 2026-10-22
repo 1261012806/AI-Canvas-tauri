@@ -17,6 +17,7 @@ import type { McpToolExposure } from './mcp';
 import type { McpClientConnection } from './mcpClient';
 import type { AnimationFrameEdit, AnimationProcessing, AnimationSheet } from './animation';
 import type { AiAppReference } from './aiApp';
+import type { ComfyRefmodAsset, ComfyRefmodSelection } from './comfyRefmod';
 
 export type {
   CanvasDrawingTool,
@@ -232,6 +233,7 @@ export interface BaseNodeData {
   provider?: string;          // 选择的供应商 ID（如 apimart）
   workflowId?: string;        // 选择的工作流 ID
   workflowInputs?: Record<string, string>; // 本地 IO 或云工作流 nodeId/fieldName 赋值
+  comfyRefmods?: ComfyRefmodSelection[]; // 本地 H3 参考包与已有加载槽位的绑定
   runninghubOutputs?: import('./runninghub').RunningHubOutput[];
   runninghubModelParameters?: Record<string, string>;
   runninghubStage?: string;
@@ -813,6 +815,7 @@ export interface AppConfig {
   customBackgroundOpacity?: number; // 自定义背景透明度 0-1，默认 0.3
   comfyUIUrl?: string;        // ComfyUI 默认服务地址（工作流没绑定服务端时用它）
   comfyServers?: ComfyServer[]; // 额外的 ComfyUI 服务端，供工作流按需绑定
+  comfyRefmodAssets?: ComfyRefmodAsset[]; // 参考包目录元数据，不复制模型文件
   comfyUIPath?: string;       // ComfyUI 安装目录路径
   comfyMemoryPolicy?: ComfyMemoryPolicy; // 本地服务任务结束后的资源策略，默认保留智能缓存
   dreaminaAuth?: DreaminaAuthData; // 即梦登录态

@@ -1,7 +1,7 @@
 /**
  * MentionEditor @提及编辑器 — 支持 @引用其他节点输出的富文本输入框，实时渲染为彩色标签芯片
  */
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useId, forwardRef, useImperativeHandle } from 'react';
+import { lazy, Suspense, useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useId, forwardRef, useImperativeHandle } from 'react';
 import { createPortal } from 'react-dom';
 import type { PromptSubmitShortcut, WorkflowIONodeType } from '../../../types';
 import { resolvePromptEnterAction } from '../../../utils/promptSubmitShortcut';
@@ -42,6 +42,9 @@ import {
   buildChipEl,
   buildDramaChipEl,
   buildWorkflowChipEl,
+  buildComfyRefmodChipEl,
+  resolveComfyRefmodChipPresentation,
+  syncComfyRefmodReferenceChips,
   ensureCaretSlotBeforeChip,
   getNodeMetaMap,
   isBrEl,
@@ -59,7 +62,32 @@ import {
   resolveCanvasMentionNodes,
   resolveDramaMentionItems,
   resolveWorkflowMentionNodes,
+  filterWorkflowMentions,
+  workflowMentionFilterChips,
 } from './mentionEditorSources';
+import { useComfyRefmodMentionOptions } from '../../../hooks/useComfyRefmodMentionOptions';
+import { buildComfyRefmodMention, parseComfyRefmodMentions, mergeComfyRefmodSelections } from '../../../utils/comfyRefmodMention';
+import { comfyRefmodKey } from '../../../utils/comfyRefmod';
+import { prepareComfyRefmodSelections } from '../../../services/comfyRefmodWorkflow';
+import type { ComfyRefmodAsset, ComfyRefmodSelection } from '../../../types/comfyRefmod';
+import type { WorkflowDefinition } from '../../../types';
+
+const ComfyRefmodMentionSettings = lazy(() => import('./ComfyRefmodMentionSettings'));
+const EMPTY_REFMODS: ComfyRefmodSelection[] = [];
+interface RefmodEditSession {
+  asset: ComfyRefmodAsset;
+  thumbnailUrl?: string;
+  initial?: ComfyRefmodSelection;
+  existing: ComfyRefmodSelection[];
+  token?: string;
+  chip?: HTMLElement;
+  range?: Range;
+  projectId: string | null;
+  nodeId: string;
+  workflow: WorkflowDefinition;
+  nodeSnapshot: string;
+  prompt: string;
+}
 
 // 无缩略图时的卡片占位图标
 const MEDIA_ICONS: Record<'image' | 'video' | 'audio' | 'text', string> = {
@@ -142,6 +170,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const lastFocusedWfValueRef = useRef<HTMLSpanElement | null>(null);
   const cancelChipDragRef = useRef<(() => void) | null>(null);
   const lastChipClickRef = useRef<{ chip: HTMLElement; time: number; x: number; y: number } | null>(null);
+  const [refmodSession, setRefmodSession] = useState<RefmodEditSession>();
+  const refmodSessionRef = useRef<RefmodEditSession | undefined>(undefined);
+  const [refmodUiError, setRefmodUiError] = useState('');
   const { nodes, edges, workflows, dramaAssets, globalCharacters, globalCharactersLoading, currentProjectId } = useAppStore(
     useShallow((state) => ({
       nodes: state.nodes,
@@ -183,6 +214,15 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     () => workflows.find((w) => w.id === selectedWorkflowId),
     [workflows, selectedWorkflowId],
   );
+  const selectedWorkflowRef = useRef(selectedWorkflow);
+  useLayoutEffect(() => {
+    selectedWorkflowRef.current = selectedWorkflow;
+    refmodSessionRef.current = undefined;
+    const timer = window.setTimeout(() => {
+      if (!refmodSessionRef.current) { setRefmodSession(undefined); setRefmodUiError(''); }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [currentProjectId, nodeId, selectedWorkflow]);
   const workflowIONodes = useMemo(
     () => selectedWorkflow?.ioNodes || [],
     [selectedWorkflow],
@@ -211,6 +251,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     // IME 组合输入期间保留浏览器的文本节点，结束后再通过输入基线合并新引用。
     if (composingRef.current) return;
     syncGlobalCharacterReferenceChips(el);
+    syncComfyRefmodReferenceChips(el);
     syncShotlistReferenceChips(el, nodeMetaMap);
     syncImageReferenceLabels(el, nodeMetaMap);
     const previousPrompt = syncedPromptRef.current;
@@ -251,7 +292,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     syncImageReferenceLabels(el, nodeMetaMap);
     if (cursorOffset !== null) restoreCursor(el, cursorOffset);
     syncHistory();
-  }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalCharacters]);
+  }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalCharacters, dramaAssets]);
 
   // ── Cursor save/restore ──
   const saveCursor = (root: HTMLElement): number => {
@@ -329,6 +370,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const el = editorRef.current;
     if (!el) return;
     syncGlobalCharacterReferenceChips(el);
+    syncComfyRefmodReferenceChips(el);
     syncImageReferenceLabels(el, nodeMetaMap);
     const nextPrompt = serializeDOM(el);
     const previousPrompt = syncedPromptRef.current;
@@ -349,6 +391,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const previousPrompt = syncedPromptRef.current;
     restoreMentionEditorSnapshot(el, snapshot);
     syncGlobalCharacterReferenceChips(el);
+    syncComfyRefmodReferenceChips(el);
     syncShotlistReferenceChips(el, nodeMetaMap);
     syncImageReferenceLabels(el, nodeMetaMap);
     syncedPromptRef.current = snapshot.prompt;
@@ -391,7 +434,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ? workflowMentionNodes.filter((n) => matchesMentionQuery(mentionQuery, [n.id, n._ioNodeId, n.label]))
     : workflowMentionNodes;
 
-  const currentNodeType = nodes.find((node) => node.id === nodeId)?.data.type;
+  const currentEditorNode = nodes.find((node) => node.id === nodeId);
+  const currentNodeType = currentEditorNode?.data.type;
   const isAudioNode = currentNodeType === 'ai-audio';
   const isVideoNode = currentNodeType === 'ai-video';
   const dramaMentionItems = useMemo(() => {
@@ -423,6 +467,18 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [dramaActionId, setDramaActionId] = useState<string | null>(null);
   // @ 面板的 Tab / 资产种类筛选
   const [pickerTab, setPickerTab] = useState<'nodes' | 'assets' | 'workflow' | null>(null);
+  const [comfySection, setComfySection] = useState<'inputs' | 'roles'>('inputs');
+  const [workflowMediaFilter, setWorkflowMediaFilter] = useState<'all' | WorkflowIONodeType>('all');
+  const localComfyWorkflow = selectedWorkflow && (!selectedWorkflow.adapterType || selectedWorkflow.adapterType === 'comfyui') ? selectedWorkflow : undefined;
+  const canMentionRefmod = isVideoNode && currentEditorNode?.data.role !== 'source' && currentEditorNode?.data.status !== 'loading' && !!localComfyWorkflow;
+  const activeRefmodSession = refmodSession && canMentionRefmod && refmodSession.projectId === currentProjectId && refmodSession.nodeId === nodeId
+    && refmodSession.workflow === selectedWorkflow ? refmodSession : undefined;
+  const effectiveComfySection = canMentionRefmod ? comfySection : 'inputs';
+  const refmodOptions = useComfyRefmodMentionOptions({
+    enabled: canMentionRefmod && ((showMention && (pickerTab === 'workflow' || resourceSearchExpanded)) || !!activeRefmodSession),
+    workflow: localComfyWorkflow,
+  });
+  const manualRefmods = currentEditorNode?.data.comfyRefmods ?? EMPTY_REFMODS;
   const [dramaKind, setDramaKind] = useState<string>('all');
   useEffect(() => {
     if (!showMention) {
@@ -435,6 +491,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setDramaActionPicker(false);
       setDramaActionId(null);
       setPickerTab(null);
+      setComfySection('inputs');
+      setWorkflowMediaFilter('all');
       setDramaKind('all');
     }
   }, [showMention]);
@@ -495,6 +553,113 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     sel.removeAllRanges();
     sel.addRange(r);
   }, []);
+
+  const closeRefmodSettings = useCallback(() => {
+    refmodSessionRef.current = undefined;
+    setRefmodSession(undefined);
+  }, []);
+
+  const openRefmodSettings = useCallback((asset: ComfyRefmodAsset, thumbnailUrl?: string, chip?: HTMLElement) => {
+    const root = editorRef.current;
+    const state = useAppStore.getState();
+    if (!root || !nodeId || !localComfyWorkflow || !canMentionRefmod || state.currentProjectId !== currentProjectId) return;
+    try {
+      const node = state.nodes.find((item) => item.id === nodeId);
+      if (!node) throw new Error('视频节点已不存在，请重新打开提示词');
+      if (node.data.role === 'source' || node.data.status === 'loading') throw new Error('源视频或正在生成的视频不能修改角色引用');
+      const currentPrompt = serializeDOM(root);
+      const token = chip?.getAttribute('data-refmod-raw') || undefined;
+      const initial = token ? parseComfyRefmodMentions(token).mentions[0]?.selection : undefined;
+      const parsed = parseComfyRefmodMentions(currentPrompt);
+      const otherMentions = [...parsed.mentions];
+      const editingIndex = token ? otherMentions.findIndex((item) => item.token === token) : -1;
+      if (editingIndex >= 0) otherMentions.splice(editingIndex, 1);
+      const existing = mergeComfyRefmodSelections(node.data.comfyRefmods, otherMentions.map((item) => item.selection));
+      const selection = window.getSelection();
+      const saved = savedMentionRangeRef.current ?? (selection?.rangeCount ? selection.getRangeAt(0) : undefined);
+      const session: RefmodEditSession = {
+        asset, thumbnailUrl, initial, existing, token, chip, range: saved?.cloneRange(),
+        projectId: currentProjectId, nodeId, workflow: localComfyWorkflow, prompt: currentPrompt,
+        nodeSnapshot: JSON.stringify([node.data.workflowId, node.data.provider, node.data.comfyRefmods]),
+      };
+      refmodSessionRef.current = session;
+      setRefmodSession(session); setRefmodUiError('');
+      setShowMention(false); setMentionQuery('');
+    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : '读取 ComfyUI 角色引用失败'); }
+  }, [nodeId, localComfyWorkflow, canMentionRefmod, currentProjectId]);
+
+  const editRefmodChip = useCallback((chip: HTMLElement) => {
+    try {
+      const raw = chip.getAttribute('data-refmod-raw') || '';
+      const mention = parseComfyRefmodMentions(raw).mentions[0];
+      if (!mention) throw new Error('角色引用已损坏，请删除后重新选择');
+      const saved = useAppStore.getState().config.comfyRefmodAssets?.find((item) => comfyRefmodKey(item) === comfyRefmodKey(mention.selection));
+      const asset = saved ?? { ...mention.selection, id: comfyRefmodKey(mention.selection), name: mention.label, tags: [], updatedAt: 0 };
+      openRefmodSettings(asset, resolveComfyRefmodChipPresentation(raw)?.thumbnailUrl, chip);
+    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : '无法编辑角色引用'); }
+  }, [openRefmodSettings]);
+
+  const applyRefmodMention = useCallback(async (selection: ComfyRefmodSelection) => {
+    const session = refmodSessionRef.current;
+    const root = editorRef.current;
+    if (!session || !root) throw new Error('角色设置已关闭，请重新选择');
+    const assertCurrent = () => {
+      const state = useAppStore.getState();
+      const node = state.nodes.find((item) => item.id === session.nodeId);
+      if (refmodSessionRef.current !== session || state.currentProjectId !== session.projectId
+        || editorOwnerRef.current.nodeId !== session.nodeId || selectedWorkflowRef.current !== session.workflow
+        || state.workflows.find((item) => item.id === session.workflow.id) !== session.workflow || !node
+        || node.data.role === 'source' || node.data.status === 'loading'
+        || session.nodeSnapshot !== JSON.stringify([node.data.workflowId, node.data.provider, node.data.comfyRefmods])
+        || serializeDOM(root) !== session.prompt) throw new Error('项目、工作流或提示词已变化，请关闭设置后重新选择');
+      return node;
+    };
+    const current = assertCurrent();
+    // 手工绑定不能被提示词悄悄覆盖；需要用户先在“已绑定”列表移除冲突项。
+    mergeComfyRefmodSelections(current.data.comfyRefmods, [selection]);
+    const prepared = await prepareComfyRefmodSelections(session.workflow, [selection], session.existing);
+    assertCurrent();
+    const resolved = prepared.find((item) => item.loaderNodeId === selection.loaderNodeId && item.slot === selection.slot
+      && comfyRefmodKey(item) === comfyRefmodKey(selection));
+    if (!resolved) throw new Error('无法确认目标槽位，请刷新目录后重试');
+    const raw = buildComfyRefmodMention(resolved, session.asset.name);
+    const chip = buildComfyRefmodChipEl(raw, session.thumbnailUrl);
+    root.focus({ preventScroll: true });
+    const caret = window.getSelection();
+    if (!caret) throw new Error('无法恢复提示词光标，请重新打开设置');
+    let range: Range;
+    if (session.chip) {
+      if (!root.contains(session.chip) || session.chip.getAttribute('data-refmod-raw') !== session.token) throw new Error('角色胶囊已变化，请重新选择');
+      session.chip.replaceWith(chip);
+      range = document.createRange();
+    } else {
+      if (!session.range || !root.contains(session.range.startContainer) || !root.contains(session.range.endContainer)) throw new Error('插入位置已变化，请重新输入 @ 选择');
+      caret.removeAllRanges(); caret.addRange(session.range);
+      deleteAtChar();
+      range = caret.rangeCount ? caret.getRangeAt(0) : session.range;
+      const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer as Element : range.startContainer.parentElement;
+      const workflowChip = element?.closest('[data-wf-id]');
+      if (workflowChip && root.contains(workflowChip)) { range.setStartAfter(workflowChip); range.collapse(true); }
+      range.insertNode(chip);
+    }
+    ensureCaretSlotBeforeChip(chip);
+    range.setStartAfter(chip); range.collapse(true);
+    caret.removeAllRanges(); caret.addRange(range);
+    savedMentionRangeRef.current = null;
+    emitDOM(); closeRefmodSettings();
+  }, [deleteAtChar, emitDOM, closeRefmodSettings]);
+
+  const removeManualRefmod = useCallback((reference: ComfyRefmodSelection) => {
+    const state = useAppStore.getState();
+    const node = state.nodes.find((item) => item.id === nodeId);
+    if (state.currentProjectId !== currentProjectId || !node || !currentEditorNode || node.data.status === 'loading' || node.data.role === 'source'
+      || selectedWorkflowRef.current !== selectedWorkflow
+      || JSON.stringify([node.data.workflowId, node.data.comfyRefmods]) !== JSON.stringify([currentEditorNode.data.workflowId, manualRefmods])) {
+      setRefmodUiError('项目或视频绑定已变化，请重新打开 ComfyUI 角色列表'); return;
+    }
+    state.updateNodeData(node.id, { comfyRefmods: manualRefmods.filter((item) => item !== reference) });
+    setRefmodUiError('');
+  }, [nodeId, currentProjectId, currentEditorNode, selectedWorkflow, manualRefmods]);
 
   // ── Insert a canvas node chip ──
   const insertChipAtCursor = useCallback(
@@ -949,6 +1114,13 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // 输入法组合中：回车/方向键属于候选框，不该触发提交或 @ 选中
       if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      const refmodChip = (e.target as Element | null)?.closest?.<HTMLElement>('[data-refmod-raw]');
+      if (refmodChip && e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault(); e.stopPropagation(); editRefmodChip(refmodChip); return;
+      }
+      if (refmodChip && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault(); refmodChip.remove(); emitDOM(); return;
+      }
       if (editorRef.current) historyRef.current.updateSelection(captureMentionEditorSelection(editorRef.current));
       const key = e.key.toLowerCase();
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === 'z' || (key === 'y' && !e.shiftKey))) {
@@ -1084,13 +1256,16 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         const range = sel.getRangeAt(0);
         if (!range.collapsed) return;
         const node = range.startContainer;
+        if (node.nodeType === Node.ELEMENT_NODE && isChipEl(node.childNodes[range.startOffset])) {
+          e.preventDefault(); (node.childNodes[range.startOffset] as HTMLElement).remove(); emitDOM(); return;
+        }
         if (node && node.nodeType === Node.TEXT_NODE) {
           const textLen = (node.textContent || '').length;
           if (range.startOffset === textLen) {
             const next = node.nextSibling;
             if (next && next.nodeType === Node.ELEMENT_NODE) {
               const nextEl = next as HTMLElement;
-              if (nextEl.hasAttribute('data-ref-id') || nextEl.hasAttribute('data-wf-id') || nextEl.hasAttribute('data-skill-id')) {
+              if (isChipEl(nextEl)) {
                 e.preventDefault();
                 next.remove();
                 emitDOM();
@@ -1109,6 +1284,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       submitShortcut,
       emitDOM,
       applyHistory,
+      editRefmodChip,
     ],
   );
 
@@ -1151,7 +1327,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       handleEditorMouseLeave();
       return;
     }
-    const el = (e.target as Element).closest?.<HTMLElement>('[data-ref-id],[data-drama-id],[data-asset-path]') ?? null;
+    const el = (e.target as Element).closest?.<HTMLElement>('[data-ref-id],[data-drama-id],[data-asset-path],[data-refmod-raw]') ?? null;
     const source = el && editorRef.current?.contains(el) ? readMentionPreviewSource(el) : null;
     const key = source ? `${source.kind}:${source.id}` : null;
     if (key === lastHoverKeyRef.current) return; // 同一芯片，跳过避免抖动
@@ -1218,12 +1394,13 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         if (previous?.chip === source && now - previous.time <= 400
           && Math.hypot(release.clientX - previous.x, release.clientY - previous.y) < 4) {
           lastChipClickRef.current = null;
+          if (source.hasAttribute('data-refmod-raw')) { editRefmodChip(source); return; }
           const reference = findReferencePreviewSource(source);
           if (reference) requestReferencePreview(reference, root.ownerDocument);
         } else lastChipClickRef.current = { chip: source, time: now, x: release.clientX, y: release.clientY };
       },
     });
-  }, [currentProjectId, emitDOM, handleEditorMouseLeave]);
+  }, [currentProjectId, emitDOM, handleEditorMouseLeave, editRefmodChip]);
   useEffect(() => {
     const dismissTransientReferences = () => {
       cancelChipDragRef.current?.();
@@ -1240,6 +1417,15 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const { source } = chipTip;
     if (source.kind === 'node') return resolveMentionPreview(nodes, source.id, source.label, nodeMetaMap.get(source.id)?.thumbnailUrl);
     if (source.kind === 'drama') return resolveDramaMentionPreview(dramaAssets, globalCharacters, nodes, source.id, source.label);
+    if (source.kind === 'refmod') {
+      try {
+        const mention = parseComfyRefmodMentions(source.id).mentions[0];
+        if (!mention) return null;
+        return { label: mention.label, outputType: 'image', thumbnailUrl: resolveComfyRefmodChipPresentation(source.id)?.thumbnailUrl,
+          text: `${mention.selection.fileName}\n加载节点 #${mention.selection.loaderNodeId} · 槽位 ${mention.selection.slot}\n${mention.selection.loaderType === 'refmods-lab' ? '参考强度沿用工作流 Combine 设置' : `参考强度 ${mention.selection.strength}`}`,
+          missing: false, description: 'ComfyUI 角色参考包 · 双击调整槽位和强度，生成前重新校验' };
+      } catch { return { label: source.label, outputType: 'text', text: '', missing: true, description: '角色引用已损坏，请删除后重新选择' }; }
+    }
     const category = getFileCategory(source.label);
     return {
       label: source.label, displayId: undefined, sprite: undefined,
@@ -1331,13 +1517,21 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       onSelect: () => handleSelectCanvasMention(node.id, node.label),
     })),
   ];
-  const workflowTabItems: MentionPickerItem[] = filteredWorkflowMentions.map((node) => ({
+  const workflowInputItems: MentionPickerItem[] = filterWorkflowMentions(filteredWorkflowMentions, workflowMediaFilter).map((node) => ({
     key: `wf:${node.id}`,
     label: node.label,
     icon: MEDIA_ICONS[node._ioType === 'image' || node._ioType === 'video' || node._ioType === 'audio' ? node._ioType : 'text'],
     badge: '工作流',
     onSelect: () => handleSelectWorkflowMention(node._ioNodeId, node.label, node._ioType),
   }));
+  const refmodTabItems: MentionPickerItem[] = refmodOptions.entries
+    .filter(({ asset, characterName }) => matchesMentionQuery(mentionQuery, [asset.name, asset.fileName, characterName, ...asset.tags]))
+    .map(({ asset, thumbnailUrl, characterName }) => ({
+      key: `refmod:${comfyRefmodKey(asset)}`, label: asset.name, thumbnailUrl,
+      icon: 'mdi:account-box-outline', badge: 'ComfyUI 角色', title: `${asset.name}${characterName ? ` · ${characterName}` : ''}\n${asset.fileName}`,
+      onSelect: () => openRefmodSettings(asset, thumbnailUrl),
+    }));
+  const workflowTabItems = effectiveComfySection === 'roles' ? refmodTabItems : workflowInputItems;
 
   const drillItem = !isAudioNode && dramaRefPickerId
     ? allDramaMentionItems.find((item) => item.id === dramaRefPickerId)
@@ -1493,10 +1687,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   // 首次打开优先展示有内容的分类；手动切换后保留选择，工作流取消时回到普通分类。
   const defaultTab = nodeTabItems.length > 0 ? 'nodes'
-    : selectedWorkflow && workflowTabItems.length > 0 ? 'workflow'
+    : localComfyWorkflow && workflowTabItems.length > 0 ? 'workflow'
       : assetTabItems.length > 0 ? 'assets' : 'nodes';
   const effectiveTab = drillItem ? 'assets'
-    : pickerTab === 'workflow' && !selectedWorkflow ? defaultTab
+    : pickerTab === 'workflow' && !localComfyWorkflow ? defaultTab
       : pickerTab ?? defaultTab;
   const activeTabItems = effectiveTab === 'assets' ? assetTabItems
     : effectiveTab === 'workflow' ? workflowTabItems : nodeTabItems;
@@ -1517,8 +1711,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       ...workflowMentionNodes
         .filter((item) => matchesMentionQuery(query, [item.id, item._ioNodeId, item.label]))
         .map((item) => ({ source: 'workflow' as const, item })),
+      ...refmodOptions.entries
+        .filter(({ asset, characterName }) => matchesMentionQuery(query, [asset.name, asset.fileName, characterName, ...asset.tags]))
+        .map((item) => ({ source: 'refmod' as const, item })),
     ];
-  }, [showMention, resourceSearchExpanded, resourceSearchQuery, projectMentionNodes, allDramaMentionItems, taggedAssets, workflowMentionNodes]);
+  }, [showMention, resourceSearchExpanded, resourceSearchQuery, projectMentionNodes, allDramaMentionItems, taggedAssets, workflowMentionNodes, refmodOptions.entries]);
 
   // 在映射卡片之前分批，目录中的大量图片不同时创建 DOM 和缩略图请求。
   const resourceSearchItems: MentionPickerItem[] = resourceSearchCandidates.slice(0, resourceSearchVisible).map((candidate, index) => {
@@ -1543,19 +1740,23 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         title: file.availability === 'offline' ? `${file.name} · 文件当前不可用` : file.name,
         onSelect: () => handleSelectAsset(file),
       };
-    } else {
+    } else if (candidate.source === 'workflow') {
       const workflowNode = candidate.item;
       item = {
         key: `wf:${workflowNode.id}`, label: workflowNode.label, badge: '工作流',
         icon: MEDIA_ICONS[workflowNode._ioType === 'image' || workflowNode._ioType === 'video' || workflowNode._ioType === 'audio' ? workflowNode._ioType : 'text'],
         onSelect: () => handleSelectWorkflowMention(workflowNode._ioNodeId, workflowNode.label, workflowNode._ioType),
       };
+    } else {
+      const { asset, thumbnailUrl } = candidate.item;
+      item = { key: `refmod:${comfyRefmodKey(asset)}`, label: asset.name, thumbnailUrl, badge: 'ComfyUI 角色',
+        icon: 'mdi:account-box-outline', onSelect: () => openRefmodSettings(asset, thumbnailUrl) };
     }
     return { ...item, domId: `${resourceSearchListId}-item-${index}` };
   });
   const activeSearchItem = resourceSearchItems.find((item) => item.key === resourceSearchActiveKey && !item.disabled)
     ?? resourceSearchItems.find((item) => !item.disabled);
-  const resourceSearchLoading = assetLoading || globalCharactersLoading;
+  const resourceSearchLoading = assetLoading || globalCharactersLoading || refmodOptions.loading;
 
   const handleResourceSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter 只选择搜索结果，不能冒泡成为节点生成或弹窗快捷键。
@@ -1703,6 +1904,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         }}
         spellCheck={false}
       />
+      {refmodUiError && <p className="ui-alert ui-alert--warning mt-2 text-xs" role="alert">{refmodUiError}</p>}
+      {activeRefmodSession && <Suspense fallback={null}><ComfyRefmodMentionSettings
+        workflow={activeRefmodSession.workflow} asset={activeRefmodSession.asset} initial={activeRefmodSession.initial}
+        existing={activeRefmodSession.existing} manual={manualRefmods} catalog={refmodOptions.catalog} loading={refmodOptions.loading}
+        error={refmodOptions.error} refresh={refmodOptions.refresh} onClose={closeRefmodSettings} onApply={applyRefmodMention}
+      /></Suspense>}
 
       {/* 保留 chip-name-tip 的 Portal 标记，宿主点外关闭逻辑继续识别。 */}
       {createPortal(
@@ -1792,7 +1999,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             tabs={[
               { id: 'nodes', label: isAudioNode ? '输入音频' : '输入图', icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:image-multiple-outline' },
               { id: 'assets', label: '资产库', icon: 'mdi:bookshelf' },
-              ...(selectedWorkflow ? [{ id: 'workflow', label: 'ComfyUI 节点' }] : []),
+              ...(localComfyWorkflow ? [{ id: 'workflow', label: 'ComfyUI' }] : []),
             ]}
             activeTab={effectiveTab}
             onTabChange={(id) => {
@@ -1804,7 +2011,29 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             chips={!resourceSearchExpanded && effectiveTab === 'assets' ? dramaKindChips : undefined}
             activeChip={dramaKind}
             onChipChange={setDramaKind}
-            leading={!resourceSearchExpanded && effectiveTab === 'assets' && drillItem ? (
+            leading={!resourceSearchExpanded && effectiveTab === 'workflow' ? (
+              <div className="flex w-full flex-col gap-2">
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" className={`mention-picker-chip${effectiveComfySection === 'inputs' ? ' active' : ''}`} onMouseDown={(event) => { event.preventDefault(); setComfySection('inputs'); }}>工作流输入</button>
+                  {canMentionRefmod && <button type="button" className={`mention-picker-chip${effectiveComfySection === 'roles' ? ' active' : ''}`} onMouseDown={(event) => { event.preventDefault(); setComfySection('roles'); }}>ComfyUI 角色</button>}
+                </div>
+                {effectiveComfySection === 'inputs' ? <div className="flex flex-wrap gap-1.5" aria-label="工作流输入类型">
+                  {workflowMentionFilterChips(filteredWorkflowMentions).map((filter) => <button key={filter.id} type="button" className={`mention-picker-chip${workflowMediaFilter === filter.id ? ' active' : ''}`}
+                    onMouseDown={(event) => { event.preventDefault(); setWorkflowMediaFilter(filter.id); }}>{filter.label}<span className="mention-picker-chip-count">{filter.count}</span></button>)}
+                </div> : <>
+                  <div className="flex items-center justify-between gap-2 text-xs text-canvas-text-muted"><span>{refmodOptions.catalog?.serverName ?? '当前工作流服务器'}</span>
+                    <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={refmodOptions.loading} onMouseDown={(event) => event.preventDefault()} onClick={refmodOptions.refresh}>{refmodOptions.loading ? '读取中…' : '刷新目录'}</button>
+                  </div>
+                  {refmodOptions.error && <p className="ui-alert ui-alert--warning text-xs" role="status">{refmodOptions.error}</p>}
+                  {manualRefmods.length > 0 && <details className="text-xs text-canvas-text-secondary"><summary className="cursor-pointer" onMouseDown={(event) => event.preventDefault()}>已绑定 {manualRefmods.length} 项（资源库/拖入）</summary>
+                    <div className="mt-1 max-h-24 space-y-1 overflow-y-auto">{manualRefmods.map((reference, index) => <div key={`${comfyRefmodKey(reference)}:${index}`} className="flex items-center gap-2 rounded border border-canvas-border p-2">
+                      <span className="min-w-0 flex-1 truncate" title={reference.fileName}>{reference.fileName}</span>
+                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => removeManualRefmod(reference)}>移除</button>
+                    </div>)}</div>
+                  </details>}
+                </>}
+              </div>
+            ) : !resourceSearchExpanded && effectiveTab === 'assets' && drillItem ? (
               <>
                 <button
                   type="button"
@@ -1867,7 +2096,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               ? '该角色暂无声音，请先在角色库中添加'
               : effectiveTab === 'assets' && drillItem && dramaActionPicker
               ? drillAction ? '该动作暂无图片、GIF 或视频素材' : '该角色暂无动作，请先在角色库中添加'
-              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'workflow' ? '当前工作流暂无可引用的节点' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
+              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'workflow' ? effectiveComfySection === 'roles' ? refmodOptions.loading ? '正在读取 ComfyUI 角色…' : '当前工作流暂无可用角色参考包' : '当前筛选下暂无工作流输入' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
             footer={(
               <>
               {resourceSearchExpanded && ((assetLoadError && !assetLoading)
