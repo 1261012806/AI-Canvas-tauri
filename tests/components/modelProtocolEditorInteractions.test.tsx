@@ -22,7 +22,15 @@ vi.mock('react', async () => ({
     const index = scope.index++;
     return scope.values[index] ??= { current: initial };
   },
-  useMemo: <T,>(factory: () => T) => factory(),
+  useMemo: <T,>(factory: () => T, deps: readonly unknown[]) => {
+    const scope = driver.scope!;
+    const index = scope.index++;
+    const previous = scope.values[index] as { value: T; deps: readonly unknown[] } | undefined;
+    if (!previous || deps.length !== previous.deps.length || deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+      scope.values[index] = { value: factory(), deps };
+    }
+    return (scope.values[index] as { value: T }).value;
+  },
   useEffect: () => {},
   useLayoutEffect: (effect: () => void) => { driver.layoutEffects.push(effect); },
   useId: () => `protocol-test-${driver.scope!.index++}`,

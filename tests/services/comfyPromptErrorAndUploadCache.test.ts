@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   storeState: {
     config: { comfyUIUrl: 'http://comfy.test:8188' },
     currentProjectId: 'p1',
+    nodes: [{ id: 'node-1', data: { type: 'ai-image' } }],
     workflows: [] as Array<Record<string, unknown>>,
   },
   cancelNodePolling: vi.fn(),

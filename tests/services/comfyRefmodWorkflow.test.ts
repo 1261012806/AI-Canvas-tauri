@@ -14,7 +14,7 @@ vi.mock('../../src/services/comfyRefmodService', () => ({
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.state } }));
 vi.mock('../../src/services/comfyServers', () => ({ resolveComfyServerSelection: () => mocks.server }));
 
-import { applyComfyRefmodsToWorkflow, assertComfyRefmodSubmissionFresh, prepareComfyRefmodSelections } from '../../src/services/comfyRefmodWorkflow';
+import { applyComfyRefmodsToWorkflow, assertComfyRefmodSubmissionFresh, ComfyRefmodMappingRequiredError, prepareComfyRefmodSelections } from '../../src/services/comfyRefmodWorkflow';
 
 const fingerprint = 'a'.repeat(64);
 const catalog: ComfyRefmodCatalog = {
@@ -82,7 +82,7 @@ describe('RefMod 工作流槽位绑定', () => {
   it('不自动覆盖原模型，明确指定槽位后才允许替换', async () => {
     const inputs = Object.fromEntries(Object.entries(loaderInputs()).map(([key, value]) => [key, key.startsWith('mod_') ? 'nested/bob' : value]));
     const wf = workflow({ '12': { class_type: 'MiniMaxH3RefModsLoader', inputs } });
-    await expect(prepareComfyRefmodSelections(wf, [reference()])).rejects.toThrow('没有可用');
+    await expect(prepareComfyRefmodSelections(wf, [reference()])).rejects.toThrow(ComfyRefmodMappingRequiredError);
     await expect(prepareComfyRefmodSelections(wf, [boundReference({ originalFileName: 'nested/bob' })])).rejects.toThrow('已有其他');
     await expect(prepareComfyRefmodSelections(wf, [boundReference({ originalFileName: 'nested/bob', replaceExisting: true })])).resolves.toHaveLength(1);
   });

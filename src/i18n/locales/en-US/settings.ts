@@ -931,7 +931,6 @@ const settings = {
   '按文档配置 → 预览请求与响应 → 试跑验证': 'Configure from the docs → preview request and response → verify with a test run',
   '复制失败，请重试': 'Copy failed. Please try again',
   '复制给AI修改': 'Copy for AI editing',
-  '使用示例变量发送一次真实请求，会产生调用与计费': 'Sends one real request with sample variables; this incurs usage and billing',
   '结果获取方式': 'How results are fetched',
   '从响应字段读取': 'Read from response fields',
   '完成后同源下载': 'Same-origin download after completion',

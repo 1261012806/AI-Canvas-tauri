@@ -209,8 +209,9 @@ function canvasNode(id: string, type: NodeType, label = id): AppState['nodes'][n
   return { id, type, position: { x: 0, y: 0 }, data: { type, label } };
 }
 function nodeRows() { return all(tree, (element) => typeof element.props['data-node-id'] === 'string'); }
+function nodeListTab() { return find((element) => element.props.role === 'tab' && element.props['data-tab-value'] === 'nodes'); }
 function openNodeList() {
-  click(all(tree, (el) => el.props.role === 'tab')[4]); render();
+  click(nodeListTab()); render();
 }
 
 beforeEach(() => {
@@ -1337,7 +1338,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(all(tree, (el) => el.type === 'asset-select')).toHaveLength(0);
     expect(cards()).toHaveLength(0);
     expect(find((el) => el.props.placeholder === '搜索节点名称、类型或编号…').props.value).toBe('');
-    expect(all(tree, (el) => el.props.className === 'ui-tabs__count')[4].props.children).toBe(types.length);
+    expect(all(nodeListTab(), (el) => el.props.className === 'ui-tabs__count')[0].props.children).toBe(types.length);
   });
 
   it('节点增删、改名和项目切换后，节点列表与计数实时跟随画布', () => {
@@ -1349,7 +1350,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(nodeRows()).toHaveLength(2);
     driver.store!.setState({ currentProjectId: 'project-2', nodes: [canvasNode('text', 'ai-text')] }); render();
     expect(nodeRows().map((el) => el.props['data-node-id'])).toEqual(['text']);
-    expect(all(tree, (el) => el.props.className === 'ui-tabs__count')[4].props.children).toBe(1);
+    expect(all(nodeListTab(), (el) => el.props.className === 'ui-tabs__count')[0].props.children).toBe(1);
     driver.store!.setState({ nodes: [] }); render();
     expect(nodeRows()).toHaveLength(0);
     expect(find((el) => el.props.children === '当前画布暂无节点')).toBeDefined();

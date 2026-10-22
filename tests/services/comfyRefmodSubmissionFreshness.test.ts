@@ -5,7 +5,7 @@ import type { ComfyRefmodCatalog, ComfyRefmodSelection } from '../../src/types/c
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(), identity: vi.fn(), catalog: vi.fn(), poll: vi.fn(), beforeSubmit: vi.fn(),
   state: {
-    currentProjectId: 'p', revision: 1, getCurrentRevision: () => 1,
+    currentProjectId: 'p', revision: 1, getCurrentRevision: (): number => 1,
     config: { comfyUIUrl: 'http://comfy.test:8188' },
     workflows: [] as WorkflowDefinition[],
     nodes: [] as Array<{ id: string; type: string; data: { prompt: string; role?: string } }>,

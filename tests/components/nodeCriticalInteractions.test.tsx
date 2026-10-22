@@ -98,7 +98,9 @@ async function installReactHookDriver(
       useId: () => `test-id-${++idIndex}`,
       useMemo: <T,>(factory: () => T) => factory(),
       useRef: <T,>(initialValue: T) => ({ current: initialValue }),
-      useSyncExternalStore: () => 'zh-CN',
+      useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown, getServerSnapshot?: () => unknown) => (
+        typeof document === 'undefined' && getServerSnapshot ? getServerSnapshot() : getSnapshot()
+      ),
       useState: <T,>(initialValue: T | (() => T)) => {
         const resolved = typeof initialValue === 'function'
           ? (initialValue as () => T)()
@@ -161,6 +163,16 @@ function installStoreMock(store: TestStore) {
     computeImageNodeDimensions: vi.fn(),
     useAppStore,
   }));
+}
+
+function mockComfyDeliveries() {
+  return {
+    subscribeComfyDeliveries: () => () => {},
+    isComfyNodeDeliveryActive: () => false,
+    beginComfyNodeDelivery: vi.fn(),
+    completeComfyNodeTask: vi.fn(),
+    pauseComfyNodeDelivery: vi.fn(),
+  };
 }
 
 function installCommonNodeMocks() {
@@ -377,7 +389,7 @@ describe('critical canvas node interactions', () => {
     vi.stubGlobal('document', { addEventListener: (name: string, listener: (event: unknown) => Promise<void>) => listeners.set(name, listener), removeEventListener: vi.fn() });
     vi.doMock('../../src/utils/assetSearchWindow', () => ({ openAssetSearchWindow: vi.fn() }));
     vi.doMock('../../src/utils/nodeAnimations', () => ({ playNodeExit: vi.fn() }));
-    vi.doMock('../../src/services/pollManager', () => ({ cancelNodePolling: vi.fn() }));
+    vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), cancelNodePolling: vi.fn() }));
     vi.doMock('@tauri-apps/plugin-global-shortcut', () => ({ unregisterAll: vi.fn() }));
     vi.doMock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => { throw new Error('Web test'); } }));
     const { useKeyboardShortcuts } = await import('../../src/hooks/useKeyboardShortcuts');
@@ -1185,6 +1197,7 @@ describe('critical canvas node interactions', () => {
       default: function PromptPanelMock() { return null; },
     }));
     vi.doMock('../../src/services/pollManager', () => ({
+      ...mockComfyDeliveries(),
       getPendingTasksForProject: () => [], resumeComfyUINodeTask: vi.fn(), resumeRunningHubNodeTask: vi.fn(),
       updatePendingTask: vi.fn(), removePendingTask: vi.fn(),
     }));
@@ -1249,7 +1262,7 @@ describe('critical canvas node interactions', () => {
         getProjectModelKind: (nodeType: string) => nodeType === 'ai-image' ? 'image' : null,
         parseProjectModelRef: (model: string | undefined) => model ? { model, provider: 'general' } : null,
       }));
-      vi.doMock('../../src/services/pollManager', () => ({ getPendingTasksForProject: () => [] }));
+      vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), getPendingTasksForProject: () => [] }));
 
       const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
       const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
@@ -1318,6 +1331,7 @@ describe('critical canvas node interactions', () => {
       resolveProjectGenerationPrompt: ({ prompt }: { prompt: string }) => prompt,
     }));
     vi.doMock('../../src/services/pollManager', () => ({
+      ...mockComfyDeliveries(),
       getPendingTasksForProject: () => [], prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(),
     }));
     const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
@@ -1369,6 +1383,7 @@ describe('critical canvas node interactions', () => {
       }));
       vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
       vi.doMock('../../src/services/pollManager', () => ({
+        ...mockComfyDeliveries(),
         getPendingTasksForProject: () => scenario === 'comfy-recovery'
           ? [{ nodeId: 'video-node', taskType: 'comfyui', comfyRecoveryState: 'pending' }] : [],
       }));
@@ -1464,6 +1479,7 @@ describe('critical canvas node interactions', () => {
       resolveProjectGenerationPrompt,
     }));
     vi.doMock('../../src/services/pollManager', () => ({
+      ...mockComfyDeliveries(),
       getPendingTasksForProject: () => [],
       prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
       VideoPollingPausedError: class extends Error {},
@@ -1589,6 +1605,7 @@ describe('critical canvas node interactions', () => {
       if (outcome === 'project-switch') store.currentProjectId = 'project-b';
     });
     vi.doMock('../../src/services/pollManager', () => ({
+      ...mockComfyDeliveries(),
       getPendingTasksForProject: () => pendingTasks,
       resumeComfyUINodeTask,
     }));
