@@ -78,6 +78,7 @@ interface RefmodEditSession {
   asset: ComfyRefmodAsset;
   thumbnailUrl?: string;
   initial?: ComfyRefmodSelection;
+  manualIndex?: number;
   existing: ComfyRefmodSelection[];
   token?: string;
   chip?: HTMLElement;
@@ -475,7 +476,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     && refmodSession.workflow === selectedWorkflow ? refmodSession : undefined;
   const effectiveComfySection = canMentionRefmod ? comfySection : 'inputs';
   const refmodOptions = useComfyRefmodMentionOptions({
-    enabled: canMentionRefmod && ((showMention && (pickerTab === 'workflow' || resourceSearchExpanded)) || !!activeRefmodSession),
+    enabled: canMentionRefmod && ((showMention && ((pickerTab === 'workflow' && comfySection === 'roles') || resourceSearchExpanded)) || !!activeRefmodSession),
     workflow: localComfyWorkflow,
   });
   const manualRefmods = currentEditorNode?.data.comfyRefmods ?? EMPTY_REFMODS;
@@ -559,7 +560,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     setRefmodSession(undefined);
   }, []);
 
-  const openRefmodSettings = useCallback((asset: ComfyRefmodAsset, thumbnailUrl?: string, chip?: HTMLElement) => {
+  const openRefmodSettings = useCallback((asset: ComfyRefmodAsset, thumbnailUrl?: string, chip?: HTMLElement, manualIndex?: number) => {
     const root = editorRef.current;
     const state = useAppStore.getState();
     if (!root || !nodeId || !localComfyWorkflow || !canMentionRefmod || state.currentProjectId !== currentProjectId) return;
@@ -569,16 +570,17 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       if (node.data.role === 'source' || node.data.status === 'loading') throw new Error('源视频或正在生成的视频不能修改角色引用');
       const currentPrompt = serializeDOM(root);
       const token = chip?.getAttribute('data-refmod-raw') || undefined;
-      const initial = token ? parseComfyRefmodMentions(token).mentions[0]?.selection : undefined;
+      const initial = manualIndex === undefined ? (token ? parseComfyRefmodMentions(token).mentions[0]?.selection : undefined) : node.data.comfyRefmods?.[manualIndex];
+      if (manualIndex !== undefined && !initial) throw new Error('手工绑定已变化，请重新打开列表');
       const parsed = parseComfyRefmodMentions(currentPrompt);
       const otherMentions = [...parsed.mentions];
       const editingIndex = token ? otherMentions.findIndex((item) => item.token === token) : -1;
       if (editingIndex >= 0) otherMentions.splice(editingIndex, 1);
-      const existing = mergeComfyRefmodSelections(node.data.comfyRefmods, otherMentions.map((item) => item.selection));
+      const existing = mergeComfyRefmodSelections((node.data.comfyRefmods ?? []).filter((_, index) => index !== manualIndex), otherMentions.map((item) => item.selection));
       const selection = window.getSelection();
       const saved = savedMentionRangeRef.current ?? (selection?.rangeCount ? selection.getRangeAt(0) : undefined);
       const session: RefmodEditSession = {
-        asset, thumbnailUrl, initial, existing, token, chip, range: saved?.cloneRange(),
+        asset, thumbnailUrl, initial, manualIndex, existing, token, chip, range: saved?.cloneRange(),
         projectId: currentProjectId, nodeId, workflow: localComfyWorkflow, prompt: currentPrompt,
         nodeSnapshot: JSON.stringify([node.data.workflowId, node.data.provider, node.data.comfyRefmods]),
       };
@@ -616,12 +618,22 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     };
     const current = assertCurrent();
     // 手工绑定不能被提示词悄悄覆盖；需要用户先在“已绑定”列表移除冲突项。
-    mergeComfyRefmodSelections(current.data.comfyRefmods, [selection]);
+    const retainedManual = (current.data.comfyRefmods ?? []).filter((_, index) => index !== session.manualIndex);
+    mergeComfyRefmodSelections(retainedManual, [selection]);
+    mergeComfyRefmodSelections(session.existing, [selection]);
     const prepared = await prepareComfyRefmodSelections(session.workflow, [selection], session.existing);
     assertCurrent();
     const resolved = prepared.find((item) => item.loaderNodeId === selection.loaderNodeId && item.slot === selection.slot
       && comfyRefmodKey(item) === comfyRefmodKey(selection));
     if (!resolved) throw new Error('无法确认目标槽位，请刷新目录后重试');
+    if (session.manualIndex !== undefined) {
+      const latest = assertCurrent();
+      const next = [...(latest.data.comfyRefmods ?? [])];
+      next[session.manualIndex] = resolved;
+      useAppStore.getState().updateNodeData(session.nodeId, { comfyRefmods: next });
+      closeRefmodSettings();
+      return;
+    }
     const raw = buildComfyRefmodMention(resolved, session.asset.name);
     const chip = buildComfyRefmodChipEl(raw, session.thumbnailUrl);
     root.focus({ preventScroll: true });
@@ -1905,8 +1917,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         spellCheck={false}
       />
       {refmodUiError && <p className="ui-alert ui-alert--warning mt-2 text-xs" role="alert">{refmodUiError}</p>}
-      {activeRefmodSession && <Suspense fallback={null}><ComfyRefmodMentionSettings
+      {activeRefmodSession && <Suspense fallback={null}><ComfyRefmodMentionSettings key={`${activeRefmodSession.nodeSnapshot}:${refmodOptions.catalog?.fetchedAt ?? 'loading'}`}
         workflow={activeRefmodSession.workflow} asset={activeRefmodSession.asset} initial={activeRefmodSession.initial}
+        bindingMode={activeRefmodSession.manualIndex !== undefined}
         existing={activeRefmodSession.existing} manual={manualRefmods} catalog={refmodOptions.catalog} loading={refmodOptions.loading}
         error={refmodOptions.error} refresh={refmodOptions.refresh} onClose={closeRefmodSettings} onApply={applyRefmodMention}
       /></Suspense>}
@@ -2014,12 +2027,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             leading={!resourceSearchExpanded && effectiveTab === 'workflow' ? (
               <div className="flex w-full flex-col gap-2">
                 <div className="flex flex-wrap gap-1.5">
-                  <button type="button" className={`mention-picker-chip${effectiveComfySection === 'inputs' ? ' active' : ''}`} onMouseDown={(event) => { event.preventDefault(); setComfySection('inputs'); }}>工作流输入</button>
-                  {canMentionRefmod && <button type="button" className={`mention-picker-chip${effectiveComfySection === 'roles' ? ' active' : ''}`} onMouseDown={(event) => { event.preventDefault(); setComfySection('roles'); }}>ComfyUI 角色</button>}
+                  <button type="button" className={`mention-picker-chip${effectiveComfySection === 'inputs' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'inputs'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('inputs')}>工作流输入</button>
+                  {canMentionRefmod && <button type="button" className={`mention-picker-chip${effectiveComfySection === 'roles' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'roles'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('roles')}>ComfyUI 角色</button>}
                 </div>
                 {effectiveComfySection === 'inputs' ? <div className="flex flex-wrap gap-1.5" aria-label="工作流输入类型">
                   {workflowMentionFilterChips(filteredWorkflowMentions).map((filter) => <button key={filter.id} type="button" className={`mention-picker-chip${workflowMediaFilter === filter.id ? ' active' : ''}`}
-                    onMouseDown={(event) => { event.preventDefault(); setWorkflowMediaFilter(filter.id); }}>{filter.label}<span className="mention-picker-chip-count">{filter.count}</span></button>)}
+                    aria-pressed={workflowMediaFilter === filter.id} onMouseDown={(event) => event.preventDefault()} onClick={() => setWorkflowMediaFilter(filter.id)}>{filter.label}<span className="mention-picker-chip-count">{filter.count}</span></button>)}
                 </div> : <>
                   <div className="flex items-center justify-between gap-2 text-xs text-canvas-text-muted"><span>{refmodOptions.catalog?.serverName ?? '当前工作流服务器'}</span>
                     <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={refmodOptions.loading} onMouseDown={(event) => event.preventDefault()} onClick={refmodOptions.refresh}>{refmodOptions.loading ? '读取中…' : '刷新目录'}</button>
@@ -2028,6 +2041,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                   {manualRefmods.length > 0 && <details className="text-xs text-canvas-text-secondary"><summary className="cursor-pointer" onMouseDown={(event) => event.preventDefault()}>已绑定 {manualRefmods.length} 项（资源库/拖入）</summary>
                     <div className="mt-1 max-h-24 space-y-1 overflow-y-auto">{manualRefmods.map((reference, index) => <div key={`${comfyRefmodKey(reference)}:${index}`} className="flex items-center gap-2 rounded border border-canvas-border p-2">
                       <span className="min-w-0 flex-1 truncate" title={reference.fileName}>{reference.fileName}</span>
+                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => {
+                        const saved = useAppStore.getState().config.comfyRefmodAssets?.find((item) => comfyRefmodKey(item) === comfyRefmodKey(reference));
+                        openRefmodSettings(saved ?? { ...reference, id: comfyRefmodKey(reference), name: reference.fileName, tags: [], updatedAt: 0 }, undefined, undefined, index);
+                      }}>编辑</button>
                       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => removeManualRefmod(reference)}>移除</button>
                     </div>)}</div>
                   </details>}

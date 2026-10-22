@@ -17,11 +17,12 @@ import ComfyModelDedupeActions from './ComfyModelDedupeActions';
 import ComfyModelDedupeHistoryDialog from './ComfyModelDedupeHistory';
 
 interface Props {
+  active?: boolean;
   busy: boolean;
   run: (label: string, operation: () => Promise<string>) => Promise<boolean>;
 }
 
-export default function ComfyModelDedupe({ busy, run }: Props) {
+export default function ComfyModelDedupe({ active = true, busy, run }: Props) {
   const t = useT();
   const [scope, setScope] = useState<ComfyModelScanScope>('modelsAndPlugins');
   const [roots, setRoots] = useState<Partial<Record<ComfyModelScanRootKind, ComfyModelScanRoot>>>({});
@@ -191,6 +192,6 @@ export default function ComfyModelDedupe({ busy, run }: Props) {
       {filteredGroups.length > limit && <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" onClick={() => setLimit((value) => value + 20)}>{t('加载更多')}</button>}
       {!scanning && !filteredGroups.length && <div className="ui-empty"><Icon icon={scan ? 'lucide:check-check' : 'lucide:files'} width={28} className="ui-empty__icon" /><p className="ui-empty__title">{scan ? (scan.groups.length ? t('没有匹配的路径') : t('未发现可去重的模型副本')) : t('扫描后选择需要合并的模型副本')}</p><p className="ui-empty__desc">{t('已共享的硬链接不重复计算空间。同名不同内容、不同量化和不同格式的文件不会仅因名称相似而合并。')}</p></div>}
     </div>
-    {historyOpen && <ComfyModelDedupeHistoryDialog onClose={() => setHistoryOpen(false)} />}
+    {active && historyOpen && <ComfyModelDedupeHistoryDialog onClose={() => setHistoryOpen(false)} />}
   </section>;
 }

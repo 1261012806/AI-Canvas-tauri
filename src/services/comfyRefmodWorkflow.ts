@@ -7,6 +7,11 @@ import { resolveComfyServerSelection } from './comfyServers';
 
 export const MAX_COMFY_REFMOD_SELECTIONS = 100;
 
+/** 只有可以由用户选择消解的槽位歧义才触发映射 UI；网络和身份错误不兜底。 */
+export class ComfyRefmodMappingRequiredError extends Error {
+  constructor(message: string) { super(message); this.name = 'ComfyRefmodMappingRequiredError'; }
+}
+
 type WorkflowGraph = Record<string, Record<string, unknown>>;
 
 export interface ComfyRefmodWorkflowLoader {
@@ -85,9 +90,8 @@ function resolveSelections(workflow: WorkflowDefinition, graph: WorkflowGraph, s
     }
     const candidates = loaders.filter((loader) => loader.loaderType === selection.loaderType
       && (selection.loaderNodeId === undefined || loader.nodeId === selection.loaderNodeId));
-    if (candidates.length !== 1) throw new Error(candidates.length
-      ? '工作流有多个 RefMod 加载节点，请在参数中明确选择目标节点和槽位'
-      : '工作流缺少对应的 RefMod 加载节点，或目标插件未安装，请先在 ComfyUI 中配置并连接加载节点');
+    if (candidates.length > 1) throw new ComfyRefmodMappingRequiredError('工作流有多个 RefMod 加载节点，请明确选择目标节点和槽位');
+    if (!candidates.length) throw new Error('工作流缺少对应的 RefMod 加载节点，或目标插件未安装，请先在 ComfyUI 中配置并连接加载节点');
     const loader = candidates[0];
     if (selection.replaceExisting && (selection.loaderNodeId === undefined || selection.slot === undefined)) {
       throw new Error('替换原 RefMod 需要明确选择目标加载节点与槽位');
@@ -97,7 +101,7 @@ function resolveSelections(workflow: WorkflowDefinition, graph: WorkflowGraph, s
       ? available.find((item) => loader.inputs[item.fileField] === selection.fileName)
         ?? available.find((item) => isComfyRefmodSlotEmpty(loader, item))
       : loader.slots.find((item) => item.slot === selection.slot);
-    if (!slot) throw new Error('没有可用的 RefMod 槽位，请在参数中选择具体槽位后明确替换原值');
+    if (!slot) throw new ComfyRefmodMappingRequiredError('没有可自动分配的 RefMod 空槽，请明确选择槽位后替换原值');
     const key = `${loader.nodeId}:${slot.slot}`;
     if (occupied.has(key)) throw new Error('多个 RefMod 不能写入同一个槽位，请重新分配');
     occupied.add(key);
@@ -127,7 +131,7 @@ function resolveSelections(workflow: WorkflowDefinition, graph: WorkflowGraph, s
 }
 
 async function freshCatalog(workflow: WorkflowDefinition, signal?: AbortSignal): Promise<ComfyRefmodCatalog> {
-  const catalog = await loadComfyRefmodCatalog(workflow.serverId, { signal, fresh: true });
+  const catalog = await loadComfyRefmodCatalog(workflow.serverId, { signal, fresh: true, includeDetails: false });
   const identity = await resolveComfyRefmodServerIdentity(workflow.serverId);
   if (catalog.endpointFingerprint !== identity.endpointFingerprint) throw new Error('读取 RefMod 期间服务器配置已改变，请重新选择');
   signal?.throwIfAborted();

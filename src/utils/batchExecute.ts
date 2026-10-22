@@ -26,7 +26,7 @@ import { resolveVideoSubmissionControls } from '../services/ai/videoRequestResol
 import { persistMediaUrlToProjectData } from '../services/fileService';
 import { animationProcessing, animationResultPatch } from '../services/animationService';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation, type CanvasDerivationGuard } from '../services/canvasDerivationGuard';
-import { completeVideoNodeTask, getPendingTasksForProject, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../services/pollManager';
+import { beginComfyNodeDelivery, completeComfyNodeTask, completeVideoNodeTask, getPendingTasksForProject, pauseComfyNodeDelivery, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from '../services/pollManager';
 import { videoInputFingerprint } from '../services/videoBatchPlanning';
 
 export interface BatchContext {
@@ -82,15 +82,16 @@ async function executeOneNode(
   const refmodFingerprint = hasProtectedVideoInputs ? videoInputFingerprint(node, useAppStore.getState()) : undefined;
   let videoResultReceived = false;
   let videoTaskId: string | undefined;
+  let comfyTaskId: string | undefined;
   let animationGuard: CanvasDerivationGuard | null = null;
-  const guarded = ['ai-animation', 'ai-video'].includes(nt) && !!ctx.currentProjectId;
+  const guarded = (['ai-animation', 'ai-video'].includes(nt) || (!!d.workflowId && d.provider === 'comfyui')) && !!ctx.currentProjectId;
   if (guarded) {
     const state = useAppStore.getState();
     if (state.currentProjectId !== ctx.currentProjectId) return false;
     animationGuard = registerCanvasDerivation(state, node.id);
     if (!animationGuard) return false;
   }
-  const isFresh = async () => {
+  const isFresh = () => {
     if (!guarded) return true;
     const state = useAppStore.getState();
     const current = hasProtectedVideoInputs ? state.nodes.find((item) => item.id === node.id) : undefined;
@@ -144,12 +145,14 @@ async function executeOneNode(
         workflowInputs: d.workflowInputs,
         nodeId: node.id,
       });
-      if (!await isFresh()) return false;
+      comfyTaskId = result.comfyTaskId;
+      if (comfyTaskId) beginComfyNodeDelivery(node.id, comfyTaskId);
+      if (!isFresh()) return false;
       const persisted = ctx.currentProjectId
         ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-image', d.label)
         : { mediaUrl: result.url, sourceUrl: result.url };
       const mediaUrl = persisted.mediaUrl;
-      if (!await isFresh()) return false;
+      if (!isFresh()) return false;
       ctx.updateNodeDataTransient(node.id, {
         imageUrl: mediaUrl,
         sourceUrl: persisted.sourceUrl,
@@ -161,6 +164,7 @@ async function executeOneNode(
         imageHeight: result.height,
         ...(isAnimation ? { aspectRatio, ...animationResultPatch(d) } : {}),
       });
+      if (result.comfyTaskId) completeComfyNodeTask(node.id, result.comfyTaskId);
       {
         useAppStore.getState().syncDramaAssetImageFromNode?.(node.id, mediaUrl);
       }
@@ -201,6 +205,9 @@ async function executeOneNode(
         workflowInputs: d.workflowInputs,
         nodeId: node.id,
       });
+      comfyTaskId = result.comfyTaskId;
+      if (comfyTaskId) beginComfyNodeDelivery(node.id, comfyTaskId);
+      if (!isFresh()) return false;
       const persisted = ctx.currentProjectId
         ? await persistMediaUrlToProjectData(
             result.url,
@@ -209,6 +216,7 @@ async function executeOneNode(
             d.label,
           )
         : { mediaUrl: result.url, sourceUrl: result.url };
+      if (!isFresh()) return false;
       const mediaUrl = persisted.mediaUrl;
       ctx.updateNodeDataTransient(node.id, {
         imageUrl: mediaUrl,
@@ -220,6 +228,7 @@ async function executeOneNode(
         imageWidth: result.width,
         imageHeight: result.height,
       });
+      if (result.comfyTaskId) completeComfyNodeTask(node.id, result.comfyTaskId);
       ctx.recordOutputHistory(node.id, {
         nodeId: node.id,
         nodeLabel: d.label,
@@ -257,18 +266,18 @@ async function executeOneNode(
         nodeId: node.id,
       };
       const result = hasProtectedVideoInputs ? await generateVideo(videoOptions, undefined, async () => {
-        if (!await isFresh()) throw new Error('项目、视频输入或角色引用已变化，请重新生成');
+        if (!isFresh()) throw new Error('项目、视频输入或角色引用已变化，请重新生成');
       }) : await generateVideo(videoOptions);
       videoResultReceived = true;
       videoTaskId = ctx.currentProjectId ? getPendingTasksForProject(ctx.currentProjectId).find((task) => task.nodeId === node.id)?.taskId : undefined;
-      if (!await isFresh()) {
+      if (!isFresh()) {
         if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId, undefined, 'canvas_changed');
         return false;
       }
       const persisted = ctx.currentProjectId
         ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-video', d.label)
         : { mediaUrl: result.url, sourceUrl: result.url };
-      if (!await isFresh()) {
+      if (!isFresh()) {
         if (videoTaskId) pauseVideoNodeTask(node.id, videoTaskId, undefined, 'canvas_changed');
         return false;
       }
@@ -319,7 +328,12 @@ async function executeOneNode(
         workflowInputs: d.workflowInputs,
         nodeId: node.id,
       });
+      comfyTaskId = result.comfyTaskId;
+      if (comfyTaskId) beginComfyNodeDelivery(node.id, comfyTaskId);
+      if (!isFresh()) return false;
       const persisted = await persistAudioGenerationResult(result, ctx.currentProjectId, d.label);
+      if (!isFresh()) return false;
+      if (result.comfyTaskId && persisted.persistence === 'failed') throw new Error('ComfyUI 音频已生成，但保存失败；任务已保留，请继续查询取回原结果');
       ctx.updateNodeDataTransient(node.id, {
         audioUrl: persisted.mediaUrl,
         sourceUrl: persisted.sourceUrl,
@@ -331,6 +345,7 @@ async function executeOneNode(
         ...(result.lyrics ? { musicLyrics: result.lyrics } : {}),
         status: 'success',
       });
+      if (result.comfyTaskId) completeComfyNodeTask(node.id, result.comfyTaskId);
       ctx.recordOutputHistory(node.id, {
         nodeId: node.id,
         nodeLabel: d.label,
@@ -359,7 +374,7 @@ async function executeOneNode(
   } catch (err) {
     if (err instanceof VideoPollingPausedError) return false;
     if (videoResultReceived && videoTaskId && pauseVideoNodeTask(node.id, videoTaskId, err, 'delivery_pending')) return false;
-    if (!await isFresh()) return false;
+    if (!isFresh()) return false;
     const msg = err instanceof Error ? err.message : typeof err === 'string' && err.trim() ? err : '生成失败';
     ctx.updateNodeDataTransient(node.id, { status: 'error', error: msg });
     ctx.recordOutputHistory(node.id, {
@@ -376,6 +391,7 @@ async function executeOneNode(
     });
     return false;
   } finally {
+    if (comfyTaskId) pauseComfyNodeDelivery(node.id, comfyTaskId, () => !!animationGuard && isCanvasDerivationFresh(animationGuard, useAppStore.getState()));
     if (animationGuard) completeCanvasDerivation(animationGuard);
   }
 }

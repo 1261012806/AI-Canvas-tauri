@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/services/comfyPolling', () => ({ comfyFetch: mocks.comfyFetch }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.state } }));
 
-import { loadComfyRefmodCatalog, resolveComfyRefmodServerIdentity } from '../../src/services/comfyRefmodService';
+import { loadComfyRefmodCatalog, loadComfyRefmodCatalogDetails, resolveComfyRefmodServerIdentity } from '../../src/services/comfyRefmodService';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -69,6 +69,26 @@ describe('RefMod 服务器目录', () => {
     expect(serialized).not.toContain('untrusted');
     expect(serialized).not.toContain('http://refmod-server');
     expect(mocks.comfyFetch.mock.calls.every(([, options]) => options.method === undefined && options.cache === 'no-store')).toBe(true);
+  });
+
+  it('核心校验不请求可选描述，展示详情可在目录可用后独立补齐', async () => {
+    let finishDetails: ((response: Response) => void) | undefined;
+    mocks.comfyFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/object_info/MiniMaxH3RefModsLoader')) return json(originalSchema());
+      if (url.endsWith('/refmods/library')) return new Promise<Response>((resolve) => { finishDetails = resolve; });
+      return json({}, 404);
+    });
+    const core = await loadComfyRefmodCatalog(undefined, { fresh: true, includeDetails: false });
+    expect(core.entries[0].fileName).toBe('people/Alice');
+    expect(mocks.comfyFetch.mock.calls).toHaveLength(3);
+    expect(mocks.comfyFetch.mock.calls.some(([url]) => url.endsWith('/refmods/library'))).toBe(false);
+    const details = loadComfyRefmodCatalogDetails(core, { fresh: true });
+    await vi.waitFor(() => expect(finishDetails).toBeDefined());
+    // 可选信息仍挂起时，另一条 fresh 执行校验也能取得核心目录。
+    const execution = await loadComfyRefmodCatalog(undefined, { fresh: true, includeDetails: false });
+    expect(execution.loaders[0].loaderType).toBe('minimax-h3');
+    finishDetails!(json([{ name: 'people/Alice', description: '角色描述', tokens: 12 }]));
+    expect((await details).entries[0]).toMatchObject({ description: '角色描述', tokens: 12 });
   });
 
   it('区分各插件格式，保留 Lab 扩展名，Francky 只暴露真实强度字段', async () => {

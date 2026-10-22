@@ -10,6 +10,7 @@ import { useAppStore } from '../store/useAppStore';
 import { persistMediaUrlToProjectData, type PersistedProjectMedia } from './fileService';
 import { runBatchTasks } from './ai/batchUtils';
 import { getRunningHubPersistedOutput } from './ai/providers/runninghubWorkflow';
+import { completeComfyNodeTask } from './pollManager';
 
 interface ApplyImageBatchParams {
   isCurrent?: () => boolean;
@@ -224,6 +225,7 @@ export async function applyImageBatchResults({
       imageWidth: item.result.width,
       imageHeight: item.result.height,
     });
+    if (item.result.comfyTaskId) completeComfyNodeTask(nodeId, item.result.comfyTaskId);
   });
 
   resolvedTargetNodeIds.slice(items.length).forEach((targetNodeId) => {

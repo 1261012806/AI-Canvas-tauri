@@ -376,6 +376,8 @@ export const MAX_IMAGE_BATCH_COUNT = 8;
 
 export interface ImageGenerationResult {
   url: string;
+  /** 本地 ComfyUI 已完成但尚待画布交付的任务身份，仅完成同一任务时清理。 */
+  comfyTaskId?: string;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];
   workflowApiTaskId?: string;
   runninghubOutputs?: import('./runninghub').RunningHubOutput[];
@@ -593,6 +595,8 @@ export type AudioOutputFormat = 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
 
 export interface AudioGenerationResult {
   url: string;
+  /** 本地 ComfyUI 已完成但尚待画布交付的任务身份。 */
+  comfyTaskId?: string;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];
   workflowApiTaskId?: string;
   runninghubOutputs?: import('./runninghub').RunningHubOutput[];

@@ -1,10 +1,11 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
 import {
   comfyRefmodKey,
   loadComfyRefmodCatalog,
+  loadComfyRefmodCatalogDetails,
   resolveComfyRefmodServerIdentity,
 } from '../../services/comfyRefmodService';
 import { appendRefmodsToVideoNode } from '../../services/comfyRefmodNodeService';
@@ -19,6 +20,8 @@ import type {
 } from '../../types/comfyRefmod';
 import Select from '../shared/Select';
 import ViewportImage from '../shared/ViewportImage';
+import { useComfyRefmodBindingRequest } from '../../hooks/useComfyRefmodBindingRequest';
+const ComfyRefmodBindingDialog = lazy(() => import('../nodes/shared/ComfyRefmodBindingDialog'));
 
 const DEFAULT_SERVER = '__default__';
 const LOADER_LABELS: Record<ComfyRefmodLoaderType, string> = {
@@ -76,6 +79,7 @@ export function RefmodCatalogBrowser({
   }>();
   const [busy, setBusy] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const refreshedKey = useRef<string | undefined>(undefined);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [activeTag, setActiveTag] = useState('');
@@ -111,12 +115,17 @@ export function RefmodCatalogBrowser({
         identity = await resolveComfyRefmodServerIdentity(actualServerId);
         if (controller.signal.aborted) return;
         setView({ requestKey, identity });
+        const refreshKey = `${requestKey}:${refreshVersion}`;
+        const fresh = refreshVersion > 0 && refreshedKey.current !== refreshKey;
+        if (fresh) refreshedKey.current = refreshKey;
         const catalog = await loadComfyRefmodCatalog(actualServerId, {
-          signal: controller.signal,
-          fresh: refreshVersion > 0,
+          signal: controller.signal, fresh, includeDetails: false,
         });
         if (controller.signal.aborted) return;
         setView({ requestKey, identity, catalog });
+        void loadComfyRefmodCatalogDetails(catalog, { signal: controller.signal, fresh }).then((detailed) => {
+          if (!controller.signal.aborted) setView({ requestKey, identity: detailed, catalog: detailed });
+        }).catch(() => { /* 描述读取不阻止选择与保存核心目录。 */ });
         const state = useAppStore.getState();
         const previous = state.config.comfyRefmodAssets ?? [];
         const next = normalizeComfyRefmodAssets(mergeRefmodCatalogEntries(previous, catalog.entries));
@@ -309,12 +318,14 @@ export default function RefModAssetsPanel({ compact = false, onCountChange }: { 
   const requestedNodeId = request?.tab === 'refmods' ? request.targetNodeId : undefined;
   const [chosenTarget, setChosenTarget] = useState('');
   const targetId = requestedNodeId ?? (chosenTarget || videoNodes.find((node) => selectedNodeIds.includes(node.id))?.id || '');
+  const binding = useComfyRefmodBindingRequest(projectId);
   const apply = useCallback(async (items: ComfyRefmodSelection[]) => {
     if (!targetId) throw new Error('请先选择要添加参考包的 H3 视频节点。');
-    await appendRefmodsToVideoNode(targetId, items, request?.projectId ?? projectId ?? undefined);
+    await appendRefmodsToVideoNode(targetId, items, request?.projectId ?? projectId ?? undefined, binding.requestMapping);
     useAppStore.getState().showToast('角色参考包已添加，可在 @ → ComfyUI → ComfyUI 角色中查看手工绑定。', 'success');
-  }, [targetId, request?.projectId, projectId]);
+  }, [targetId, request?.projectId, projectId, binding.requestMapping]);
   return <div className="flex min-h-0 flex-1 flex-col">
+    {binding.request && <Suspense fallback={null}><ComfyRefmodBindingDialog key={binding.requestId} request={binding.request} onApply={binding.apply} onClose={binding.close} /></Suspense>}
     <div className="flex flex-wrap items-center gap-2 border-b border-canvas-border p-3">
       <span className="text-xs text-canvas-text-secondary">添加到视频节点</span>
       <Select className="min-w-40 flex-1" value={targetId} disabled={!!requestedNodeId} aria-label="目标 H3 视频节点"

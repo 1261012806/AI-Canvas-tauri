@@ -2,10 +2,11 @@
  * comfyServers — ComfyUI 服务端地址解析。
  *
  * 图片与视频分开部署时，工作流各自绑定一台服务端（WorkflowDefinition.serverId），
- * 没绑定、或绑定的服务端已被删掉时一律回落到默认地址 config.comfyUIUrl。
+ * 未绑定时使用默认地址；已绑定的服务端失效时要求重新选择，防止素材上传到另一台机器。
  */
 import { useAppStore } from '../store/useAppStore';
 import { comfyFetch } from './comfyPolling';
+import { withComfyQueryTimeout } from './comfyQuery';
 
 export const DEFAULT_COMFY_URL = 'http://127.0.0.1:8188';
 export type ComfyServerAvailability = 'checking' | 'available' | 'unavailable';
@@ -45,7 +46,7 @@ export function listConfiguredComfyServers(): Array<ComfyServerSelection & { isD
   return servers;
 }
 
-/** 显式服务器选择必须存在且地址有效；与普通工作流的兼容回落策略区分。 */
+/** 显式服务器选择必须存在且地址有效。 */
 export function resolveComfyServerSelection(serverId?: string): ComfyServerSelection & { baseUrl: string } {
   const { config } = useAppStore.getState();
   const server = serverId === undefined ? undefined : config.comfyServers?.find((item) => item.id === serverId);
@@ -79,37 +80,27 @@ export async function probeComfyServer(
     return false;
   }
 
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  options.signal?.addEventListener('abort', abort, { once: true });
-  const timeout = globalThis.setTimeout(abort, options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
-
   try {
-    const response = await comfyFetch(`${baseUrl}/system_stats`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (!response.ok) return false;
-    const payload = await response.json().catch(() => null);
-    return typeof payload === 'object' && payload !== null;
+    return await withComfyQueryTimeout(async (signal) => {
+      const response = await comfyFetch(`${baseUrl}/system_stats`, { cache: 'no-store', signal });
+      if (!response.ok) return false;
+      const payload = await response.json().catch(() => null);
+      return typeof payload === 'object' && payload !== null;
+    }, options.signal, options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
   } catch {
     return false;
-  } finally {
-    globalThis.clearTimeout(timeout);
-    options.signal?.removeEventListener('abort', abort);
   }
 }
 
-/** 工作流实际要提交到的服务端地址；都没配时返回空串，由调用方决定报错还是回落。 */
+/** 已绑定的目标不得静默改用默认服务；未绑定且未配置时保留空串供既有入口提示。 */
 export function comfyBaseUrlFor(workflowId?: string): string {
   const { config, workflows } = useAppStore.getState();
-  const serverId = workflowId
-    ? workflows.find((workflow) => workflow.id === workflowId)?.serverId
-    : undefined;
-  const bound = serverId
-    ? config.comfyServers?.find((server) => server.id === serverId)?.url
-    : undefined;
-  return normalize(bound) || normalize(config.comfyUIUrl);
+  const workflow = workflowId === undefined ? undefined : workflows.find((item) => item.id === workflowId);
+  if (workflowId !== undefined && !workflow) throw new Error('所选 ComfyUI 工作流不存在，请重新选择');
+  if (workflow?.serverId !== undefined) return resolveComfyServerSelection(workflow.serverId).baseUrl;
+  const baseUrl = normalize(config.comfyUIUrl);
+  if (baseUrl && !isComfyApiUrl(baseUrl)) throw new Error('默认 ComfyUI 服务地址无效，请在设置中检查');
+  return baseUrl;
 }
 
 /** 服务端在设置里的显示名；找不到（已删除）时返回 undefined，界面按「默认」处理。 */

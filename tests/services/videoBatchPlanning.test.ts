@@ -1,12 +1,24 @@
 import { beforeEach, it, expect, vi } from 'vitest';
 import { useAppStore } from '../../src/store/useAppStore';
-import { inspectVideoNode, videoInputFingerprint } from '../../src/services/videoBatchPlanning';
+import { checkVideoServices, inspectVideoNode, videoInputFingerprint } from '../../src/services/videoBatchPlanning';
 
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({ currentProjectId: 'p', showToast: vi.fn(), nodes: [{ id: 'v', type: 'ai-video', position: { x: 0, y: 0 },
     data: { type: 'ai-video', label: 'SH001', model: 'general/test', provider: 'general', prompt: '@{img:参考图} 动作', seedanceDuration: 6, videoUrl: 'old.mp4' } },
     { id: 'img', type: 'source-image', position: { x: 0, y: 0 }, data: { type: 'source-image', label: '参考图', imageUrl: 'ref.png' } }] });
+});
+it('批次检查将失效的显式服务器列为该节点问题，不回落默认或中断整批', async () => {
+  const initial = useAppStore.getState();
+  useAppStore.setState({
+    config: { ...initial.config, comfyUIUrl: 'http://default.test:8188', comfyServers: [] },
+    workflows: [{ id: 'wf-deleted-server', name: 'test', category: 'ai-video', fileName: 'test.json', fileContent: '{}', createdAt: 1, serverId: 'deleted' }],
+    nodes: initial.nodes.map((node) => node.id === 'v' ? { ...node, data: { ...node.data, provider: 'comfyui', workflowId: 'wf-deleted-server' } } : node),
+  });
+  const state = useAppStore.getState();
+  const item = inspectVideoNode(state.nodes[0], state);
+  const result = await checkVideoServices([item], state);
+  expect(result[0].issues).toEqual(expect.arrayContaining([expect.stringContaining('服务器不存在')]));
 });
 it('detects broken reference inputs and invalid duration', () => {
   const state = useAppStore.getState();

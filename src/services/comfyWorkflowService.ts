@@ -23,6 +23,7 @@ import {
   updatePendingTask,
 } from './pollManager';
 import { ComfyPendingError, comfyFetch, pollComfyHistory } from './comfyPolling';
+import { withComfyQueryTimeout } from './comfyQuery';
 import { corsSafeFetch } from './ai/httpTransport';
 import { resolveComfyOutputUrl } from './comfyOutputs';
 import { createComfyProgressSession, type ComfyProgressSession } from './comfyProgress';
@@ -92,9 +93,11 @@ export async function cancelComfyUINodeTask(nodeId: string): Promise<void> {
   }
 
   // 兼容尚未提供 /api/jobs/:id/cancel 的 ComfyUI 版本。
-  const queueResponse = await comfyFetch(`${baseUrl}/queue`);
-  await assertComfyResponse(queueResponse, '读取 ComfyUI 队列');
-  const queue = (await queueResponse.json()) as Record<string, unknown>;
+  const queue = await withComfyQueryTimeout(async (signal) => {
+    const queueResponse = await comfyFetch(`${baseUrl}/queue`, { signal });
+    await assertComfyResponse(queueResponse, '读取 ComfyUI 队列');
+    return await queueResponse.json() as Record<string, unknown>;
+  });
   if (queueContainsPrompt(queue.queue_pending, promptId)) {
     const deleteResponse = await comfyFetch(`${baseUrl}/queue`, {
       method: 'POST',
@@ -1481,7 +1484,7 @@ export async function executeComfyUIGenerate(
   /** 提示词框里引用的图片，按顺序填充工作流图片上传节点 */
   referenceImageUrls: string[] = [],
   referenceMedia: { videoUrls?: string[]; audioUrls?: string[] } = {},
-): Promise<{ url: string; width: number; height: number }> {
+): Promise<{ url: string; width: number; height: number; comfyTaskId?: string }> {
   const { workflowId, workflowInputs, prompt, imageSize = '2K', aspectRatio = '1:1' } = params;
   const comfyUrl = comfyBaseUrlFor(workflowId);
   assertComfyNodeCanSubmit(params.nodeId);
@@ -1501,7 +1504,7 @@ export async function executeComfyUIGenerate(
         savePendingTask({
           nodeId: params.nodeId,
           projectId,
-          nodeType: 'ai-image',
+          nodeType: useAppStore.getState().nodes.find((node) => node.id === params.nodeId)?.data.type ?? 'ai-image',
           provider: 'comfyui',
           taskId: '',
           taskType: 'comfyui',
@@ -1541,8 +1544,10 @@ export async function executeComfyUIGenerate(
 
     // 轮询等待结果
     const result = await pollComfyUIHistory(baseUrl, promptId, dims, signal);
+    if (params.nodeId && projectId) retainPending = true;
     await applyConfiguredComfyMemoryPolicy(baseUrl);
-    return result;
+    if (params.nodeId && projectId) updatePendingTask(params.nodeId, { comfyRecoveryState: 'save_pending' }, promptId);
+    return { ...result, ...(params.nodeId && projectId ? { comfyTaskId: promptId } : {}) };
   } catch (error) {
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
@@ -1736,7 +1741,7 @@ export async function executeComfyUIAudioGenerate(
   /** 连入音频节点的产物，兜底填充工作流的 audio IO 节点 */
   referenceAudioUrls: string[] = [],
   promptMedia: { imageUrls?: string[]; videoUrls?: string[] } = {},
-): Promise<{ url: string }> {
+): Promise<{ url: string; comfyTaskId?: string }> {
   const { workflowId, workflowInputs, prompt } = params;
   const comfyUrl = comfyBaseUrlFor(workflowId);
   assertComfyNodeCanSubmit(params.nodeId);
@@ -1783,8 +1788,10 @@ export async function executeComfyUIAudioGenerate(
 
     // 轮询等待结果
     const result = await pollComfyUIHistoryForAudio(baseUrl, promptId, signal);
+    if (params.nodeId && projectId) retainPending = true;
     await applyConfiguredComfyMemoryPolicy(baseUrl);
-    return result;
+    if (params.nodeId && projectId) updatePendingTask(params.nodeId, { comfyRecoveryState: 'save_pending' }, promptId);
+    return { ...result, ...(params.nodeId && projectId ? { comfyTaskId: promptId } : {}) };
   } catch (error) {
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;

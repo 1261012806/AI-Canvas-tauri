@@ -45,6 +45,37 @@ const abortControllers = new Map<string, AbortController>();
 const videoResumePromises = new Map<string, Promise<void>>();
 const runninghubMessageWaiters = new Map<string, () => void>();
 const workflowApiMessageWaiters = new Map<string, () => void>();
+// 只描述本进程仍在消费的交付操作；不持久化，也不作为任务或画布写入授权。
+const activeComfyDeliveries = new Map<string, { projectId: string; nodeId: string; taskId: string }>();
+const comfyDeliveryListeners = new Set<() => void>();
+const notifyComfyDeliveries = () => comfyDeliveryListeners.forEach((listener) => listener());
+
+export function subscribeComfyDeliveries(listener: () => void): () => void {
+  comfyDeliveryListeners.add(listener);
+  return () => { comfyDeliveryListeners.delete(listener); };
+}
+
+export function isComfyNodeDeliveryActive(projectId: string | null, nodeId: string | undefined): boolean {
+  return [...activeComfyDeliveries.values()].some((item) => item.projectId === projectId && item.nodeId === nodeId);
+}
+
+export function beginComfyNodeDelivery(nodeId: string, taskId: string | undefined): void {
+  if (!taskId) return;
+  const task = loadAll().find((item) => item.nodeId === nodeId && item.taskType === 'comfyui' && item.taskId === taskId);
+  if (!task) return;
+  const key = JSON.stringify([task.projectId, nodeId, taskId]);
+  if (activeComfyDeliveries.has(key)) return;
+  activeComfyDeliveries.set(key, { projectId: task.projectId, nodeId, taskId });
+  notifyComfyDeliveries();
+}
+
+function endComfyNodeDelivery(nodeId: string, taskId: string): void {
+  let changed = false;
+  for (const [key, item] of activeComfyDeliveries) {
+    if (item.nodeId === nodeId && item.taskId === taskId) { activeComfyDeliveries.delete(key); changed = true; }
+  }
+  if (changed) notifyComfyDeliveries();
+}
 
 function abortNodePolling(nodeId: string): void {
   const controller = abortControllers.get(nodeId);
@@ -120,7 +151,7 @@ export interface PendingTask {
   videoGeneration?: Pick<BaseNodeData, 'prompt' | 'model' | 'provider' | 'seedanceResolution'
     | 'seedanceRatio' | 'seedanceDuration' | 'generateAudio' | 'videoResolution' | 'videoFrames' | 'videoFps'>;
   /** ComfyUI 远端终态尚未确认，保留任务并提供续查/再次取消。 */
-  comfyRecoveryState?: 'disconnected' | 'cancel_pending';
+  comfyRecoveryState?: 'disconnected' | 'cancel_pending' | 'save_pending';
 }
 
 // ═══════════════════════════════════════════
@@ -211,6 +242,28 @@ export function completeVideoNodeTask(nodeId: string, expectedTaskId?: string): 
     // localStorage 删除不会通知节点：完成同一任务时同步清除暂停标记，
     // 让已挂载的重试卡片收到 Store 更新，避免视频已交付仍显示旧提示。
     useAppStore.getState().updateNodeDataTransient(nodeId, { videoTaskState: undefined });
+  }
+}
+
+/** 原结果已保存并写回后调用；不能用旧回执清理其他项目或新任务。 */
+export function completeComfyNodeTask(nodeId: string, expectedTaskId: string | undefined): void {
+  if (!expectedTaskId) return;
+  const state = useAppStore.getState();
+  const task = loadAll().find((item) => item.nodeId === nodeId && item.projectId === state.currentProjectId
+    && item.taskType === 'comfyui' && item.submitted && item.taskId === expectedTaskId);
+  if (task && state.nodes.some((node) => node.id === nodeId)) removePendingTask(nodeId, expectedTaskId);
+}
+
+/** 已生成的原任务尚未交付时，保留续取入口，且不触碰切换后的项目或新任务。 */
+export function pauseComfyNodeDelivery(nodeId: string, expectedTaskId: string | undefined, isCurrent: () => boolean): void {
+  if (!expectedTaskId) return;
+  endComfyNodeDelivery(nodeId, expectedTaskId);
+  const task = loadAll().find((item) => item.nodeId === nodeId && item.taskType === 'comfyui'
+    && item.submitted && item.taskId === expectedTaskId && item.comfyRecoveryState === 'save_pending');
+  if (!task) return;
+  const state = useAppStore.getState();
+  if (isCurrent() && state.currentProjectId === task.projectId && state.nodes.some((node) => node.id === nodeId)) {
+    state.updateNodeDataTransient(nodeId, { status: 'error', error: 'ComfyUI 已完成，结果保存或回填尚未完成，请继续查询取回原结果' });
   }
 }
 
@@ -313,6 +366,13 @@ function loadAll(): PendingTask[] {
 
 function saveAll(tasks: PendingTask[]): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.map(sanitizePendingTask)));
+  let changed = false;
+  for (const [key, active] of activeComfyDeliveries) {
+    if (!tasks.some((task) => task.projectId === active.projectId && task.nodeId === active.nodeId && task.taskId === active.taskId)) {
+      activeComfyDeliveries.delete(key); changed = true;
+    }
+  }
+  if (changed) notifyComfyDeliveries();
 }
 
 function resolveProviderTaskConfig(
@@ -899,10 +959,11 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
   const label = (node?.data as BaseNodeData | undefined)?.label || '';
 
   const signal = registerNodePolling(nodeId);
+  const deliveryGuard = registerCanvasDerivation(useAppStore.getState(), nodeId);
   const isCurrent = () => !signal.aborted
     && useAppStore.getState().currentProjectId === task.projectId
+    && !!deliveryGuard && isCanvasDerivationFresh(deliveryGuard, useAppStore.getState())
     && getPendingTasksForProject(task.projectId).some((item) => item.nodeId === nodeId && item.taskId === taskId);
-  updatePendingTask(nodeId, { comfyRecoveryState: undefined }, taskId);
 
   const kinds: ComfyOutputKind[] =
     nodeType === 'ai-video' ? ['video']
@@ -912,6 +973,8 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
   let resultReceived = false;
 
   try {
+    beginComfyNodeDelivery(nodeId, taskId);
+    updatePendingTask(nodeId, { comfyRecoveryState: undefined }, taskId);
     // 与实时生成共用轮询：ComfyUI 重启后 promptId 会彻底消失，那里会连 /queue 一起确认并直接判失败，
     // 不再让恢复出来的任务空转一小时
     const { url } = await pollComfyHistory(
@@ -922,6 +985,7 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
       signal,
     );
     resultReceived = true;
+    updatePendingTask(nodeId, { comfyRecoveryState: 'save_pending' }, taskId);
     if (nodeType === 'ai-video') {
       updatePendingTask(nodeId, { videoRecoveryState: 'paused' }, taskId);
     }
@@ -931,14 +995,14 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
     ).catch(() => {});
     await applyNodeResult(nodeId, url, label, isCurrent);
     if (nodeType === 'ai-video') completeVideoNodeTask(nodeId, taskId);
-    else removePendingTask(nodeId, taskId);
+    else completeComfyNodeTask(nodeId, taskId);
   } catch (err) {
     // 被删除、取消或新一轮查询替代时，不能清理当前任务或覆盖其界面状态。
     if (signal.aborted) return;
     if (err instanceof ComfyPendingError) {
       // 图片/音频切走后仍需恢复入口；视频另用 canvas_changed 保留本地交付状态。
       if (!(err instanceof CanvasResultStaleError) || nodeType !== 'ai-video') {
-        updatePendingTask(nodeId, { comfyRecoveryState: 'disconnected' }, taskId);
+        updatePendingTask(nodeId, { comfyRecoveryState: resultReceived ? 'save_pending' : 'disconnected' }, taskId);
       }
       if (nodeType === 'ai-video' && pauseVideoNodeTask(nodeId, taskId, undefined, err instanceof CanvasResultStaleError ? 'canvas_changed' : 'query_interrupted')) return;
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: err.message });
@@ -950,10 +1014,17 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
       if (isCurrent()) {
         if (nodeType === 'ai-video' && resultReceived && !(err instanceof PollTaskFailedError)
           && pauseVideoNodeTask(nodeId, taskId, err, 'delivery_pending')) return;
+        if (resultReceived && !(err instanceof PollTaskFailedError)) {
+          updatePendingTask(nodeId, { comfyRecoveryState: 'save_pending' }, taskId);
+          useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: 'ComfyUI 已完成，结果保存或回填尚未完成，请继续查询取回原结果' });
+          return;
+        }
         await handleResumeError(task, err);
       }
     }
   } finally {
+    endComfyNodeDelivery(nodeId, taskId);
+    if (deliveryGuard) completeCanvasDerivation(deliveryGuard);
     cleanupNodePolling(nodeId, signal);
   }
 }
@@ -965,7 +1036,7 @@ export async function resumeComfyUINodeTask(nodeId: string): Promise<void> {
   const task = getPendingTasksForProject(store.currentProjectId).find((item) => (
     item.nodeId === nodeId && item.taskType === 'comfyui' && item.submitted && item.taskId
   ));
-  if (!task || abortControllers.has(nodeId)) return;
+  if (!task || abortControllers.has(nodeId) || isComfyNodeDeliveryActive(task.projectId, nodeId)) return;
   store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined });
   await resumeComfyUI(task);
 }
@@ -1593,6 +1664,13 @@ export async function resumePendingTasks(projectId: string): Promise<void> {
 
     if (task.taskType === 'comfyui' && task.comfyRecoveryState === 'cancel_pending') {
       store.updateNodeDataTransient(task.nodeId, { status: 'error', error: 'ComfyUI 取消尚未确认，请继续查询或再次终止' });
+      continue;
+    }
+
+    if (task.taskType === 'comfyui' && task.comfyRecoveryState === 'save_pending') {
+      if (!abortControllers.has(task.nodeId) && !isComfyNodeDeliveryActive(task.projectId, task.nodeId)) store.updateNodeDataTransient(task.nodeId, {
+        status: 'error', error: 'ComfyUI 已完成，结果保存或回填尚未完成，请继续查询取回原结果',
+      });
       continue;
     }
 

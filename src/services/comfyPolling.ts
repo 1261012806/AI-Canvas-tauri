@@ -7,6 +7,7 @@
 import { corsSafeFetch } from './ai/httpTransport';
 import { pollTask } from './pollTask';
 import type { ComfyOutputs } from './comfyOutputs';
+import { withComfyQueryTimeout } from './comfyQuery';
 
 /**
  * 将 ComfyUI 直连地址替换为当前环境可访问的地址：
@@ -85,9 +86,11 @@ async function isPromptQueued(
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    const response = await comfyFetch(`${baseUrl}/queue`, { signal });
-    if (!response.ok) return true;
-    const queue = (await response.json()) as Record<string, unknown>;
+    const queue = await withComfyQueryTimeout(async (querySignal) => {
+      const response = await comfyFetch(`${baseUrl}/queue`, { signal: querySignal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json() as Record<string, unknown>;
+    }, signal);
     const lists = [queue.queue_running, queue.queue_pending].filter(Array.isArray) as unknown[][];
     if (lists.length === 0) return true;
     return lists.some((list) => list.some((item) => Array.isArray(item) && item[1] === promptId));
@@ -137,9 +140,11 @@ export async function pollComfyHistory<T>(
   return pollTask<ComfyPollState, T>({
     fetchState: async () => {
       try {
-        const response = await comfyFetch(`${baseUrl}/history/${promptId}`, { signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const history = (await response.json()) as Record<string, unknown>;
+        const history = await withComfyQueryTimeout(async (querySignal) => {
+          const response = await comfyFetch(`${baseUrl}/history/${promptId}`, { signal: querySignal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return await response.json() as Record<string, unknown>;
+        }, signal);
         if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
         errorRounds = 0;
         const entry = history[promptId] as ComfyHistoryEntry | undefined;

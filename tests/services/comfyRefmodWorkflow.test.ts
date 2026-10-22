@@ -65,7 +65,7 @@ describe('RefMod 工作流槽位绑定', () => {
     await applyComfyRefmodsToWorkflow(wf, execution, selected);
     expect(execution['12'].inputs).toMatchObject({ mod_1: '(none)', mod_2: 'alice', strength_2: 0.4, copies_2: 2 });
     expect(JSON.parse(wf.fileContent)['12'].inputs.strength_2).toBe(1);
-    expect(mocks.catalog).toHaveBeenLastCalledWith(undefined, { signal: undefined, fresh: true });
+    expect(mocks.catalog).toHaveBeenLastCalledWith(undefined, { signal: undefined, fresh: true, includeDetails: false });
   });
 
   it('多个同格式加载器必须明确目标，不能猜测人物顺序', async () => {

@@ -37,6 +37,9 @@ const ADAPTERS: ReadonlyArray<{
 ];
 
 const catalogCache = new Map<string, ComfyRefmodCatalog>();
+const catalogDetailsCache = new Map<string, {
+  metadata: ReturnType<typeof metadataByName>; warnings: string[]; fetchedAt: number;
+}>();
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -208,7 +211,7 @@ function catalogReadError(message: string, cause: unknown): Error {
 /** 只读取已配置服务器的节点下拉与安全元数据，不读取模型权重或执行任何节点。 */
 export async function loadComfyRefmodCatalog(
   serverId?: string,
-  options: { signal?: AbortSignal; fresh?: boolean } = {},
+  options: { signal?: AbortSignal; fresh?: boolean; includeDetails?: boolean } = {},
 ): Promise<ComfyRefmodCatalog> {
   options.signal?.throwIfAborted();
   const server = resolveComfyServerSelection(serverId);
@@ -223,7 +226,9 @@ export async function loadComfyRefmodCatalog(
   const cacheKey = JSON.stringify([serverId ?? null, identity.endpointFingerprint]);
   const cached = catalogCache.get(cacheKey);
   if (!options.fresh && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) {
-    return structuredClone({ ...cached, serverName: identity.serverName });
+    const current = { ...cached, serverName: identity.serverName };
+    return options.includeDetails === false ? structuredClone(current)
+      : loadComfyRefmodCatalogDetails(current, { signal: options.signal });
   }
 
   const controller = new AbortController();
@@ -258,20 +263,6 @@ export async function loadComfyRefmodCatalog(
     }
     if (readableCount === 0) throw new Error('无法读取 ComfyUI RefMod 目录，请检查服务器连接与访问权限');
 
-    // 可选信息拥有独立的短超时，不能因 metadata 不可用而丢掉已成功读取的主目录。
-    const [fantastic, details] = await Promise.allSettled([
-      readOptionalJson(server.baseUrl, `/object_info/${FANTASTIC_CLASS}`, controller.signal),
-      loaders.some((loader) => loader.loaderType !== 'refmods-lab')
-        ? readOptionalJson(server.baseUrl, '/refmods/library', controller.signal)
-        : Promise.resolve(undefined),
-    ]);
-    controller.signal.throwIfAborted();
-    // 只检测复杂 JSON Stack，不猜测或覆盖其 picks、声画通道与 budget。
-    if (fantastic.status === 'fulfilled' && record(fantastic.value)?.[FANTASTIC_CLASS]) {
-      warnings.push('检测到 Fantastic RefMod Stack；其自定义 JSON 选择暂不支持自动绑定，请在 ComfyUI 中选择。');
-    }
-    if (details.status === 'rejected') warnings.push('RefMod 详细信息暂不可用，仍可按已读取的文件名选择。');
-    const metadata = metadataByName(details.status === 'fulfilled' ? details.value : undefined);
     const entries: ComfyRefmodAsset[] = [];
     for (const loader of loaders) {
       const names = new Set(loader.slots.flatMap((slot) => slot.allowedNames));
@@ -282,7 +273,6 @@ export async function loadComfyRefmodCatalog(
           id: comfyRefmodKey(ref),
           name: fileName.split(/[\\/]/).at(-1) ?? fileName,
           tags: [],
-          ...(loader.loaderType !== 'refmods-lab' ? metadata.get(fileName) : {}),
           updatedAt: Date.now(),
         });
       }
@@ -290,8 +280,12 @@ export async function loadComfyRefmodCatalog(
     assertEndpointCurrent(serverId, expectedEndpoint);
     const catalog: ComfyRefmodCatalog = { ...identity, entries, loaders, warnings, failedLoaderTypes, fetchedAt: Date.now() };
     catalogCache.set(cacheKey, catalog);
-    while (catalogCache.size > 8) catalogCache.delete(catalogCache.keys().next().value!);
-    return structuredClone(catalog);
+    while (catalogCache.size > 8) {
+      const oldest = catalogCache.keys().next().value!;
+      catalogCache.delete(oldest); catalogDetailsCache.delete(oldest);
+    }
+    return options.includeDetails === false ? structuredClone(catalog)
+      : loadComfyRefmodCatalogDetails(catalog, { signal: options.signal, fresh: options.fresh });
   } catch (error) {
     if (options.signal?.aborted) throw new DOMException('RefMod 目录读取已取消', 'AbortError');
     if (controller.signal.aborted) throw catalogReadError('读取 RefMod 目录超时，请检查 ComfyUI 服务后重试', error);
@@ -300,6 +294,55 @@ export async function loadComfyRefmodCatalog(
     throw catalogReadError('读取 RefMod 目录失败，请检查 ComfyUI 服务与插件', error);
   } finally {
     globalThis.clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', abort);
+  }
+}
+
+/** 可选展示信息单独加载；执行校验只读取核心加载器，绝不等待这里。 */
+export async function loadComfyRefmodCatalogDetails(
+  catalog: ComfyRefmodCatalog,
+  options: { signal?: AbortSignal; fresh?: boolean } = {},
+): Promise<ComfyRefmodCatalog> {
+  options.signal?.throwIfAborted();
+  const server = resolveComfyServerSelection(catalog.serverId);
+  const expectedEndpoint = normalizeEndpoint(server.baseUrl);
+  if (await fingerprintEndpoint(server.baseUrl) !== catalog.endpointFingerprint) {
+    throw new Error('ComfyUI 服务器配置已变化，请重新读取 RefMod 目录');
+  }
+  assertEndpointCurrent(catalog.serverId, expectedEndpoint);
+  const key = JSON.stringify([catalog.serverId ?? null, catalog.endpointFingerprint]);
+  const enrich = (details: { metadata: ReturnType<typeof metadataByName>; warnings: string[] }): ComfyRefmodCatalog => ({
+    ...catalog, warnings: [...new Set([...catalog.warnings, ...details.warnings])], entries: catalog.entries.map((entry) => ({
+      ...entry, ...(entry.loaderType !== 'refmods-lab' ? details.metadata.get(entry.fileName) : {}),
+    })),
+  });
+  const cached = catalogDetailsCache.get(key);
+  if (!options.fresh && cached && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) return enrich(cached);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
+  try {
+    const [fantastic, details] = await Promise.allSettled([
+      readOptionalJson(server.baseUrl, `/object_info/${FANTASTIC_CLASS}`, controller.signal),
+      catalog.loaders.some((loader) => loader.loaderType !== 'refmods-lab')
+        ? readOptionalJson(server.baseUrl, '/refmods/library', controller.signal)
+        : Promise.resolve(undefined),
+    ]);
+    controller.signal.throwIfAborted();
+    assertEndpointCurrent(catalog.serverId, expectedEndpoint);
+    const warnings: string[] = [];
+    if (fantastic.status === 'fulfilled' && record(fantastic.value)?.[FANTASTIC_CLASS]) {
+      warnings.push('检测到 Fantastic RefMod Stack；其自定义 JSON 选择暂不支持自动绑定，请在 ComfyUI 中选择。');
+    }
+    if (details.status === 'rejected') warnings.push('RefMod 详细信息暂不可用，仍可按已读取的文件名选择。');
+    const metadata = metadataByName(details.status === 'fulfilled' ? details.value : undefined);
+    // 描述只合并当前核心目录已有的文件，不覆盖任何核心缓存或文件身份。
+    const detailed = { metadata, warnings, fetchedAt: Date.now() };
+    catalogDetailsCache.set(key, detailed);
+    while (catalogDetailsCache.size > 8) catalogDetailsCache.delete(catalogDetailsCache.keys().next().value!);
+    return enrich(detailed);
+  } finally {
     options.signal?.removeEventListener('abort', abort);
   }
 }

@@ -6,6 +6,7 @@
  */
 import type { ComfyMemoryPolicy } from '../types';
 import { comfyFetch } from './comfyPolling';
+import { withComfyQueryTimeout } from './comfyQuery';
 
 export type ComfyMemoryReleaseMode = Exclude<ComfyMemoryPolicy, 'smart'>;
 
@@ -83,9 +84,11 @@ export async function fetchComfyMemoryStats(
   baseUrl: string,
   signal?: AbortSignal,
 ): Promise<ComfyMemoryStats> {
-  const response = await comfyFetch(`${trimBaseUrl(baseUrl)}/system_stats`, { signal });
-  await assertResponse(response, '读取 ComfyUI 显存状态');
-  const payload = await response.json() as Record<string, unknown>;
+  const payload = await withComfyQueryTimeout(async (querySignal) => {
+    const response = await comfyFetch(`${trimBaseUrl(baseUrl)}/system_stats`, { signal: querySignal });
+    await assertResponse(response, '读取 ComfyUI 显存状态');
+    return await response.json() as Record<string, unknown>;
+  }, signal);
   const system = payload.system && typeof payload.system === 'object' && !Array.isArray(payload.system)
     ? payload.system as Record<string, unknown>
     : undefined;
@@ -130,9 +133,11 @@ export async function maybeAutoReleaseComfyMemory(
   if (!policy || policy === 'smart') return 'disabled';
   if (!isLoopbackComfyUrl(baseUrl)) return 'skipped-remote';
 
-  const queueResponse = await comfyFetch(`${trimBaseUrl(baseUrl)}/queue`, { signal });
-  await assertResponse(queueResponse, '读取 ComfyUI 队列');
-  const queue = await queueResponse.json() as Record<string, unknown>;
+  const queue = await withComfyQueryTimeout(async (querySignal) => {
+    const response = await comfyFetch(`${trimBaseUrl(baseUrl)}/queue`, { signal: querySignal });
+    await assertResponse(response, '读取 ComfyUI 队列');
+    return await response.json() as Record<string, unknown>;
+  }, signal);
   if (queueHasItems(queue.queue_running) || queueHasItems(queue.queue_pending)) {
     return 'skipped-busy';
   }

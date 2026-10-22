@@ -11,6 +11,8 @@ interface Props {
   catalog?: ComfyRefmodCatalog;
   asset: ComfyRefmodAsset;
   initial?: ComfyRefmodSelection;
+  bindingMode?: boolean;
+  stepLabel?: string;
   existing: ComfyRefmodSelection[];
   manual: ComfyRefmodSelection[];
   loading: boolean;
@@ -21,7 +23,7 @@ interface Props {
 }
 
 /** 只编辑一个引用，目标槽位与原值仍交给 fresh prepare 最终复核。 */
-export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, initial, existing, manual, loading, error, refresh, onClose, onApply }: Props) {
+export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, initial, bindingMode = false, stepLabel, existing, manual, loading, error, refresh, onClose, onApply }: Props) {
   const graph = useMemo(() => {
     if (!catalog) return { loaders: [], error: '' };
     try { return { loaders: getComfyRefmodLoaders(workflow, catalog).filter((loader) => loader.loaderType === asset.loaderType), error: '' }; }
@@ -52,7 +54,7 @@ export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, i
 
   return <ModalOverlay isOpen onClose={onClose} ariaLabel="ComfyUI 角色设置" className="w-[min(92vw,26rem)]" zIndex={10100} closeOnBackdrop={false} motionPreset="quick">
     <div className="flex items-start justify-between gap-2 border-b border-canvas-border p-3" data-reference-preview-open="">
-      <div className="min-w-0"><h3 className="ui-title">ComfyUI 角色设置</h3><p className="mt-1 break-words text-xs text-canvas-text-secondary">{asset.name}</p></div>
+      <div className="min-w-0"><h3 className="ui-title">ComfyUI 角色设置</h3>{stepLabel && <p className="mt-1 text-xs text-canvas-text-muted">{stepLabel}</p>}<p className="mt-1 break-words text-xs text-canvas-text-secondary">{asset.name}</p></div>
       <PopupCloseButton onClick={onClose} ariaLabel="关闭角色设置" />
     </div>
     <div className="space-y-3 p-3">
@@ -77,7 +79,7 @@ export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, i
           onChange={(event) => { if (event.target.value !== '') setStrength(Number(event.target.value)); }} />
       </label> : asset.loaderType === 'refmods-lab' && <p className="text-xs text-canvas-text-muted">Lab 参考强度沿用工作流内的 Combine 设置。</p>}
       {(issue || occupiedMessage || serverMismatch || error || graph.error) && <p className="ui-alert ui-alert--warning text-xs" role="alert">{issue || occupiedMessage || (serverMismatch ? '参考包所属服务器已改变，请删除后在当前服务器重新选择' : error || graph.error)}</p>}
-      <p className="text-xs text-canvas-text-muted">只修改本次执行副本。删除提示词中的角色胶囊即可取消引用；连线控制的槽位请在 ComfyUI 中调整。</p>
+      <p className="text-xs text-canvas-text-muted">{bindingMode ? '手工绑定保存在此视频节点中，可在已绑定列表编辑或移除；只修改执行副本，连线控制的槽位请在 ComfyUI 中调整。' : '只修改本次执行副本。删除提示词中的角色胶囊即可取消引用；连线控制的槽位请在 ComfyUI 中调整。'}</p>
     </div>
     <div className="flex items-center justify-end gap-2 border-t border-canvas-border p-3">
       <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost mr-auto" disabled={loading || applying} onClick={refresh}>{loading ? '读取中…' : '刷新目录'}</button>
@@ -95,7 +97,7 @@ export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, i
           ...(explicit ? { replaceExisting: true } : {}),
         }).catch((cause) => setIssue(cause instanceof Error ? cause.message : '设置角色引用失败'))
           .finally(() => setApplying(false));
-      }}>{applying ? '校验中…' : initial ? '更新引用' : '插入引用'}</button>
+      }}>{applying ? '校验中…' : bindingMode ? initial ? '更新绑定' : '确认槽位' : initial ? '更新引用' : '插入引用'}</button>
     </div>
   </ModalOverlay>;
 }

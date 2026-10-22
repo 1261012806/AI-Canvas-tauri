@@ -1,7 +1,7 @@
 /**
  * AINodeDialog AI 生成弹窗 — 点击节点后弹出的浮动面板，包含 Prompt 输入、模型选择、参数配置、生成按钮
  */
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Icon } from '@iconify/react';
 // 生成中的流光边框：仅在生成时按需加载
 const BorderBeam = lazy(() => import('../../vendor/generation-effects/border-beam/src').then((m) => ({ default: m.BorderBeam })));
@@ -48,7 +48,7 @@ import {
 import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
-import { getPendingTasksForProject, resumeComfyUINodeTask, resumeRunningHubNodeTask, updatePendingTask, removePendingTask } from '../../services/pollManager';
+import { beginComfyNodeDelivery, completeComfyNodeTask, getPendingTasksForProject, isComfyNodeDeliveryActive, pauseComfyNodeDelivery, resumeComfyUINodeTask, resumeRunningHubNodeTask, subscribeComfyDeliveries, updatePendingTask, removePendingTask } from '../../services/pollManager';
 import VideoTaskStatus from './shared/VideoTaskStatus';
 import { isCloudWorkflow, getCloudWorkflowPersistedOutput, workflowExecution } from '../../services/workflowExecutionService';
 import { completeWorkflowApiNodeTask, stopWorkflowApiNodeTask } from '../../services/workflowApi/workflowApiAdapter';
@@ -78,6 +78,9 @@ function AINodeDialog() {
       currentProjectId: s.currentProjectId,
     })),
   );
+
+  const comfyDeliveryActive = useSyncExternalStore(subscribeComfyDeliveries,
+    () => isComfyNodeDeliveryActive(currentProjectId, activeNodeId ?? undefined), () => false);
 
   // 仅订阅当前激活的节点（而非整个 nodes 数组），拖拽其他节点时不会触发本弹窗重渲染
   const node = useAppStore((s) => (s.activeNodeId ? s.nodes.find((n) => n.id === s.activeNodeId) : undefined));
@@ -408,7 +411,9 @@ function AINodeDialog() {
     const submittingNodeId = activeNodeId!;
     const submittingProjectId = currentProjectId;
     const runningHubTask = cloudWorkflow || latestData.provider === 'runninghub';
-    const guardedSubmission = runningHubTask || (latestData.type === 'ai-animation' && !!submittingProjectId);
+    const localComfyTask = !!latestData.workflowId && !cloudWorkflow;
+    let comfyTaskId: string | undefined;
+    const guardedSubmission = runningHubTask || localComfyTask || (latestData.type === 'ai-animation' && !!submittingProjectId);
     let cloudGuard = guardedSubmission ? registerCanvasDerivation(store, submittingNodeId) : null;
     const isStillCurrentSubmission = () => {
       const state = useAppStore.getState();
@@ -432,7 +437,7 @@ function AINodeDialog() {
           projectId: submittingProjectId,
         }).nodeIds;
         if (cloudGuard) completeCanvasDerivation(cloudGuard);
-        cloudGuard = runningHubTask ? registerCanvasDerivation(useAppStore.getState(), submittingNodeId) : null;
+        cloudGuard = guardedSubmission ? registerCanvasDerivation(useAppStore.getState(), submittingNodeId) : null;
         showToast(t('正在批量生成 {count} 张图片', { count: batchCount }));
         const batch = await generateImagesBatch({
           prompt: effectivePrompt,
@@ -444,11 +449,13 @@ function AINodeDialog() {
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
           nodeId: activeNodeId ?? undefined,
         }, batchCount);
+        comfyTaskId = batch.results.find((result) => result.comfyTaskId)?.comfyTaskId;
+        if (comfyTaskId) beginComfyNodeDelivery(submittingNodeId, comfyTaskId);
         if (!isStillCurrentSubmission()) return;
         await applyImageBatchResults({
           nodeId: submittingNodeId,
           targetNodeIds: batchNodeIds,
-          isCurrent: runningHubTask ? isStillCurrentSubmission : undefined,
+          isCurrent: guardedSubmission ? isStillCurrentSubmission : undefined,
           batch,
           projectId: submittingProjectId,
           prompt: effectivePrompt,
@@ -479,6 +486,8 @@ function AINodeDialog() {
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
           nodeId: activeNodeId ?? undefined,
         });
+        comfyTaskId = result.comfyTaskId;
+        if (comfyTaskId) beginComfyNodeDelivery(submittingNodeId, comfyTaskId);
         if (!isStillCurrentSubmission()) return;
         // 下载远程 URL 到本地项目目录
         const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (currentProjectId
@@ -499,6 +508,7 @@ function AINodeDialog() {
         });
         if (runningHubTask) completeRunningHubNodeTask(submittingNodeId);
         if (result.workflowApiTaskId) completeWorkflowApiNodeTask(submittingNodeId, result.workflowApiTaskId);
+        if (result.comfyTaskId) completeComfyNodeTask(submittingNodeId, result.comfyTaskId);
         useAppStore.getState().syncDramaAssetImageFromNode?.(activeNodeId!, mediaUrl);
         recordOutputHistory(activeNodeId!, {
           nodeId: activeNodeId!,
@@ -576,10 +586,13 @@ function AINodeDialog() {
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
           nodeId: activeNodeId ?? undefined,
         });
+        comfyTaskId = result.comfyTaskId;
+        if (comfyTaskId) beginComfyNodeDelivery(submittingNodeId, comfyTaskId);
         if (!isStillCurrentSubmission()) return;
         const persisted = currentProjectId
           ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-panorama', nodeLabel)
           : { mediaUrl: result.url, sourceUrl: result.url };
+        if (!isStillCurrentSubmission()) return;
         const mediaUrl = persisted.mediaUrl;
         updateNodeData(activeNodeId!, {
           imageUrl: mediaUrl,
@@ -591,6 +604,7 @@ function AINodeDialog() {
           imageWidth: result.width,
           imageHeight: result.height,
         });
+        if (result.comfyTaskId) completeComfyNodeTask(submittingNodeId, result.comfyTaskId);
         recordOutputHistory(activeNodeId!, {
           nodeId: activeNodeId!,
           nodeLabel: nodeLabel,
@@ -624,12 +638,15 @@ function AINodeDialog() {
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
           nodeId: activeNodeId ?? undefined,
         });
+        comfyTaskId = result.comfyTaskId;
+        if (comfyTaskId) beginComfyNodeDelivery(submittingNodeId, comfyTaskId);
         if (!isStillCurrentSubmission()) {
           if (result.url.startsWith('blob:')) URL.revokeObjectURL(result.url);
           return;
         }
         const persisted = await persistAudioGenerationResult(result, currentProjectId, nodeLabel);
-        if (runningHubTask && !isStillCurrentSubmission()) return;
+        if (guardedSubmission && !isStillCurrentSubmission()) return;
+        if (result.comfyTaskId && persisted.persistence === 'failed') throw new Error('ComfyUI 音频已生成，但保存失败；任务已保留，请继续查询取回原结果');
         updateNodeData(activeNodeId!, {
           audioUrl: persisted.mediaUrl,
           sourceUrl: persisted.sourceUrl,
@@ -643,6 +660,7 @@ function AINodeDialog() {
         });
         if (runningHubTask) completeRunningHubNodeTask(submittingNodeId);
         if (result.workflowApiTaskId) completeWorkflowApiNodeTask(submittingNodeId, result.workflowApiTaskId);
+        if (result.comfyTaskId) completeComfyNodeTask(submittingNodeId, result.comfyTaskId);
         recordOutputHistory(activeNodeId!, {
           nodeId: activeNodeId!,
           nodeLabel: nodeLabel,
@@ -732,6 +750,7 @@ function AINodeDialog() {
       });
       showToast(msg, 'error');
     } finally {
+      if (comfyTaskId) pauseComfyNodeDelivery(submittingNodeId, comfyTaskId, isStillCurrentSubmission);
       if (runningHubTask && isStillCurrentSubmission() && useAppStore.getState().nodes.find((item) => item.id === submittingNodeId)?.data.status === 'success') completeRunningHubNodeTask(submittingNodeId);
       if (cloudGuard) completeCanvasDerivation(cloudGuard);
     }
@@ -1007,8 +1026,9 @@ function AINodeDialog() {
   // Early return must come after ALL hooks
   if (!activeNodeId || !node || !data || !nodeType || directorDialogBlocked) return null;
 
-  const recoverableComfyTask = currentProjectId && data.status !== 'loading'
-    ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && task.taskType === 'comfyui' && task.comfyRecoveryState)
+  const recoverableComfyTask = currentProjectId && !comfyDeliveryActive
+    ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && task.taskType === 'comfyui' && task.comfyRecoveryState
+      && (data.status !== 'loading' || task.comfyRecoveryState === 'save_pending'))
     : undefined;
   const cloudTask = currentProjectId ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && ['runninghub-workflow', 'runninghub-model'].includes(task.taskType)) : undefined;
   const workflowApiTask = currentProjectId ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && task.taskType === 'workflow-api') : undefined;
@@ -1149,12 +1169,14 @@ function AINodeDialog() {
             <span className="min-w-0 flex-1 text-xs">
               {recoverableComfyTask.comfyRecoveryState === 'cancel_pending'
                 ? t('ComfyUI 取消尚未确认，任务已保留')
-                : t('ComfyUI 查询中断，任务已保留')}
+                : recoverableComfyTask.comfyRecoveryState === 'save_pending'
+                  ? t('ComfyUI 已完成，结果尚未保存或回填，任务已保留')
+                  : t('ComfyUI 查询中断，任务已保留')}
             </span>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="ui-btn ui-btn--sm" onClick={() => {
                 void resumeComfyUINodeTask(activeNodeId).catch(() => showToast(t('继续查询失败，任务仍保留'), 'error'));
-              }}>{t('继续查询')}</button>
+              }}>{recoverableComfyTask.comfyRecoveryState === 'save_pending' ? t('继续保存') : t('继续查询')}</button>
               <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>{t('再次终止')}</button>
             </div>
           </div>

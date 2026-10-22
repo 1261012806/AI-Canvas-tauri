@@ -40,6 +40,8 @@ function RepositorySummary({ repository }: { repository: ComfyRepository }) {
 export default function ComfyManagementWindow() {
   const t = useT();
   const [tab, setTab] = useState<Tab>('core');
+  const [modelsVisited, setModelsVisited] = useState(false);
+  const [modelsRevision, setModelsRevision] = useState(0);
   const [snapshot, setSnapshot] = useState<ComfyManagementSnapshot | null>(null);
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [busy, setBusy] = useState(() => t('读取安装信息'));
@@ -99,8 +101,14 @@ export default function ComfyManagementWindow() {
     return () => { active = false; aliveRef.current = false; themeCleanup.current(); };
   }, [refreshSnapshot]);
 
+  // 原生管理写入开始时就撤销旧 scanId；操作失败也不能继续展示可替换的旧扫描。
+  const withInvalidatedModelScan = <T,>(operation: () => Promise<T>): Promise<T> => {
+    setModelsRevision((value) => value + 1);
+    return operation();
+  };
+  const installDependencies = (repositoryId: string) => withInvalidatedModelScan(() => installComfyDependencies(repositoryId));
   const mutate = async (request: ComfyRepositoryAction) => {
-    const result = await applyComfyRepositoryAction(request, onDownloadProgress);
+    const result = await withInvalidatedModelScan(() => applyComfyRepositoryAction(request, onDownloadProgress));
     await refreshSnapshot();
     setCatalog(null);
     setVersionRepository(null);
@@ -120,7 +128,7 @@ export default function ComfyManagementWindow() {
     title: t('安装插件'),
     detail: t('将安装 {name}，初始状态为停用。安装后可显式安装依赖，再启用并重启 ComfyUI。仅安装你信任的插件。', { name }),
     operation: async () => {
-      const result = await installComfyExtension(url, onDownloadProgress);
+      const result = await withInvalidatedModelScan(() => installComfyExtension(url, onDownloadProgress));
       await refreshSnapshot(); setCatalog(null);
       return result.message;
     },
@@ -128,7 +136,7 @@ export default function ComfyManagementWindow() {
   const updateAll = () => setConfirmation({
     title: t('一键更新'),
     detail: t('依次更新内核和已启用的 Git 插件。有本地修改、独立版本或更新失败时停止，已完成项会保留。请先停止 ComfyUI。'),
-    operation: async () => {
+    operation: () => withInvalidatedModelScan(async () => {
       if (!snapshot) return '';
       const repositories = [snapshot.core, ...snapshot.extensions].filter((repository): repository is ComfyRepository => !!repository && repository.isGit && repository.enabled && !repository.removed);
       let completed = 0;
@@ -143,7 +151,7 @@ export default function ComfyManagementWindow() {
         throw new Error(t('已更新 {count} 项，后续更新停止：{reason}', { count: completed, reason: String(cause) }), { cause });
       } finally { await refreshSnapshot(); setCatalog(null); }
       return t('已更新 {count} 项，请重新启动 ComfyUI', { count: completed });
-    },
+    }),
   });
   const start = () => {
     setTab('console');
@@ -178,7 +186,7 @@ export default function ComfyManagementWindow() {
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <Tabs<Tab> aria-label={t('ComfyUI 管理分类')} value={tab} className="min-w-0 flex-1 basis-96"
           items={TABS.map((item) => ({ value: item.id, label: <><Icon icon={item.icon} width={15} />{t(item.label)}</>, disabled: !!busy }))}
-          onChange={(next) => { setTab(next); setSearch(''); if (next === 'catalog' && !catalog) void loadCatalog(); }} />
+          onChange={(next) => { setTab(next); setSearch(''); if (next === 'models') setModelsVisited(true); if (next === 'catalog' && !catalog) void loadCatalog(); }} />
         {isPluginTab && <div className="ml-auto flex w-80 max-w-full shrink-0 items-center gap-2">
           <input className="ui-input ui-input--sm min-w-0 flex-1" type="search"
             aria-label={tab === 'extensions' ? t('搜索已装插件') : t('搜索新插件')}
@@ -207,7 +215,7 @@ export default function ComfyManagementWindow() {
         <RepositorySummary repository={snapshot.core} />
         <div className="ui-row">
           <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy || !snapshot.core.isGit || snapshot.core.dirty || !snapshot.core.branch} onClick={() => void run(t('更新内核'), () => mutate({ repositoryId: 'core', action: 'update' }))}>{t('更新当前分支')}</button>
-          <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy} onClick={() => void run(t('安装内核依赖'), async () => (await installComfyDependencies('core')).message)}>{t('安装内核依赖')}</button>
+          <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy} onClick={() => void run(t('安装内核依赖'), async () => (await installDependencies('core')).message)}>{t('安装内核依赖')}</button>
         </div>
         {snapshot.core.isGit ? <ComfyVersionList key={`${snapshot.core.id}:${snapshot.core.commit}:${snapshotRevision}`} repository={snapshot.core} busy={!!busy} onSwitch={(reference, title) => switchVersion(snapshot.core!, reference, title)} /> : <div className="ui-empty"><p className="ui-empty__title">{t('当前内核不是 Git 安装')}</p><p className="ui-empty__desc">{t('可管理自定义节点和启动设置；该安装不支持内核版本切换。')}</p></div>}
       </> : <div className="ui-empty"><p className="ui-empty__title">{t('未找到 ComfyUI 内核')}</p></div>)}
@@ -221,7 +229,7 @@ export default function ComfyManagementWindow() {
               {repository.removed ? <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy} onClick={() => void run(t('恢复插件'), () => mutate({ repositoryId: repository.id, action: 'restore' }))}>{t('恢复')}</button> : <>
                 <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy || !repository.isGit || repository.dirty || !repository.branch} onClick={() => void run(t('更新插件'), () => mutate({ repositoryId: repository.id, action: 'update' }))}>{t('更新')}</button>
                 <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy || !repository.isGit} onClick={() => setVersionRepository(repository)}>{t('切换版本')}</button>
-                <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy} onClick={() => void run(t('安装依赖'), async () => (await installComfyDependencies(repository.id)).message)}>{t('安装依赖')}</button>
+                <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={!!busy} onClick={() => void run(t('安装依赖'), async () => (await installDependencies(repository.id)).message)}>{t('安装依赖')}</button>
                 <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={!!busy} onClick={() => setConfirmation({ title: t('卸载插件'), detail: t('将 {name} 移到本安装的恢复目录，不永久删除；可在列表中恢复。请先停止 ComfyUI。', { name: repository.name }), operation: () => mutate({ repositoryId: repository.id, action: 'uninstall' }) })}>{t('卸载')}</button>
               </>}
             </div></td>
@@ -243,7 +251,10 @@ export default function ComfyManagementWindow() {
         </form>
       </section>}
       {snapshot && tab === 'settings' && <ComfyLaunchSettings busy={!!busy} run={run} />}
-      {snapshot && tab === 'models' && <ComfyModelDedupe busy={!!busy} run={run} />}
+      {snapshot && modelsVisited && <div hidden={tab !== 'models'} inert={tab !== 'models'}
+        className={tab === 'models' ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'hidden'}>
+        <ComfyModelDedupe key={modelsRevision} active={tab === 'models'} busy={!!busy} run={run} />
+      </div>}
       {snapshot && tab === 'console' && <ComfyRuntimeConsole runtime={runtime} error={runtimeError} busy={!!busy} onRetry={refreshRuntime} onClear={clearDisplay} onStop={stop} />}
     </main>
     <ModalOverlay isOpen={!!versionRepository} onClose={() => { if (!busy) setVersionRepository(null); }} ariaLabel={t('插件版本')} className="w-[calc(100%_-_24px)] max-w-5xl max-h-[85vh] bg-canvas-surface" closeOnBackdrop={!busy}>

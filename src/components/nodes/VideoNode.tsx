@@ -1,7 +1,7 @@
 /**
  * VideoNode 视频节点 — 在画布上渲染视频内容，支持上传本地视频、播放控制、连接其他节点
  */
-import { memo, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { lazy, Suspense, memo, useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { Handle, Position } from '@xyflow/react';
 import { isRemoteMediaUrl } from '../../utils/mediaUrl';
@@ -56,6 +56,8 @@ import VideoTaskStatus from './shared/VideoTaskStatus';
 import { COMFY_REFMOD_MIME } from '../../utils/comfyRefmod';
 import { readComfyRefmodDragPayload } from '../../utils/comfyRefmodDrag';
 import { appendRefmodsToVideoNode } from '../../services/comfyRefmodNodeService';
+import { useComfyRefmodBindingRequest } from '../../hooks/useComfyRefmodBindingRequest';
+const ComfyRefmodBindingDialog = lazy(() => import('./shared/ComfyRefmodBindingDialog'));
 
 const DEFAULT_VIDEO_NODE_WIDTH = 280;
 const DEFAULT_VIDEO_NODE_HEIGHT = 158;
@@ -270,6 +272,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
   const isSingleSelection = useAppStore((s) => s.selectedNodeIds.length <= 1);
   const projectId = useAppStore((s) => s.currentProjectId);
   const [refmodDragOver, setRefmodDragOver] = useState(false);
+  const refmodBinding = useComfyRefmodBindingRequest(projectId);
   const handleRefmodDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!Array.from(event.dataTransfer.types).includes(COMFY_REFMOD_MIME)) return;
     event.preventDefault(); event.stopPropagation();
@@ -283,13 +286,13 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     void (async () => {
       try {
         const references = readComfyRefmodDragPayload(payload);
-        await appendRefmodsToVideoNode(id, references, projectId);
+        await appendRefmodsToVideoNode(id, references, projectId, refmodBinding.requestMapping);
         useAppStore.getState().showToast('参考包已添加，可在 @ → ComfyUI → ComfyUI 角色中查看手工绑定。', 'success');
       } catch (error) {
         useAppStore.getState().showToast(error instanceof Error ? error.message : '添加参考包失败', 'error');
       }
     })();
-  }, [id, projectId]);
+  }, [id, projectId, refmodBinding.requestMapping]);
   const isSource = data.role === 'source';
   const fallbackDimensions = computeVideoNodeDimensions(data.videoWidth ?? 0, data.videoHeight ?? 0);
   // 旧项目可能保存了横屏框尺寸；空节点展示跟随当前比例，成片继续使用真实媒体尺寸。
@@ -1046,6 +1049,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         onResize={handleResize}
       />
 
+      {refmodBinding.request && <Suspense fallback={null}><ComfyRefmodBindingDialog key={refmodBinding.requestId} request={refmodBinding.request} onApply={refmodBinding.apply} onClose={refmodBinding.close} /></Suspense>}
       {/* 全屏预览 */}
       <FullscreenOverlay
         isOpen={isFullscreen}

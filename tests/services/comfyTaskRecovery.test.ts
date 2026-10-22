@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../src/store/useAppStore';
 import {
-  cancelNodePolling, cleanupNodePolling, clearProjectTasks, completeVideoNodeTask, getPendingTasksForProject,
-  pauseVideoNodeTask, prepareVideoNodeGeneration, registerNodePolling, resumeComfyUINodeTask,
+  beginComfyNodeDelivery, cancelNodePolling, cleanupNodePolling, clearProjectTasks, completeComfyNodeTask, completeVideoNodeTask, getPendingTasksForProject,
+  isComfyNodeDeliveryActive, subscribeComfyDeliveries,
+  pauseComfyNodeDelivery, pauseVideoNodeTask, prepareVideoNodeGeneration, registerNodePolling, resumeComfyUINodeTask,
   resumePendingTasks, resumeVideoNodeTask, savePendingTask, VideoPollingPausedError,
 } from '../../src/services/pollManager';
 import {
@@ -76,6 +77,83 @@ afterEach(() => {
 });
 
 describe('ComfyUI 任务恢复合同', () => {
+  it.each(['ai-image', 'ai-audio'] as const)('%s 远端完成先保留原任务，调用方交付后才清理', async (nodeType) => {
+    useAppStore.getState().updateNodeDataTransient('n1', { type: nodeType });
+    const result = await (nodeType === 'ai-audio' ? executeComfyUIAudioGenerate(params) : executeComfyUIGenerate(params));
+    expect(result.comfyTaskId).toBe('prompt-1');
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'save_pending' });
+    await expect(executeComfyUIGenerate(params)).rejects.toThrow('未交付');
+    expect(promptCalls()).toHaveLength(1);
+    completeComfyNodeTask('n1', 'old-prompt');
+    expect(pending()).toHaveLength(1);
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'success' });
+    completeComfyNodeTask('n1', result.comfyTaskId);
+    expect(pending()).toEqual([]);
+  });
+
+  it.each(['ai-image', 'ai-audio'] as const)('%s 下载失败及重新进入保留原 promptId，续取不重新提交', async (nodeType) => {
+    useAppStore.getState().updateNodeDataTransient('n1', { type: nodeType });
+    mocks.history.mockImplementation(async () => completed());
+    await (nodeType === 'ai-audio' ? executeComfyUIAudioGenerate(params) : executeComfyUIGenerate(params));
+    mocks.persist.mockRejectedValueOnce(new Error('/private/output?token=secret'));
+    await resumeComfyUINodeTask('n1');
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'save_pending' });
+    expect(useAppStore.getState().nodes[0].data.error).toContain('保存或回填尚未完成');
+    expect(JSON.stringify(pending())).not.toMatch(/private|secret/);
+    const calls = mocks.history.mock.calls.length;
+    await resumePendingTasks('p1');
+    expect(mocks.history).toHaveBeenCalledTimes(calls);
+    expect(pending()).toHaveLength(1);
+    await resumeComfyUINodeTask('n1');
+    expect(pending()).toEqual([]);
+    expect(useAppStore.getState().nodes[0].data.status).toBe('success');
+    expect(promptCalls()).toHaveLength(1);
+  });
+
+  it('旧交付回执既不清除新任务，也不改写已失效画布的状态', () => {
+    savePendingTask({ ...task, comfyRecoveryState: 'save_pending' });
+    useAppStore.getState().updateNodeDataTransient('n1', { status: 'idle', imageUrl: 'asset://new.png' });
+    pauseComfyNodeDelivery('n1', task.taskId, () => false);
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'idle', imageUrl: 'asset://new.png' });
+    savePendingTask({ ...task, taskId: 'new-prompt', comfyRecoveryState: 'save_pending' });
+    completeComfyNodeTask('n1', task.taskId);
+    pauseComfyNodeDelivery('n1', task.taskId, () => true);
+    expect(pending()[0].taskId).toBe('new-prompt');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('idle');
+  });
+
+  it('真实落盘期间禁止重入，过期交付结束后释放续取入口而不改写节点', async () => {
+    savePendingTask({ ...task, comfyRecoveryState: 'save_pending' });
+    const changed = vi.fn();
+    const unsubscribe = subscribeComfyDeliveries(changed);
+    beginComfyNodeDelivery('n1', task.taskId);
+    expect(isComfyNodeDeliveryActive('p1', 'n1')).toBe(true);
+    expect(isComfyNodeDeliveryActive('p2', 'n1')).toBe(false);
+    await resumeComfyUINodeTask('n1');
+    expect(mocks.history).not.toHaveBeenCalled();
+    pauseComfyNodeDelivery('n1', task.taskId, () => false);
+    expect(isComfyNodeDeliveryActive('p1', 'n1')).toBe(false);
+    expect(pending()[0].comfyRecoveryState).toBe('save_pending');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    expect(changed).toHaveBeenCalledTimes(2);
+    beginComfyNodeDelivery('n1', task.taskId);
+    clearProjectTasks('p1');
+    expect(isComfyNodeDeliveryActive('p1', 'n1')).toBe(false);
+    unsubscribe();
+  });
+
+  it('恢复查询期间画布 revision 改变，迟到结果不能被当作新节点的产物', async () => {
+    savePendingTask({ ...task, comfyRecoveryState: 'save_pending' });
+    mocks.history.mockImplementationOnce(async () => {
+      useAppStore.getState().setCanvasRevision(useAppStore.getState().getCurrentRevision() + 1);
+      return completed();
+    });
+    await resumeComfyUINodeTask('n1');
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes[0].data.imageUrl).toBeUndefined();
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'save_pending' });
+  });
+
   it.each([
     ['图片', () => executeComfyUIGenerate(params)],
     ['视频', () => executeComfyUIVideoGenerate(params)],
@@ -407,7 +485,7 @@ describe('ComfyUI 任务恢复合同', () => {
     await resumeComfyUINodeTask('n1');
     expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
     expect(useAppStore.getState().nodes[0].data.imageUrl).toBeUndefined();
-    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'disconnected' });
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', comfyRecoveryState: 'save_pending' });
     useAppStore.setState({ currentProjectId: 'p1' });
     mocks.history.mockImplementation(async () => completed());
     mocks.persist.mockImplementation(async (url: string) => ({ mediaUrl: url, sourceUrl: url }));

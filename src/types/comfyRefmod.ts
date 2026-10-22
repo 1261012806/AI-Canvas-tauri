@@ -1,3 +1,5 @@
+import type { WorkflowDefinition } from './index';
+
 /** RefMod 引用只保存服务身份和插件返回的相对文件名，不保存地址或本地路径。 */
 export type ComfyRefmodLoaderType = 'minimax-h3' | 'refmods-lab' | 'h3-refmods';
 
@@ -65,3 +67,11 @@ export interface ComfyRefmodCatalog extends ComfyRefmodServerIdentity {
   failedLoaderTypes?: ComfyRefmodLoaderType[];
   fetchedAt: number;
 }
+
+/** 仅当前调用方内存中的映射请求；不进入配置或项目持久化。 */
+export interface ComfyRefmodBindingRequest {
+  workflow: WorkflowDefinition;
+  incoming: ComfyRefmodSelection[];
+  existing: ComfyRefmodSelection[];
+}
+export type ComfyRefmodBindingResolver = (request: ComfyRefmodBindingRequest) => Promise<ComfyRefmodSelection[]>;

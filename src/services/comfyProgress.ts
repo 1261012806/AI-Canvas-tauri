@@ -1,6 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
 import type { ComfyNodeProgressStage } from '../types/comfyProgress';
 import { comfyFetch } from './comfyPolling';
+import { withComfyQueryTimeout } from './comfyQuery';
 import { connectNativeComfyProgress } from './comfyProgressTransport';
 
 const SOCKET_READY_TIMEOUT_MS = 1_000;
@@ -295,9 +296,11 @@ export function createComfyProgressSession({
     const controller = new AbortController();
     queueRequest = controller;
     try {
-      const response = await comfyFetch(`${baseUrl.replace(/\/+$/, '')}/queue`, { signal: controller.signal });
-      if (response.ok) {
-        const queue: unknown = await response.json();
+      const queue = await withComfyQueryTimeout(async (signal) => {
+        const response = await comfyFetch(`${baseUrl.replace(/\/+$/, '')}/queue`, { signal });
+        return response.ok ? await response.json() as unknown : null;
+      }, controller.signal);
+      if (queue !== null) {
         if (!closed && !controller.signal.aborted && promptId === boundPromptId && isRecord(queue)) {
           const state = currentProgress.state;
           if (isProgressOpen() && state.stage !== 'queued') return;

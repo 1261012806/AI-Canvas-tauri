@@ -6,11 +6,12 @@ const mocks = vi.hoisted(() => ({
     workflows: [], projects: [], customStyles: [], updateNodeDataTransient: vi.fn(), updateNodeData: vi.fn(),
     recordOutputHistory: vi.fn(), showToast: vi.fn() },
   generate: vi.fn(), persist: vi.fn(), guardFresh: true, completeGuard: vi.fn(),
+  image: vi.fn(), audio: vi.fn(), persistAudio: vi.fn(), completeComfy: vi.fn(), pauseComfy: vi.fn(),
 }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.store } }));
 vi.mock('../../src/store/store.utils', () => ({ generateId: () => 'test-id', derivedNodePlacement: vi.fn() }));
-vi.mock('../../src/services/aiService', () => ({ generateVideo: mocks.generate }));
-vi.mock('../../src/services/ai/generateAudio', () => ({ persistAudioGenerationResult: vi.fn() }));
+vi.mock('../../src/services/aiService', () => ({ generateVideo: mocks.generate, generateImage: mocks.image, generateAudio: mocks.audio }));
+vi.mock('../../src/services/ai/generateAudio', () => ({ persistAudioGenerationResult: mocks.persistAudio }));
 vi.mock('../../src/services/fileService', () => ({ persistMediaUrlToProjectData: mocks.persist }));
 vi.mock('../../src/services/imageBatchService', () => ({ applyImageBatchResults: vi.fn(), failImageBatchNodes: vi.fn(), prepareImageBatchNodes: vi.fn() }));
 vi.mock('../../src/services/projectSettingsService', () => ({ getProjectModelKind: () => 'video', parseProjectModelRef: () => undefined,
@@ -27,6 +28,7 @@ vi.mock('../../src/services/canvasDerivationGuard', () => ({ registerCanvasDeriv
 vi.mock('../../src/services/videoBatchPlanning', () => ({ videoInputFingerprint: () => 'video-fingerprint' }));
 vi.mock('../../src/services/pollManager', () => ({
   prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
+  beginComfyNodeDelivery: vi.fn(), completeComfyNodeTask: mocks.completeComfy, pauseComfyNodeDelivery: mocks.pauseComfy,
   getPendingTasksForProject: () => [],
   VideoPollingPausedError: class extends Error {
     constructor() { super('视频查询已暂停'); }
@@ -155,5 +157,47 @@ describe('节点视频生成的宿主任务租约', () => {
     expect(await run({ assertFresh: vi.fn(async () => undefined) })).toEqual({ success: false, message: '模型未接受请求' });
     expect(mocks.store.updateNodeDataTransient).toHaveBeenLastCalledWith('video', { status: 'error', error: '模型未接受请求' });
     expect(mocks.store.recordOutputHistory).toHaveBeenCalledWith('video', expect.objectContaining({ status: 'error', error: '模型未接受请求' }));
+  });
+});
+
+describe('ComfyUI 图片与音频交付边界', () => {
+  function setup(kind: 'ai-image' | 'ai-audio') {
+    mocks.store.nodes = [{ id: 'media', data: { type: kind, label: '本地工作流', prompt: '内容',
+      provider: 'comfyui', model: 'comfyui/workflow', workflowId: 'wf' } }];
+    mocks.image.mockReset().mockResolvedValue({ url: 'remote.png', width: 64, height: 64, comfyTaskId: 'original' });
+    mocks.audio.mockReset().mockResolvedValue({ url: 'remote.wav', comfyTaskId: 'original' });
+    mocks.persistAudio.mockReset().mockResolvedValue({ mediaUrl: 'saved.wav', outputUrl: 'remote.wav', persistence: 'saved', filePath: 'saved.wav' });
+  }
+
+  it.each(['ai-image', 'ai-audio'] as const)('%s 保存期间 revision 变化，拒绝回填和任务清理', async (kind) => {
+    setup(kind);
+    const saving = deferred<{ mediaUrl: string; sourceUrl: string; outputUrl: string; persistence: string }>();
+    const persist = kind === 'ai-image' ? mocks.persist : mocks.persistAudio;
+    persist.mockReturnValueOnce(saving.promise);
+    const pending = executeGeneration('media');
+    await vi.waitFor(() => expect(persist).toHaveBeenCalledOnce());
+    mocks.guardFresh = false;
+    saving.resolve({ mediaUrl: 'stale', sourceUrl: 'remote', outputUrl: 'remote', persistence: 'saved' });
+    expect((await pending).success).toBe(false);
+    expect(mocks.store.updateNodeData).not.toHaveBeenCalled();
+    expect(mocks.completeComfy).not.toHaveBeenCalled();
+    expect(mocks.pauseComfy).toHaveBeenCalledWith('media', 'original', expect.any(Function));
+    expect(mocks.pauseComfy.mock.calls[0][2]()).toBe(false);
+  });
+
+  it.each(['ai-image', 'ai-audio'] as const)('%s 保存并写回之后才清理同一个原任务', async (kind) => {
+    setup(kind);
+    expect(await executeGeneration('media')).toEqual({ success: true });
+    expect(mocks.completeComfy).toHaveBeenCalledWith('media', 'original');
+    expect(mocks.store.updateNodeData.mock.invocationCallOrder[0]).toBeLessThan(mocks.completeComfy.mock.invocationCallOrder[0]);
+  });
+
+  it('音频落盘失败不能以临时地址冒充成功交付', async () => {
+    setup('ai-audio');
+    mocks.persistAudio.mockResolvedValueOnce({ mediaUrl: 'remote.wav', outputUrl: 'remote.wav', persistence: 'failed', persistError: 'disk full' });
+    expect((await executeGeneration('media')).success).toBe(false);
+    expect(mocks.store.updateNodeData).not.toHaveBeenCalled();
+    expect(mocks.completeComfy).not.toHaveBeenCalled();
+    expect(mocks.pauseComfy).toHaveBeenCalledWith('media', 'original', expect.any(Function));
   });
 });

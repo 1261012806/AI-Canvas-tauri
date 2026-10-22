@@ -226,6 +226,11 @@ impl Read for ResponseReader<'_> {
     }
 }
 
+fn blocked_download_headers(content_type: Option<&str>, content_length: Option<u64>, expected_bytes: u64) -> bool {
+    content_type.is_some_and(|value| value.split(';').next().is_some_and(|kind| kind.trim().eq_ignore_ascii_case("text/html")))
+        || content_length.is_some_and(|length| length != expected_bytes)
+}
+
 fn download(app: &AppHandle, target: &Target, archive: &Path, release: &Release, variant: &Variant,
     control: &mut Control, runtime: &tokio::runtime::Handle) -> Result<(), String> {
     let client = reqwest::Client::builder().user_agent("AI-Canvas/ComfyUI-installer")
@@ -252,8 +257,10 @@ fn download(app: &AppHandle, target: &Target, archive: &Path, release: &Release,
                 retryable.store(crate::github_fallback::transient_status(response.status().as_u16()), Ordering::Release);
                 return Err(format!("安装包下载返回 HTTP {}", response.status().as_u16()));
             }
-            if response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.contains("text/html")) || response.content_length().is_some_and(|length| length != variant.bytes) {
+            if blocked_download_headers(response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|value| value.to_str().ok()),
+                response.content_length(), variant.bytes) {
+                // 连接成功也可能收到网关拦截页或错误包；只切换一次下载源，摘要不符仍直接失败。
+                retryable.store(true, Ordering::Release);
                 return Err("下载站点返回了拦截页面或不完整安装包".into());
             }
             let mut reader = ResponseReader { response, pending: Cursor::new(Vec::new()), runtime: runtime.clone(), control, retryable: &retryable };
@@ -530,6 +537,15 @@ pub async fn install_comfyui_portable(webview: Webview, app: AppHandle, target_i
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blocked_or_incomplete_download_headers_allow_source_fallback() {
+        assert!(blocked_download_headers(Some("text/html; charset=utf-8"), Some(200), 1_000));
+        assert!(blocked_download_headers(Some("Text/HTML; charset=UTF-8"), None, 1_000));
+        assert!(blocked_download_headers(Some("application/octet-stream"), Some(500), 1_000));
+        assert!(!blocked_download_headers(Some("application/octet-stream"), Some(1_000), 1_000));
+        // 未提供长度的合法流仍进入既有固定大小与 SHA-256 校验，不能仅据缺失响应头跳过它们。
+        assert!(!blocked_download_headers(None, None, 1_000));
+    }
     #[test]
     fn rejects_traversal_device_names_ads_and_absolute_archive_entries() {
         for invalid in ["../outside", "a/../outside", "/absolute", "C:\\outside", "a/file:secret", "a/CON.txt", "a/NUL", "a/file.", "a//file", "a/./file"] {

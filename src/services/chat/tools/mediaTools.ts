@@ -322,8 +322,12 @@ export function registerMediaAgentTools(): Array<() => void> {
             } else if (workflow?.adapterType === 'workflow-api') {
               try { validateWorkflowApiManifest(workflow.workflowApi); workflowApiConnection(store.config.providers[workflow.workflowApi.connectionId], workflow.workflowApi); }
               catch (error) { return { allowed: false, reason: error instanceof Error ? error.message : '工作流连接无效' }; }
-            } else if (!comfyBaseUrlFor(option.workflowId)) {
-              return { allowed: false, reason: '请先在设置里配置 ComfyUI 服务地址' };
+            } else {
+              try {
+                if (!comfyBaseUrlFor(option.workflowId)) return { allowed: false, reason: '请先在设置里配置 ComfyUI 服务地址' };
+              } catch (error) {
+                return { allowed: false, reason: error instanceof Error ? error.message : 'ComfyUI 服务器配置无效' };
+              }
             }
           } else if (option.provider === 'general') {
             const generalModel = (store.config.generalModels ?? []).find(

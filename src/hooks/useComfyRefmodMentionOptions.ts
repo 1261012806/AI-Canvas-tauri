@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/useAppStore';
 import type { WorkflowDefinition } from '../types';
 import type { ComfyRefmodAsset, ComfyRefmodCatalog } from '../types/comfyRefmod';
-import { loadComfyRefmodCatalog } from '../services/comfyRefmodService';
+import { loadComfyRefmodCatalog, loadComfyRefmodCatalogDetails } from '../services/comfyRefmodService';
 import { getComfyRefmodLoaders } from '../services/comfyRefmodWorkflow';
 import { buildComfyRefmodMentionEntries } from '../utils/comfyRefmodMentionOptions';
 
@@ -28,6 +28,7 @@ export function useComfyRefmodMentionOptions({ enabled, workflow }: {
   })));
   const active = enabled && !!workflow && (!workflow.adapterType || workflow.adapterType === 'comfyui');
   const [revision, setRevision] = useState(0);
+  const refreshedKey = useRef<string | undefined>(undefined);
   const [view, setView] = useState<{ requestKey: string; catalog?: ComfyRefmodCatalog; error?: string }>();
   const refresh = useCallback(() => setRevision((current) => current + 1), []);
   const serverId = workflow?.serverId;
@@ -39,8 +40,14 @@ export function useComfyRefmodMentionOptions({ enabled, workflow }: {
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    void loadComfyRefmodCatalog(serverId, { signal: controller.signal, fresh: revision > 0 }).then((catalog) => {
-      if (!controller.signal.aborted) setView({ requestKey, catalog });
+    const fresh = revision > 0 && refreshedKey.current !== requestKey;
+    if (fresh) refreshedKey.current = requestKey;
+    void loadComfyRefmodCatalog(serverId, { signal: controller.signal, fresh, includeDetails: false }).then((catalog) => {
+      if (controller.signal.aborted) return;
+      setView({ requestKey, catalog });
+      void loadComfyRefmodCatalogDetails(catalog, { signal: controller.signal, fresh }).then((detailed) => {
+        if (!controller.signal.aborted) setView({ requestKey, catalog: detailed });
+      }).catch(() => { /* 可选描述不阻断核心目录；下次刷新可重试。 */ });
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted) setView({
         requestKey,

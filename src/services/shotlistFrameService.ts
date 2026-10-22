@@ -11,6 +11,7 @@ import { persistMediaUrlToProjectData } from './fileService';
 import { resolveProjectGenerationPrompt } from './projectSettingsService';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from './canvasDerivationGuard';
 import { getShotlist, type ShotlistScope } from './shotlistService';
+import { beginComfyNodeDelivery, completeComfyNodeTask, pauseComfyNodeDelivery } from './pollManager';
 
 export const MAX_SHOTLIST_FRAME_BATCH = 12;
 const activeBatches = new Set<string>();
@@ -133,6 +134,7 @@ export async function generateShotlistFrames(input: ShotFrameBatchInput): Promis
       };
       input.onProgress?.(results.length, selected.length, row.id);
       current.updateNodeDataTransient(image.id, { status: 'loading', error: undefined });
+      let comfyTaskId: string | undefined;
       try {
         if (!fresh() || !imageUnchanged()) {
           results.push({ rowId: row.id, nodeId: image.id, status: 'stale' });
@@ -143,6 +145,8 @@ export async function generateShotlistFrames(input: ShotFrameBatchInput): Promis
           imageSize: imageData.imageSize || '2K', aspectRatio: imageData.aspectRatio || '16:9',
           workflowId: model.workflowId, workflowInputs: imageData.workflowInputs,
         }, controller.signal), controller.signal);
+        comfyTaskId = generated.comfyTaskId;
+        if (comfyTaskId) beginComfyNodeDelivery(image.id, comfyTaskId);
         if (controller.signal.aborted || !fresh() || !imageUnchanged()) {
           results.push({ rowId: row.id, nodeId: image.id, status: controller.signal.aborted ? 'cancelled' : 'stale' });
           continue;
@@ -160,6 +164,7 @@ export async function generateShotlistFrames(input: ShotFrameBatchInput): Promis
           filePath: persisted.filePath, output: persisted.sourceUrl, imageWidth: generated.width, imageHeight: generated.height,
           status: 'success', error: undefined,
         });
+        if (generated.comfyTaskId) completeComfyNodeTask(image.id, generated.comfyTaskId);
         const latestRows = latest.nodes.find((item) => item.id === sheet.id)?.data.shotlistRows ?? [];
         const canBind = JSON.stringify(latestRows.find((item) => item.id === row.id)) === fingerprint;
         if (canBind) {
@@ -185,6 +190,7 @@ export async function generateShotlistFrames(input: ShotFrameBatchInput): Promis
         }
         results.push({ rowId: row.id, nodeId: image.id, status: cancelled ? 'cancelled' : 'error' });
       } finally {
+        if (comfyTaskId) pauseComfyNodeDelivery(image.id, comfyTaskId, () => fresh() && imageUnchanged());
         // 参数编辑不启动新生成（各入口拒绝 loading 节点）；本批占位节点仍需结束旧请求状态。
         if (useAppStore.getState().currentProjectId === input.projectId
           && useAppStore.getState().nodes.find((item) => item.id === image.id)?.data.status === 'loading') {

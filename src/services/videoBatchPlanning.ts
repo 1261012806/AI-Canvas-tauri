@@ -107,7 +107,11 @@ export async function checkVideoServices(items: VideoPreflightItem[], state: Wor
   return Promise.all(items.map(async (item) => {
     const node = state.nodes.find((n) => n.id === item.nodeId);
     if (!node || videoInputData(node, state).provider !== 'comfyui') return item;
-    const url = comfyBaseUrlFor(videoInputData(node, state).workflowId);
+    let url: string;
+    try { url = comfyBaseUrlFor(videoInputData(node, state).workflowId); }
+    catch (error) {
+      return { ...item, issues: [...item.issues, error instanceof Error ? error.message : 'ComfyUI 服务器配置无效'] };
+    }
     if (!probes.has(url)) probes.set(url, probeComfyServer(url));
     return await probes.get(url) ? item : { ...item, issues: [...item.issues, 'ComfyUI 服务不可用'] };
   }));

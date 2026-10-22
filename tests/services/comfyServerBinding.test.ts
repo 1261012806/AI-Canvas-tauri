@@ -80,12 +80,22 @@ describe('工作流绑定的 ComfyUI 服务端', () => {
     expect(comfyBaseUrlFor('wf-video')).toBe('http://video-server:8189');
   });
 
-  it('没绑定、绑定的服务端已删除、或没传工作流时都回落到默认地址', () => {
+  it('仅没绑定或没传工作流时使用默认地址', () => {
     expect(comfyBaseUrlFor('wf-image')).toBe('http://image-server:8188');
     expect(comfyBaseUrlFor()).toBe('http://image-server:8188');
-    // 服务端被删掉后，绑过它的工作流不能因为找不到地址就报错
+  });
+
+  it('显式绑定已删除或地址无效时拒绝，不回落到默认服务器', async () => {
     mocks.storeState.config.comfyServers = [];
-    expect(comfyBaseUrlFor('wf-video')).toBe('http://image-server:8188');
+    expect(() => comfyBaseUrlFor('wf-video')).toThrow('不存在');
+    await expect(executeComfyUIVideoGenerate({ prompt: 'test', model: 'wf', provider: 'comfyui', workflowId: 'wf-video' }))
+      .rejects.toThrow('不存在');
+    expect(mocks.corsSafeFetch).not.toHaveBeenCalled();
+    for (const url of ['', 'file:///tmp/models', 'not-a-url']) {
+      mocks.storeState.config.comfyServers = [{ id: 'video-1', name: '视频服务器', url }];
+      expect(() => comfyBaseUrlFor('wf-video')).toThrow('地址无效');
+    }
+    expect(() => comfyBaseUrlFor('deleted-workflow')).toThrow('工作流不存在');
   });
 
   it('提交与轮询都走绑定的那台服务端，不碰默认地址', async () => {
