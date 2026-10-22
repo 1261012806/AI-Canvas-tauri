@@ -16,6 +16,7 @@ import { applyAppearanceTheme, installSystemAppearanceListener, resolveAppearanc
 import { getBuiltinAppearanceTheme, normalizeAppearanceTheme } from '../../services/appearance/appearanceDefaults';
 import { getAppearanceForConfig } from '../../services/appearance/appearanceMigration';
 import { createAppearanceUiSnapshot, listenForStyleGuideAppearance, requestStyleGuideAppearance } from '../../services/appearance/appearanceWindowSync';
+import { useTooltipAutoPlacement } from '../../hooks/useTooltipAutoPlacement';
 
 type GuideTheme = 'dark' | 'light';
 type GuidePreviewMode = 'follow' | GuideTheme;
@@ -27,6 +28,7 @@ const getSystemMode = () => resolveAppearanceMode('system');
 const getServerMode = (): GuideTheme => 'dark';
 
 export default function StyleGuideWindow() {
+  useTooltipAutoPlacement();
   const t = useT();
   const systemMode = useSyncExternalStore(installSystemAppearanceListener, getSystemMode, getServerMode);
   const [appearance, setAppearance] = useState<AppearanceUiSnapshot>(() => createAppearanceUiSnapshot(getBuiltinAppearanceTheme('standard-dark')));

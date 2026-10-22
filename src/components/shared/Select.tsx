@@ -126,6 +126,8 @@ export default function Select<T extends string = string>({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef(false);
+  // 菜单收起会重建键盘监听，配对释放状态需保留到本次 Esc 松开。
+  const cancelledEscapeRef = useRef(false);
   const customEditing = !!customInput;
   const menuId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -146,16 +148,22 @@ export default function Select<T extends string = string>({
   }, [expanded, customEditing]);
 
   useEffect(() => {
-    if (disabled) return;
+    if (disabled) { cancelledEscapeRef.current = false; return; }
     const keydown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Escape' && cancelledEscapeRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       const target = event.target as Node;
       if (!wrapRef.current?.contains(target) && !menuRef.current?.contains(target)) return;
       if (customEditing && target === inputRef.current && !expanded) {
-        if (event.isComposing) return;
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault();
           setOpen(true);
         } else if (event.key === 'Enter' || event.key === 'Escape') {
+          if (event.key === 'Escape') cancelledEscapeRef.current = true;
           event.preventDefault();
           inputRef.current?.blur();
         }
@@ -179,6 +187,7 @@ export default function Select<T extends string = string>({
         setOpen(false);
         (customEditing ? inputRef.current : triggerRef.current)?.focus({ preventScroll: true });
         if (event.key === 'Escape') {
+          cancelledEscapeRef.current = true;
           event.preventDefault();
           event.stopImmediatePropagation();
         }
@@ -206,9 +215,22 @@ export default function Select<T extends string = string>({
       items[next]?.focus({ preventScroll: true });
       items[next]?.scrollIntoView({ block: 'nearest' });
     };
+    const keyup = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !cancelledEscapeRef.current) return;
+      cancelledEscapeRef.current = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const resetEscape = () => { cancelledEscapeRef.current = false; };
     // 比父弹窗的 document 捕获监听更早处理 Escape，先关闭当前下拉。
     window.addEventListener('keydown', keydown, true);
-    return () => window.removeEventListener('keydown', keydown, true);
+    window.addEventListener('keyup', keyup, true);
+    window.addEventListener('blur', resetEscape);
+    return () => {
+      window.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('keyup', keyup, true);
+      window.removeEventListener('blur', resetEscape);
+    };
   }, [disabled, expanded, customEditing]);
 
   useEffect(() => {
@@ -250,10 +272,6 @@ export default function Select<T extends string = string>({
       menu.style.left = `${position.left}px`;
     };
     updatePosition();
-    const selectedOption = menu.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (selectedOption) {
-      menu.scrollTop = Math.max(0, selectedOption.offsetTop - (menu.clientHeight - selectedOption.offsetHeight) / 2);
-    }
     const observer = new ResizeObserver(updatePosition);
     observer.observe(menu);
     if (wrapRef.current) observer.observe(wrapRef.current);
@@ -266,6 +284,16 @@ export default function Select<T extends string = string>({
       menu.removeAttribute('style');
     };
   }, [expanded, fixedMenu]);
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!expanded || !menu) return;
+    const option = menu.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]:not(:disabled)')
+      ?? menu.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
+    (option ?? menu).focus({ preventScroll: true });
+    // 只滚动菜单自身，避免 Portal 菜单聚焦时带动父弹窗或页面。
+    if (option) menu.scrollTop = Math.max(0, option.offsetTop - (menu.clientHeight - option.offsetHeight) / 2);
+  }, [expanded]);
 
   const sizeClass = size === 'sm' ? 'ui-select--sm' : size === 'lg' ? 'ui-select--lg' : '';
   const rootClass = `ui-select ui-select--custom nodrag nopan ${sizeClass} ${className}`.trim();
@@ -297,6 +325,7 @@ export default function Select<T extends string = string>({
     <div
       className="ui-menu overscroll-contain"
       role="listbox"
+      tabIndex={-1}
       id={menuId}
       aria-label={ariaLabel}
       ref={menuRef}

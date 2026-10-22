@@ -48,6 +48,15 @@ function roundToPrecision(val: number, precision: number): number {
   return Math.round(val * factor) / factor;
 }
 
+function parseInputValue(text: string, unit?: string): number | undefined {
+  let raw = text.trim();
+  if (unit && raw.toLowerCase().endsWith(unit.toLowerCase())) {
+    raw = raw.slice(0, -unit.length).trim();
+  }
+  const parsed = parseFloat(raw);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 export default function NumberStepper({
   value,
   onChange,
@@ -77,9 +86,16 @@ export default function NumberStepper({
   // 当用户主动编辑时使用 draftText，未编辑时直接派生当前 value
   const [draftText, setDraftText] = useState<string | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const draftTextRef = useRef<string | null>(null);
+  const updateDraftText = useCallback((text: string | null) => {
+    // blur 可能在同一事件中同步发生，提交和取消都读取即时草稿。
+    draftTextRef.current = text;
+    setDraftText(text);
+  }, []);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
+  const stopScrubRef = useRef<(() => void) | null>(null);
   const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -99,25 +115,70 @@ export default function NumberStepper({
   }, [onChange]);
 
   // 清除长按定时器
-  const clearRepeat = () => {
+  const clearRepeat = useCallback(() => {
     if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
     if (repeatIntervalRef.current) clearInterval(repeatIntervalRef.current);
     repeatTimerRef.current = null;
     repeatIntervalRef.current = null;
-  };
+  }, []);
 
-  useEffect(() => () => clearRepeat(), []);
+  useEffect(() => {
+    if (disabled) {
+      clearRepeat();
+      stopScrubRef.current?.();
+    }
+    return () => {
+      clearRepeat();
+      stopScrubRef.current?.();
+    };
+  }, [clearRepeat, disabled]);
+
+  const cancelInput = useCallback(() => {
+    updateDraftText(null);
+    inputRef.current?.blur();
+  }, [updateDraftText]);
+
+  useEffect(() => {
+    if (disabled) return;
+    let cancelledEscape = false;
+    const keydown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      if (event.target !== inputRef.current && !cancelledEscape) return;
+      // 在父弹窗的 document 捕获监听前取消编辑，本次按键只处理当前控件。
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancelledEscape = true;
+      cancelInput();
+    };
+    const keyup = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || !cancelledEscape) return;
+      cancelledEscape = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const resetEscape = () => { cancelledEscape = false; };
+    window.addEventListener('keydown', keydown, true);
+    window.addEventListener('keyup', keyup, true);
+    window.addEventListener('blur', resetEscape);
+    return () => {
+      window.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('keyup', keyup, true);
+      window.removeEventListener('blur', resetEscape);
+    };
+  }, [cancelInput, disabled]);
 
   // 步进核心处理
   const stepBy = useCallback((delta: number) => {
     if (disabled) return;
-    const current = latestValueRef.current;
+    const draft = draftTextRef.current;
+    const current = draft === null ? latestValueRef.current
+      : latestClampRef.current(parseInputValue(draft, unit) ?? latestValueRef.current);
     const next = latestClampRef.current(current + delta);
-    if (next !== current) {
+    updateDraftText(null);
+    if (next !== latestValueRef.current) {
       latestOnChangeRef.current(next);
-      setDraftText(null);
     }
-  }, [disabled]);
+  }, [disabled, unit, updateDraftText]);
 
   // 长按连续触发
   const startRepeat = (direction: 1 | -1, isShift: boolean) => {
@@ -143,7 +204,7 @@ export default function NumberStepper({
 
   // 键盘快捷响应
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (disabled) return;
+    if (disabled || e.nativeEvent?.isComposing || e.nativeEvent?.keyCode === 229) return;
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       const delta = e.shiftKey ? step * shiftMultiplier : step;
@@ -155,8 +216,9 @@ export default function NumberStepper({
     } else if (e.key === 'Enter') {
       e.currentTarget.blur();
     } else if (e.key === 'Escape') {
-      setDraftText(null);
-      e.currentTarget.blur();
+      e.preventDefault();
+      e.stopPropagation();
+      cancelInput();
     }
   };
 
@@ -171,22 +233,18 @@ export default function NumberStepper({
 
   // 提交输入框文本
   const commitInput = () => {
-    if (draftText === null) return;
-    let raw = draftText.trim();
-    // 自动剥离尾部附带的单位字符（如 40px -> 40）
-    if (unit && raw.toLowerCase().endsWith(unit.toLowerCase())) {
-      raw = raw.slice(0, -unit.length).trim();
-    }
-    const parsed = parseFloat(raw);
-    const next = isNaN(parsed) ? clamp(value) : clamp(parsed);
+    const draft = draftTextRef.current;
+    if (draft === null) return;
+    const next = clamp(parseInputValue(draft, unit) ?? value);
+    updateDraftText(null);
     onChange(next);
-    setDraftText(null);
   };
 
   // 水平拖拽微调 (Scrubbing)
   const handleDragMouseDown = (e: React.MouseEvent) => {
     if (disabled || e.button !== 0) return;
     if (document.activeElement === inputRef.current) return;
+    stopScrubRef.current?.();
 
     let hasMoved = false;
     const startX = e.clientX;
@@ -208,11 +266,12 @@ export default function NumberStepper({
       const next = latestClampRef.current(startVal + roundedDelta);
       if (next !== latestValueRef.current) {
         latestOnChangeRef.current(next);
-        setDraftText(null);
+        updateDraftText(null);
       }
     };
 
     const onMouseUp = () => {
+      stopScrubRef.current = null;
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
       document.body.classList.remove('cursor-ew-resize', 'select-none');
@@ -222,14 +281,16 @@ export default function NumberStepper({
       }
     };
 
+    stopScrubRef.current = onMouseUp;
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
   };
 
   const sizeClass = size === 'sm' ? 'ui-stepper--sm' : size === 'lg' ? 'ui-stepper--lg' : '';
 
-  const canIncrease = !disabled && value < max;
-  const canDecrease = !disabled && value > min;
+  const activeValue = clamp(draftText === null ? value : parseInputValue(draftText, unit) ?? value);
+  const canIncrease = !disabled && activeValue < max;
+  const canDecrease = !disabled && activeValue > min;
   const displayValue = draftText !== null ? draftText : String(clamp(value));
 
   return (
@@ -258,16 +319,17 @@ export default function NumberStepper({
           value={displayValue}
           disabled={disabled}
           role="spinbutton"
+          aria-label={ariaLabel}
           aria-valuenow={value}
           aria-valuemin={min !== -Infinity ? min : undefined}
           aria-valuemax={max !== Infinity ? max : undefined}
           aria-disabled={disabled}
           onFocus={() => {
-            setDraftText(String(clamp(value)));
+            updateDraftText(String(clamp(value)));
             inputRef.current?.select();
           }}
           onBlur={commitInput}
-          onChange={(e) => setDraftText(e.target.value)}
+          onChange={(e) => updateDraftText(e.target.value)}
           onKeyDown={handleKeyDown}
         />
       </div>

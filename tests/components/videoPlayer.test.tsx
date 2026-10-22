@@ -98,6 +98,13 @@ beforeEach(() => {
 afterEach(() => { scope.effects.forEach((effect) => effect.cleanup?.()); vi.unstubAllGlobals(); });
 
 describe('UI Kit VideoPlayer', () => {
+  it('紧凑播放器提供 Tab 入口以显露控件，普通播放器不额外占用焦点', () => {
+    input = { ...input, compact: true }; render();
+    expect(control('视频.mp4 视频播放器').props.tabIndex).toBe(0);
+    expect(control('视频.mp4 视频播放器').props.className).toContain('ui-video-player--compact');
+    input = { ...input, compact: false }; render();
+    expect(control('视频.mp4 视频播放器').props.tabIndex).toBeUndefined();
+  });
   it('播放时逐帧同步真实进度，暂停、结束、换源及卸载取消刷新', async () => {
     const frame = () => { const [id, callback] = frames.entries().next().value!; frames.delete(id); callback(0); };
     render(); await settle(); event('onLoadedMetadata'); expect(frames.size).toBe(0);

@@ -100,7 +100,7 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
   };
   const openFind = () => { setFindOpen(true); requestAnimationFrame(() => findInput.current?.focus()); };
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     const key = event.key.toLowerCase();
     if (event.ctrlKey || event.metaKey) {
       if (key === 's' && onSave) { event.preventDefault(); event.stopPropagation(); onSave(); }
@@ -144,7 +144,10 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
       {onSave && <button type="button" className="ui-btn ui-btn--sm ui-btn--primary ml-auto" disabled={readOnly} onClick={onSave}><Icon icon="lucide:save" />保存</button>}
     </div>
     {findOpen && <div className="ui-markdown-editor__toolbar" role="search" aria-label="查找替换">
-      <input ref={findInput} className="ui-input ui-input--sm min-w-0 flex-1" aria-label="查找内容" placeholder="查找内容" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); find(); } }} />
+      <input ref={findInput} className="ui-input ui-input--sm min-w-0 flex-1" aria-label="查找内容" placeholder="查找内容" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+        if (event.key === 'Enter') { event.preventDefault(); find(); }
+      }} />
       <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={find}>下一个</button>
       {!readOnly && <><input className="ui-input ui-input--sm min-w-0 flex-1" aria-label="替换为" placeholder="替换为" value={replacement} onChange={(event) => setReplacement(event.target.value)} />
         <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={() => replace(false)}>替换</button>

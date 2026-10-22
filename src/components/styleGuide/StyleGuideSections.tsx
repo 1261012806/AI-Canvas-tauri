@@ -20,7 +20,7 @@ import FileUploadButton from '../shared/FileUploadButton';
 import ProviderBadge from '../shared/ProviderBadge';
 import Toast from '../Toast';
 import { useAppStore } from '../../store/useAppStore';
-import { memo, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from 'react';
 import { MotionConfig } from 'framer-motion';
 import StyleGuideMascot from './StyleGuideMascot';
 import StyleGuideGenerationEffects from './StyleGuideGenerationEffects';
@@ -283,12 +283,12 @@ function ButtonsSection() {
         </div>
       </Demo>
 
-      <Demo label="状态" code=":disabled / .is-active / .is-loading（内部放 .ui-spinner）">
+      <Demo label="状态" code=":disabled / .is-active / .is-loading + disabled + aria-busy（内部放 .ui-spinner）">
         <div className="ui-row">
           <button type="button" className="ui-btn ui-btn--secondary" disabled>禁用</button>
           <button type="button" className="ui-btn ui-btn--secondary is-active">选中</button>
-          <button type="button" className="ui-btn ui-btn--primary is-loading">
-            <span className="ui-spinner" />处理中
+          <button type="button" className="ui-btn ui-btn--primary is-loading" disabled aria-busy="true">
+            <span className="ui-spinner" aria-hidden="true" />处理中…
           </button>
           <button type="button" className="ui-btn ui-btn--primary ui-btn--block">通栏 ui-btn--block</button>
         </div>
@@ -421,15 +421,25 @@ function InputsSection() {
         </div>
       </Demo>
 
-      <Demo label="说明与错误态" code=".ui-hint 说明文字 / .ui-error 校验失败 / .ui-input.is-invalid">
-        <div className="grid gap-3 sm:grid-cols-2">
+      <Demo label="字段状态对照" code=".ui-input / readOnly / disabled / .is-invalid + aria-invalid / .ui-hint / .ui-error">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="ui-field">
-            <label className="ui-label" htmlFor="sg-input-hint">连接名称</label>
-            <input id="sg-input-hint" className="ui-input" defaultValue="OpenAI 主账号" />
-            <p className="ui-hint">仅本地保存，用于区分多个厂商连接</p>
+            <label className="ui-label" htmlFor="sg-input-hint">正常 · 连接名称</label>
+            <input id="sg-input-hint" className="ui-input" defaultValue="OpenAI 主账号" aria-describedby="sg-input-hint-desc" />
+            <p id="sg-input-hint-desc" className="ui-hint">可编辑，用于区分多个厂商连接</p>
           </div>
           <div className="ui-field">
-            <label className="ui-label" htmlFor="sg-input-err">接口地址</label>
+            <label className="ui-label" htmlFor="sg-input-readonly">只读 · 配置标识</label>
+            <input id="sg-input-readonly" className="ui-input" defaultValue="config-ui-kit-example" readOnly aria-describedby="sg-input-readonly-hint" />
+            <p id="sg-input-readonly-hint" className="ui-hint">可聚焦、选择和复制，内容保持只读</p>
+          </div>
+          <div className="ui-field">
+            <label className="ui-label" htmlFor="sg-input-disabled">禁用 · 系统字段</label>
+            <input id="sg-input-disabled" className="ui-input" defaultValue="由系统生成，不可编辑" disabled aria-describedby="sg-input-disabled-hint" />
+            <p id="sg-input-disabled-hint" className="ui-hint">不可编辑，Tab 跳过该字段</p>
+          </div>
+          <div className="ui-field">
+            <label className="ui-label" htmlFor="sg-input-err">错误 · 接口地址</label>
             <input id="sg-input-err" className="ui-input is-invalid" defaultValue="not-a-url" aria-invalid="true" aria-describedby="sg-input-err-hint" />
             <p id="sg-input-err-hint" className="ui-error">请填写以 http(s):// 开头的完整地址</p>
           </div>
@@ -459,15 +469,11 @@ function InputsSection() {
         </div>
       </Demo>
 
-      <Demo label="多行文本与禁用" code=".ui-textarea（可纵向拉伸）/ :disabled">
+      <Demo label="多行文本" code=".ui-textarea（可纵向拉伸）">
         <div className="ui-field">
           <label className="ui-label" htmlFor="sg-textarea">提示词</label>
           <textarea id="sg-textarea" className="ui-textarea" defaultValue="一只在雨中奔跑的柴犬，电影感光影" />
           <p className="ui-hint">右下角可拖动改变高度</p>
-        </div>
-        <div className="ui-field">
-          <label className="ui-label" htmlFor="sg-input-disabled">禁用字段</label>
-          <input id="sg-input-disabled" className="ui-input" defaultValue="由系统生成，不可编辑" disabled />
         </div>
       </Demo>
     </Section>
@@ -521,6 +527,7 @@ function NumberStepperDemo() {
   const [angle, setAngle] = useState(90);
   const [duration, setDuration] = useState(350);
   const [scale, setScale] = useState(1.2);
+  const [draftValue, setDraftValue] = useState(-1.5);
 
   const clampedSize = Math.max(28, Math.min(val, 96));
   const dynamicRadius = Math.min(val / 3, 20);
@@ -637,6 +644,16 @@ function NumberStepperDemo() {
         </div>
       </div>
 
+      <div className="ui-card p-3">
+        <label className="ui-label" htmlFor="sg-number-draft">键入草稿与边界</label>
+        <div className="ui-row mt-2">
+          <NumberStepper id="sg-number-draft" value={draftValue} onChange={setDraftValue}
+            min={-10} max={10} step={0.5} precision={1} />
+          <output className="text-xs tabular-nums text-canvas-text-secondary">已提交值：{draftValue.toFixed(1)}</output>
+        </div>
+        <p className="ui-hint mt-2">支持负数与小数；编辑时可暂留空值或负号，Enter 或失焦提交并限制在 −10～10，Esc 放弃草稿。可键入 −2.5、99 或无效文本比较结果。</p>
+      </div>
+
       {/* 工程场景与多单位 */}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col justify-between rounded-lg border border-canvas-border bg-canvas-card p-3">
@@ -722,56 +739,114 @@ function CustomSelectDemo() {
 function DropdownMenuDemo() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState('最近修改');
+  const [result, setResult] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const closeMenu = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
+    const current = menuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]');
+    const first = menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+    (current ?? first)?.focus();
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab' && event.shiftKey) {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    const current = items.findIndex((item) => item === document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  };
+
   return (
-    <div className="ui-dropdown" ref={wrapRef}>
-      <button
-        type="button"
-        className="ui-btn ui-btn--secondary"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {selected}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-      {open ? (
-        <div className="ui-menu" role="menu">
-          <span className="ui-menu__label">排序</span>
-          {['最近修改', '名称 A→Z', '创建时间'].map((item) => (
-            <button
-              key={item}
-              type="button"
-              role="menuitem"
-              className={`ui-menu__item${selected === item ? ' is-active' : ''}`}
-              onClick={() => { setSelected(item); setOpen(false); }}
-            >
-              {item}
+    <div className="ui-stack ui-stack--tight">
+      <div className="ui-dropdown max-w-full self-start" ref={wrapRef}
+        onBlur={(event) => {
+          // 向前 Tab 保留浏览器原生顺序，焦点离开后收起。
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+        }}>
+        <button
+          ref={triggerRef}
+          id="sg-menu-trigger"
+          type="button"
+          className="ui-btn ui-btn--secondary max-w-full"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? 'sg-action-menu' : undefined}
+          onClick={() => setOpen((v) => !v)}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            event.preventDefault();
+            setOpen(true);
+          }}
+        >
+          <span className="min-w-0 truncate">{selected}</span>
+          <svg className="shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        {open ? (
+          <div ref={menuRef} id="sg-action-menu" className="ui-menu w-72 max-w-[calc(100vw-32px)]" role="menu"
+            aria-labelledby="sg-menu-trigger" onKeyDown={handleMenuKeyDown}>
+            <span className="ui-menu__label" role="presentation">排序</span>
+            {['最近修改', '名称 A→Z', '创建时间', '名称包含非常长的项目与工作区描述时，仍保持菜单宽度和完整名称提示'].map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected === item}
+                tabIndex={-1}
+                title={item}
+                className={`ui-menu__item${selected === item ? ' is-active' : ''}`}
+                onClick={() => { setSelected(item); closeMenu(); }}
+              >
+                <span className="min-w-0 truncate">{item}</span>
+              </button>
+            ))}
+            <button type="button" role="menuitemradio" aria-checked={false} tabIndex={-1} className="ui-menu__item" disabled>按使用频率排序（暂不可用）</button>
+            <div className="ui-menu__sep" role="separator" />
+            <span className="ui-menu__label" role="presentation">操作</span>
+            <button type="button" role="menuitem" tabIndex={-1} className="ui-menu__item"
+              onClick={() => { setResult('已触发导出 JSON 样例。'); closeMenu(); }}>
+              导出为 JSON
+              <span className="ui-menu__shortcut">Ctrl+E</span>
             </button>
-          ))}
-          <div className="ui-menu__sep" />
-          <span className="ui-menu__label">操作</span>
-          <button type="button" role="menuitem" className="ui-menu__item">
-            导出为 JSON
-            <span className="ui-menu__shortcut">Ctrl+E</span>
-          </button>
-          <button type="button" role="menuitem" className="ui-menu__item is-danger">
-            删除工作区
-          </button>
-        </div>
-      ) : null}
+            <button type="button" role="menuitem" tabIndex={-1} className="ui-menu__item is-danger"
+              onClick={() => { setResult('已触发删除工作区样例。'); closeMenu(); }}>
+              删除工作区
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {result && <p className="ui-hint" role="status">{result}</p>}
     </div>
   );
 }
@@ -796,7 +871,10 @@ function MenusSection() {
         <div className="pb-32">
           <DropdownMenuDemo />
           <p className="m-0 mt-2 text-[11px] text-canvas-text-muted">
-            菜单浮层用 .ui-menu--right 右对齐、.ui-menu--up 向上展开
+            ↑ / ↓ 跳过禁用项，Home / End 到首尾，Esc 关闭并返回入口，Tab 离开菜单；长名称悬停可查看全文。操作仅记录本地样例结果。
+          </p>
+          <p className="ui-hint mt-1">
+            菜单浮层用 .ui-menu--right 右对齐、.ui-menu--up 向上展开。
           </p>
         </div>
       </Demo>
@@ -875,6 +953,7 @@ function SelectionSection() {
   const [switchOff, setSwitchOff] = useState(false);
   const [slider, setSlider] = useState(65);
   const [segment, setSegment] = useState('grid');
+  const [nodeSegment, setNodeSegment] = useState('text');
 
   return (
     <Section
@@ -956,7 +1035,7 @@ function SelectionSection() {
       </Demo>
 
       <Demo label="分段控件" code=".ui-segmented > .ui-segmented__item（.is-active 表示选中）">
-        <div className="ui-segmented" role="tablist">
+        <div className="ui-segmented" role="group" aria-label="视图筛选">
           {[
             { key: 'grid', label: '网格' },
             { key: 'list', label: '列表' },
@@ -965,8 +1044,7 @@ function SelectionSection() {
             <button
               key={item.key}
               type="button"
-              role="tab"
-              aria-selected={segment === item.key}
+              aria-pressed={segment === item.key}
               className={`ui-segmented__item${segment === item.key ? ' is-active' : ''}`}
               onClick={() => setSegment(item.key)}
             >
@@ -977,7 +1055,7 @@ function SelectionSection() {
       </Demo>
 
       <Demo label="节点主题色分段" code="ui-segmented ui-segmented--node-text | --node-image | --node-video | --node-audio | --node-panorama">
-        <div className="ui-segmented ui-segmented--node-text" role="tablist">
+        <div className="ui-segmented ui-segmented--node-text" role="group" aria-label="节点类型筛选">
           {[
             { key: 'text', label: '文本' },
             { key: 'image', label: '图像' },
@@ -987,10 +1065,9 @@ function SelectionSection() {
             <button
               key={item.key}
               type="button"
-              role="tab"
-              aria-selected={segment === item.key}
-              className={`ui-segmented__item${segment === item.key ? ' is-active' : ''}`}
-              onClick={() => setSegment(item.key)}
+              aria-pressed={nodeSegment === item.key}
+              className={`ui-segmented__item${nodeSegment === item.key ? ' is-active' : ''}`}
+              onClick={() => setNodeSegment(item.key)}
             >
               {item.label}
             </button>
@@ -1271,6 +1348,20 @@ function FeedbackSection() {
             <div className="ui-alert__body">厂商连接失败：API Key 无效或已过期。</div>
           </div>
         </div>
+      </Demo>
+
+      <Demo label="悬浮提示 · 键盘与边界" code={'data-tooltip="提示内容" / data-tooltip-pos="top|bottom|left|right"；窗口根组件挂载 useTooltipAutoPlacement()'}>
+        <div className="ui-card overflow-hidden p-3">
+          <div className="ui-row">
+            <button type="button" className="ui-btn ui-btn--secondary" data-tooltip="鼠标悬停或键盘聚焦后显示，提示层可越过卡片裁剪边界。">上方提示</button>
+            <button type="button" className="ui-btn ui-btn--secondary" data-tooltip-pos="bottom"
+              data-tooltip="这是一条较长的提示，用于比较明暗主题下的文字与背景，并检查窄窗口换行和视口边缘避让。缩窄窗口后，完整说明仍应保持可读。">下方长提示</button>
+            <button type="button" className="ui-icon-btn" aria-label="侧边提示示例" data-tooltip-pos="right" data-tooltip="靠近窗口边缘时自动避让">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6m0-10v1" /></svg>
+            </button>
+          </div>
+        </div>
+        <p className="ui-hint mt-2">用 Tab 聚焦或悬停查看；滚动、缩窄窗口和切换主题，比较提示位置、换行与对比度。</p>
       </Demo>
 
       <Demo label="进度与加载" code=".ui-progress（--success / --danger / --indeterminate）/ .ui-spinner / .ui-skeleton">
@@ -1704,7 +1795,7 @@ export const STYLE_GUIDE_GROUPS = [
   {
     id: 'feedback', title: '反馈与浮层', description: '解释结果、提示等待与承载临时任务。',
     sections: [
-      { id: 'sg-feedback', title: '提示与状态', keywords: ['ui-alert', 'ui-progress', 'ui-spinner', 'ui-skeleton', 'ui-empty', '进度', '加载', '骨架屏', '空状态'], component: FeedbackSection },
+      { id: 'sg-feedback', title: '提示与状态', keywords: ['ui-alert', 'ui-progress', 'ui-spinner', 'ui-skeleton', 'ui-empty', 'data-tooltip', 'Tooltip', '悬浮提示', '进度', '加载', '骨架屏', '空状态'], component: FeedbackSection },
       { id: 'sg-toast', title: '吐司提示', keywords: ['Toast', 'showToast', 'dismissToast', '通知', '成功', '信息', '错误'], component: ToastSection },
       { id: 'sg-dialogs', title: '弹窗', keywords: ['ModalOverlay', 'PopupCloseButton', 'dialog', '确认', '表单', '遮罩'], component: DialogsSection },
     ],

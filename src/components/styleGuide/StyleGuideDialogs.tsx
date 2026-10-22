@@ -2,6 +2,7 @@ import { useCallback, useState, type FormEvent } from 'react';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import Select from '../shared/Select';
+import NumberStepper from '../shared/NumberStepper';
 
 const EXAMPLES = [
   { kind: 'basic', label: '普通弹窗', title: '普通弹窗示例' },
@@ -21,6 +22,7 @@ export default function StyleGuideDialogs() {
   const [name, setName] = useState('我的示例配置');
   const [description, setDescription] = useState('编辑名称与说明，查看表单、按钮和焦点交互。');
   const [backgroundKind, setBackgroundKind] = useState('color');
+  const [count, setCount] = useState(40);
   const [result, setResult] = useState('选择一个样例打开弹窗。');
   const example = EXAMPLES.find((item) => item.kind === kind)!;
   const close = useCallback(() => setIsOpen(false), []);
@@ -109,6 +111,14 @@ export default function StyleGuideDialogs() {
                 <span className="ui-label">说明</span>
                 <textarea className="ui-textarea" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
               </label>
+              <div className="ui-field">
+                <label className="ui-label" htmlFor="sg-dialog-count">次数</label>
+                <div className="ui-row">
+                  <NumberStepper id="sg-dialog-count" value={count} onChange={setCount} min={0} max={100} />
+                  <output className="text-xs tabular-nums text-canvas-text-secondary">已提交值：{count}</output>
+                </div>
+                <span className="ui-hint">编辑数值后，首次 Esc 取消草稿并保留弹窗，再按 Esc 关闭弹窗。示例值仅保留在本窗口。</span>
+              </div>
               <div className="ui-field">
                 <label className="ui-label" htmlFor="sg-dialog-background">背景类型</label>
                 <Select id="sg-dialog-background" value={backgroundKind} onChange={setBackgroundKind}

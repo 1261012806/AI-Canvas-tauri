@@ -272,7 +272,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   }, [menu]);
 
   return (
-    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} aria-label={`${name} 视频播放器`}>
+    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} tabIndex={compact ? 0 : undefined} aria-label={`${name} 视频播放器`}>
         <div className="ui-video-player__view">
         {src && active ? <>
           <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="metadata" aria-label={`${name} 视频播放`}

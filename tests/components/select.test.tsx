@@ -3,11 +3,12 @@ import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const hooks = vi.hoisted(() => ({ states: [] as unknown[], cursor: 0, effects: [] as Array<() => void | (() => void)>, layouts: [] as Array<() => void | (() => void)> }));
+const hooks = vi.hoisted(() => ({ states: [] as unknown[], cursor: 0, refs: [] as Array<{ current: unknown }>, refCursor: 0,
+  effects: [] as Array<() => void | (() => void)>, layouts: [] as Array<() => void | (() => void)> }));
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   useId: () => 'select-test',
-  useRef: <T,>(value: T) => ({ current: value }),
+  useRef: <T,>(value: T) => hooks.refs[hooks.refCursor++] ??= { current: value },
   useEffect: (callback: () => void | (() => void)) => hooks.effects.push(callback),
   useLayoutEffect: (callback: () => void | (() => void)) => hooks.layouts.push(callback),
   useState: <T,>(initial: T) => {
@@ -42,6 +43,8 @@ function event(key?: string, target?: unknown) {
 beforeEach(() => {
   hooks.states = [];
   hooks.cursor = 0;
+  hooks.refs = [];
+  hooks.refCursor = 0;
   hooks.effects = [];
   hooks.layouts = [];
   vi.stubGlobal('document', { body: {}, addEventListener: vi.fn(), removeEventListener: vi.fn(), activeElement: null });
@@ -128,7 +131,7 @@ describe('共享 Select 迁移语义', () => {
       },
       get offsetHeight() { return Math.min(320, Number.parseFloat(this.style.maxHeight) || 320); },
       get clientHeight() { return this.offsetHeight; },
-      querySelector: () => ({ offsetTop: 900, offsetHeight: 28 }),
+      querySelector: () => ({ offsetTop: 900, offsetHeight: 28, focus: vi.fn() }),
       removeAttribute: vi.fn(),
     };
     tree.props.ref.current = { getBoundingClientRect: () => rect, zIndex: 'auto', parentElement: { zIndex: '10000', parentElement: null } };
@@ -146,6 +149,70 @@ describe('共享 Select 迁移语义', () => {
     cleanups.forEach((cleanup) => cleanup?.());
   });
 
+  it.each([
+    { description: '当前选中项可用', selectedEnabled: true, hasEnabled: true },
+    { description: '选中项禁用或不存在', selectedEnabled: false, hasEnabled: true },
+    { description: '没有可用选项', selectedEnabled: false, hasEnabled: false },
+  ])('容器内菜单打开后聚焦可用选项，$description', ({ selectedEnabled, hasEnabled }) => {
+    hooks.states = [true, false];
+    const tree = Select({ value: 'chosen', fixedMenu: false, onChange: vi.fn(), options: [
+      { value: 'first', label: '第一项', disabled: !hasEnabled },
+      { value: 'chosen', label: '当前项', disabled: !selectedEnabled },
+    ] });
+    const menuNode = elements(tree).find((node) => node.props.role === 'listbox')!;
+    const chosen = { offsetTop: 240, offsetHeight: 28, focus: vi.fn() };
+    const first = { offsetTop: 0, offsetHeight: 28, focus: vi.fn() };
+    const menu = {
+      clientHeight: 100, scrollTop: 0, focus: vi.fn(), removeAttribute: vi.fn(),
+      querySelector: (selector: string) => selector.includes('aria-selected')
+        ? (selectedEnabled ? chosen : null) : (hasEnabled ? first : null),
+    };
+    menuNode.props.ref!.current = menu;
+    hooks.layouts.forEach((layout) => layout());
+    expect((selectedEnabled ? chosen : hasEnabled ? first : menu).focus)
+      .toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+    expect(menu.scrollTop).toBe(selectedEnabled ? 204 : 0);
+  });
+
+  it('打开时从当前选中项继续方向键导航，Enter 提交相邻项', () => {
+    hooks.states = [true, false];
+    const change = vi.fn();
+    const tree = Select({ value: 'b', fixedMenu: false, onChange: change, options: [
+      { value: 'a', label: '一' }, { value: 'b', label: '二' }, { value: 'c', label: '三' },
+    ] });
+    const nodes = elements(tree);
+    const trigger = { focus: vi.fn() };
+    nodes.find((node) => node.props['aria-haspopup'] === 'listbox')!.props.ref!.current = trigger;
+    tree.props.ref.current = { contains: (target: unknown) => target === trigger };
+    const controls = nodes.filter((node) => node.props.role === 'option').map((node, index) => {
+      const control = {
+        offsetTop: index * 28, offsetHeight: 28,
+        focus: vi.fn(() => { Object.assign(document, { activeElement: control }); }),
+        click: vi.fn(() => invoke(node, 'onClick', event())),
+        scrollIntoView: vi.fn(),
+      };
+      return control;
+    });
+    nodes.find((node) => node.props.role === 'listbox')!.props.ref!.current = {
+      clientHeight: 100, scrollTop: 0, removeAttribute: vi.fn(),
+      querySelector: (selector: string) => selector.includes('aria-selected') ? controls[1] : controls[0],
+      querySelectorAll: () => controls,
+      contains: (target: unknown) => controls.includes(target as typeof controls[number]),
+    };
+    hooks.layouts.forEach((layout) => layout());
+    expect(document.activeElement).toBe(controls[1]);
+    const cleanup = hooks.effects[0]();
+    const registration = vi.mocked(window.addEventListener).mock.calls.find(([name]) => name === 'keydown')!;
+    const dispatch = registration[1] as (event: unknown) => void;
+    dispatch(event('ArrowDown', controls[1]));
+    expect(document.activeElement).toBe(controls[2]);
+    dispatch(event('Enter', controls[2]));
+    expect(change).toHaveBeenCalledExactlyOnceWith('c');
+    expect(hooks.states[0]).toBe(false);
+    expect(trigger.focus).toHaveBeenCalled();
+    cleanup?.();
+  });
+
   it('Escape 在父弹窗捕获监听前收起菜单', () => {
     hooks.states = [true, false];
     const tree = Select({ value: 'x', onChange: vi.fn(), options: [{ value: 'x', label: 'X' }] });
@@ -161,6 +228,69 @@ describe('共享 Select 迁移语义', () => {
     expect(hooks.states[0]).toBe(false);
     expect(escape.stopImmediatePropagation).toHaveBeenCalledOnce();
     expect(target.focus).toHaveBeenCalledOnce();
+    cleanup?.();
+  });
+
+  it('Escape 收起重渲染后仍消费连按和配对释放，下次独立 Escape 可交给父层', () => {
+    const props = { value: 'x', onChange: vi.fn(), options: [{ value: 'x', label: 'X' }] };
+    hooks.states = [true, false];
+    const tree = Select(props);
+    const target = { focus: vi.fn() };
+    const nodes = elements(tree);
+    nodes.find((node) => node.props['aria-haspopup'] === 'listbox')!.props.ref!.current = target;
+    const menuRef = nodes.find((node) => node.props.role === 'listbox')!.props.ref!;
+    tree.props.ref.current = { contains: (node: unknown) => node === target };
+    const cleanup = hooks.effects[0]();
+    const listener = (type: string) => vi.mocked(window.addEventListener).mock.calls
+      .filter(([name]) => name === type).at(-1)![1] as (event: unknown) => void;
+    listener('keydown')(event('Escape', target));
+    expect(hooks.states[0]).toBe(false);
+    cleanup?.(); menuRef.current = null;
+    hooks.cursor = hooks.refCursor = 0; hooks.effects = []; hooks.layouts = [];
+    Select(props);
+    const nextCleanup = hooks.effects[0]();
+    const repeated = { ...event('Escape', target), repeat: true };
+    listener('keydown')(repeated);
+    expect(repeated.stopImmediatePropagation).toHaveBeenCalledOnce();
+    const release = event('Escape', target);
+    listener('keyup')(release);
+    expect(release.preventDefault).toHaveBeenCalledOnce();
+    expect(release.stopImmediatePropagation).toHaveBeenCalledOnce();
+    const nextEscape = event('Escape', target);
+    listener('keydown')(nextEscape);
+    expect(nextEscape.stopImmediatePropagation).not.toHaveBeenCalled();
+    const nextRelease = event('Escape', target);
+    listener('keyup')(nextRelease);
+    expect(nextRelease.stopImmediatePropagation).not.toHaveBeenCalled();
+    nextCleanup?.();
+  });
+
+  it('自定义输入 Escape 失焦后消费释放，窗口失焦清除未释放状态', () => {
+    const onBlur = vi.fn();
+    const tree = Select({ value: 'custom', onChange: vi.fn(), options: [{ value: 'custom', label: '自定义' }],
+      customInput: { value: '自定义值', onChange: vi.fn(), onBlur } });
+    const input = elements(tree).find((node) => node.type === 'input')!;
+    const target = { blur: vi.fn(() => invoke(input, 'onBlur', {})) };
+    input.props.ref!.current = target;
+    tree.props.ref.current = { contains: (node: unknown) => node === target };
+    const cleanup = hooks.effects[0]();
+    const listener = (type: string) => vi.mocked(window.addEventListener).mock.calls
+      .find(([name]) => name === type)![1] as (event: unknown) => void;
+    const escape = event('Escape', target);
+    listener('keydown')(escape);
+    expect(target.blur).toHaveBeenCalledOnce(); expect(onBlur).toHaveBeenCalledOnce();
+    expect(escape.stopImmediatePropagation).toHaveBeenCalledOnce();
+    const release = event('Escape', {});
+    listener('keyup')(release);
+    expect(release.stopImmediatePropagation).toHaveBeenCalledOnce();
+    listener('keydown')(event('Escape', target));
+    listener('blur')({});
+    const afterBlur = event('Escape', {});
+    listener('keyup')(afterBlur);
+    expect(afterBlur.stopImmediatePropagation).not.toHaveBeenCalled();
+    const unrelated = event('Escape', {});
+    listener('keydown')(unrelated);
+    expect(unrelated.stopImmediatePropagation).not.toHaveBeenCalled();
     cleanup?.();
   });
 
