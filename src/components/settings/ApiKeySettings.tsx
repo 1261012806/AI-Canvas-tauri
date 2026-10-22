@@ -17,6 +17,7 @@ import {
 import {
   parseConnectionShare,
   serializeConnection,
+  type ConnectionImportDiagnostic,
 } from '../../services/ai/providerConnectionTransfer';
 import { copyText } from '../../services/clipboardService';
 import { exportJsonTextFile, readJsonTextFile, JsonFileTransferError } from '../../services/fileService';
@@ -30,7 +31,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import ProviderBadge from '../shared/ProviderBadge';
 import { defaultModelGroups } from '../nodes/shared/defaultModels';
-import { shouldListProviderConnection } from './apiKeySettingsUtils';
+import { getCustomConnectionReadiness, shouldListProviderConnection } from './apiKeySettingsUtils';
 import { deleteAppSecret, isSecretStoreAvailable } from '../../services/providerSecretService';
 import { testProviderConnection } from '../../services/testConnection';
 import { replaceLegacyApimartOmni } from '../../services/ai/apimartVideoModels';
@@ -78,6 +79,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   const importFileRef = useRef<HTMLInputElement>(null);
   const importBusyRef = useRef(false);
   const [importBusy, setImportBusy] = useState(false);
+  const [importDiagnostics, setImportDiagnostics] = useState<ConnectionImportDiagnostic[]>([]);
   const siteSwitchBusyRef = useRef(false);
   const [switchingSite, setSwitchingSite] = useState<string | null>(null);
   const unreadSecrets = useAppStore((state) => state.configSecretReadErrors);
@@ -454,9 +456,15 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
   /** 从用户选择的 JSON 文件导入自定义连接；保存后补填 API Key。 */
   const importConnectionFile = async (file: File) => {
+    setImportDiagnostics([]);
     const parsed = parseConnectionShare(await readJsonTextFile(file));
     if (!parsed) {
       useAppStore.getState().showToast(t('文件里没有有效的连接配置'), 'error');
+      return;
+    }
+    if (parsed.diagnostics.length) {
+      setImportDiagnostics(parsed.diagnostics);
+      useAppStore.getState().showToast(t('连接配置未导入，请修正下方列出的模型配置问题后重试'), 'error');
       return;
     }
     const definition = getProviderDefinition(parsed.catalogId);
@@ -689,6 +697,25 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="settings-pane-body provider-settings-body">
+        {importDiagnostics.length > 0 && (
+          <div role="alert" className="ui-alert ui-alert--danger flex-col items-stretch gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <strong>{t('连接配置未导入，请修正下方列出的模型配置问题后重试')}</strong>
+              <button type="button" className="ui-btn ui-btn--sm shrink-0" onClick={() => setImportDiagnostics([])}>
+                {t('关闭')}
+              </button>
+            </div>
+            <ul className="max-h-56 space-y-2 overflow-y-auto text-xs">
+              {importDiagnostics.map((issue, index) => (
+                <li key={`${issue.path}:${index}`} className="break-words">
+                  {issue.modelName && <strong>{issue.modelName}{issue.modelId && issue.modelId !== issue.modelName ? ` · ${issue.modelId}` : ''}</strong>}
+                  <div className="font-mono">{issue.path}</div>
+                  <div>{t(issue.message)}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {!secretStoreAvailable && (
           <p className="provider-secret-warning">
             <Icon icon="mdi:shield-alert-outline" width="14" />
@@ -739,6 +766,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                 : definition.id === 'custom-openai'
                   ? item.config.name.trim() || definition.name
                   : isWorkflowApi ? item.config.name.trim() || t(definition.name) : definition.name;
+              const customReadiness = definition.id === 'custom-openai'
+                ? getCustomConnectionReadiness(item.config.selectedModels) : undefined;
               const statusLabel = isDreamina
                 ? t('OAuth 已连接')
                 : isRunningHub
@@ -747,7 +776,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                     ? t('{configured}/{count} 组已配置', { configured: cccKeyCount, count: cccConnections.length })
                   : isPendingApiKey
                     ? t('待填写 API Key')
-                    : isWorkflowApi ? t('已配置') : t('已连接');
+                    : isWorkflowApi ? t('已配置') : customReadiness ? t('Key 已填写') : t('已连接');
               return (
                 <Fragment key={item.id}>
                 <div className={`provider-connection-card${isRunningHub ? ' provider-connection-card--runninghub' : ''}`}>
@@ -758,6 +787,13 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                       <span className={`provider-list-status${isPendingApiKey || (isRunningHub && runningHubKeyCount < 2) || (isCcc && cccKeyCount < cccConnections.length) ? ' is-limited' : ''}`}>
                         {statusLabel}
                       </span>
+                      {customReadiness && (
+                        <span className={`provider-list-status${customReadiness !== 'ready' ? ' is-limited' : ''}`}
+                          data-tooltip={t('仅校验本地配置，不代表实际调用已验证')}>
+                          {customReadiness === 'invalid' ? t('配置需修正')
+                            : customReadiness === 'pending' ? t('协议待配置') : t('本地校验通过')}
+                        </span>
+                      )}
                       {siteOptions && <div className="ui-segmented shrink-0" role="group" aria-label={`${displayName} · ${t('API 站点')}`} aria-busy={switchingSite === item.id}>
                         {siteOptions.map((site) => (
                           <button key={site.id} type="button"

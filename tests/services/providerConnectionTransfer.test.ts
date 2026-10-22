@@ -37,14 +37,15 @@ describe('自定义媒体连接 JSON', () => {
           maxImageReferences: 10, supportsDataUrlReference: false, resolutionField: 'resolution', hasResolutionField: true },
         imageReferenceRequestMode: 'generation-json-image-urls',
         executionProfile: { preset: 'custom', protocol: { version: 1, mode: 'sync', submit: { method: 'POST', path: '/v1/images/generations',
-          body: { model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}', resolution: '{{resolution}}' } },
+          body: { model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}', size: '{{size}}', n: '{{n}}' } },
           resultUrlPath: 'data.0.url' } } },
       { id: 'video-fixture', name: '视频', category: 'video', provider: 'custom-original',
         videoCapability: { resolutions: ['480p', '720p', '1080p'], defaultResolution: '720p', ratios: ['16:9', '9:16'],
           defaultRatio: '16:9', minDuration: 4, maxDuration: 30, defaultDuration: 5, frameRates: [24], defaultFrameRate: 24,
           maxImageReferences: 10, maxVideoReferences: 3, maxAudioReferences: 3 },
         executionProfile: { preset: 'custom', protocol: { version: 1, mode: 'sync', submit: { method: 'POST', path: '/v1/videos',
-          body: { model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}', videos: '{{videoUrls}}', audios: '{{audioUrls}}' } },
+          body: { model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}', videos: '{{videoUrls}}', audios: '{{audioUrls}}',
+            resolution: '{{resolution}}', ratio: '{{aspectRatio}}', duration: '{{duration}}' } },
           resultUrlPath: 'url' } } },
     ];
     const text = serializeConnection({ name: '自定义渠道', catalogId: 'custom-openai', apiKey: 'private-fixture',
@@ -53,6 +54,7 @@ describe('自定义媒体连接 JSON', () => {
     expect(text).not.toContain('private-fixture');
     expect(text).not.toContain('secret:provider');
     const parsed = parseConnectionShare(text)!;
+    expect(parsed.diagnostics).toEqual([]);
     const expectedModels = models.map((model) => ({ ...model, provider: '', categoryManual: false }));
     expect(parsed.config.selectedModels).toEqual(expectedModels);
     expect(parsed.config.catalogModels).toEqual(expectedModels);
@@ -65,5 +67,49 @@ describe('自定义媒体连接 JSON', () => {
     expect(parseConnectionShare(text)!.config.selectedModels![0].imageCapability).toBeUndefined();
     expect(parseConnectionShare('{')).toBeNull();
     expect(parseConnectionShare('{"connection":{}}')).toBeNull();
+  });
+
+  it('逐模型报告非法协议与未知预设，不把删除协议后的模型留在启用列表', () => {
+    const payload = JSON.parse(serializeConnection({ name: '自定义', catalogId: 'custom-openai', apiKey: '', selectedModels: [] }));
+    payload.connection.selectedModels = [
+      { id: 'valid', category: 'text' },
+      { id: 'bad-path', name: '路径错误', category: 'video', executionProfile: { preset: 'custom', protocol: {
+        version: 2, mode: 'sync', submit: { method: 'POST', path: 'https://example.test/private?key=private-fixture' },
+        response: { type: 'json', result: { urlPath: 'url' } },
+      } } },
+      { id: 'future', name: '未知预设', category: 'video', executionProfile: { preset: 'future-video' } },
+    ];
+    const parsed = parseConnectionShare(JSON.stringify(payload))!;
+    expect(parsed.config.selectedModels?.map((model) => model.id)).toEqual(['valid']);
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'bad-path', path: 'connection.selectedModels.1.executionProfile.protocol.submit.path' }),
+      expect.objectContaining({ modelId: 'future', path: 'connection.selectedModels.2.executionProfile.preset' }),
+    ]));
+    expect(JSON.stringify(parsed.diagnostics)).not.toContain('private-fixture');
+    expect(JSON.stringify(parsed.diagnostics)).not.toContain('https://example.test');
+  });
+
+  it('目录中的非法配置也阻止整批导入，结果类别错误定位到结果映射', () => {
+    const payload = JSON.parse(serializeConnection({ name: '视频', catalogId: 'custom-openai', apiKey: '',
+      selectedModels: [{ id: 'valid', category: 'text', name: '文本', provider: '' }] }));
+    payload.connection.catalogModels = [{ id: 'wrong-result', category: 'video', executionProfile: { preset: 'custom', protocol: {
+      version: 2, mode: 'sync', submit: { method: 'POST', path: '/generate' },
+      response: { type: 'json', result: { textPath: 'prompt' } },
+    } } }];
+    const parsed = parseConnectionShare(JSON.stringify(payload))!;
+    expect(parsed.diagnostics[0]).toMatchObject({ modelId: 'wrong-result', path: 'connection.catalogModels.0.executionProfile.protocol.response.result' });
+    expect(parsed.config.catalogModels).toEqual([]);
+  });
+
+  it('未声明的可选能力及未配置协议保留为待配置，不要求补全参数', () => {
+    const text = serializeConnection({ name: '待配置', catalogId: 'custom-openai', apiKey: '', selectedModels: [
+      { id: 'video-empty', name: '待配置视频', category: 'video', provider: '' },
+      { id: 'image-empty', name: '待配置图片', category: 'image', provider: '', imageCapability: {} },
+    ] });
+    const parsed = parseConnectionShare(text)!;
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.config.selectedModels).toHaveLength(2);
+    expect(parsed.config.selectedModels![0].videoCapability).toBeUndefined();
+    expect(parsed.config.selectedModels![1].imageCapability).toEqual({});
   });
 });

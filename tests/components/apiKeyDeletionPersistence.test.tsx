@@ -381,6 +381,38 @@ describe('自定义连接 JSON 文件入口', () => {
     expect(Object.keys(driver.state().config.providers)).toEqual(before);
   });
 
+  it('非法模型报告精确位置且整批不保存，不把有效模型部分导入', async () => {
+    const before = structuredClone(driver.state().config.providers);
+    const payload = JSON.parse(serializeConnection({ name: '拒绝导入', catalogId: 'custom-openai', apiKey: '', selectedModels: [
+      { id: 'valid', name: '有效文本', category: 'text', provider: '' },
+    ] }));
+    payload.connection.selectedModels.push({ id: 'wrong-video', name: '视频返回文本', category: 'video', executionProfile: {
+      preset: 'custom', protocol: { version: 2, mode: 'sync', submit: { method: 'POST', path: '/generate' },
+        response: { type: 'json', result: { textPath: 'prompt' } } },
+    } });
+    driver.readJson.mockResolvedValue(JSON.stringify(payload));
+    await chooseFile(new File(['fixture'], 'invalid.json'));
+    expect(driver.toast).toHaveBeenCalledWith('连接配置未导入，请修正下方列出的模型配置问题后重试', 'error');
+    expect(driver.state().config.providers).toEqual(before);
+    expect(driver.state().setPendingApiKeyConnectionId).not.toHaveBeenCalled();
+    expect(find(render(), (element) => element.props.children === 'connection.selectedModels.1.executionProfile.protocol.response.result')).toBeDefined();
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(Object.values(fresh.getState().config.providers).some((connection) => connection.name === '拒绝导入')).toBe(false);
+  });
+
+  it('自定义连接把 Key 填写和本地协议校验分开显示，不冒充已连接', () => {
+    driver.state().setProviderConfig('custom-1', { apiKey: 'private-fixture', selectedModels: [
+      { id: 'v', name: '待配置视频', category: 'video', provider: 'custom-1' },
+    ] });
+    const card = find(render(), (element) => typeof element.props.className === 'string'
+      && element.props.className.split(' ').includes('provider-connection-card')
+      && !!find(element.props.children, (child) => child.props.children === '待删除连接'))!;
+    expect(find(card, (element) => element.props.children === 'Key 已填写')).toBeDefined();
+    expect(find(card, (element) => element.props.children === '协议待配置')).toBeDefined();
+    expect(find(card, (element) => element.props.children === '已连接')).toBeUndefined();
+  });
+
   it.each([
     ['too-large', 'JSON 文件不能超过 8 MiB'], ['invalid-utf8', '文件必须使用 UTF-8 编码'],
   ] as const)('文件读取错误 %s 给出提示且不保存', async (code, message) => {

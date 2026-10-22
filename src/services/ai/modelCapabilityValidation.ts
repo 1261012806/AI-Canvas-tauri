@@ -1,7 +1,81 @@
 /** 自定义媒体模型的能力与请求映射一致性；不推断厂商参数或发送网络请求。 */
-import type { ProviderModelSelection } from '../../types';
-import type { ImageModelCapability } from '../../types/aiTypes';
+import type { GeneralModelCategory, ProviderModelSelection } from '../../types';
+import type { ImageModelCapability, ModelProtocolPresetId, NormalizedModelExecutionProtocol } from '../../types/aiTypes';
 import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
+
+const RESULT_CATEGORY_LABELS: Record<GeneralModelCategory, string> = {
+  text: '文本', image: '图片', video: '视频', audio: '音频',
+};
+
+const MODEL_PROTOCOL_PRESET_IDS: readonly ModelProtocolPresetId[] = [
+  'openai-chat', 'anthropic-chat', 'gemini-chat', 'openai-image', 'openai-gpt-image',
+  'gpt-image-gateway-json', 'google-image-native', 'xai-image-native', 'agnes-video', 'custom',
+];
+
+export function isModelProtocolPresetId(value: unknown): value is ModelProtocolPresetId {
+  return typeof value === 'string' && MODEL_PROTOCOL_PRESET_IDS.includes(value as ModelProtocolPresetId);
+}
+
+/** 请求成功和结果可交付是两项独立条件；不能把文本结果当作视频试跑成功。 */
+export function assertModelProtocolResult(
+  category: GeneralModelCategory,
+  result: { urls?: string[]; text?: string },
+): void {
+  if (category === 'text') {
+    if (typeof result.text !== 'string' || !result.text.trim()) {
+      throw new Error('请求成功，但没有解析出文本结果；请检查 response.result.textPath 或 poll.response.result.textPath');
+    }
+    return;
+  }
+  if (!result.urls?.length || result.urls.some((value) => typeof value !== 'string' || !value.trim())) {
+    throw new Error('请求成功，但没有解析出有效媒体结果地址；请检查结果 URL、Base64 或二进制下载映射');
+  }
+  for (const rawValue of result.urls) {
+    const value = rawValue.trim();
+    if (/^data:/i.test(value)) {
+      const match = /^data:([^;,]+)(?:;[^,]*)?,([\s\S]+)$/i.exec(value);
+      const mimeType = match?.[1].trim().toLowerCase();
+      if (!mimeType || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(mimeType)
+        || !mimeType.startsWith(`${category}/`) || !match?.[2].trim()) {
+        throw new Error('请求成功，但实际返回的内联媒体 MIME 类型与模型类别不匹配，请检查厂商响应与结果映射');
+      }
+      continue;
+    }
+    let url: URL;
+    try { url = new URL(value); } catch {
+      throw new Error('请求成功，但结果字段不是有效的 HTTP(S) 媒体地址，请检查结果 URL 路径是否误指向文本字段');
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+      throw new Error('请求成功，但结果字段不是无凭据的 HTTP(S) 媒体地址，请检查厂商响应与结果映射');
+    }
+  }
+}
+
+/** 检查声明的输出类别，不依赖 URL 文件后缀推断媒体类型。 */
+export function assertModelProtocolResultMapping(
+  category: GeneralModelCategory,
+  protocol: NormalizedModelExecutionProtocol,
+): void {
+  const asynchronous = protocol.mode === 'async';
+  const result = asynchronous ? protocol.poll?.response.result : protocol.response.result;
+  const location = asynchronous ? 'poll.response.result' : 'response.result';
+  const binary = !asynchronous && protocol.response.type === 'binary';
+  const text = !asynchronous && protocol.response.type === 'text';
+  const hasMediaMapping = binary || !!(result?.urlPath || result?.base64Path || result?.download);
+  if (category === 'text') {
+    if (hasMediaMapping) throw new Error(`${location}：文本模型不能使用媒体结果映射，请配置 textPath 或同步 text 响应`);
+    if (!text && !result?.textPath) {
+      throw new Error(`${location}：文本模型必须配置 textPath，或使用同步 text 响应`);
+    }
+  } else if (text || !hasMediaMapping) {
+    throw new Error(`${location}：${RESULT_CATEGORY_LABELS[category]}模型需要 URL、Base64、binary 响应或 download 映射，不能仅配置 textPath`);
+  }
+  const mimeType = result?.mimeType?.split(';')[0].trim().toLowerCase();
+  if (mimeType && mimeType !== 'application/octet-stream'
+    && !mimeType.startsWith(`${category === 'text' ? 'text' : category}/`)) {
+    throw new Error(`${location}.mimeType 与${RESULT_CATEGORY_LABELS[category]}模型类别不匹配，请按厂商文档修改结果 MIME 类型`);
+  }
+}
 
 export function assertImageModelCapability(capability: ImageModelCapability): void {
   for (const [field, defaultField] of [
@@ -83,14 +157,22 @@ export function assertConfiguredImageReferences(capability: ImageModelCapability
 
 /** 多选项必须消费动态变量；单一固定值允许由厂商协议固定输出。 */
 export function assertModelCapabilityProtocol(model: ProviderModelSelection): void {
+  if (model.executionProfile && !isModelProtocolPresetId(model.executionProfile.preset)) {
+    throw new Error('executionProfile.preset：调用协议预设不受当前应用支持');
+  }
   if (model.imageCapability) assertImageModelCapability(model.imageCapability);
   if (model.imageCapability?.supportsDataUrlReference === false
     && model.imageReferenceRequestMode === 'generation-json-image-data-urls') {
     throw new Error(`模型“${model.name}”声明不支持 Base64 参考图，但请求方式会发送 Base64`);
   }
-  const protocol = model.executionProfile?.preset === 'custom'
-    ? resolveModelExecutionProfile(model.executionProfile) : undefined;
+  const protocol = resolveModelExecutionProfile(model.executionProfile);
+  if (model.executionProfile && !protocol && model.category !== 'text') {
+    throw new Error('executionProfile.preset：原生文本协议不能用于媒体模型');
+  }
   if (!protocol) return;
+  assertModelProtocolResultMapping(model.category, protocol);
+  // 厂商预设的请求映射由各预设维护；这里不把它当成用户声明的自定义参数。
+  if (model.executionProfile?.preset !== 'custom') return;
   const source = JSON.stringify(protocol.submit);
   const requireMapping = (adjustable: boolean, label: string, variables: string[]) => {
     if (adjustable && !modelProtocolUsesVariable(source, ...variables)) {

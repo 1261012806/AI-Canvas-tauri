@@ -87,7 +87,7 @@ describe('provider connection transfer', () => {
     expect(parseConnectionShare('{"kind":"other"}')).toBeNull();
   });
 
-  it('丢弃 payload 里夹带的凭据与非法协议', () => {
+  it('丢弃夹带的凭据，并报告非法协议以拒绝整批导入', () => {
     const hostile = JSON.stringify({
       kind: 'ai-canvas/provider-connection',
       version: 1,
@@ -112,6 +112,9 @@ describe('provider connection transfer', () => {
     expect(parsed?.config).not.toHaveProperty('apiKeyRef');
     expect(parsed?.config.baseUrl).toBe('https://evil.example.com/v1');
     expect(parsed?.config.chatApiProtocol).toBe('openai-compatible');
-    expect(parsed?.config.selectedModels?.[0].executionProfile).toBeUndefined();
+    expect(parsed?.config.selectedModels).toEqual([]);
+    expect(parsed?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'm1', path: expect.stringContaining('executionProfile.protocol') }),
+    ]));
   });
 });

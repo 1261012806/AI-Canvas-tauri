@@ -38,6 +38,7 @@ import {
 import { normalizeBaseUrl } from '../../services/ai/providerBaseUrl';
 import { emitCloseChatWindow } from '../../services/chat/chatWindowService';
 import { testProviderConnection } from '../../services/testConnection';
+import { confirmAction } from '../../services/confirmDialog';
 import { useAppStore } from '../../store/useAppStore';
 import { useT } from '../../i18n';
 import { runningHubSiteDrafts, runningHubSiteId } from '../../services/runninghubSiteCredentials';
@@ -69,6 +70,27 @@ function applyKnownVideoTemplateDefaults(
   baseUrl?: string,
 ): ProviderModelSelection {
   return applyH3TemplateDefaults(applySeedanceTemplateDefaults(model, baseUrl), baseUrl);
+}
+
+interface ConnectionDraftState {
+  connectionName: string;
+  chatApiProtocol: ChatApiProtocol;
+  baseUrl: string;
+  models: ProviderModelSelection[];
+  selectedIds: Set<string>;
+  visibleModelCategories: Set<GeneralModelCategory>;
+  manualModelId: string;
+  manualModelName: string;
+  manualCategory: GeneralModelCategory;
+}
+
+/** 仅比较弹窗内的编辑内容；凭据单独在内存比较，不进入序列化快照。 */
+function serializeConnectionDraft(draft: ConnectionDraftState): string {
+  return JSON.stringify({
+    ...draft,
+    selectedIds: [...draft.selectedIds].sort(),
+    visibleModelCategories: [...draft.visibleModelCategories].sort(),
+  });
 }
 
 export default function ProviderConnectionDialog({
@@ -172,7 +194,20 @@ export default function ProviderConnectionDialog({
   );
   const [protocolValid, setProtocolValid] = useState(true);
   const [categoryEditModelId, setCategoryEditModelId] = useState<string | null>(null);
+  const [testSessionScope] = useState(() => connectionId || createConnectionId('custom-openai'));
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const protocolDraftInvalidRef = useRef(false);
+  const navigationPendingRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const currentConnectionDraft = (): ConnectionDraftState => ({
+    connectionName, chatApiProtocol, baseUrl, models, selectedIds, visibleModelCategories,
+    manualModelId, manualModelName, manualCategory,
+  });
+  const [draftBaseline, setDraftBaseline] = useState(() => ({
+    snapshot: serializeConnectionDraft(currentConnectionDraft()),
+    apiKey,
+  }));
 
   const definition = getProviderDefinition(definitionId);
   const definitions = getProviderDefinitions();
@@ -254,34 +289,80 @@ export default function ProviderConnectionDialog({
   }, [apiKey, baseUrl, definition, dreaminaLoggedIn, workflowApiKey, activeRunningHubSite, siteKeys]);
   const workflowOnlyConnection = definition?.id === 'runninghub-model' && !apiKey.trim();
 
+  const hasConnectionChanges = () => definition?.id === 'custom-openai'
+    && (apiKey !== draftBaseline.apiKey
+      || serializeConnectionDraft(currentConnectionDraft()) !== draftBaseline.snapshot);
+
+  const navigateWithDraftGuard = async (navigate: () => void, discardConnection = false): Promise<boolean> => {
+    if (savingRef.current || navigationPendingRef.current) return false;
+    if (!protocolDraftInvalidRef.current && !(discardConnection && hasConnectionChanges())) {
+      navigate();
+      return true;
+    }
+    navigationPendingRef.current = true;
+    try {
+      const confirmed = await confirmAction(
+        discardConnection
+          ? t('当前连接有未保存的修改，离开后将丢弃。是否放弃修改？')
+          : t('当前协议有尚未同步的 JSON 草稿，离开后将丢弃。是否放弃草稿？'),
+        { title: t('保留未完成的配置'), kind: 'warning', okLabel: t('放弃修改'), cancelLabel: t('继续编辑') },
+      );
+      if (!confirmed || savingRef.current) return false;
+      protocolDraftInvalidRef.current = false;
+      navigate();
+      return true;
+    } catch (error) {
+      setCatalogStatus('error');
+      setCatalogMessage(error instanceof Error ? error.message : t('无法确认是否放弃修改，请重试'));
+      return false;
+    } finally {
+      navigationPendingRef.current = false;
+    }
+  };
+
   const chooseDefinition = (nextDefinition: ProviderDefinition) => {
-    abortRef.current?.abort();
-    const savedConfig = nextDefinition.kind === 'web-search'
-      ? providerConfigs[nextDefinition.id]
-      : undefined;
-    setDefinitionId(nextDefinition.id);
-    setConnectionName(savedConfig?.name || nextDefinition.name);
-    setChatApiProtocol(resolveChatApiProtocol(savedConfig?.chatApiProtocol));
-    setGenericApiKey(savedConfig?.apiKey || '');
-    setBaseUrl(savedConfig?.baseUrl || nextDefinition.defaultBaseUrl || '');
-    setAssetLibraryConfig(savedConfig?.assetLibrary);
-    setLegacyWorkflowApiKey('');
-    if (nextDefinition.id === 'runninghub-model') setSiteKeys(runningHubSiteDrafts(providerConfigs));
-    const localModels = nextDefinition.id === 'cccapi' ? [] : fallbackModels[nextDefinition.id] || [];
-    setModels(localModels);
-    setSelectedIds(new Set());
-    setCatalogStatus(localModels.length > 0 ? 'ready' : 'idle');
-    setCatalogMessage('');
-    setQuery('');
-    setCategory('all');
-    setVisibleModelCategories(new Set(CATEGORY_ORDER));
-    setManualModelId('');
-    setManualModelName('');
-    setManualCategory('text');
-    setVideoCapabilityModelId(null);
-    setProtocolModelId(null);
-    setProtocolValid(true);
-    setCategoryEditModelId(null);
+    void navigateWithDraftGuard(() => {
+      abortRef.current?.abort();
+      const savedConfig = nextDefinition.kind === 'web-search'
+        ? providerConfigs[nextDefinition.id]
+        : undefined;
+      setDefinitionId(nextDefinition.id);
+      setConnectionName(savedConfig?.name || nextDefinition.name);
+      setChatApiProtocol(resolveChatApiProtocol(savedConfig?.chatApiProtocol));
+      setGenericApiKey(savedConfig?.apiKey || '');
+      setBaseUrl(savedConfig?.baseUrl || nextDefinition.defaultBaseUrl || '');
+      setAssetLibraryConfig(savedConfig?.assetLibrary);
+      setLegacyWorkflowApiKey('');
+      if (nextDefinition.id === 'runninghub-model') setSiteKeys(runningHubSiteDrafts(providerConfigs));
+      const localModels = nextDefinition.id === 'cccapi' ? [] : fallbackModels[nextDefinition.id] || [];
+      setModels(localModels);
+      setSelectedIds(new Set());
+      setCatalogStatus(localModels.length > 0 ? 'ready' : 'idle');
+      setCatalogMessage('');
+      setQuery('');
+      setCategory('all');
+      setVisibleModelCategories(new Set(CATEGORY_ORDER));
+      setManualModelId('');
+      setManualModelName('');
+      setManualCategory('text');
+      setImageCapabilityModelId(null);
+      setVideoCapabilityModelId(null);
+      setProtocolModelId(null);
+      setProtocolValid(true);
+      setCategoryEditModelId(null);
+      setDraftBaseline({
+        snapshot: serializeConnectionDraft({
+          connectionName: savedConfig?.name || nextDefinition.name,
+          chatApiProtocol: resolveChatApiProtocol(savedConfig?.chatApiProtocol),
+          baseUrl: savedConfig?.baseUrl || nextDefinition.defaultBaseUrl || '',
+          models: localModels,
+          selectedIds: new Set(),
+          visibleModelCategories: new Set(CATEGORY_ORDER),
+          manualModelId: '', manualModelName: '', manualCategory: 'text',
+        }),
+        apiKey: savedConfig?.apiKey || '',
+      });
+    }, true);
   };
 
   /**
@@ -436,46 +517,64 @@ export default function ProviderConnectionDialog({
   const closeProtocolEditor = () => {
     setProtocolModelId(null);
     setProtocolValid(true);
+    protocolDraftInvalidRef.current = false;
+  };
+
+  const openModelSettings = (modelId: string, kind: 'image' | 'video' | 'protocol'): Promise<boolean> => {
+    if (kind === 'protocol' && protocolModelId === modelId) return Promise.resolve(true);
+    return navigateWithDraftGuard(() => {
+      closeProtocolEditor();
+      setImageCapabilityModelId(kind === 'image' ? modelId : null);
+      setVideoCapabilityModelId(kind === 'video' ? modelId : null);
+      if (kind === 'protocol') setProtocolModelId(modelId);
+    });
   };
 
   const toggleModel = (modelId: string) => {
-    if (selectedIds.has(modelId) && protocolModelId === modelId) closeProtocolEditor();
-    if (selectedIds.has(modelId) && videoCapabilityModelId === modelId) {
-      setVideoCapabilityModelId(null);
-    }
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(modelId)) next.delete(modelId);
-      else next.add(modelId);
-      return next;
-    });
+    const removingProtocol = selectedIds.has(modelId) && protocolModelId === modelId;
+    const toggle = () => {
+      if (removingProtocol) closeProtocolEditor();
+      if (selectedIds.has(modelId) && videoCapabilityModelId === modelId) setVideoCapabilityModelId(null);
+      if (selectedIds.has(modelId) && imageCapabilityModelId === modelId) setImageCapabilityModelId(null);
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        if (next.has(modelId)) next.delete(modelId);
+        else next.add(modelId);
+        return next;
+      });
+    };
+    if (removingProtocol) void navigateWithDraftGuard(toggle);
+    else toggle();
   };
 
   const toggleVisibleModels = () => {
     const allVisibleSelected = filteredModels.length > 0
       && filteredModels.every((model) => selectedIds.has(model.id));
-    if (
+    const removingProtocol = Boolean(
       allVisibleSelected
       && protocolModelId
-      && filteredModels.some((model) => model.id === protocolModelId)
-    ) {
-      closeProtocolEditor();
-    }
-    if (
-      allVisibleSelected
-      && videoCapabilityModelId
-      && filteredModels.some((model) => model.id === videoCapabilityModelId)
-    ) {
-      setVideoCapabilityModelId(null);
-    }
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      for (const model of filteredModels) {
-        if (allVisibleSelected) next.delete(model.id);
-        else next.add(model.id);
-      }
-      return next;
-    });
+      && filteredModels.some((model) => model.id === protocolModelId),
+    );
+    const toggle = () => {
+      if (removingProtocol) closeProtocolEditor();
+      if (
+        allVisibleSelected
+        && videoCapabilityModelId
+        && filteredModels.some((model) => model.id === videoCapabilityModelId)
+      ) setVideoCapabilityModelId(null);
+      if (allVisibleSelected && imageCapabilityModelId
+        && filteredModels.some((model) => model.id === imageCapabilityModelId)) setImageCapabilityModelId(null);
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        for (const model of filteredModels) {
+          if (allVisibleSelected) next.delete(model.id);
+          else next.add(model.id);
+        }
+        return next;
+      });
+    };
+    if (removingProtocol) void navigateWithDraftGuard(toggle);
+    else toggle();
   };
 
   const toggleVisibleCategory = (nextCategory: GeneralModelCategory) => {
@@ -506,35 +605,47 @@ export default function ProviderConnectionDialog({
       provider: connectionId || definition.id,
       ...(!seedanceVariant && !h3Variant ? { categoryManual: true } : {}),
     }, baseUrl);
-    setModels((current) => mergeModels(current, [model]));
-    setSelectedIds((current) => new Set(current).add(id));
-    setManualModelId('');
-    setManualModelName('');
-    if (definition.id === 'custom-openai' && model.category === 'image') {
-      setImageCapabilityModelId(id); setVideoCapabilityModelId(null); setProtocolModelId(null);
-    }
-    if (definition.id === 'custom-openai' && model.category === 'video') {
-      setProtocolModelId(id);
-      setVideoCapabilityModelId(null);
-      setProtocolValid(true);
-    }
+    const displacesProtocol = Boolean(protocolModelId
+      && (model.category === 'image' || model.category === 'video' || protocolModelId === id));
+    const add = () => {
+      if (displacesProtocol) closeProtocolEditor();
+      setModels((current) => mergeModels(current, [model]));
+      setSelectedIds((current) => new Set(current).add(id));
+      setManualModelId('');
+      setManualModelName('');
+      if (definition.id === 'custom-openai' && model.category === 'image') {
+        setImageCapabilityModelId(id); setVideoCapabilityModelId(null); setProtocolModelId(null);
+      }
+      if (definition.id === 'custom-openai' && model.category === 'video') {
+        setProtocolModelId(id);
+        setImageCapabilityModelId(null);
+        setVideoCapabilityModelId(null);
+        setProtocolValid(true);
+      }
+    };
+    if (displacesProtocol) void navigateWithDraftGuard(add);
+    else add();
   };
 
   const updateModelCategory = (modelId: string, nextCategory: GeneralModelCategory) => {
-    setModels((current) => current.map((model) =>
-      model.id === modelId ? {
-        ...model,
-        category: nextCategory,
-        categoryManual: true,
-        ...(nextCategory === 'video' ? {} : { videoCapability: undefined }),
-        ...(nextCategory === 'image' ? {} : { imageCapability: undefined }),
-      } : model,
-    ));
-    if (nextCategory !== 'video' && videoCapabilityModelId === modelId) {
-      setVideoCapabilityModelId(null);
-    }
-    setVisibleModelCategories((current) => new Set(current).add(nextCategory));
-    setCategoryEditModelId(null);
+    const update = () => {
+      if (protocolModelId === modelId) closeProtocolEditor();
+      setModels((current) => current.map((model) =>
+        model.id === modelId ? {
+          ...model,
+          category: nextCategory,
+          categoryManual: true,
+          ...(nextCategory === 'video' ? {} : { videoCapability: undefined }),
+          ...(nextCategory === 'image' ? {} : { imageCapability: undefined }),
+        } : model,
+      ));
+      if (nextCategory !== 'video' && videoCapabilityModelId === modelId) setVideoCapabilityModelId(null);
+      if (nextCategory !== 'image' && imageCapabilityModelId === modelId) setImageCapabilityModelId(null);
+      setVisibleModelCategories((current) => new Set(current).add(nextCategory));
+      setCategoryEditModelId(null);
+    };
+    if (protocolModelId === modelId) void navigateWithDraftGuard(update);
+    else update();
   };
 
   /** 0 / 空 表示不声明，交回给按模型 ID 猜目录的兜底逻辑。 */
@@ -588,10 +699,12 @@ export default function ProviderConnectionDialog({
 
   const applyImageTemplate = (modelId: string, templateId: string) => {
     const template = createImageQuickAdaptTemplate(templateId);
-    setModels((current) => current.map((model) => model.id === modelId && model.category === 'image'
-      ? { ...model, ...template } : model));
-    // 避免已展开的旧协议编辑器继续回写覆盖新模板。
-    closeProtocolEditor();
+    void navigateWithDraftGuard(() => {
+      setModels((current) => current.map((model) => model.id === modelId && model.category === 'image'
+        ? { ...model, ...template } : model));
+      // 避免已展开的旧协议编辑器继续回写覆盖新模板。
+      closeProtocolEditor();
+    });
   };
 
   const updateImageReferenceRequestMode = (
@@ -604,18 +717,26 @@ export default function ProviderConnectionDialog({
   };
 
   const closeDialog = () => {
-    abortRef.current?.abort();
-    onClose();
+    void navigateWithDraftGuard(() => {
+      abortRef.current?.abort();
+      onClose();
+    }, true);
   };
 
   const returnToDefinitionPicker = () => {
-    abortRef.current?.abort();
-    setDefinitionId('');
+    void navigateWithDraftGuard(() => {
+      abortRef.current?.abort();
+      closeProtocolEditor();
+      setDefinitionId('');
+    }, true);
   };
 
   const handleSave = async () => {
     if (
       !definition
+      || savingRef.current
+      || navigationPendingRef.current
+      || protocolDraftInvalidRef.current
       || missingCredentials
       || (!isWebSearchProvider && !isWorkflowApi && !workflowOnlyConnection && selectedModels.length === 0)
       || !protocolValid
@@ -635,7 +756,7 @@ export default function ProviderConnectionDialog({
     }
     const nextConnectionId = isWebSearchProvider
       ? definition.id
-      : connectionId || createConnectionId(definition.id);
+      : connectionId || (definition.id === 'custom-openai' ? testSessionScope : createConnectionId(definition.id));
     const modelConfig = isWebSearchProvider || isWorkflowApi
       ? {}
       : {
@@ -645,22 +766,32 @@ export default function ProviderConnectionDialog({
           visibleModelCategories: CATEGORY_ORDER.filter((item) => visibleModelCategories.has(item)),
           catalogUpdatedAt: Date.now(),
         };
-    try { await onSave(
-      nextConnectionId,
-      {
-        name: connectionName.trim() || definition.name,
-        apiKey: definition.authType === 'oauth' ? '' : apiKey.trim(),
-        baseUrl: isWorkflowApi ? normalizeWorkflowApiBaseUrl(baseUrl, true) : normalizeBaseUrl(baseUrl, chatApiProtocol) || undefined,
-        catalogId: definition.id,
-        ...(definition.id === 'custom-openai' ? { chatApiProtocol } : {}),
-        ...modelConfig,
-        ...(definition.id === 'volcengine' && assetLibraryConfig ? { assetLibrary: { ...assetLibraryConfig, projectName: assetLibraryConfig.projectName || 'default' } } : {}),
-      },
-      definition.id === 'runninghub-model'
-        ? { runninghubWorkflowApiKey: workflowApiKey.trim(), ...(activeRunningHubSite ? { runninghubSiteKeys: siteKeys } : {}) }
-        : isWorkflowApi ? { workflowApiDrafts: workflowDrafts } : undefined,
-    );
-    } catch (error) { setCatalogStatus('error'); setCatalogMessage(error instanceof Error ? error.message : t('保存失败')); }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await onSave(
+        nextConnectionId,
+        {
+          name: connectionName.trim() || definition.name,
+          apiKey: definition.authType === 'oauth' ? '' : apiKey.trim(),
+          baseUrl: isWorkflowApi ? normalizeWorkflowApiBaseUrl(baseUrl, true) : normalizeBaseUrl(baseUrl, chatApiProtocol) || undefined,
+          catalogId: definition.id,
+          ...(definition.id === 'custom-openai' ? { chatApiProtocol } : {}),
+          ...modelConfig,
+          ...(definition.id === 'volcengine' && assetLibraryConfig ? { assetLibrary: { ...assetLibraryConfig, projectName: assetLibraryConfig.projectName || 'default' } } : {}),
+        },
+        definition.id === 'runninghub-model'
+          ? { runninghubWorkflowApiKey: workflowApiKey.trim(), ...(activeRunningHubSite ? { runninghubSiteKeys: siteKeys } : {}) }
+          : isWorkflowApi ? { workflowApiDrafts: workflowDrafts } : undefined,
+      );
+      setDraftBaseline({ snapshot: serializeConnectionDraft(currentConnectionDraft()), apiKey });
+    } catch (error) {
+      setCatalogStatus('error');
+      setCatalogMessage(error instanceof Error ? error.message : t('保存失败'));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return createPortal(
@@ -718,7 +849,7 @@ export default function ProviderConnectionDialog({
           onCopyConnection={onCopyCccGroup} onRemoveConnection={onRemoveCccGroup} />
       ) : (
         <>
-          <div className="provider-dialog-body">
+          <div className="provider-dialog-body" inert={saving} aria-busy={saving}>
             <ProviderConnectionForm
               editing={editing}
               definition={definition}
@@ -794,13 +925,15 @@ export default function ProviderConnectionDialog({
                 apiKey={apiKey}
                 baseUrl={baseUrl}
                 setProtocolValid={setProtocolValid}
+                onProtocolDraftInvalidChange={(invalid) => { protocolDraftInvalidRef.current = invalid; }}
+                testSessionScope={testSessionScope}
+                onOpenModelSettings={openModelSettings}
                 protocolModel={protocolModel}
                 imageCapabilityModel={imageCapabilityModel}
                 setImageCapabilityModelId={setImageCapabilityModelId}
                 onUpdateImageCapability={updateImageCapability}
                 onApplyImageTemplate={applyImageTemplate}
                 videoCapabilityModel={videoCapabilityModel}
-                setProtocolModelId={setProtocolModelId}
                 setVideoCapabilityModelId={setVideoCapabilityModelId}
                 categoryEditModelId={categoryEditModelId}
                 setCategoryEditModelId={setCategoryEditModelId}
@@ -822,7 +955,7 @@ export default function ProviderConnectionDialog({
                 onUpdateModelProtocol={updateModelProtocol}
                 onUpdateVideoCapability={updateVideoCapability}
                 onUpdateImageReferenceRequestMode={updateImageReferenceRequestMode}
-                onCloseProtocolEditor={closeProtocolEditor}
+                onCloseProtocolEditor={() => { void navigateWithDraftGuard(closeProtocolEditor); }}
                 onFetchModels={handleFetchModels}
               />
             )}
@@ -837,21 +970,22 @@ export default function ProviderConnectionDialog({
                   : t('至少选择一个模型')}
             </span>
             <div>
-              <AnimatedButton type="button" className="provider-secondary-btn" onClick={closeDialog}>
+              <AnimatedButton type="button" className="provider-secondary-btn" disabled={saving} onClick={closeDialog}>
                 {t('取消')}
               </AnimatedButton>
               <AnimatedButton
                 type="button"
                 className="provider-primary-btn"
                 disabled={
-                  missingCredentials
+                  saving
+                  || missingCredentials
                   || (isWorkflowApi && !workflowValid)
                   || (!isWebSearchProvider && !isWorkflowApi && !workflowOnlyConnection && selectedModels.length === 0)
                   || !protocolValid
                 }
                 onClick={() => void handleSave()}
               >
-                {editing ? t('保存更改') : t('添加厂商')}
+                {saving ? t('保存中...') : editing ? t('保存更改') : t('添加厂商')}
               </AnimatedButton>
             </div>
           </footer>

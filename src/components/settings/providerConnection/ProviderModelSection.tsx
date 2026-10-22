@@ -43,13 +43,15 @@ interface ProviderModelSectionProps {
   apiKey: string;
   baseUrl: string;
   setProtocolValid: Dispatch<SetStateAction<boolean>>;
+  onProtocolDraftInvalidChange: (invalid: boolean) => void;
+  testSessionScope: string;
+  onOpenModelSettings: (modelId: string, kind: 'image' | 'video' | 'protocol') => Promise<boolean>;
   protocolModel: ProviderModelSelection | undefined;
   imageCapabilityModel: ProviderModelSelection | undefined;
   setImageCapabilityModelId: Dispatch<SetStateAction<string | null>>;
   onUpdateImageCapability: (modelId: string, capability: ImageModelCapability) => void;
   onApplyImageTemplate: (modelId: string, templateId: string) => void;
   videoCapabilityModel: ProviderModelSelection | undefined;
-  setProtocolModelId: Dispatch<SetStateAction<string | null>>;
   setVideoCapabilityModelId: Dispatch<SetStateAction<string | null>>;
   categoryEditModelId: string | null;
   setCategoryEditModelId: Dispatch<SetStateAction<string | null>>;
@@ -95,13 +97,15 @@ export default function ProviderModelSection({
   apiKey,
   baseUrl,
   setProtocolValid,
+  onProtocolDraftInvalidChange,
+  testSessionScope,
+  onOpenModelSettings,
   protocolModel,
   imageCapabilityModel,
   setImageCapabilityModelId,
   onUpdateImageCapability,
   onApplyImageTemplate,
   videoCapabilityModel,
-  setProtocolModelId,
   setVideoCapabilityModelId,
   categoryEditModelId,
   setCategoryEditModelId,
@@ -309,8 +313,7 @@ export default function ProviderModelSection({
                         aria-label={`配置 ${model.name} 图片参数能力`} title="图片参数能力"
                         aria-pressed={imageSettingsId === model.id}
                         onClick={() => {
-                          setImageCapabilityModelId(model.id); setVideoCapabilityModelId(null);
-                          setProtocolModelId(null); setProtocolValid(true); scrollToSettings();
+                          void onOpenModelSettings(model.id, 'image').then((opened) => { if (opened) scrollToSettings(); });
                         }}><Icon icon="lucide:image" width="16" /></AnimatedButton>
                     ) : null}
                     {model.category === 'video' ? (
@@ -321,11 +324,7 @@ export default function ProviderModelSection({
                         title="视频参数能力"
                         aria-pressed={videoSettingsId === model.id}
                         onClick={() => {
-                          setVideoCapabilityModelId(model.id);
-                          setImageCapabilityModelId(null);
-                          setProtocolModelId(null);
-                          setProtocolValid(true);
-                          scrollToSettings();
+                          void onOpenModelSettings(model.id, 'video').then((opened) => { if (opened) scrollToSettings(); });
                         }}
                       >
                         <Icon icon="lucide:video" width="16" />
@@ -338,11 +337,7 @@ export default function ProviderModelSection({
                       title="调用协议"
                       aria-pressed={protocolSettingsId === model.id}
                       onClick={() => {
-                        setProtocolModelId(model.id);
-                        setImageCapabilityModelId(null);
-                        setVideoCapabilityModelId(null);
-                        setProtocolValid(true);
-                        scrollToSettings();
+                        void onOpenModelSettings(model.id, 'protocol').then((opened) => { if (opened) scrollToSettings(); });
                       }}
                     >
                       <Icon icon="lucide:sliders-horizontal" width="16" />
@@ -466,6 +461,8 @@ export default function ProviderModelSection({
                     onUpdateImageReferenceRequestMode(protocolModel.id, mode)
                   )}
                   onValidityChange={setProtocolValid}
+                  onDraftInvalidChange={onProtocolDraftInvalidChange}
+                  testSessionScope={testSessionScope}
                   onClose={onCloseProtocolEditor}
                 />
               ) : null}

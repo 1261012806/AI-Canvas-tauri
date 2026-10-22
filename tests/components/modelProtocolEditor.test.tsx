@@ -18,6 +18,11 @@ describe('model protocol editor', () => {
     const html = renderEditor({ id: 'custom-video', name: 'Video', category: 'video', provider: 'gateway' });
     expect(html).toContain('value="custom" selected=""');
     expect(html).toContain('声明式协议 JSON');
+    expect(html).toContain('真实试跑配置');
+    expect(html).toContain('文生视频（无参考素材）');
+    expect(html).toContain('首尾帧（不混用参考素材）');
+    expect(html).toContain('多参考素材（不使用首尾帧）');
+    expect(html).not.toContain('https://cdn.example/reference');
     expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>JSON</);
     for (const name of ['SD2.0', 'SD2.5', 'H3']) {
       expect(html).toContain(`填入 ${name} 视频预设（APIMart）`);

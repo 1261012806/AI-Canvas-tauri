@@ -8,7 +8,7 @@
  *
  * 导入的内容是外部数据：模型协议里的自定义请求会带着用户的 API Key 发出去，
  * 所以这里按白名单挑字段、规范化 Base URL，并用 validateModelExecutionProtocol
- * 丢掉非法协议（协议里的 path 只允许相对路径，拼在用户可见的 Base URL 上）。
+ * 拒绝非法协议并返回逐模型诊断；调用方必须在全部校验通过后才保存。
  */
 import type {
   ApiProviderConfig,
@@ -25,6 +25,8 @@ import { GENERAL_MODEL_CATEGORY_LABELS } from '../../types';
 import { validateModelExecutionProtocol } from './modelProtocol';
 import { normalizeBaseUrl } from './providerBaseUrl';
 import { isChatApiProtocol, resolveChatApiProtocol } from './chatApiProtocol';
+import { assertModelCapabilityProtocol, isModelProtocolPresetId } from './modelCapabilityValidation';
+import { assertVideoModelCapability } from './videoRequestResolver';
 
 const SHARE_KIND = 'ai-canvas/provider-connection';
 const SHARE_VERSION = 1;
@@ -72,10 +74,54 @@ export function serializeConnection(config: ApiProviderConfig, workflows: Workfl
   }, null, 2);
 }
 
-function parseModel(value: unknown): ProviderModelSelection | null {
-  if (!isRecord(value)) return null;
+export interface ConnectionImportDiagnostic {
+  modelId?: string;
+  modelName?: string;
+  /** 仅使用校验器生成的位置，不回显请求体、凭据或任意输入字段。 */
+  path: string;
+  message: string;
+}
+
+function protocolDiagnostic(error: string): { field: string; message: string } {
+  const polling = error.startsWith('轮询') || error.startsWith('异步轮询');
+  const field = polling ? 'poll' : 'submit';
+  if (/使用了不允许的变量|不安全的变量路径/.test(error)) {
+    return { field, message: '请求包含不支持或不安全的变量，请使用编辑器列出的可用变量' };
+  }
+  if (/headers|Header|鉴权字段|鉴权配置|鉴权类型|鉴权前缀/.test(error)) {
+    return { field: /鉴权/.test(error) ? 'auth' : `${field}.headers`, message: '鉴权或请求头配置无效，请在调用协议编辑器中检查；密钥由连接注入' };
+  }
+  if (/taskIdPath|任务 ID 路径/.test(error)) return { field: 'response.taskIdPath', message: '任务 ID 路径无效，请填写提交响应中的任务 ID 字段路径' };
+  if (/任务 ID 变量|本次提交响应中的任务 ID/.test(error)) {
+    return { field: 'poll', message: '查询请求必须引用提交响应中的任务 ID，不能写死任务编号' };
+  }
+  if (/pathMode/.test(error)) return { field: `${field}.pathMode`, message: '路径基准只支持 append 或 origin' };
+  if (/ path/.test(error)) return { field: `${field}.path`, message: '请求路径无效，请使用非空的同源相对路径' };
+  if (/method/.test(error)) return { field: `${field}.method`, message: '请求方法只支持当前协议允许的 GET 或 POST' };
+  if (/结果下载/.test(error)) return { field: 'poll.response.result.download', message: '结果下载配置无效，请检查同源 GET 路径、任务 ID 引用和互斥的结果映射' };
+  if (/MIME|结果|Base64|文本路径|URL 路径/.test(error)) {
+    return { field: polling ? 'poll.response.result' : 'response.result', message: '结果映射无效，请检查结果路径、MIME 类型与返回格式' };
+  }
+  if (/状态路径|成功状态|失败状态/.test(error)) return { field: 'poll.response', message: '查询状态映射无效，请按接口文档填写状态字段及成功、失败值' };
+  if (/version/.test(error)) return { field: 'version', message: '协议版本或响应字段布局无效，当前支持 version 1 与 version 2' };
+  if (/mode/.test(error)) return { field: 'mode', message: '执行模式只支持 sync 或 async' };
+  if (/请求体|条件项|数组展开项/.test(error)) return { field: `${field}.body`, message: '请求体编码、条件项或数组展开配置无效，请在调用协议编辑器中检查' };
+  return { field: polling ? 'poll' : '', message: '调用协议格式无效，请在调用协议编辑器中检查对应字段' };
+}
+
+function parseModel(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[]): ProviderModelSelection | null {
+  if (!isRecord(value)) {
+    diagnostics.push({ path, message: '模型配置必须是 JSON 对象' });
+    return null;
+  }
   const id = asString(value.id);
-  if (!id) return null;
+  const identify = { modelId: id?.slice(0, 120), modelName: (asString(value.name) || id)?.slice(0, 120) };
+  const diagnose = (field: string, message: string) => diagnostics.push({ ...identify, path: field ? `${path}.${field}` : path, message });
+  if (!id) { diagnose('id', '模型 ID 不能为空'); return null; }
+  if (value.category !== undefined && !CATEGORIES.includes(value.category as GeneralModelCategory)) {
+    diagnose('category', '模型类别只支持 text、image、video 或 audio');
+    return null;
+  }
   const category = CATEGORIES.includes(value.category as GeneralModelCategory)
     ? value.category as GeneralModelCategory
     : 'text';
@@ -98,8 +144,16 @@ function parseModel(value: unknown): ProviderModelSelection | null {
       (item): item is 'text' | 'image' => item === 'text' || item === 'image',
     );
   }
+  if (value.videoCapability !== undefined && !isRecord(value.videoCapability)) {
+    diagnose('videoCapability', '视频能力必须是 JSON 对象，未确认的可选参数可以不声明');
+    return null;
+  }
   if (isRecord(value.videoCapability)) {
     model.videoCapability = value.videoCapability as ProviderModelSelection['videoCapability'];
+  }
+  if (value.imageCapability !== undefined && !isRecord(value.imageCapability)) {
+    diagnose('imageCapability', '图片能力必须是 JSON 对象，未确认的可选参数可以不声明');
+    return null;
   }
   if (isRecord(value.imageCapability)) {
     model.imageCapability = value.imageCapability as ProviderModelSelection['imageCapability'];
@@ -109,24 +163,52 @@ function parseModel(value: unknown): ProviderModelSelection | null {
   }
 
   const profile = value.executionProfile;
-  if (isRecord(profile) && typeof profile.preset === 'string') {
+  if (profile !== undefined) {
+    if (!isRecord(profile) || !isModelProtocolPresetId(profile.preset)) {
+      diagnose('executionProfile.preset', '调用协议预设不受当前应用支持，请使用当前版本提供的预设或自定义协议');
+      return null;
+    }
     if (profile.preset !== 'custom') {
-      model.executionProfile = { preset: profile.preset as never };
-    } else if (validateModelExecutionProtocol(profile.protocol).length === 0) {
+      model.executionProfile = { preset: profile.preset };
+    } else {
+      const errors = validateModelExecutionProtocol(profile.protocol);
+      if (errors.length) {
+        for (const error of errors) {
+          const issue = protocolDiagnostic(error);
+          diagnose(`executionProfile.protocol${issue.field ? `.${issue.field}` : ''}`, issue.message);
+        }
+        return null;
+      }
       model.executionProfile = {
         preset: 'custom',
         protocol: profile.protocol as never,
       };
     }
-    // 协议非法就退回预设协议，宁可少一条自定义规则也不让来路不明的请求跑起来
+  }
+  try {
+    if (model.category === 'video') assertVideoModelCapability(model.videoCapability);
+    assertModelCapabilityProtocol(model);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (/response\.result/.test(message)) {
+      const resultField = message.startsWith('poll.') ? 'poll.response.result' : 'response.result';
+      const field = `${resultField}${message.includes('.mimeType') ? '.mimeType' : ''}`;
+      diagnose(`executionProfile.protocol.${field}`, '结果类型与模型类别不一致，请为文本配置文本结果，为图片、视频或音频配置对应媒体结果');
+    } else if (/executionProfile\.preset/.test(message)) {
+      diagnose('executionProfile.preset', '调用协议预设与模型类别不匹配，请选择对应类别的协议');
+    } else {
+      diagnose(model.category === 'image' ? 'imageCapability' : 'videoCapability', '参数能力无效，或可调参数未在提交协议中映射；未确认的可选参数可以不声明');
+    }
+    return null;
   }
   return model;
 }
 
-function parseModels(value: unknown): ProviderModelSelection[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+function parseModels(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[]): ProviderModelSelection[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) { diagnostics.push({ path, message: '模型列表必须是 JSON 数组' }); return undefined; }
   return value
-    .map(parseModel)
+    .map((model, index) => parseModel(model, `${path}.${index}`, diagnostics))
     .filter((model): model is ProviderModelSelection => model !== null);
 }
 
@@ -134,6 +216,8 @@ export interface ParsedConnectionShare {
   /** 目录定义 ID（custom-openai / apimart ...）；缺失时按自定义接口处理。 */
   catalogId: string;
   config: ApiProviderConfig;
+  /** 非空时整个导入必须拒绝；config 仅供本地预览，不可部分保存。 */
+  diagnostics: ConnectionImportDiagnostic[];
   workflowApi?: WorkflowApiManifest;
   workflowApiDrafts?: WorkflowApiDraft[];
 }
@@ -178,9 +262,11 @@ export function parseConnectionShare(text: string): ParsedConnectionShare | null
   const visible = Array.isArray(source.visibleModelCategories)
     ? CATEGORIES.filter((item) => (source.visibleModelCategories as unknown[]).includes(item))
     : undefined;
+  const diagnostics: ConnectionImportDiagnostic[] = [];
 
   return {
     catalogId,
+    diagnostics,
     ...(workflowApi ? { workflowApi } : {}),
     ...(workflowApiDrafts ? { workflowApiDrafts } : {}),
     config: {
@@ -191,8 +277,8 @@ export function parseConnectionShare(text: string): ParsedConnectionShare | null
       chatApiProtocol,
       catalogId,
       ...(catalogId === 'cccapi' ? { cccGroup: asString(source.cccGroup)?.slice(0, 120) } : {}),
-      selectedModels: customWorkflow ? [] : parseModels(source.selectedModels),
-      catalogModels: customWorkflow ? [] : parseModels(source.catalogModels),
+      selectedModels: customWorkflow ? [] : parseModels(source.selectedModels, 'connection.selectedModels', diagnostics),
+      catalogModels: customWorkflow ? [] : parseModels(source.catalogModels, 'connection.catalogModels', diagnostics),
       visibleModelCategories: visible,
     },
   };

@@ -3,7 +3,7 @@
  */
 import Select from '../shared/Select';
 import { Icon } from '@iconify/react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type {
   GeneralModelCategory,
   ImageReferenceRequestMode,
@@ -25,7 +25,6 @@ import type {
   VideoModelCapability,
 } from '../../types/aiTypes';
 import {
-  executeModelProtocol,
   getDefaultCustomProtocol,
   getDefaultModelProtocolPollRetryConfig,
   getModelProtocolPreset,
@@ -42,7 +41,11 @@ import {
   getProtocolVariableDescription,
 } from '../../services/ai/modelProtocolVariables';
 import PopupCloseButton from '../shared/PopupCloseButton';
-import { describeProtocolTestRunBlocker, resolveProtocolTestRunDraft, type ProtocolChoice } from './modelProtocolTestRun';
+import {
+  assertRealProtocolTestVariables, buildVideoTestVariables, defaultVideoTestScenario,
+  describeProtocolTestRunBlocker, resolveProtocolTestRunDraft,
+  type ProtocolChoice, type VideoTestReferences, type VideoTestScenario,
+} from './modelProtocolTestRun';
 import { useT } from '../../i18n';
 import { copyText } from '../../services/clipboardService';
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from '../../services/ai/imageModelTemplates';
@@ -56,6 +59,13 @@ import { corsSafeFetch } from '../../services/ai/httpTransport';
 import { parseResponseError } from '../../services/ai/httpUtils';
 import { createSeedanceQuickAdaptTemplate } from '../../services/ai/seedanceModelCapabilities';
 import { createH3QuickAdaptTemplate } from '../../services/ai/h3ModelCapabilities';
+import { assertModelProtocolResult, assertModelProtocolResultMapping } from '../../services/ai/modelCapabilityValidation';
+import {
+  discardProtocolTestSession, getProtocolTestSession, pauseProtocolTestSession,
+  resumeProtocolTestSession, startProtocolTestSession, subscribeProtocolTestSession,
+  ProtocolTestSessionError,
+} from '../../services/ai/modelProtocolTestSession';
+import { confirmAction } from '../../services/confirmDialog';
 
 type EditorView = 'form' | 'json';
 type JsonFieldKind = 'object' | 'value';
@@ -72,6 +82,8 @@ interface ModelProtocolEditorProps {
   onImageReferenceRequestModeChange: (mode: ImageReferenceRequestMode | undefined) => void;
   onVideoCapabilityChange?: (capability: VideoModelCapability) => void;
   onValidityChange: (valid: boolean) => void;
+  onDraftInvalidChange?: (invalid: boolean) => void;
+  testSessionScope?: string;
   onClose: () => void;
 }
 
@@ -94,7 +106,7 @@ interface ProtocolPreviewState {
 interface ProtocolTestRunState {
   status: 'idle' | 'running' | 'success' | 'error';
   message?: string;
-  /** 成功时的原始返回结构，失败时为空。 */
+  /** 成功时的结果摘要，不保留完整响应或内联媒体正文。 */
   detail?: string;
 }
 
@@ -179,7 +191,7 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
   if (model.category === 'image') {
     const imageSize = model.imageCapability?.defaultResolution ?? model.imageCapability?.resolutions?.[0] ?? '1K';
     const aspectRatio = model.imageCapability?.defaultRatio ?? model.imageCapability?.ratios?.[0] ?? '1:1';
-    const imageUrls = ['data:image/png;base64,iVBORw0KGgo='];
+    const imageUrls: string[] = [];
     // 未完成的编辑草稿不能让整个设置窗口加载失败；真实发送仍严格校验尺寸。
     let dimensions = { width: 1024, height: 1024 };
     try { dimensions = resolveImageTemplateDimensions(model.imageCapability, imageSize, aspectRatio); } catch { /* 保留预览占位 */ }
@@ -191,42 +203,19 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
       ...dimensions,
       n: 1,
       batchCount: 1,
-      imageUrls,
+      imageUrls: imageUrls.length ? imageUrls : undefined,
       googleImageParts: buildGoogleImageParts(common.prompt, imageUrls),
     };
   }
   if (model.category === 'video') {
     return {
       ...common,
-      size: '1152x768',
-      width: 1152,
-      height: 768,
-      frames: 121,
-      frames8n1: 121,
-      fps: 24,
-      duration: 5,
-      videoResolution: 768,
-      videoFrames: 121,
-      videoFps: 24,
-      seedanceResolution: '720p',
-      seedanceRatio: '16:9',
-      seedanceDuration: 5,
-      generateAudio: false,
-      videoOperation: 'video-to-video',
-      imageUrls: ['https://cdn.example/reference-first.png', 'https://cdn.example/reference-last.png'],
-      firstImage: 'https://cdn.example/reference-first.png',
-      lastImage: 'https://cdn.example/reference-last.png',
-      imageWithRoles: [
-        { url: 'https://cdn.example/reference-first.png', role: 'first_frame' },
-        { url: 'https://cdn.example/reference-last.png', role: 'last_frame' },
-      ],
-      referenceImageUrls: ['https://cdn.example/reference-first.png'],
-      videoUrls: ['https://cdn.example/reference.mp4'],
-      referenceVideoUrl: 'https://cdn.example/reference.mp4',
-      referenceVideoUrls: ['https://cdn.example/reference.mp4'],
-      audioUrls: ['https://cdn.example/reference.mp3'],
-      audioUrl: 'https://cdn.example/reference.mp3',
-      referenceAudioUrls: ['https://cdn.example/reference.mp3'],
+      duration: model.videoCapability?.defaultDuration ?? model.videoCapability?.durations?.[0] ?? model.videoCapability?.minDuration,
+      aspectRatio: model.videoCapability?.defaultRatio ?? model.videoCapability?.ratios?.[0],
+      seedanceResolution: model.videoCapability?.defaultResolution ?? model.videoCapability?.resolutions?.[0],
+      fps: model.videoCapability?.defaultFrameRate ?? model.videoCapability?.frameRates?.[0],
+      n: 1,
+      batchCount: 1,
     };
   }
   return {
@@ -240,9 +229,6 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
     musicBpm: 120,
     n: 1,
     batchCount: 1,
-    audioUrls: ['https://cdn.example/reference.mp3'],
-    audioUrl: 'https://cdn.example/reference.mp3',
-    referenceAudioUrls: ['https://cdn.example/reference.mp3'],
   };
 }
 
@@ -286,6 +272,15 @@ function parseDraft(value: string): { protocol?: NormalizedModelExecutionProtoco
   } catch (error) {
     return { error: error instanceof Error ? error.message : '协议 JSON 无效' };
   }
+}
+
+function protocolDraftErrors(protocol: NormalizedModelExecutionProtocol, category: GeneralModelCategory): string[] {
+  const errors = validateModelExecutionProtocol(protocol);
+  if (!errors.length) {
+    try { assertModelProtocolResultMapping(category, protocol); }
+    catch (error) { errors.push(error instanceof Error ? error.message : '结果映射无效'); }
+  }
+  return errors;
 }
 
 function serializeJson(value: unknown): string {
@@ -422,6 +417,8 @@ export default function ModelProtocolEditor({
   onImageReferenceRequestModeChange,
   onVideoCapabilityChange,
   onValidityChange,
+  onDraftInvalidChange,
+  testSessionScope,
   onClose,
 }: ModelProtocolEditorProps) {
   const t = useT();
@@ -435,13 +432,30 @@ export default function ModelProtocolEditor({
   const [protocol, setProtocol] = useState<NormalizedModelExecutionProtocol>(initialProtocol);
   const [view, setView] = useState<EditorView>(simpleEditor || videoJsonEditor ? 'json' : 'form');
   const [protocolJson, setProtocolJson] = useState(() => serializeJson(initialProtocol));
+  const [unsyncedDraft, setUnsyncedDraft] = useState(false);
+  const [navigationError, setNavigationError] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'success' | 'error'>('idle');
   const [error, setError] = useState<string | null>(() => initialPreset === 'custom'
-    ? validateModelExecutionProtocol(initialProtocol)[0] ?? null : null);
+    ? protocolDraftErrors(initialProtocol, model.category)[0] ?? null : null);
   const [formRevision, setFormRevision] = useState(0);
   const [previewVariablesJson, setPreviewVariablesJson] = useState(
     () => serializeJson(initialPreviewVariables ?? createPreviewVariables(model)),
   );
+  const [testVariablesJson, setTestVariablesJson] = useState(
+    () => serializeJson(initialPreviewVariables ?? createPreviewVariables(model)),
+  );
+  const [testScenario, setTestScenario] = useState<VideoTestScenario>(() => defaultVideoTestScenario(model));
+  const [testReferences, setTestReferences] = useState<VideoTestReferences>({ firstImage: '', lastImage: '', images: '', videos: '', audios: '' });
+  const trialVariablesId = useId();
+  const sessionIdentity = useMemo(() => ({
+    scopeId: testSessionScope ?? (model.provider || 'protocol-editor'), modelId: model.id, baseUrl,
+  }), [testSessionScope, model.provider, model.id, baseUrl]);
+  const sessionObserver = useMemo(() => ({
+    subscribe: (listener: () => void) => subscribeProtocolTestSession(sessionIdentity, listener),
+    getSnapshot: () => getProtocolTestSession(sessionIdentity),
+  }), [sessionIdentity]);
+  const session = useSyncExternalStore(sessionObserver.subscribe, sessionObserver.getSnapshot, () => undefined);
+  useEffect(() => { onDraftInvalidChange?.(unsyncedDraft); }, [unsyncedDraft, onDraftInvalidChange]);
   const [responseSampleJson, setResponseSampleJson] = useState(
     () => serializeJson(createResponseSample()),
   );
@@ -452,11 +466,18 @@ export default function ModelProtocolEditor({
   const protocolJsonId = useId();
   const protocolJsonHelpId = `${protocolJsonId}-help`;
   const protocolTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<HTMLElement | null>(null);
   const protocolSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const pendingProtocolCaretRef = useRef<number | null>(null);
   const invalidFormFieldsRef = useRef(new Set<string>());
-  const [testRun, setTestRun] = useState<ProtocolTestRunState>({ status: 'idle' });
+  const testRunContext = useMemo(() => ({ identity: sessionIdentity, authenticated: !!apiKey.trim() }), [sessionIdentity, apiKey]);
+  const [testRunState, setTestRunState] = useState<{ context: object; value: ProtocolTestRunState }>(
+    () => ({ context: testRunContext, value: { status: 'idle' } }),
+  );
+  const testRun: ProtocolTestRunState = testRunState.context === testRunContext ? testRunState.value : { status: 'idle' };
+  const setTestRun = (value: ProtocolTestRunState) => setTestRunState({ context: testRunContext, value });
   const testAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { testAbortRef.current?.abort(); pauseProtocolTestSession(sessionIdentity); }, [sessionIdentity, apiKey]);
   useEffect(() => () => testAbortRef.current?.abort(), []);
   useEffect(() => {
     onValidityChange(!error && invalidFormFieldsRef.current.size === 0);
@@ -474,9 +495,11 @@ export default function ModelProtocolEditor({
   const publishProtocol = (nextProtocol: NormalizedModelExecutionProtocol) => {
     setProtocol(nextProtocol);
     setProtocolJson(serializeJson(nextProtocol));
-    const errors = validateModelExecutionProtocol(nextProtocol);
+    const errors = protocolDraftErrors(nextProtocol, model.category);
     setError(errors[0] ?? (invalidFormFieldsRef.current.size > 0 ? '请修正表单中的 JSON 错误' : null));
     const valid = errors.length === 0 && invalidFormFieldsRef.current.size === 0;
+    setUnsyncedDraft(!valid);
+    setNavigationError('');
     onValidityChange(valid);
     if (valid) onChange({ preset: 'custom', protocol: parseModelExecutionProtocol(nextProtocol) });
   };
@@ -490,7 +513,9 @@ export default function ModelProtocolEditor({
   const updateFormValidity = (fieldId: string, fieldError?: string) => {
     if (fieldError) invalidFormFieldsRef.current.add(fieldId);
     else invalidFormFieldsRef.current.delete(fieldId);
-    const protocolErrors = validateModelExecutionProtocol(protocol);
+    setUnsyncedDraft(invalidFormFieldsRef.current.size > 0 || protocolDraftErrors(protocol, model.category).length > 0);
+    setNavigationError('');
+    const protocolErrors = protocolDraftErrors(protocol, model.category);
     setError(protocolErrors[0] ?? (invalidFormFieldsRef.current.size > 0 ? '请修正表单中的 JSON 错误' : null));
     onValidityChange(protocolErrors.length === 0 && invalidFormFieldsRef.current.size === 0);
   };
@@ -498,12 +523,15 @@ export default function ModelProtocolEditor({
   const updateCustomJson = (value: string) => {
     setProtocolJson(value);
     const parsed = parseDraft(value);
-    setError(parsed.error ?? null);
-    onValidityChange(!!parsed.protocol);
+    const draftError = parsed.error ?? (parsed.protocol ? protocolDraftErrors(parsed.protocol, model.category)[0] : undefined);
+    setUnsyncedDraft(!!draftError);
+    setNavigationError('');
+    setError(draftError ?? null);
+    onValidityChange(!!parsed.protocol && !draftError);
     if (parsed.protocol) {
       invalidFormFieldsRef.current.clear();
       setProtocol(parsed.protocol);
-      onChange({ preset: 'custom', protocol: parsed.protocol });
+      if (!draftError) onChange({ preset: 'custom', protocol: parsed.protocol });
     }
   };
 
@@ -531,17 +559,39 @@ export default function ModelProtocolEditor({
   };
 
   const changeView = (nextView: EditorView) => {
+    if (view === nextView) return;
+    if (unsyncedDraft || invalidFormFieldsRef.current.size > 0) {
+      setNavigationError(t('请先修正当前草稿再切换视图，未完成的内容已保留。'));
+      if (view === 'json') protocolTextareaRef.current?.focus({ preventScroll: true });
+      else editorRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus({ preventScroll: true });
+      return;
+    }
     protocolSelectionRef.current = null;
     pendingProtocolCaretRef.current = null;
     invalidFormFieldsRef.current.clear();
-    const errors = validateModelExecutionProtocol(protocol);
+    const errors = protocolDraftErrors(protocol, model.category);
     setError(errors[0] ?? null);
     setProtocolJson(serializeJson(protocol));
     setView(nextView);
     onValidityChange(errors.length === 0);
   };
 
-  const changePreset = (nextPreset: ProtocolChoice) => {
+  const allowOverwriteDraft = async () => !unsyncedDraft || await confirmAction(
+    t('当前协议有尚未同步的草稿，放弃后将丢失这些内容。'),
+    { title: t('放弃未完成的协议草稿？'), okLabel: t('放弃草稿'), cancelLabel: t('继续编辑') },
+  ).catch(() => false);
+
+  const allowFormTransform = () => {
+    if (!invalidFormFieldsRef.current.size) return true;
+    setNavigationError(t('请先修正当前草稿再切换视图，未完成的内容已保留。'));
+    editorRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus({ preventScroll: true });
+    return false;
+  };
+
+  const changePreset = async (nextPreset: ProtocolChoice) => {
+    if (nextPreset === preset || !(await allowOverwriteDraft())) return;
+    setUnsyncedDraft(false);
+    setNavigationError('');
     protocolSelectionRef.current = null;
     pendingProtocolCaretRef.current = null;
     setPreset(nextPreset);
@@ -579,11 +629,15 @@ export default function ModelProtocolEditor({
     onChange({ preset: nextPreset });
   };
 
-  const applyVideoJsonTemplate = (templateId: 'sd2.0' | 'sd2.5' | 'h3') => {
+  const applyVideoJsonTemplate = async (templateId: 'sd2.0' | 'sd2.5' | 'h3') => {
+    if (!(await allowOverwriteDraft())) return;
+    setUnsyncedDraft(false);
+    setNavigationError('');
     const template = templateId === 'h3'
       ? createH3QuickAdaptTemplate('h3-standard', 'apimart')
       : createSeedanceQuickAdaptTemplate(templateId === 'sd2.0' ? '2.0-standard' : '2.5', 'apimart');
     testAbortRef.current?.abort();
+    pauseProtocolTestSession(sessionIdentity);
     testAbortRef.current = null;
     setTestRun({ status: 'idle' });
     protocolSelectionRef.current = null;
@@ -593,10 +647,15 @@ export default function ModelProtocolEditor({
     setPreset('custom');
     setView('json');
     onVideoCapabilityChange?.(template.capability);
+    const nextModel = { ...model, videoCapability: template.capability };
+    setTestVariablesJson(serializeJson(createPreviewVariables(nextModel)));
+    setPreviewVariablesJson(serializeJson(createPreviewVariables(nextModel)));
+    setTestScenario(defaultVideoTestScenario(nextModel));
     publishProtocol(parseModelExecutionProtocol(template.executionProfile.protocol!));
   };
 
   const changeMode = (mode: ModelExecutionProtocol['mode']) => {
+    if (!allowFormTransform()) return;
     updateProtocol((draft) => {
       draft.mode = mode;
       if (mode === 'sync') {
@@ -648,6 +707,7 @@ export default function ModelProtocolEditor({
 
   const insertSizeMapping = (mapping: string) => {
     if (!mapping) return;
+    if (!allowFormTransform()) return;
     updateProtocol((draft) => {
       const body = isJsonObject(draft.submit.body) ? draft.submit.body : {};
       if (mapping === 'size') body.size = '{{size}}';
@@ -682,6 +742,7 @@ export default function ModelProtocolEditor({
 
   const insertMultipartFile = (fieldName: string) => {
     if (!fieldName) return;
+    if (!allowFormTransform()) return;
     updateProtocol((draft) => {
       const body = isJsonObject(draft.submit.body) ? draft.submit.body : {};
       body[fieldName] = {
@@ -696,6 +757,7 @@ export default function ModelProtocolEditor({
 
   const insertJsonReferenceArray = (fieldName: string) => {
     if (!fieldName) return;
+    if (!allowFormTransform()) return;
     updateProtocol((draft) => {
       const body = isJsonObject(draft.submit.body) ? draft.submit.body : {};
       body[fieldName] = '{{imageUrls}}';
@@ -706,6 +768,7 @@ export default function ModelProtocolEditor({
   };
 
   const insertVideoReferenceField = (mapping: string) => {
+    if (!allowFormTransform()) return;
     const mappings: Record<string, string> = {
       image_urls: 'imageUrls',
       first_image: 'firstImage',
@@ -842,19 +905,43 @@ export default function ModelProtocolEditor({
    *
    * 本地预览只能证明模板渲染得出来，证明不了厂商认这些字段——中转站最常见的失败
    * 是 400 unsupported field，只有真发一次请求才看得到。这会产生真实调用与计费，
-   * 所以只在用户点按钮时执行，异步协议会一直轮询到出结果，可随时取消。
+   * 所以只在用户点按钮时执行；拿到任务 ID 后可暂停、续查，不重提生成。
    */
+  const describeTestError = (testError: unknown): string => {
+    if (testError instanceof ProtocolTestSessionError) {
+      const messages = {
+        'invalid-identity': '试跑连接地址无效，请检查接口地址',
+        'existing-session': '已有试跑记录，请先继续查询或放弃记录',
+        'session-limit': '保留的试跑任务过多，请先处理已有记录',
+        'not-resumable': '当前任务暂时不能继续查询',
+        busy: '任务仍在处理中，请稍后操作',
+        paused: '查询已暂停',
+        'submission-uncertain': '提交状态不确定，请先到厂商后台确认',
+        'different-origin': '任务查询地址与当前连接不同源',
+      };
+      return t(messages[testError.code]);
+    }
+    return t(testError instanceof Error ? testError.message.split(apiKey || '\0').join('[REDACTED]') : '试跑失败');
+  };
+  const resultDetail = (result: { urls?: string[]; text?: string; taskId?: string }) => serializeJson({
+    ...result, urls: result.urls?.map((url) => url.startsWith('data:') ? '[inline media]' : url),
+    text: result.text?.slice(0, 2000),
+  }).split(apiKey || '\0').join('[REDACTED]');
+
   const runProtocolTest = async () => {
+    if (testAbortRef.current && !testAbortRef.current.signal.aborted) return;
+    if (getProtocolTestSession(sessionIdentity)) return;
     if (describeProtocolTestRunBlocker(preset, apiKey, baseUrl, !!error || invalidFormFieldsRef.current.size > 0)) return;
     let variables: ModelProtocolVariables;
     try {
-      const parsed = JSON.parse(previewVariablesJson) as ProtocolJsonValue;
-      if (!isJsonObject(parsed)) throw new Error('示例变量必须是 JSON 对象');
-      variables = parsed;
+      const parsed = JSON.parse(testVariablesJson) as ProtocolJsonValue;
+      if (!isJsonObject(parsed)) throw new Error('试跑变量必须是 JSON 对象');
+      assertRealProtocolTestVariables(parsed);
+      variables = workflowMode ? parsed : { ...parsed, model: model.id };
     } catch (parseError) {
       setTestRun({
         status: 'error',
-        message: parseError instanceof Error ? parseError.message : '示例变量解析失败',
+        message: describeTestError(parseError),
       });
       return;
     }
@@ -888,9 +975,15 @@ export default function ModelProtocolEditor({
         const currentProtocol = resolveProtocolTestRunDraft(
           preset, protocol, protocolJson, invalidFormFieldsRef.current.size > 0,
         );
-        result = await executeModelProtocol({ apiKey, baseUrl, protocol: currentProtocol, variables, signal: controller.signal });
+        assertModelProtocolResultMapping(model.category, currentProtocol);
+        if (!workflowMode && model.category === 'video') {
+          variables = await buildVideoTestVariables(model, testScenario, testReferences, variables);
+        }
+        if (controller.signal.aborted) return;
+        result = await startProtocolTestSession({ identity: sessionIdentity, category: model.category, apiKey, protocol: currentProtocol, variables });
       }
       if (controller.signal.aborted) return;
+      assertModelProtocolResult(model.category, result);
       const parts = [
         result.urls?.length ? t('返回 {count} 个结果地址', { count: result.urls.length }) : '',
         result.text ? t('返回文本 {count} 字', { count: result.text.length }) : '',
@@ -899,22 +992,52 @@ export default function ModelProtocolEditor({
       setTestRun({
         status: 'success',
         message: parts.join('，') || t('调用成功，但没有解析出结果'),
-        detail: serializeJson(result),
+        detail: resultDetail(result),
       });
     } catch (runError) {
       if (controller.signal.aborted) return;
       setTestRun({
         status: 'error',
-        message: runError instanceof Error ? runError.message : t('试跑失败'),
+        message: describeTestError(runError),
       });
+    } finally {
+      if (testAbortRef.current === controller) testAbortRef.current = null;
+    }
+  };
+
+  const resumeProtocolTest = async () => {
+    if (testAbortRef.current && !testAbortRef.current.signal.aborted) return;
+    if (!apiKey.trim() || !getProtocolTestSession(sessionIdentity)?.canResume) return;
+    setTestRun({ status: 'running' });
+    const controller = new AbortController();
+    testAbortRef.current = controller;
+    try {
+      const result = await resumeProtocolTestSession({ identity: sessionIdentity, apiKey });
+      if (controller.signal.aborted) return;
+      assertModelProtocolResult(session?.category ?? model.category, result);
+      setTestRun({ status: 'success', message: t('原任务查询完成，未重新提交生成'),
+        detail: resultDetail(result) });
+    } catch (queryError) {
+      if (controller.signal.aborted) return;
+      setTestRun({ status: 'error', message: describeTestError(queryError) });
+    } finally {
+      if (testAbortRef.current === controller) testAbortRef.current = null;
     }
   };
 
   const cancelProtocolTest = () => {
     testAbortRef.current?.abort();
     testAbortRef.current = null;
+    pauseProtocolTestSession(sessionIdentity);
     setTestRun({ status: 'idle' });
   };
+
+  const trialRunning = testRun.status === 'running' || session?.status === 'submitting' || session?.status === 'polling';
+  const sessionMessage = session?.status === 'uncertain'
+    ? t('提交状态不确定，请先到厂商后台确认；不会自动重新提交。')
+    : session?.status === 'paused'
+      ? t('查询已暂停，任务仍保留；继续查询不会重新生成。')
+      : session?.status === 'failed' ? t('上游任务已失败，不能继续查询生成结果。') : '';
 
   const testRunBlocker = describeProtocolTestRunBlocker(preset, apiKey, baseUrl, !!error);
   const testRunDisabledReason = testRunBlocker === 'legacy-preset'
@@ -930,7 +1053,7 @@ export default function ModelProtocolEditor({
     && (preset === 'openai-image' || preset === 'legacy');
 
   return (
-    <section className="provider-protocol-editor is-small"       aria-label={t('{name} 调用协议', { name: model.name })}>
+    <section ref={editorRef} className="provider-protocol-editor is-small" aria-label={t('{name} 调用协议', { name: model.name })}>
       <div className="provider-protocol-editor-head">
         <div>
           <span>{t(workflowMode ? '工作流调用协议' : '模型调用协议')}</span>
@@ -1033,31 +1156,70 @@ export default function ModelProtocolEditor({
       ) : null}
 
       <div className="provider-protocol-testrun" aria-live="polite">
+        {navigationError ? <p role="alert" className="ui-alert ui-alert--warning mb-2">{navigationError}</p> : null}
+        <details className="mb-2 rounded-md border border-canvas-border p-2">
+          <summary className="cursor-pointer text-xs text-canvas-text-secondary">{t('真实试跑配置')}</summary>
+          <p className="my-2 text-xs text-canvas-text-muted">{t('试跑变量与本地预览分开；只有点击试跑才会发送真实请求。')}</p>
+          {!workflowMode && model.category === 'video' ? <div className="mb-2 grid gap-2 sm:grid-cols-2">
+            <label className="ui-field sm:col-span-2"><span className="ui-label">{t('试跑场景')}</span>
+              <Select fixedMenu disabled={trialRunning} value={testScenario} onChange={(value) => setTestScenario(value as VideoTestScenario)}>
+                <option value="text">{t('文生视频（无参考素材）')}</option>
+                <option value="keyframe">{t('首尾帧（不混用参考素材）')}</option>
+                <option value="reference">{t('多参考素材（不使用首尾帧）')}</option>
+              </Select>
+            </label>
+            <p className="m-0 text-xs text-canvas-text-muted sm:col-span-2">{t('视频素材由上方场景填写，JSON 只调整参数；未声明的参数可留空。')}</p>
+            {(testScenario === 'keyframe'
+              ? [['firstImage', '首帧图片地址'], ['lastImage', '尾帧图片地址（可选）']]
+              : testScenario === 'reference' ? [['images', '参考图片地址（每行一条）'], ['videos', '参考视频地址（每行一条）'], ['audios', '参考音频地址（每行一条）']] : []
+            ).map(([field, label]) => <label key={field} className="ui-field min-w-0">
+              <span className="ui-label">{t(label)}</span>
+              <textarea className="ui-textarea" rows={2} value={testReferences[field as keyof VideoTestReferences]}
+                disabled={trialRunning} spellCheck={false}
+                onChange={(event) => setTestReferences((current) => ({ ...current, [field]: event.target.value }))} />
+            </label>)}
+          </div> : null}
+          <label className="ui-field" htmlFor={trialVariablesId}><span className="ui-label">{t('试跑参数 JSON')}</span>
+            <textarea id={trialVariablesId} className="ui-textarea font-mono" rows={6} spellCheck={false}
+              value={testVariablesJson} disabled={trialRunning} onChange={(event) => setTestVariablesJson(event.target.value)} />
+          </label>
+        </details>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className="provider-secondary-btn h-7"
-            disabled={!!testRunDisabledReason || testRun.status === 'running'}
+            disabled={!!testRunDisabledReason || trialRunning || !!session}
             title={testRunDisabledReason || undefined}
             onClick={() => void runProtocolTest()}
           >
             <Icon
-              icon={testRun.status === 'running' ? 'mdi:loading' : 'mdi:play-circle-outline'}
-              className={testRun.status === 'running' ? 'settings-spin' : undefined}
+              icon={trialRunning ? 'mdi:loading' : 'mdi:play-circle-outline'}
+              className={trialRunning ? 'settings-spin' : undefined}
               width="14"
             />
-            {testRun.status === 'running' ? t('试跑中') : t('试跑')}
+            {trialRunning ? t('试跑中') : t('试跑')}
           </button>
-          {testRun.status === 'running' ? (
+          {trialRunning ? (
             <button type="button" className="provider-text-btn h-7" onClick={cancelProtocolTest}>
-              {t('取消')}
+              {t(session?.status === 'polling' ? '暂停查询' : '停止等待')}
             </button>
           ) : null}
+          {session?.canResume ? <button type="button" className="ui-btn ui-btn--sm" disabled={!apiKey.trim()}
+            onClick={() => void resumeProtocolTest()}>{t('继续查询')}</button> : null}
+          {session && !trialRunning ? <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => {
+            void confirmAction(t('放弃查询记录不会停止上游任务；再次试跑会创建新任务并可能计费。'),
+              { title: t('放弃试跑记录？'), okLabel: t('放弃记录'), cancelLabel: t('保留任务') }).then((confirmed) => {
+              if (confirmed) { discardProtocolTestSession(sessionIdentity); setTestRun({ status: 'idle' }); }
+            }).catch(() => {});
+          }}>{t('放弃记录')}</button> : null}
           <small className="text-[11px] text-canvas-text-muted">
             {testRunDisabledReason
-              || t('使用示例变量发送一次真实请求，会产生调用与计费')}
+              || t('使用试跑配置发送真实请求，会产生调用与计费')}
           </small>
         </div>
+        {sessionMessage ? <p role="status" className="mt-2 text-xs text-canvas-text-secondary">{sessionMessage}</p> : null}
+        {session?.taskId ? <p className="mt-1 break-all text-xs text-canvas-text-muted">{t('任务 ID {id}', { id: session.taskId })}</p> : null}
+        {session ? <p className="mt-1 text-xs text-canvas-text-muted">{t('查询记录仅保留到应用关闭或刷新。')}</p> : null}
         {testRun.message ? (
           <div className={`provider-catalog-message is-${testRun.status === 'error' ? 'error' : 'ready'} mt-2`}>
             <Icon

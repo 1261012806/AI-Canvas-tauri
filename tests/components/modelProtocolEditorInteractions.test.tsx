@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 interface HookScope { values: unknown[]; index: number }
 const driver = vi.hoisted(() => ({
   scope: null as HookScope | null, execute: vi.fn(), copy: vi.fn(),
+  confirm: vi.fn(),
   layoutEffects: [] as Array<() => void>,
 }));
 vi.mock('react', async () => ({
@@ -27,10 +28,11 @@ vi.mock('react', async () => ({
   useId: () => `protocol-test-${driver.scope!.index++}`,
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
 }));
-vi.mock('../../src/services/ai/modelProtocol', async (original) => ({
-  ...await original<typeof import('../../src/services/ai/modelProtocol')>(),
-  executeModelProtocol: (...args: unknown[]) => driver.execute(...args),
+vi.mock('../../src/services/ai/modelProtocolTestSession', async (original) => ({
+  ...await original<typeof import('../../src/services/ai/modelProtocolTestSession')>(),
+  startProtocolTestSession: (...args: unknown[]) => driver.execute(...args),
 }));
+vi.mock('../../src/services/confirmDialog', () => ({ confirmAction: (...args: unknown[]) => driver.confirm(...args) }));
 vi.mock('../../src/services/clipboardService', () => ({ copyText: (...args: unknown[]) => driver.copy(...args) }));
 import ModelProtocolEditor from '../../src/components/settings/ModelProtocolEditor';
 import { getDefaultCustomProtocol, parseModelExecutionProtocol, previewModelProtocolRequest } from '../../src/services/ai/modelProtocol';
@@ -83,6 +85,7 @@ beforeEach(() => {
   driver.scope = { values: [], index: 0 };
   driver.execute.mockReset().mockResolvedValue({ urls: ['https://cdn.example/result.png'] });
   driver.copy.mockReset().mockResolvedValue(true);
+  driver.confirm.mockReset().mockResolvedValue(true);
   props = {
     model: { id: 'image-model', name: 'Image', category: 'image', provider: 'custom',
       executionProfile: { preset: 'custom', protocol: getDefaultCustomProtocol('image') } },
@@ -207,6 +210,49 @@ describe('model protocol editor interactions', () => {
     await click(button('试跑'));
     expect(driver.execute).not.toHaveBeenCalled();
     expect(props.onValidityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('preserves an invalid draft when switching views and only overwrites it after explicit confirmation', async () => {
+    props.model.category = 'video';
+    render();
+    change(protocolField(), '{ unfinished user settings');
+    await click(find((element) => element.props.role === 'tab' && element.props.children === '表单'));
+    expect(protocolField().props.value).toBe('{ unfinished user settings');
+    expect(props.onValidityChange).toHaveBeenLastCalledWith(false);
+    driver.confirm.mockResolvedValue(false);
+    await click(find((element) => element.props['aria-label'] === '填入 H3 视频预设（APIMart）'));
+    expect(protocolField().props.value).toBe('{ unfinished user settings');
+    expect(props.onChange).not.toHaveBeenCalled();
+    driver.confirm.mockResolvedValue(true);
+    await click(find((element) => element.props['aria-label'] === '填入 H3 视频预设（APIMart）'));
+    expect(JSON.parse(protocolField().props.value as string).submit.path).toBeTruthy();
+  });
+
+  it('keeps preview-only edits out of real trial variables', async () => {
+    render();
+    const previewLabel = find((element) => element.type === 'label' && element.props.children === '示例变量 JSON');
+    const preview = find((element) => element.type === 'textarea' && element.props.id === previewLabel.props.htmlFor);
+    change(preview, JSON.stringify({ model: 'other-model', prompt: 'preview only', imageUrls: ['https://cdn.example/not-real.png'] }));
+    await click(button('试跑'));
+    expect(driver.execute).toHaveBeenCalledWith(expect.objectContaining({ variables: expect.objectContaining({
+      model: 'image-model', prompt: 'A cinematic product shot',
+    }) }));
+    expect(driver.execute.mock.calls[0][0].variables.imageUrls).toBeUndefined();
+  });
+
+  it('blocks placeholder trial media locally and does not report text-only media results as success', async () => {
+    render();
+    const trialLabel = find((element) => element.type === 'label' && elements(element.props.children).some((child) => child.props.children === '试跑参数 JSON'));
+    const trial = find((element) => element.type === 'textarea' && element.props.id === trialLabel.props.htmlFor);
+    change(trial, JSON.stringify({ prompt: 'real trial', imageUrls: ['https://cdn.example/ref.png'] }));
+    await click(button('试跑'));
+    expect(driver.execute).not.toHaveBeenCalled();
+    expect(elements(tree).some((element) => element.props.children === '试跑变量包含示例素材，请换成真实素材后再试跑')).toBe(true);
+    change(trial, JSON.stringify({ prompt: 'real trial' }));
+    driver.execute.mockResolvedValue({ text: 'this is not an image' });
+    await click(button('试跑'));
+    expect(elements(tree).some((element) => typeof element.props.children === 'string'
+      && element.props.children.includes('没有解析出有效媒体结果地址'))).toBe(true);
   });
 
   it('executes the corrected current draft with the edited sample variables', async () => {
