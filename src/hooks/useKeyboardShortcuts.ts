@@ -16,6 +16,7 @@ import { SHOTLIST_DEFAULT_COLUMNS, createShotRow } from '../types';
 import { generateId } from '../store/store.utils';
 import { invoke } from '@tauri-apps/api/core';
 import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
+import { startNodeRename } from '../utils/nodeRename';
 
 interface NodeShortcutDefinition {
   type: NodeType;
@@ -225,17 +226,10 @@ export function useKeyboardShortcuts() {
       // F2: rename the single selected node through the shared NodeLabel editor.
       if (e.key === 'F2' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         const state = useAppStore.getState();
-        if (state.selectedNodeIds.length === 1) {
-          const selectedId = state.selectedNodeIds[0];
-          const nodeElement = Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node'))
-            .find((element) => element.dataset.id === selectedId);
-          const labelElement = nodeElement?.querySelector<HTMLElement>('.node-label-text');
-          if (labelElement) {
-            e.preventDefault();
-            e.stopPropagation();
-            labelElement.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
-            return;
-          }
+        if (state.selectedNodeIds.length === 1 && startNodeRename(state.selectedNodeIds[0])) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
         }
       }
 

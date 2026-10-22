@@ -12,6 +12,7 @@ const MENU_ITEMS = [
   { label: '复制', shortcut: 'Ctrl C', action: 'copy' as const },
   { label: '剪切', shortcut: 'Ctrl X', action: 'cut' as const },
   { label: '创建副本', shortcut: 'Ctrl D', action: 'duplicate' as const },
+  { label: '重命名', shortcut: 'F2', action: 'rename' as const, conditional: true },
   { label: '锁定', shortcut: '', action: 'toggleLock' as const, dynamicLockLabel: true },
   { label: '转换图片', shortcut: '', action: 'convertImage' as const, conditional: true, dynamicLabel: true },
   { label: '解除分组', shortcut: '', action: 'ungroup' as const, groupOnly: true },
@@ -28,7 +29,7 @@ const MENU_ITEMS = [
 ];
 
 const MENU_W = 176;
-const MENU_H = 494; // 视频节点最多 13 items + 1 sep
+const MENU_H = 532; // 视频节点最多 14 items + 1 sep
 const TEXT_SELECTION_MENU_EXTRA_H = 78; // 2 text-selection items + separator
 
 function PluginToolsSubmenu({ tools, onSelect }: {
@@ -152,6 +153,7 @@ interface NodeContextMenuProps {
   onCopyText?: () => void;
   onCutText?: () => void;
   onDuplicate: () => void;
+  onRename?: () => void;
   onToggleLock: () => void;
   isLocked: boolean;
   onConvertImage?: () => void;
@@ -182,6 +184,7 @@ export function NodeContextMenu({
   onCopyText,
   onCutText,
   onDuplicate,
+  onRename,
   onToggleLock,
   isLocked,
   onConvertImage,
@@ -218,6 +221,7 @@ export function NodeContextMenu({
     copy: onCopy,
     cut: onCut,
     duplicate: onDuplicate,
+    rename: onRename || (() => {}),
     toggleLock: onToggleLock,
     convertImage: onConvertImage || (() => {}),
     addToCharacter: onAddToCharacter || (() => {}),
@@ -233,6 +237,7 @@ export function NodeContextMenu({
   };
 
   const items = MENU_ITEMS.filter((item) => {
+    if (item.action === 'rename' && !onRename) return false;
     if (item.groupOnly && !onUngroup) return false;
     if (item.conditional && item.action === 'showInFolder' && !onShowInFolder) return false;
     if (item.conditional && item.action === 'openGroupFolder' && !onOpenGroupFolder) return false;

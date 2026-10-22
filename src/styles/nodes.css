@@ -157,8 +157,8 @@
   color: var(--appearance-node-text, var(--theme-text));
 }
 
-/* 设置中关闭「显示节点标题」后隐藏标签（保留 DOM，项目快照仍可读取标题） */
-[data-node-label-visible='false'] .node-label {
+/* 关闭标题显示后仍保留 DOM，重命名时临时显示编辑框。 */
+[data-node-label-visible='false'] .node-label:not([data-editing='true']) {
   display: none;
 }
 

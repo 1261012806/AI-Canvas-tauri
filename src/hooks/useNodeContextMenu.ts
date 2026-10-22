@@ -4,6 +4,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { getActiveTextSelection, type ActiveTextSelection } from '../utils/textSelection';
+import { startNodeRename } from '../utils/nodeRename';
 import {
   ensureGroupFolder,
   openDirectoryInFileManager,
@@ -177,6 +178,12 @@ export function useNodeContextMenu() {
     useAppStore.getState().showToast(t('节点已创建副本'));
   }, [menu.nodeId, nodes, copySelectedNodes, pasteNodes, closeMenu, t]);
 
+  const handleRename = useCallback(() => {
+    if (!menu.nodeId) return;
+    closeMenu();
+    startNodeRename(menu.nodeId);
+  }, [menu.nodeId, closeMenu]);
+
   // ── Ungroup ──
   const handleUngroup = useCallback(() => {
     if (!menu.nodeId) return;
@@ -202,6 +209,8 @@ export function useNodeContextMenu() {
   const currentNode = nodes.find((n) => n.id === menu.nodeId);
   const nodeType = (currentNode?.type) as NodeType | undefined;
   const nodeData = currentNode?.data as BaseNodeData | undefined;
+  const showRename = nodeType != null
+    && !['group', 'canvas-note', 'plugin-node', 'ai-app'].includes(nodeType);
   const pluginTools = getAvailableNodePluginTools(installedPlugins, nodeType);
   const isNodeLocked = currentNode?.draggable === false;
   const actionMediaIdentity = [nodeData?.fileName, nodeData?.filePath, nodeData?.imageUrl]
@@ -553,6 +562,8 @@ export function useNodeContextMenu() {
     handleCopyText,
     handleCutText,
     handleDuplicate,
+    handleRename,
+    showRename,
     handleToggleLock,
     isNodeLocked,
     handleConvertImage,

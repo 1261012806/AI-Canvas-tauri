@@ -59,7 +59,7 @@ export default function NodeLabel({ kind, label, displayId, isBeta, nodeId: _nod
   );
 
   return (
-    <div className={`node-label flex items-center gap-2 px-3 py-2 select-none ${isEditing ? 'z-20' : ''}`} data-label-kind={kind}>
+    <div className={`node-label flex items-center gap-2 px-3 py-2 select-none ${isEditing ? 'z-20' : ''}`} data-label-kind={kind} data-editing={isEditing}>
       <span
         className="node-label-icon w-5 h-5 rounded flex items-center justify-center"
         aria-hidden="true"

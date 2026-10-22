@@ -961,6 +961,8 @@ function CanvasInner({ onReady }: CanvasProps) {
     handleCopyText,
     handleCutText,
     handleDuplicate,
+    handleRename,
+    showRename,
     handleToggleLock,
     isNodeLocked,
     handleConvertImage,
@@ -1811,6 +1813,7 @@ function CanvasInner({ onReady }: CanvasProps) {
         onCopyText={handleCopyText}
         onCutText={handleCutText}
         onDuplicate={handleDuplicate}
+        onRename={showRename ? handleRename : undefined}
         onToggleLock={handleToggleLock}
         isLocked={isNodeLocked}
         onConvertImage={showImageConversion ? handleConvertImage : undefined}
