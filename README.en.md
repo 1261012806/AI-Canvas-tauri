@@ -14,8 +14,6 @@
 
 AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, Markdown, shot lists, 360° panoramas and hand-drawn notes into connectable canvas nodes. In a single project you can orchestrate generation pipelines, manage characters, scenes, props and local media assets, run ComfyUI workflows, and use the conversational assistant to query or modify the canvas, generate media, dispatch read-only sub-agents, read authorized files, and accumulate project memory. Projects can also be split into series and episodes — each episode of an AI short drama gets its own canvas, while the character library and assets are shared across the whole series.
 
-**v0.10.13:** Adds full-screen reference previews and precise shot references. Improves video-replica character references and task recovery, asset loading, group controls, and the ComfyUI installer.
-
 ![Version](https://img.shields.io/badge/version-0.10.13-6366f1)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db)
 ![React](https://img.shields.io/badge/React-19-61dafb)
@@ -39,27 +37,24 @@ AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, 
 
 | Capability | Description |
 | --- | --- |
-| Multimodal node canvas | Connect text, images, video, audio, animation, Markdown, shot lists, panoramas, director nodes, source files and canvas notes. Minimap counts, lightweight overview nodes and progressive display improve navigation while preserving source media and canvas data. |
-| Frame animation editing & export | Import or generate sprite sheets, correct grids, reorder or disable frames, and adjust offsets, frame rate and looping. Desktop Rust processing exports GIF, PNG sequences or PNG atlases with JSON, using the same frame arrangement as the preview. |
-| AI & workflows | Cloud models, custom model protocols with trial runs, unified CCC group management with automatic per-model key routing, multiple ComfyUI servers and local management (model deduplication and a runtime console), RunningHub workflows/AI apps, generic Workflow API connections with an AutoDL H3 template, Dreamina and local ONNX inference. Built-in DLSS5 image/video texture-enhancement templates require the matching ComfyUI nodes. Uploads, progress and recovery follow each platform. |
-| User plugins | Install JavaScript or trusted Python plugins from local folders, the marketplace or GitHub Releases. Plugins extend tools, nodes and host-managed UI. JavaScript uses QuickJS; Python has the current user’s permissions. Source and full revision digests bind execution; disabled or replaced revisions cannot write results back. |
-| Scripts & shot production | Browse source chapters, write episodes, preserve script snapshots, revise shots, fill missing frames, prepare voice/video/director nodes and send dialogue captions and ready voice-overs to the timeline. Reference character action media with @. |
-| Built-in video editing | A separate editor provides multiple tracks, trimming, splitting, transforms, transitions, text, stickers and volume controls, with passthrough or composited export. MCP also exposes project editing, background export, media probing and frame extraction. |
-| Conversational Agent | Multiple conversations, streaming, Plan/B/C modes, tools, approvals and project memory. Follow-ups retain complete recent turns and sanitized tool results; long tasks can compress context. Embedded and separate windows share drafts, model catalogs and task views. Supports Agent Package imports. |
-| AI app nodes | Created only by the built-in Agent or MCP. Users can open apps, run read-only actions and explicitly save state or results. The first version supports isolated HTML/CSS interfaces and Worker JavaScript, with access limited to bound canvas assets and no arbitrary file or network access. |
-| Read-only sub-agents | Define domain roles and let the main task dispatch parallel read-only sub-agents; sanitized results return to the main task. |
-| Characters & creative assets | Project/global character cards, reference images, voices and action media, plus extraction, descriptions and image binding for characters, scenes and props. |
-| External MCP control | Disabled by default. Supports local stdio and Streamable HTTP with an additional configuration confirmation; on-demand tool discovery is the default. Import media, upload images in chunks, paste system content, capture the canvas and control editing projects. MCP runs autonomously, while user-choice questions still require the user. |
-| Local storage & protected settings | Media is stored in project directories, structured data in IndexedDB, and API keys in the Rust credential store. Settings save changed fields with conflict checks; failures preserve drafts and offer retry/reload. Exit waits for saving. |
-| Series & episodes | Each episode has its own canvas; the series shares characters, project memory and media directories. The assistant can create episodes in batches from a script. |
-| Asset library & previews | Tab toggles the left asset drawer for project files, global assets, creative assets and the node list. Renaming an asset updates matching canvas node titles. Locate and connect nodes from cards, browse full-screen images by display number, play floating videos and pin output history. Includes recoverable deletion and desktop .aicanvas project packages. |
-| Asset editing & prompt extraction | Edit image prompts, reference images and tags; extract prompts and tags from single images or batches and save successful results automatically. Text and Markdown share a large editor; asset files use manual saving with checks for external changes. |
-| Onboarding & help | First-run guidance, a scenario-based Help Center and an offline manual covering references, ComfyUI inputs, shortcuts and custom APIs. |
-| Three director runtimes | Lightweight desk, Blender editing and AI shot previs. Explicit shot-list or image references produce bounded JSON scenes with playback, screenshots and MP4 output; MCP can read the contract and read/write scenes. Blender supports Windows x86_64, macOS Intel/Apple Silicon and stable 4.5, 5.0, 5.1 and 5.2 series. Save-and-return validates the camera PNG and .blend project. |
-| Appearance & hover controls | Full appearance presets cover pages, canvas, nodes, edges and handles, with custom presets and `.aicanvas-theme` import/export. Hint lines reveal the top project bar and upper-right operation history with subtle motion and reduced-motion support. |
-| Video batches & local usage | Video batches check inputs and submit serially; unfinished tasks are not resubmitted automatically after reopening. The desktop ledger for Volcengine Ark image/video nodes stores price snapshots, supports usage queries and Excel export. Estimated or calculated amounts are not official bills. |
+| Multimodal node canvas | Connect text, images, video, audio, animation, Markdown, storyboards, panoramas, director nodes and canvas notes. |
+| Frame animation editing & export | Import or generate sprite sheets, edit animation frames and playback, and export GIFs, PNG sequences or atlases. |
+| AI & workflows | Connect cloud and custom models, CCC, multiple ComfyUI servers, RunningHub, generic workflow APIs, Dreamina and local ONNX models. |
+| User plugins | Install plugins from local files, the marketplace or GitHub Releases to extend tools, nodes and interfaces. JavaScript runs with restricted capabilities; trusted Python plugins run with your user permissions. |
+| Scripts & shot production | Browse source material, write episode scripts, generate and revise shots, and prepare voice and video assets for the editing timeline. |
+| Built-in video editing | Arrange multiple tracks and edit clips, transitions, captions, stickers and volume in a separate editor. Supports video export and MCP control. |
+| Conversational Agent | Query and edit the canvas, generate media and manage tasks through conversation. Supports multiple conversations, Plan/B/C modes, project memory, separate windows and read-only sub-agents. |
+| AI app nodes | Create interactive apps through the Agent or MCP. Apps access only bound canvas assets, run read-only actions and save results. |
+| Characters & creative assets | Manage project and global character libraries, reference images, voices and action media, and organize characters, scenes and props. |
+| External MCP control | Let external AI tools control the canvas, media and editing projects through local stdio or Streamable HTTP. Disabled by default; remote access requires confirmation to enable. |
+| Local storage | Save projects and media locally, and manage API keys in a separate credential store. |
+| Series & episodes | Give each episode its own canvas while sharing characters, project memory and assets across the series. |
+| Asset library & editing | Manage, preview and edit assets, including prompts, tags, batch prompt extraction from images, text and Markdown. Supports project packages and recoverable deletion. |
+| 3D director desk | Build scenes, preview shots and produce video with the lightweight director desk, Blender editing and AI shot previs. |
+| Appearance customization | Apply appearance presets across pages, canvas, nodes and edges. Create custom themes and import or export presets. |
+| Video batches & usage tracking | Manage video generation batches and export local usage reports for Volcengine Ark image/video nodes. Usage estimates are not official bills. |
 
-The documentation baseline was checked against 0.10.1 source on 2026-10-08; the 0.10.2 update adds unified CCC group management and per-model key routing (2026-10-09). Installer capabilities depend on their version; source and automated checks do not establish real-model, desktop multi-window or cross-platform acceptance. See the [user manual](site/manual.html) and [module index](doc/文档导航.md) (in Chinese) for operations, ownership and validation boundaries.
+Available features depend on the desktop app version. See the [user manual](site/manual.html) for operations and the [module index](doc/文档导航.md) for development and integration documentation (both in Chinese).
 
 ## Tech Stack
 
@@ -124,8 +119,6 @@ npm run build
 # Desktop app build
 npm run tauri build
 ```
-
-`package.json` is the version source. `npm run sync-version` currently updates only the Chinese README badge and `src-tauri/Cargo.toml`; check the Tauri configuration, translated READMEs, website and manual separately. See the [release guide](doc/打包与发版流程.md).
 
 ## Documentation
 
