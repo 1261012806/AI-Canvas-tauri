@@ -532,11 +532,16 @@ async function resolvePromptReferences(
   }
 
   const assetImageMap = new Map<string, string>();
+  const assetMediaMap = new Map<string, { kind: 'video' | 'audio'; url: string; filePath: string }>();
   for (const m of rawPrompt.matchAll(/@asset\{([^}]+)\}/g)) {
     let p = m[1];
     try { p = decodeURIComponent(m[1]); } catch { /* keep raw */ }
     const name = p.split(/[\\/]/).pop() || '';
-    if (getFileCategory(name) === 'image' && !assetImageMap.has(m[1])) {
+    const category = getFileCategory(name);
+    if (extractMediaReferences && (category === 'video' || category === 'audio') && !assetMediaMap.has(m[1])) {
+      assetMediaMap.set(m[1], { kind: category, url: await getAssetUrlFromPath(p), filePath: p });
+    }
+    if (category === 'image' && !assetImageMap.has(m[1])) {
       const dataUrl = await readFileToDataUrl(p);
       if (dataUrl) assetImageMap.set(m[1], dataUrl);
     }
@@ -613,6 +618,20 @@ async function resolvePromptReferences(
       return mediaLabel('image', addImage(`chat-image:${chatImageFileName}`, { url }));
     }
     if (assetEnc !== undefined) {
+      const media = assetMediaMap.get(assetEnc);
+      if (media) {
+        const key = `asset:${assetEnc}`;
+        const indices = media.kind === 'video' ? videoKeyToIndex : audioKeyToIndex;
+        let idx = indices.get(key);
+        if (idx === undefined) {
+          idx = indices.size + 1;
+          indices.set(key, idx);
+          mediaReferences.push({
+            ...media, origin: 'prompt', role: media.kind === 'audio' ? 'reference_audio' : 'reference',
+          });
+        }
+        return mediaLabel(media.kind, idx);
+      }
       const dataUrl = assetImageMap.get(assetEnc);
       if (!dataUrl) return '';
       const key = `asset:${assetEnc}`;
@@ -907,7 +926,7 @@ export async function resolvePromptWithImageRefs(
     ? getMediaReferenceUrls(result.references, 'image', 'local') : result.imageUrls };
 }
 
-/** 视频生成入口：图片、视频和音频引用都提取为对应的独立媒体参数。 */
+/** 视频生成入口：提取图片、视频和音频引用。 */
 export async function resolvePromptWithMediaRefs(rawPrompt: string, options: { preserveBindings?: boolean } = {}): Promise<PromptMediaReferences> {
   return resolvePromptReferences(rawPrompt, true, options.preserveBindings);
 }

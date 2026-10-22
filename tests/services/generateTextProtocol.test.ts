@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateText } from '../../src/services/ai/generateText';
 import { useAppStore } from '../../src/store/useAppStore';
+import { resolvePromptWithMediaRefs } from '../../src/services/ai/promptResolver';
 import type { ModelExecutionProfile } from '../../src/types/aiTypes';
 
 const jsonResponse = (payload: unknown) => new Response(JSON.stringify(payload), {
@@ -183,5 +184,20 @@ describe('custom text model protocol', () => {
       .resolves.toBe(preset === 'anthropic-chat' ? 'Claude 回复' : 'Gemini 回复');
     expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedUrl);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ [expectedHeader]: 'secret' });
+  });
+});
+
+describe('shared protocol asset references', () => {
+  it('extracts local video and audio assets once and keeps their prompt reference indices', async () => {
+    const result = await resolvePromptWithMediaRefs(
+      '参考 @asset{references%2Fclip.mp4} 和 @asset{references%2Fvoice.mp3}，再次参考 @asset{references%2Fclip.mp4}',
+    );
+    expect(result.prompt).toBe('参考 视频1 和 音频1，再次参考 视频1');
+    expect(result.videoUrls).toHaveLength(1);
+    expect(result.audioUrls).toHaveLength(1);
+    expect(result.references).toEqual([
+      expect.objectContaining({ kind: 'video', origin: 'prompt', role: 'reference', filePath: 'references/clip.mp4' }),
+      expect.objectContaining({ kind: 'audio', origin: 'prompt', role: 'reference_audio', filePath: 'references/voice.mp3' }),
+    ]);
   });
 });
