@@ -1,4 +1,5 @@
 import type { BaseNodeData } from '../../../types';
+import { resolveVideoThumbnailPoster } from '../../shared/videoThumbnailSource';
 import type { MentionChipPreview } from '../../../types/referencePreview';
 import { cellBackgroundStyle, gridBoundaries } from '../../../utils/storyboardGrid';
 import { formatShotVideoPrompt, parseShotlistRowMentionId } from '../../../types/shotlist';
@@ -83,7 +84,8 @@ export function resolveMentionPreview(
   const node = nodes.find((item) => item.id === (cell?.[1] ?? id));
   const data = node?.data;
   const image = thumbnailUrl || data?.thumbnailUrl || data?.imageUrl || data?.directorCaptureUrls?.[0];
-  const outputType: 'image' | 'video' | 'audio' | 'text' = cell || data?.imageUrl || data?.directorCaptureUrls?.length ? 'image'
+  const outputType: 'image' | 'video' | 'audio' | 'text' = !cell && (data?.type === 'ai-video' || data?.type === 'source-video') ? 'video'
+    : cell || data?.imageUrl || data?.directorCaptureUrls?.length ? 'image'
     : data?.videoUrl ? 'video' : data?.audioUrl ? 'audio' : 'text';
   let sprite: ReturnType<typeof cellBackgroundStyle> | undefined;
   let cellImage = image;
@@ -106,7 +108,9 @@ export function resolveMentionPreview(
     label: cell ? fallbackLabel : data?.label || fallbackLabel,
     displayId: cell ? undefined : data?.displayId,
     outputType,
-    thumbnailUrl: cellImage,
+    thumbnailUrl: outputType === 'video' ? resolveVideoThumbnailPoster(image, data?.videoUrl, data?.filePath) : cellImage,
+    videoUrl: outputType === 'video' ? data?.videoUrl : undefined,
+    filePath: outputType === 'video' ? data?.filePath : undefined,
     sprite,
     text: typeof data?.output === 'string' ? data.output.slice(0, 240) : '',
     missing: !node,

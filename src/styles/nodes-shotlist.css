@@ -370,6 +370,28 @@ button.shot-frame:hover {
   display: flex;
 }
 
+.shot-video > .resource-video-preview {
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-radius: inherit;
+}
+.shot-video .shot-frame-pick,
+.shot-video .shot-frame-unbind {
+  z-index: 2;
+  display: flex;
+  width: 24px;
+  height: 24px;
+  background: var(--theme-card);
+  color: var(--theme-text);
+  border: 1px solid var(--theme-border);
+}
+.shot-video .shot-frame-pick:focus-visible,
+.shot-video .shot-frame-unbind:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+
 /* ── 画面挑选浮层（Portal 到 body，固定定位）── */
 .shot-picker {
   position: fixed;

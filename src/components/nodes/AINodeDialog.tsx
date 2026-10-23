@@ -30,6 +30,8 @@ import VolcengineCostEstimate from './shared/VolcengineCostEstimate';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import LazyLoadBoundary from '../shared/LazyLoadBoundary';
+import ResourceVideoPreview from '../shared/ResourceVideoPreview';
+import { useResourceVideoPreview } from '../../hooks/useResourceVideoPreview';
 const VolcengineBillingSettings = lazy(() => import('../settings/VolcengineBillingSettings'));
 import type { MentionEditorHandle } from './shared/MentionEditor';
 import ConnectedNodesPreview from './shared/ConnectedNodesPreview';
@@ -88,6 +90,9 @@ function AINodeDialog() {
   const node = useAppStore((s) => (s.activeNodeId ? s.nodes.find((n) => n.id === s.activeNodeId) : undefined));
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
   const data = useMemo(() => resolveGenerationNodeData(node?.data), [node?.data]);
+  const cloudOutputs = data?.workflowApiOutputs ?? data?.runninghubOutputs;
+  const cloudVideoPreview = useResourceVideoPreview(JSON.stringify([currentProjectId, activeNodeId]),
+    (cloudOutputs ?? []).flatMap((output, index) => output.kind === 'video' ? [`${output.url}:${index}`] : []));
   const nodeType = data?.type;
   const isPrevis = nodeType === 'ai-director' && data?.directorRuntimeKind === 'ai-threejs';
   const directorDialogBlocked = (node?.type === 'ai-director' || nodeType === 'ai-director') && !isPrevis;
@@ -298,6 +303,8 @@ function AINodeDialog() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 先关闭产物视频预览，保留底层节点提示词面板。
+        if (cloudVideoPreview.expandedId !== null) return;
         if (billingOpen) {
           setBillingOpen(false);
           return;
@@ -322,7 +329,7 @@ function AINodeDialog() {
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [billingOpen, handleCloseNodeDialog, isExpanded, polishOpen, closePolish]);
+  }, [billingOpen, cloudVideoPreview.expandedId, handleCloseNodeDialog, isExpanded, polishOpen, closePolish]);
 
   // All hooks must be called before any early return
   const onPromptChange = useCallback(
@@ -1080,7 +1087,6 @@ function AINodeDialog() {
     : undefined;
   const cloudTask = currentProjectId ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && ['runninghub-workflow', 'runninghub-model'].includes(task.taskType)) : undefined;
   const workflowApiTask = currentProjectId ? getPendingTasksForProject(currentProjectId).find((task) => task.nodeId === activeNodeId && task.taskType === 'workflow-api') : undefined;
-  const cloudOutputs = data.workflowApiOutputs ?? data.runninghubOutputs;
 
   const audioPurpose = data.audioPurpose
     ?? (data.model ? findMediaModelOption(data.model)?.audioPurpose : undefined);
@@ -1212,7 +1218,12 @@ function AINodeDialog() {
           </div>}
           {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">全部产物 · {cloudOutputs.length}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
             <p className="mb-1 text-canvas-text-secondary">产物 {index + 1}{output.nodeId ? ` · 节点 ${output.nodeId}` : ''}</p>
-            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={`产物 ${index + 1}`} /> : output.kind === 'video' ? <video className="max-h-48 w-full" src={output.url} controls preload="metadata" /> : <audio className="w-full" src={output.url} controls preload="metadata" />}
+            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={`产物 ${index + 1}`} /> : output.kind === 'video'
+              ? <ResourceVideoPreview src={output.url} name={`产物 ${index + 1}`} className="max-h-48 w-full"
+                  projectId={currentProjectId ?? undefined}
+                  expanded={cloudVideoPreview.expandedId === `${output.url}:${index}`}
+                  onExpandedChange={(expanded) => cloudVideoPreview.setExpanded(expanded ? `${output.url}:${index}` : null)} />
+              : <audio className="w-full" src={output.url} controls preload="metadata" />}
           </div>)}</div></details>}
           {recoverableComfyTask && (
             <div className="ui-alert ui-alert--warning mx-3 mb-2 flex-wrap" role="status">

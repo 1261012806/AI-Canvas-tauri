@@ -84,7 +84,7 @@ import { useCanvasViewportPreferences } from '../hooks/useCanvasViewportPreferen
 import { getCanvasLockedZoom, normalizeCanvasZoom } from '../utils/canvasViewportPreferences';
 import type { BaseNodeData } from '../types';
 import type { CanvasEdgeDisplayMode } from '../types/canvasEdges';
-import { SHOTLIST_FRAME_SOURCE_TYPES, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
+import { isShotRowBlank, SHOTLIST_FRAME_SOURCE_TYPES, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
 import type { Node as RFNode, NodeProps, NodeTypes, OnMove } from '@xyflow/react';
 import { useNodeSnap, ResizeSnapContext, type SnapLine } from '../hooks/useNodeSnap';
 import { setCanvasPointerPosition } from '../services/canvasPointerService';
@@ -1248,23 +1248,16 @@ function CanvasInner({ onReady }: CanvasProps) {
         return;
       }
 
-      // 对话框已开启时直接切到被点击的节点：已有产物的节点也一视同仁，不必再按空格。
-      // 这里读 getState() 而非订阅 activeNodeId，避免对话框开关导致 onNodeClick 反复重建。
-      const isDialogOpen = useAppStore.getState().activeNodeId !== null;
-      if (isDialogOpen) {
-        openDialogForNode(liveNode);
-        return;
-      }
-
-      // 对话框未开启：已有产物的节点与源节点保持「不自动弹窗」，需要空格键唤起。
-      const isSilentOnFirstClick =
+      // 已有内容的节点单击只选中，即使之前已有对话框；按空格或显式生成按钮再打开。
+      const isSilentOnClick =
         liveNode.data?.role === 'source' ||
         (liveNode.data?.type === 'ai-text' && liveNode.data?.output) ||
         (liveNode.data?.type === 'ai-image' && liveNode.data?.imageUrl) ||
         (liveNode.data?.type === 'ai-panorama' && liveNode.data?.imageUrl) ||
         (liveNode.data?.type === 'ai-video' && liveNode.data?.videoUrl) ||
-        (liveNode.data?.type === 'ai-audio' && liveNode.data?.audioUrl);
-      if (isSilentOnFirstClick) {
+        (liveNode.data?.type === 'ai-audio' && liveNode.data?.audioUrl) ||
+        (liveNode.data?.type === 'ai-shotlist' && liveNode.data.shotlistRows?.some((row) => !isShotRowBlank(row)));
+      if (isSilentOnClick) {
         closeNodeDialog();
         return;
       }
@@ -1462,7 +1455,8 @@ function CanvasInner({ onReady }: CanvasProps) {
       const shotlist = el.closest<HTMLElement>('.shotlist-node');
       if (!shotlist) continue;
       if (shotlist.closest(`.react-flow__node[data-id="${node.id}"]`)) continue;
-      const cell = el.closest<HTMLElement>('[data-shot-frame-row]');
+      const cell = el.closest<HTMLElement>('[data-shot-frame-row], [data-shot-video-row]');
+      if (cell?.dataset.shotVideoRow && node.type !== 'ai-video' && node.type !== 'source-video') return null;
       return cell?.closest('.shotlist-node') === shotlist ? cell : null;
     }
     return null;
@@ -1572,9 +1566,11 @@ function CanvasInner({ onReady }: CanvasProps) {
         void duplication.finish().then((clone) => {
           if (!clone) return;
           const shotlistId = frameCell?.closest('.react-flow__node')?.getAttribute('data-id');
-          const rowId = frameCell?.dataset.shotFrameRow;
+          const rowId = frameCell?.dataset.shotVideoRow ?? frameCell?.dataset.shotFrameRow;
           if (shotlistId && rowId) {
-            useAppStore.getState().bindShotlistFrame(shotlistId, rowId, clone.id);
+            const state = useAppStore.getState();
+            if (frameCell?.dataset.shotVideoRow) state.bindShotlistVideo(shotlistId, rowId, clone.id);
+            else state.bindShotlistFrame(shotlistId, rowId, clone.id);
             return;
           }
           const sbId = cell?.closest('.react-flow__node')?.getAttribute('data-id');
@@ -1589,9 +1585,11 @@ function CanvasInner({ onReady }: CanvasProps) {
       }
       if (frameCell) {
         const shotlistId = frameCell.closest('.react-flow__node')?.getAttribute('data-id');
-        const rowId = frameCell.dataset.shotFrameRow;
+        const rowId = frameCell.dataset.shotVideoRow ?? frameCell.dataset.shotFrameRow;
         if (shotlistId && shotlistId !== node.id && rowId) {
-          useAppStore.getState().bindShotlistFrame(shotlistId, rowId, node.id);
+          const state = useAppStore.getState();
+          if (frameCell.dataset.shotVideoRow) state.bindShotlistVideo(shotlistId, rowId, node.id);
+          else state.bindShotlistFrame(shotlistId, rowId, node.id);
           onNodeDragStop();
           return;
         }

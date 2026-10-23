@@ -15,6 +15,7 @@ import { buildReferenceChipEl } from '../../shared/referenceChipDom';
 import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
 import { buildComfyRefmodMention, parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
 import { comfyRefmodKey } from '../../../utils/comfyRefmod';
+import { resolveVideoThumbnailPoster } from '../../shared/videoThumbnailSource';
 
 const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 export const ZWSP = '\u200B';
@@ -82,8 +83,15 @@ function localAssetUrl(filePath?: string): string | undefined {
 }
 
 export function bestNodeThumb(
-  data: { imageUrl?: unknown; thumbnailUrl?: unknown; filePath?: unknown },
+  data: { type?: unknown; imageUrl?: unknown; videoUrl?: unknown; thumbnailUrl?: unknown; filePath?: unknown },
 ): string | undefined {
+  if (data.videoUrl || data.type === 'ai-video' || data.type === 'source-video') {
+    return resolveVideoThumbnailPoster(
+      typeof data.thumbnailUrl === 'string' ? data.thumbnailUrl : undefined,
+      typeof data.videoUrl === 'string' ? data.videoUrl : undefined,
+      typeof data.filePath === 'string' ? data.filePath : undefined,
+    );
+  }
   if (data.imageUrl) {
     return localAssetUrl(data.filePath as string | undefined)
       || (data.thumbnailUrl as string | undefined)

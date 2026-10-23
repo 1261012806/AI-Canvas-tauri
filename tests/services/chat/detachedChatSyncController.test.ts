@@ -614,6 +614,7 @@ describe('detached chat sync controller', () => {
         type: 'ai-image',
         displayId: 3,
         imageUrl: undefined,
+        videoUrl: undefined,
         thumbnailUrl: 'asset://thumb-1',
       },
     }]);
@@ -661,6 +662,26 @@ describe('detached chat sync controller', () => {
     expect(useAppStore.getState().chatComposerLiveDraft).toBe('独立窗口里改过的草稿');
 
     controller.dispose();
+  });
+
+  it('projects playable video URLs and patches source changes without leaking file paths or bodies', () => {
+    const node = (videoUrl: string, x = 0) => ({
+      id: 'video-node', type: 'source-video', position: { x, y: 0 },
+      data: { label: '源视频', type: 'source-video' as const, videoUrl, thumbnailUrl: 'asset://localhost/poster.png',
+        filePath: 'PRIVATE_FILE_PATH', prompt: 'PRIVATE_PROMPT', output: 'PRIVATE_OUTPUT' },
+    });
+    useAppStore.setState({ nodes: [node('asset://localhost/first.mp4')] });
+    const first = buildDetachedChatSnapshot(useAppStore.getState());
+    expect(first.nodes[0].data.videoUrl).toBe('asset://localhost/first.mp4');
+    expect(JSON.stringify(first.nodes)).not.toContain('PRIVATE_');
+    useAppStore.setState({ nodes: [node('asset://localhost/first.mp4', 120)] });
+    expect(buildDetachedChatSnapshot(useAppStore.getState()).nodes).toBe(first.nodes);
+    useAppStore.setState({ nodes: [node('asset://localhost/second.mp4', 120)] });
+    const next = buildDetachedChatSnapshot(useAppStore.getState());
+    const patch = createChatStatePatch(first, next);
+    expect(patch.fields.nodes?.[0].data.videoUrl).toBe('asset://localhost/second.mp4');
+    expect(applyChatStatePatch(first, patch).nodes[0].data.videoUrl).toBe('asset://localhost/second.mp4');
+    expect(JSON.stringify(patch.fields.nodes)).not.toContain('PRIVATE_');
   });
 
   it('keeps the node projection stable across canvas drags', () => {

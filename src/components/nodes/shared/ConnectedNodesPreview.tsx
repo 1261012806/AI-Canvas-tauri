@@ -17,6 +17,8 @@ import type { BaseNodeData, StoryboardCellOverride } from '../../../types';
 import { useT } from '../../../i18n';
 import { calcAnchoredPosition } from '../../../utils/popupPosition';
 import FullscreenOverlay from '../../shared/FullscreenOverlay';
+import VideoThumbnail from '../../shared/VideoThumbnail';
+import { resolveVideoThumbnailPoster } from '../../shared/videoThumbnailSource';
 import {
   calculateDockOffset,
   calculateReferenceFan,
@@ -64,6 +66,7 @@ interface FullscreenPreviewItem {
   outputType: string;
   mediaUrl?: string;
   thumbnailUrl?: string;
+  filePath?: string;
   previewText?: string;
 }
 
@@ -155,12 +158,14 @@ export default function ConnectedNodesPreview({
           : undefined;
         const outputType = isShotlist
           ? 'shotlist'
+          : data.type === 'ai-video' || data.type === 'source-video' || n.type === 'ai-video' || n.type === 'source-video'
+          ? 'video'
           : (data.imageUrl || directorThumb)
           ? 'image' : data.videoUrl ? 'video' : data.audioUrl ? 'audio' : 'text';
         const thumbnailUrl = outputType === 'image'
           ? (localAssetUrl(data.filePath as string | undefined) || (data.thumbnailUrl as string) || data.imageUrl || directorThumb || undefined)
           : outputType === 'video'
-          ? ((data.thumbnailUrl as string) || undefined) : undefined;
+          ? resolveVideoThumbnailPoster(data.thumbnailUrl, data.videoUrl, data.filePath) : undefined;
         const previewText = data.output ? String(data.output) : undefined;
         const textSnippet = outputType === 'text' && previewText
           ? previewText.slice(0, 50) : undefined;
@@ -228,6 +233,7 @@ export default function ConnectedNodesPreview({
           textSnippet,
           previewText,
           mediaUrl,
+          filePath: outputType === 'video' ? data.filePath : undefined,
           shotCount,
           hasOutput: isShotlist ? shotCount > 0 : !!data.output,
           nodeType: data.type,
@@ -505,9 +511,10 @@ export default function ConnectedNodesPreview({
             {/* 缩略图内容 */}
             {node.outputType === 'image' && node.thumbnailUrl ? (
               <img src={node.thumbnailUrl} alt={node.label} className="thumb-img" loading="lazy" />
-            ) : node.outputType === 'video' && node.thumbnailUrl ? (
+            ) : node.outputType === 'video' ? (
               <div className="thumb-video-wrap">
-                <img src={node.thumbnailUrl} alt={node.label} className="thumb-img" loading="lazy" />
+                <VideoThumbnail src={node.mediaUrl} filePath={node.filePath} poster={node.thumbnailUrl}
+                  name={node.label} alt={node.label} className="thumb-img object-cover" />
                 <span className="thumb-play-icon">▶</span>
               </div>
             ) : node.outputType === 'text' && node.textSnippet ? (
@@ -680,6 +687,7 @@ export default function ConnectedNodesPreview({
               ) : fullscreenPreview.outputType === 'video' && fullscreenPreview.mediaUrl ? (
                 <video
                   src={fullscreenPreview.mediaUrl}
+                  poster={fullscreenPreview.thumbnailUrl}
                   className="max-h-full max-w-full rounded-2xl bg-black shadow-2xl"
                   controls
                   autoPlay
@@ -690,12 +698,8 @@ export default function ConnectedNodesPreview({
                   <audio src={fullscreenPreview.mediaUrl} className="w-full" controls autoPlay />
                 </div>
               ) : fullscreenPreview.outputType === 'video' && fullscreenPreview.thumbnailUrl ? (
-                <img
-                  src={fullscreenPreview.thumbnailUrl}
-                  alt={fullscreenPreview.label}
-                  className="max-h-full max-w-full select-none rounded-2xl object-contain shadow-2xl"
-                  draggable={false}
-                />
+                <VideoThumbnail poster={fullscreenPreview.thumbnailUrl} name={fullscreenPreview.label} alt={fullscreenPreview.label}
+                  className="h-full w-full select-none rounded-2xl object-contain shadow-2xl" />
               ) : (
                 <div className="max-h-full w-full max-w-3xl overflow-y-auto rounded-2xl border border-canvas-border bg-canvas-surface/90 p-6 text-sm leading-7 text-canvas-text shadow-2xl backdrop-blur-xl">
                   {fullscreenPreview.previewText || t('暂无可预览内容')}

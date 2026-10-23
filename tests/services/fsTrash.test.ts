@@ -187,6 +187,20 @@ describe('删除节点文件的项目归属校验', () => {
     expect(isPathInsideDir('D:/data/project-b', 'D:/data/project-b')).toBe(false);
   });
 
+  it('分镜仍持有参考画面或成片快照时，删除来源节点保留共用文件', async () => {
+    const imagePath = 'D:/data/project-b/reference.png';
+    const videoPath = 'D:/data/project-b/final.mp4';
+    const keep = collectNodeFileReferences({ shotlistRows: [{
+      frame: { filePath: imagePath },
+      video: { url: `asset://localhost/${videoPath}` },
+    }] });
+    expect(keep).toEqual(new Set([imagePath, videoPath]));
+
+    await deleteNodeFiles([{ filePath: imagePath }, { filePath: videoPath }], keep, 'project-b');
+
+    expect(fsMocks.rename).not.toHaveBeenCalled();
+  });
+
   it('跨项目复制来的文件不会被删除', async () => {
     // 当前项目是 B，但节点的 filePath 仍指向源项目 A
     await deleteNodeFile({ filePath: 'D:/data/project-a/original.png' }, undefined, 'project-b');

@@ -62,6 +62,30 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('routes ready video bindings to the generated-video column and images to frame without replacing either reference', async () => {
+    const frame = { nodeId: 'old-image', kind: 'image' as const, url: 'old.png' };
+    useAppStore.setState({ nodes: [node('sheet', { type: 'ai-shotlist', shotlistRows: [{ id: 'r', shotNo: '1', frame, duration: 4 }] }),
+      node('video', { type: 'source-video', videoUrl: 'ready.mp4', videoDuration: 8 }),
+      node('image', { imageUrl: 'new.png' }), node('pending', { type: 'ai-video' })] });
+    const tool = getAgentTool('canvas_bind_shotlist_frame')!;
+    const bound = await tool.execute(context(), { shotlistId: 'sheet', rowId: 'r', sourceNodeId: 'video' });
+    expect(bound.status).toBe('success');
+    expect(JSON.parse(bound.modelContent)).toMatchObject({ target: 'video', reused: false, sourceNodeId: 'video' });
+    expect(useAppStore.getState().nodes[0].data.shotlistRows![0]).toMatchObject({ frame, duration: 4,
+      video: { nodeId: 'video', kind: 'video', url: 'ready.mp4' } });
+    const revision = useAppStore.getState().getCurrentRevision();
+    const repeated = await tool.execute(context(), { shotlistId: 'sheet', rowId: 'r', sourceNodeId: 'video' });
+    expect(JSON.parse(repeated.modelContent)).toMatchObject({ target: 'video', reused: true, revision });
+    const image = await tool.execute(context(), { shotlistId: 'sheet', rowId: 'r', sourceNodeId: 'image' });
+    expect(image.status).toBe('success');
+    expect(JSON.parse(image.modelContent).target).toBe('frame');
+    expect(useAppStore.getState().nodes[0].data.shotlistRows![0]).toMatchObject({ frame: { nodeId: 'image' }, video: { nodeId: 'video' } });
+    const pending = await tool.execute(context(), { shotlistId: 'sheet', rowId: 'r', sourceNodeId: 'pending' });
+    expect(pending.status).toBe('error');
+    expect(useAppStore.getState().nodes[0].data.shotlistRows![0].video?.nodeId).toBe('video');
+    expect(useAppStore.getState().edges).toEqual([{ id: 'e1', source: 'n1', target: 'n2' }]);
+  });
+
   it('MCP 冷查询、创建与更新可优先使用已存全局场景，且不要求先打开库', async () => {
     const global: DramaAsset = { id: 'global-scene', kind: 'scene', name: '全局街道', key: 'street', summary: '', visualNotes: '',
       importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1,

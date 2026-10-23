@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import PopupCloseButton from '../../shared/PopupCloseButton';
 import MentionPicker, { type MentionPickerChip, type MentionPickerItem } from '../../shared/MentionPicker';
 import ViewportImage from '../../shared/ViewportImage';
+import VideoThumbnail from '../../shared/VideoThumbnail';
 import { useDialogFocus } from '../../../hooks/useDialogFocus';
 import { findDraggableMentionChip, startMentionChipDrag } from './mentionEditorChipDrag';
 import {
@@ -1504,7 +1505,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         const tip = { source, key, x: position.left, y: position.top, width,
           ownerNodeId: nodeId, ownerProjectId: currentProjectId };
         setChipTip(tip);
-        if (source.kind === 'asset' && getFileCategory(source.label) === 'image') {
+        if (source.kind === 'asset' && ['image', 'video'].includes(getFileCategory(source.label))) {
           // Resolve only the hovered file; do not scan asset folders or retain stale results.
           void getAssetUrlFromPath(source.id).then((assetUrl) => {
             if (stillHovered()) setChipTip((current) => current === tip
@@ -1584,8 +1585,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       label: source.label, displayId: undefined, sprite: undefined,
       outputType: category === 'other' ? 'text' : category,
       thumbnailUrl: category === 'image' && !chipTip.assetUnavailable ? chipTip.assetUrl : undefined,
+      videoUrl: category === 'video' && !chipTip.assetUnavailable ? chipTip.assetUrl : undefined,
       text: '', missing: !!chipTip.assetUnavailable,
-      description: chipTip.assetUnavailable ? '素材图片不可用' : `素材库 · ${{ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]}`,
+      description: chipTip.assetUnavailable ? '素材文件不可用' : `素材库 · ${{ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]}`,
     };
   }, [chipTip, currentProjectId, dramaAssets, globalAssets, nodeId, nodeMetaMap, nodes]);
   useEffect(() => {
@@ -1665,6 +1667,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       key: `node:${node.id}`,
       label: node.label,
       thumbnailUrl: node.thumbnailUrl,
+      video: node.outputType === 'video' ? { src: node.videoUrl, filePath: node.filePath } : undefined,
       icon: MEDIA_ICONS[node.outputType],
       badge: node.isSelf ? '自身' : node.displayId != null ? `#${node.displayId}` : undefined,
       onSelect: () => handleSelectCanvasMention(node.id, node.label),
@@ -1786,6 +1789,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         key: `drama-action-media:${media.id}`,
         label: media.name,
         thumbnailUrl: media.kind === 'video' ? undefined : media.url,
+        video: media.kind === 'video' ? { src: media.url, filePath: media.filePath } : undefined,
         icon: media.kind === 'video' ? 'lucide:film' : 'mdi:image-outline',
         badge: media.kind === 'video' ? '视频' : media.kind === 'gif' ? 'GIF' : '图片',
         disabled: !resolveDramaActionMediaRef(drillCharacter, drillAction.id, media.id),
@@ -1805,14 +1809,16 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           setMentionQuery('');
         },
       }))
-      : drillActions.map((action) => ({
-        key: `drama-action:${action.id}`,
-        label: action.name,
-        thumbnailUrl: action.media?.find((media) => media.kind !== 'video' && media.url)?.url,
-        icon: 'lucide:accessibility',
-        badge: `${action.media?.length ?? 0} 素材`,
-        onSelect: () => setDramaActionId(action.id),
-      }))
+      : drillActions.map((action) => {
+        const image = action.media?.find((media) => media.kind !== 'video' && media.url);
+        const video = image ? undefined : action.media?.find((media) => media.kind === 'video' && media.url);
+        return {
+          key: `drama-action:${action.id}`, label: action.name, thumbnailUrl: image?.url,
+          video: video ? { src: video.url, filePath: video.filePath } : undefined,
+          icon: 'lucide:accessibility', badge: `${action.media?.length ?? 0} 素材`,
+          onSelect: () => setDramaActionId(action.id),
+        };
+      })
     : drillItem ? [
       ...(drillRefs.length > 1 ? [{
         key: 'drama-merge-all',
@@ -1877,6 +1883,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       const node = candidate.item;
       item = {
         key: `node:${node.id}`, label: node.label, thumbnailUrl: node.thumbnailUrl,
+        video: node.outputType === 'video' ? { src: node.videoUrl, filePath: node.filePath } : undefined,
         icon: MEDIA_ICONS[node.outputType],
         badge: node.isSelf ? '自身' : node.displayId != null ? `#${node.displayId}` : '节点',
         onSelect: () => handleSelectCanvasMention(node.id, node.label),
@@ -2083,7 +2090,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               transition={fadeFast}
             >
               <div className="reference-chip-content flex h-32 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-canvas-bg">
-                {chipPreview.thumbnailUrls && chipPreview.thumbnailUrls.length > 1 ? (
+                {chipPreview.outputType === 'video' ? (
+                  <VideoThumbnail src={chipPreview.videoUrl} filePath={chipPreview.filePath} poster={chipPreview.thumbnailUrl}
+                    name={chipPreview.label} alt={chipPreview.label} className="h-full w-full object-contain" />
+                ) : chipPreview.thumbnailUrls && chipPreview.thumbnailUrls.length > 1 ? (
                   <div className="grid h-full w-full grid-cols-2 gap-1 overflow-hidden p-2">
                     {chipPreview.thumbnailUrls.slice(0, 4).map((url, index) => (
                       <img key={`${index}:${url}`} src={url} alt={`${chipPreview.label} · ${index + 1}`} className="h-12 w-full object-contain" loading="lazy" />
@@ -2428,11 +2438,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                           data-tooltip={file.name}
                           onClick={() => handleSelectAsset(file)}
                         >
-                          {file.assetUrl ? (
+                          {file.category === 'video' ? (
+                            <VideoThumbnail src={file.assetUrl} filePath={file.path} name={file.name} alt={file.name}
+                              className="aspect-square w-full object-cover" />
+                          ) : file.assetUrl ? (
                             <ViewportImage src={file.assetUrl} alt={file.name} />
                           ) : (
                             <span className="asset-picker-card-icon">
-                              {file.category === 'video' ? '🎬' : file.category === 'audio' ? '🎵' : file.category === 'text' ? '📄' : '📁'}
+                              {file.category === 'audio' ? '🎵' : file.category === 'text' ? '📄' : '📁'}
                             </span>
                           )}
                           <span className="asset-picker-card-name">{file.name}</span>

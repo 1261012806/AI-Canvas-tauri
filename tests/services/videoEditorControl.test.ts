@@ -13,7 +13,7 @@ vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => m
 vi.mock('../../src/services/mcp/mcpUiRuntimeService', () => ({ listAppWindows: mocks.windows }));
 vi.mock('../../src/services/videoEditorWindowService', () => ({ openVideoEditorWindow: vi.fn() }));
 vi.mock('../../src/services/videoEditorInspectionService', () => ({ probeControlledNode: mocks.probe }));
-import { bindVideoEditorTracks, createControlledEditor, readControlledEditor, updateControlledEditor, validateVideoEditorOutput,
+import { bindVideoEditorTracks, createControlledEditor, listControlledEditors, readControlledEditor, updateControlledEditor, validateVideoEditorOutput,
   videoEditorVersion } from '../../src/services/videoEditorControlService';
 import { compareAndSaveVideoEditorProject, getVideoEditorProject, saveVideoEditorProject } from '../../src/services/indexedDb/videoEditorRepository';
 import { clearAgentToolRegistryForTests, getAgentTool, getAvailableAgentTools } from '../../src/services/chat/toolRegistry';
@@ -52,13 +52,54 @@ describe('MCP 剪辑工程', () => {
     await expect(createControlledEditor(context(), { nodeIds: ['video'] })).rejects.toThrow('decode');
   });
   it('builds shot timing and optional dialogue overlays from the real shotlist type', async () => {
+    const video = mediaNode('shot-video', 'source-video');
+    video.data.videoUrl = 'asset://shot-video'; video.data.filePath = 'G:/private/shot-video.mp4';
     const rows = [{ ...createShotRow('r1', '1'), duration: 4, content: '真实界面', dialogue: '开始创作',
-      frame: { nodeId: 'image', kind: 'image' as const } }];
+      frame: { nodeId: 'image', kind: 'image' as const }, video: { nodeId: video.id, kind: 'video' as const } }];
     const node = mediaNode('shots', 'ai-shotlist'); node.data.shotlistRows = rows;
-    mocks.store.nodes.push(node);
+    mocks.store.nodes.push(video, node);
     const created = await createControlledEditor(context(), { shotlistNodeId: 'shots', includeDialogueCaptions: true });
     expect(created.duration).toBe(4); expect(created.tracks).toHaveLength(2);
     expect(created.tracks[1].clips[0].textStyle?.content).toBe('开始创作');
+    expect(created.tracks[0].clips[0]).toMatchObject({ kind: 'video', nodeId: video.id });
+  });
+
+  it('MCP 分镜时间轴只装配回填视频，缺失镜头的字幕不串入后续镜头', async () => {
+    const video = mediaNode('ready-shot-video', 'ai-video'); video.data.videoUrl = 'asset://ready-shot-video';
+    const sheet = mediaNode('filtered-shots', 'ai-shotlist');
+    sheet.data.shotlistRows = [
+      { ...createShotRow('missing', '1'), duration: 9, dialogue: '缺失成片', frame: { nodeId: 'image', kind: 'image' } },
+      { ...createShotRow('ready', '2'), duration: 2, dialogue: '有效镜头', video: { nodeId: video.id, kind: 'video' } },
+    ];
+    mocks.store.nodes.push(video, sheet);
+    const created = await createControlledEditor(context(), { shotlistNodeId: sheet.id, includeDialogueCaptions: true });
+    expect(created.duration).toBe(2);
+    expect(created.tracks[0].clips).toHaveLength(1);
+    expect(created.tracks[0].clips[0]).toMatchObject({ nodeId: video.id, kind: 'video', timelineStart: 0, sourceOut: 2 });
+    expect(created.tracks[1].clips).toHaveLength(1);
+    expect(created.tracks[1].clips[0]).toMatchObject({ timelineStart: 0, textStyle: { content: '有效镜头' } });
+  });
+
+  it('MCP 分镜无回填视频时拒绝空工程，画面列旧视频也不作兜底', async () => {
+    const frame = mediaNode('old-frame-video', 'source-video'); frame.data.videoUrl = 'asset://old-frame-video';
+    const sheet = mediaNode('no-output-shots', 'ai-shotlist');
+    sheet.data.shotlistRows = [{ ...createShotRow('row', '1'), content: '有参考但没成片',
+      frame: { nodeId: frame.id, kind: 'video', url: frame.data.videoUrl } }];
+    mocks.store.nodes.push(frame, sheet);
+    const before = (await listControlledEditors(context())).total;
+    await expect(createControlledEditor(context(), { shotlistNodeId: sheet.id })).rejects.toThrow('没有可推送的生成视频');
+    expect((await listControlledEditors(context())).total).toBe(before);
+  });
+
+  it('MCP 继续拒绝已删除来源的成片快照，不扩大为任意素材路径装配', async () => {
+    const sheet = mediaNode('deleted-source-shots', 'ai-shotlist');
+    sheet.data.shotlistRows = [{ ...createShotRow('row', '1'), video: {
+      nodeId: 'deleted-video', kind: 'video', url: 'asset://deleted-video', filePath: 'G:/private/deleted.mp4',
+    } }];
+    mocks.store.nodes.push(sheet);
+    const before = (await listControlledEditors(context())).total;
+    await expect(createControlledEditor(context(), { shotlistNodeId: sheet.id })).rejects.toThrow('素材节点不存在');
+    expect((await listControlledEditors(context())).total).toBe(before);
   });
   it('updates cut timing, overlay text and music in one versioned write', async () => {
     const created = await createControlledEditor(context(), { nodeIds: ['image'] });

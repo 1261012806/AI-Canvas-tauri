@@ -7,6 +7,7 @@ import { withPreviewRevision } from '../../hooks/useReferencedImageWatcher';
 import { getResourceVideoFloatingRect, resolveResourceVideoSource } from '../../hooks/useResourceVideoPreview';
 import { acquireCanvasVideoPoster } from '../nodes/shared/video/canvasVideoPreviewCache';
 import { releaseViewportVideoElement } from './viewportVideoResource';
+import { resolveVideoThumbnailPoster } from './videoThumbnailSource';
 import { fadeFast, springSmooth } from '../../utils/motion';
 import type { HistoryRecord } from '../../services/indexedDbService';
 
@@ -58,7 +59,8 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
   const [failedPoster, setFailedPoster] = useState<string>();
   const primary = resolved?.identity === identity ? resolved.src : undefined;
   const source = primary && primary === failedSource && src && src !== primary ? withPreviewRevision(src, revision) : primary;
-  const suppliedPoster = poster && poster !== src && poster !== primary ? withPreviewRevision(poster, revision) : undefined;
+  const validPoster = resolveVideoThumbnailPoster(poster, src, filePath);
+  const suppliedPoster = validPoster && validPoster !== primary ? withPreviewRevision(validPoster, revision) : undefined;
 
   useEffect(() => {
     if (!visible) return;

@@ -766,6 +766,7 @@ describe('node plugin runtime', () => {
           data: {
             label: '样片 · 拉片分镜表',
             shotlistRows: [{ id: 'shot-1', shotNo: '1', frameKey: 'frame-1', content: '建立环境',
+              video: { nodeId: 'forged-video', kind: 'video', assetId: 'forged-video-asset', filePath: 'C:/forged-video.mp4' },
               frameAnalysis: { sourceVideoNodeId: 'forged', sourceVideoName: '伪造来源', shotId: 'stable-1', inPoint: 0, outPoint: 2,
                 aiOriginal: { content: 'AI 原文', confidence: 0.5 }, overrideFields: ['content'], reviewStatus: 'reviewed' } }],
           },
@@ -860,6 +861,7 @@ describe('node plugin runtime', () => {
       targetHandle: 'left',
     })));
     expect(JSON.stringify(shotlist.data)).not.toContain('forged');
+    expect((shotlist.data.shotlistRows as Array<Record<string, unknown>>)[0]).not.toHaveProperty('video');
     expect(JSON.stringify(shotlist.data)).not.toContain('伪造来源');
     expect(mocks.showToast).toHaveBeenCalledWith('已生成拉片节点');
   });
@@ -1531,7 +1533,7 @@ describe('node plugin runtime', () => {
     expect(mocks.updateNodeData).toHaveBeenCalledWith('image-node', { imageUrl });
   });
 
-  it('rejects an untrusted nested shotlist frame URL', async () => {
+  it.each(['frame', 'video'] as const)('rejects an untrusted nested shotlist %s URL', async (binding) => {
     mocks.state = {
       ...mocks.state,
       nodes: [{
@@ -1547,7 +1549,7 @@ describe('node plugin runtime', () => {
         shotlistRows: [{
           id: 'shot-1',
           shotNo: '1',
-          frame: { nodeId: 'missing', kind: 'image', url: 'https://attacker.example/frame.png' },
+          [binding]: { nodeId: 'missing', kind: binding === 'video' ? 'video' : 'image', url: 'https://attacker.example/media' },
         }],
       },
     });
@@ -1579,6 +1581,25 @@ describe('node plugin runtime', () => {
     await executeNodePluginTool(tool, 'shotlist-node');
 
     expect(mocks.updateNodeData).toHaveBeenCalledWith('shotlist-node', { shotlistRows });
+  });
+
+  it('插件改写分镜只保留宿主已有成片身份，不能用已授权 URL 伪造其他节点绑定', async () => {
+    const video = { nodeId: 'real-video', kind: 'video', url: 'asset://localhost/final.mp4', assetId: 'real-asset' };
+    mocks.state = { ...mocks.state, nodes: [{ id: 'shotlist-node', type: 'ai-shotlist', position: { x: 0, y: 0 },
+      data: { label: '分镜表', type: 'ai-shotlist', shotlistRows: [{ id: 'shot-1', shotNo: '1', video }] },
+    }], installedPlugins: [shotlistToolPlugin] };
+    const forged = { ...video, nodeId: 'forged-video', assetId: 'forged-asset' };
+    mocks.invoke.mockResolvedValue({ data: { shotlistRows: [
+      { id: 'shot-1', shotNo: '1', content: '修改文本', video: forged },
+      { id: 'shot-2', shotNo: '2', video: forged },
+    ] } });
+
+    await executeNodePluginTool(getAvailableNodePluginTools([shotlistToolPlugin], 'ai-shotlist')[0], 'shotlist-node');
+
+    expect(mocks.updateNodeData).toHaveBeenCalledWith('shotlist-node', { shotlistRows: [
+      { id: 'shot-1', shotNo: '1', content: '修改文本', video },
+      { id: 'shot-2', shotNo: '2' },
+    ] });
   });
 
   it('rejects a new remote image embedded in Markdown output', async () => {

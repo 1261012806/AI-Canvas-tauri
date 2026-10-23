@@ -198,11 +198,12 @@ function sameProjection(
     && previous.data.type === node.data.type
     && previous.data.displayId === node.data.displayId
     && previous.data.imageUrl === node.data.imageUrl
+    && previous.data.videoUrl === node.data.videoUrl
     && previous.data.thumbnailUrl === node.data.thumbnailUrl;
 }
 
 /**
- * 独立窗口只用节点做 @ 引用与缩略图，正文（提示词/输出/历史）不跨窗口传。
+ * 独立窗口只用节点做 @ 引用与缩略图，视频沿用已有可播放 URL，不传文件路径或正文。
  * 拖动画布每帧都会换一个 nodes 数组，但投影字段没变 —— 逐字段比过之后原样返回
  * 上一次的数组，让补丁层的 Object.is 直接短路，省掉整棵树的 JSON 比较。
  */
@@ -225,6 +226,7 @@ export function projectChatNodes(nodes: AppState['nodes']): Node<BaseNodeData>[]
             type: node.data.type,
             displayId: node.data.displayId,
             imageUrl: node.data.imageUrl,
+            videoUrl: node.data.videoUrl,
             thumbnailUrl: node.data.thumbnailUrl,
           },
         };

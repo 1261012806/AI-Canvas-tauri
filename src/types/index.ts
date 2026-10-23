@@ -66,7 +66,7 @@ export type {
   DirectorWorldColor,
 } from './directorScene';
 
-export type { ShotFrameBinding, ShotFrameCandidate, ShotlistColumnKey, ShotRow } from './shotlist';
+export type { ShotFrameBinding, ShotVideoBinding, ShotFrameCandidate, ShotlistColumnKey, ShotRow } from './shotlist';
 export {
   buildShotFramePrompt,
   buildShotPlaceholderText,

@@ -36,9 +36,35 @@ describe('分镜工具', () => {
     expect(JSON.parse(next.modelContent).rows[0].content).toHaveLength(200);
   });
 
+  it('读取独立成片的稳定身份/就绪状态，实时源优先于快照且不泄漏路径', async () => {
+    const state = useAppStore.getState();
+    const sheet = state.nodes[0];
+    useAppStore.setState({ nodes: [{ ...sheet, data: { ...sheet.data, shotlistRows: [
+      { id: 'ready', shotNo: '1', video: { nodeId: 'ready-source', kind: 'video', filePath: 'SECRET_PATH', url: 'SECRET_SNAPSHOT' } },
+      { id: 'pending', shotNo: '2', video: { nodeId: 'pending-source', kind: 'video', url: 'SECRET_OLD_VIDEO' } },
+      { id: 'fallback', shotNo: '3', video: { nodeId: 'deleted-source', kind: 'video', url: 'SECRET_FALLBACK' } },
+      { id: 'unbound', shotNo: '4', video: null },
+      { id: 'new', shotNo: '5' },
+    ] } },
+    { id: 'ready-source', type: 'source-video', position: { x: 0, y: 0 }, data: { type: 'source-video', label: 'ready', videoUrl: 'SECRET_REAL_VIDEO' } },
+    { id: 'pending-source', type: 'ai-video', position: { x: 0, y: 0 }, data: { type: 'ai-video', label: 'pending' } },
+    ] });
+    const result = await getAgentTool('shotlist_read')!.execute(context(), { nodeId: 'sheet' });
+    expect(result.status).toBe('success');
+    expect(result.modelContent).not.toContain('SECRET_');
+    const rows = JSON.parse(result.modelContent).rows;
+    expect(rows.map((row: { video?: unknown }) => row.video)).toEqual([
+      { nodeId: 'ready-source', kind: 'video', ready: true },
+      { nodeId: 'pending-source', kind: 'video', ready: false },
+      { nodeId: 'deleted-source', kind: 'video', ready: true }, null, undefined,
+    ]);
+  });
+
   it('写工具本地 schema 拒绝媒体字段，旧 revision 不写画布', async () => {
     const invalid = prepareAgentToolCall({ callId: 'call', toolId: 'shotlist_update_rows', input: { nodeId: 'sheet', mode: 'update', rows: [{ id: 'r1', frame: { url: 'bad' } }] } }, context());
     expect(invalid.ok).toBe(false);
+    expect(prepareAgentToolCall({ callId: 'video', toolId: 'shotlist_update_rows', input: { nodeId: 'sheet', mode: 'update',
+      rows: [{ id: 'r1', video: { nodeId: 'fake', kind: 'video' } }] } }, context()).ok).toBe(false);
     const result = await getAgentTool('shotlist_update_rows')!.execute({ ...context(), baseRevision: -1 }, { nodeId: 'sheet', mode: 'update', rows: [{ id: 'r1', content: 'bad' }] });
     expect(result.status).toBe('error');
     expect(useAppStore.getState().nodes[0].data.shotlistRows?.[0].content).not.toBe('bad');

@@ -24,7 +24,7 @@ import type { ShotRow } from '../../src/types/shotlist';
 globalThis.indexedDB = new IDBFactory();
 
 function shot(id: string, overrides: Partial<ShotRow> = {}): ShotRow {
-  return { ...createShotRow(id, id), ...overrides };
+  return { ...createShotRow(id, id), video: { nodeId: `video-${id}`, kind: 'video', url: `asset://video-${id}.mp4` }, ...overrides };
 }
 
 async function pushAndLoad(nodeId: string, rows: ShotRow[]) {
@@ -38,36 +38,38 @@ beforeEach(() => {
 });
 
 describe('分镜表推送时间轴', () => {
-  it('绑了图的行按表里的时长出图片片段', async () => {
+  it('生成视频按表内时长入轨，画面列的参考图片不进入成片', async () => {
     const clips = await pushAndLoad('n-image', [
       shot('a', {
         duration: 6,
         frame: { nodeId: 'src-1', kind: 'image', url: 'asset://a.png', filePath: '/data/a.png' },
+        video: { nodeId: 'generated-1', kind: 'video', url: 'asset://generated.mp4', filePath: '/data/generated.mp4' },
       }),
     ]);
     expect(clips).toHaveLength(1);
-    expect(clips[0].kind).toBe('image');
-    expect(clips[0].nodeId).toBe('src-1');
-    expect(clips[0].filePath).toBe('/data/a.png');
-    // 关键差异：不吃图片固定停留时长，用分镜表填的秒数
+    expect(clips[0].kind).toBe('video');
+    expect(clips[0].nodeId).toBe('generated-1');
+    expect(clips[0].filePath).toBe('/data/generated.mp4');
     expect(clips[0].sourceOut - clips[0].sourceIn).toBe(6);
   });
 
-  it('绑了视频的行出视频片段', async () => {
+  it('回填视频的行出视频片段', async () => {
     const clips = await pushAndLoad('n-video', [
-      shot('a', { duration: 4, frame: { nodeId: 'src-v', kind: 'video', url: 'asset://a.mp4' } }),
+      shot('a', { duration: 4, video: { nodeId: 'src-v', kind: 'video', url: 'asset://a.mp4' } }),
     ]);
     expect(clips[0].kind).toBe('video');
     expect(clips[0].sourceUrl).toBe('asset://a.mp4');
   });
 
-  it('没画面但有文字的行出文字占位片段', async () => {
+  it.each(['image', 'video'] as const)('只有 %s 画面或文字的行跳过，不作成片或文字占位', async (kind) => {
     const clips = await pushAndLoad('n-text', [
-      shot('a', { shotNo: '1', shotSize: '全景', content: '警察松动警戒线', duration: 3 }),
+      shot('a', { shotNo: '1', shotSize: '全景', content: '警察松动警戒线', duration: 3,
+        video: null, frame: { nodeId: 'reference', kind, url: 'asset://reference' } }),
+      shot('ready', { duration: 2 }),
     ]);
-    expect(clips[0].kind).toBe('text');
-    expect(clips[0].textStyle?.content).toContain('警察松动警戒线');
-    expect(clips[0].sourceOut - clips[0].sourceIn).toBe(3);
+    expect(clips).toHaveLength(1);
+    expect(clips[0]).toMatchObject({ kind: 'video', nodeId: 'video-ready', timelineStart: 0, sourceOut: 2 });
+    expect(clips[0].textStyle).toBeUndefined();
   });
 
   it('全空的行直接跳过，不占时间轴', async () => {
@@ -112,7 +114,7 @@ describe('分镜表推送时间轴', () => {
   it('没有可推的镜头时报错而不是建空工程', async () => {
     await expect(openVideoEditorForShotlist({
       projectId: 'proj-1', nodeId: 'n-empty', label: '空表', rows: [createShotRow('x', 1)],
-    })).rejects.toThrow('还没有可推送的镜头');
+    })).rejects.toThrow('还没有可推送的生成视频');
     expect(await getVideoEditorProject('proj-1::n-empty')).toBeNull();
   });
 
@@ -200,6 +202,47 @@ describe('分镜表推送时间轴', () => {
     expect(await getVideoEditorProject('proj-1::n-ambiguous-audio')).toEqual(original);
   });
 
+  it('跳过缺视频镜头后主轨、字幕和配音使用同一镜头顺序与时长', async () => {
+    const rows = [shot('a', { duration: 2, dialogue: '第一句' }),
+      shot('missing', { video: null, duration: 8, dialogue: '没有成片的对白', frame: { nodeId: 'reference', kind: 'image', url: 'reference.png' } }),
+      shot('c', { duration: 3, dialogue: '第三句' })];
+    const voices = ['missing', 'c'].map((rowId) => ({ id: `voice-${rowId}`, type: 'ai-audio', data: {
+      type: 'ai-audio' as const, label: '配音', audioUrl: `${rowId}.wav`,
+      shotlistProductionSource: { nodeId: 'n-filtered', rowId, kind: 'voiceover' as const },
+    } }));
+    await openVideoEditorForShotlist({ projectId: 'proj-1', nodeId: 'n-filtered', label: '仅成片', rows,
+      includeDialogueCaptions: true, voiceoverNodes: voices });
+    const record = (await getVideoEditorProject('proj-1::n-filtered'))!;
+    expect(getVideoTrack(record.tracks)!.clips.map((clip) => [clip.nodeId, clip.timelineStart, clip.sourceOut]))
+      .toEqual([['video-a', 0, 2], ['video-c', 2, 3]]);
+    const captions = record.tracks.find((track) => track.id === 'shotlist-dialogue')!;
+    expect(captions.clips.map((clip) => [clip.textStyle?.content, clip.timelineStart, clip.sourceOut]))
+      .toEqual([['第一句', 0, 2], ['第三句', 2, 3]]);
+    const audio = record.tracks.find((track) => track.id === 'shotlist-voiceover')!;
+    expect(audio.clips).toMatchObject([{ nodeId: 'voice-c', timelineStart: 2, sourceOut: 3 }]);
+    expect(record.nodeIds).toEqual(['video-a', 'video-c', 'voice-c']);
+  });
+
+  it('所有镜头都缺少回填视频时保留旧工程，不退回画面列的视频', async () => {
+    await pushAndLoad('n-no-video-preserve', [shot('ready', { duration: 2 })]);
+    const original = await getVideoEditorProject('proj-1::n-no-video-preserve');
+    windowMocks.openVideoEditorWindow.mockClear();
+    await expect(openVideoEditorForShotlist({ projectId: 'proj-1', nodeId: 'n-no-video-preserve', label: '缺失', rows: [
+      shot('old-frame', { video: null, frame: { nodeId: 'old-video', kind: 'video', url: 'old.mp4' }, content: '旧画面视频' }),
+      shot('empty-video', { video: { nodeId: 'empty', kind: 'video', url: ' ', filePath: ' ' } }),
+    ] })).rejects.toThrow('没有可推送的生成视频');
+    expect(await getVideoEditorProject('proj-1::n-no-video-preserve')).toEqual(original);
+    expect(windowMocks.openVideoEditorWindow).not.toHaveBeenCalled();
+  });
+
+  it('未填计划时长时使用回填视频真实时长，参考画面的旧时长不影响成片', async () => {
+    const clips = await pushAndLoad('n-video-duration', [shot('actual', { duration: undefined,
+      frame: { nodeId: 'reference', kind: 'video', url: 'reference.mp4', sourceDuration: 99 },
+      video: { nodeId: 'result', kind: 'video', url: 'result.mp4', sourceDuration: 4.25 },
+    })]);
+    expect(clips[0].sourceOut).toBe(4.25);
+  });
+
   it('读取工程后来源过期则不落盘或开窗', async () => {
     const assertCurrent = vi.fn().mockImplementationOnce(() => {}).mockImplementation(() => { throw new Error('已切项目'); });
     await expect(openVideoEditorForShotlist({ projectId: 'proj-1', nodeId: 'n-stale', label: '旧表',
@@ -208,14 +251,35 @@ describe('分镜表推送时间轴', () => {
     expect(windowMocks.openVideoEditorWindow).not.toHaveBeenCalled();
   });
 
-  it('画面取实时视频地址，清空后不复用旧成果，删除来源时才退回快照', () => {
-    const rows = [shot('a', { frame: { nodeId: 'v', kind: 'video', url: 'old.mp4' } })];
+  it('回填视频取实时地址，活源清空后不复用旧成果，删除来源时才退回快照', () => {
+    const rows = [shot('a', { frame: { nodeId: 'reference', kind: 'image', url: 'reference.png' },
+      video: { nodeId: 'v', kind: 'video', url: 'old.mp4' } })];
     const latest = resolveShotlistTimelineRows(rows, [{ id: 'v', type: 'ai-video', data: {
       type: 'ai-video', label: '新版', videoUrl: 'new.mp4', thumbnailUrl: 'cover.png', videoDuration: 9,
     } }]);
-    expect(latest[0].frame).toMatchObject({ url: 'new.mp4', sourceDuration: 9 });
-    expect(resolveShotlistTimelineRows(rows, [{ id: 'v', type: 'ai-video', data: { type: 'ai-video', label: '已清空' } }])[0].frame).toBeNull();
-    expect(resolveShotlistTimelineRows(rows, [])[0].frame?.url).toBe('old.mp4');
-    expect(rows[0].frame?.url).toBe('old.mp4');
+    expect(latest[0].video).toMatchObject({ url: 'new.mp4', sourceDuration: 9 });
+    expect(latest[0].frame).toBe(rows[0].frame);
+    expect(resolveShotlistTimelineRows(rows, [{ id: 'v', type: 'ai-video', data: {
+      type: 'ai-video', label: '已清空', videoUrl: '', filePath: '/data/old.mp4',
+    } }])).toEqual([]);
+    expect(resolveShotlistTimelineRows(rows, [])[0].video?.url).toBe('old.mp4');
+    expect(rows[0].video?.url).toBe('old.mp4');
+  });
+
+  it('过滤没有回填、空快照及类型已改变的活源，保持有效行顺序供缺镜提示比较', () => {
+    const rows = [shot('missing', { video: null }),
+      shot('empty', { video: { nodeId: 'empty', kind: 'video' } }),
+      shot('wrong', { video: { nodeId: 'retyped', kind: 'video', url: 'old.mp4' } }),
+      shot('ready', { video: { nodeId: 'ready', kind: 'video', url: 'saved.mp4' } }),
+      shot('deleted', { video: { nodeId: 'gone', kind: 'video', filePath: '/data/saved.mp4' } })];
+    const resolved = resolveShotlistTimelineRows(rows, [
+      { id: 'retyped', type: 'source-image', data: { type: 'source-image', label: '图片', imageUrl: 'reference.png' } },
+      { id: 'ready', type: 'source-video', data: { type: 'source-video', label: '视频', videoUrl: 'current.mp4' } },
+    ]);
+    expect(resolved.map((row) => row.id)).toEqual(['ready', 'deleted']);
+    expect(resolved[0].video?.url).toBe('current.mp4');
+    expect(resolved[1].video?.filePath).toBe('/data/saved.mp4');
+    expect(rows.filter((row) => !resolved.some((ready) => ready.id === row.id)).map((row) => row.id))
+      .toEqual(['missing', 'empty', 'wrong']);
   });
 });

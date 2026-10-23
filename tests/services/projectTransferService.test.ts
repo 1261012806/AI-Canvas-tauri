@@ -436,6 +436,24 @@ describe('projectTransferService', () => {
     expect(references.every((item) => item.assetId === undefined)).toBe(true);
   });
 
+  it('导入分镜参考画面与成片快照时解除源资产身份并统计缺失视频', async () => {
+    const reference = (relativePath: string) => ({ assetId: 'source-asset', relativePath });
+    const project = { ...PROJECT_RECORD, nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', shotlistRows: [{
+      id: 'shot-1', shotNo: '1',
+      frame: { nodeId: 'deleted-image', kind: 'image', ...reference('reference.png') },
+      video: { nodeId: 'deleted-video', kind: 'video', ...reference('final.mp4'), sourceDuration: 5 },
+    }] } }] };
+    mocks.open.mockResolvedValue('/in/分镜成片.aicanvas');
+    mocks.invoke.mockResolvedValue({ texts: archiveTexts({ project }), assetPaths: ['reference.png'], assetBytes: 1 });
+
+    const result = (await importProjectArchive())!;
+
+    expect(result.missingAssetCount).toBe(1);
+    const row = mocks.saveProject.mock.calls[0][0].nodes[0].data.shotlistRows[0];
+    expect(row.frame).toEqual({ nodeId: 'deleted-image', kind: 'image', relativePath: 'reference.png' });
+    expect(row.video).toEqual({ nodeId: 'deleted-video', kind: 'video', relativePath: 'final.mp4', sourceDuration: 5 });
+  });
+
   it('allocates independent project and episode ids on repeated import and includes episode missing assets', async () => {
     mocks.open.mockResolvedValue('/in/整部剧.aicanvas');
     mocks.invoke.mockResolvedValue({

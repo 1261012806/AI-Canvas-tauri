@@ -17,8 +17,8 @@ import {
   createShotRow,
 } from '../types/shotlist';
 
-/** 除画面外的列 = 模型能填的字段 */
-type ShotTextColumn = Exclude<ShotlistColumnKey, 'frame'>;
+/** 媒体列之外才是模型能填写的字段。 */
+type ShotTextColumn = Exclude<ShotlistColumnKey, 'frame' | 'video'>;
 
 /** 每列告诉模型该填什么。键名直接用列 key，返回的 JSON 就能对号入座 */
 const COLUMN_SPECS: Record<ShotTextColumn, string> = {
@@ -39,7 +39,7 @@ const COLUMN_SPECS: Record<ShotTextColumn, string> = {
  */
 export function buildShotlistGenerationPrompt(request: string, columns: ShotlistColumnKey[]): string {
   const fields = columns
-    .filter((key): key is ShotTextColumn => key !== 'frame')
+    .filter((key): key is ShotTextColumn => key !== 'frame' && key !== 'video')
     .map((key) => `- ${key}（${SHOTLIST_COLUMN_LABELS[key]}）：${COLUMN_SPECS[key]}`);
   return [
     '你是分镜师。按下面的需求拆出一份逐镜清单。',
@@ -95,16 +95,23 @@ export function parseShotlistRows(text: string): ShotRow[] {
 }
 
 /**
- * 重生成时按镜号把已绑定的画面接回去。
- * 一句「再来一版」不该把配好的图全丢了；镜号对不上的行才真的从零开始。
+ * 重生成时按镜号接续镜头身份和已绑定媒体。
+ * 唯一镜号沿用稳定行 ID、参考画面与生成视频；重复镜号不猜测对应关系。
  */
 export function carryOverShotFrames(previous: ShotRow[], generated: ShotRow[]): ShotRow[] {
-  const frames = new Map(
-    previous.filter((row) => row.frame).map((row) => [row.shotNo.trim(), row.frame!]),
-  );
-  if (frames.size === 0) return generated;
+  const unique = new Map<string, ShotRow | null>();
+  for (const row of previous) {
+    const shotNo = row.shotNo.trim();
+    if (shotNo) unique.set(shotNo, unique.has(shotNo) ? null : row);
+  }
+  const generatedCounts = new Map<string, number>();
+  for (const row of generated) {
+    const shotNo = row.shotNo.trim();
+    generatedCounts.set(shotNo, (generatedCounts.get(shotNo) ?? 0) + 1);
+  }
   return generated.map((row) => {
-    const frame = frames.get(row.shotNo.trim());
-    return frame ? { ...row, frame } : row;
+    const existing = unique.get(row.shotNo.trim());
+    return existing && generatedCounts.get(row.shotNo.trim()) === 1
+      ? { ...row, id: existing.id, frame: existing.frame, video: existing.video } : row;
   });
 }

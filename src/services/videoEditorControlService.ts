@@ -8,7 +8,6 @@ import {
 } from './indexedDb/videoEditorRepository';
 import { listAppWindows } from './mcp/mcpUiRuntimeService';
 import { buildClip, buildDialogueTrack, buildShotClip, isEditableMediaNode, resolveShotlistTimelineRows } from './videoEditorService';
-import { isShotRowBlank } from '../types/shotlist';
 import {
   computeTimelineDuration, DEFAULT_TEXT_STYLE, relayoutSequential, VIDEO_EDITOR_SCHEMA_VERSION,
   type VideoEditorClip, type VideoEditorProjectRecord, type VideoEditorTrack,
@@ -176,8 +175,8 @@ export async function createControlledEditor(context: VideoEditorControlContext,
     const node = store.nodes.find((candidate) => candidate.id === input.shotlistNodeId);
     if (node?.type !== 'ai-shotlist') throw new VideoEditorControlError('请选择当前项目的镜头表节点');
     anchorId = node.id;
-    const rows = resolveShotlistTimelineRows(node.data.shotlistRows ?? [], store.nodes).filter((row) => !isShotRowBlank(row));
-    if (!rows.length) throw new VideoEditorControlError('镜头表没有可用镜头');
+    const rows = resolveShotlistTimelineRows(node.data.shotlistRows ?? [], store.nodes);
+    if (!rows.length) throw new VideoEditorControlError('镜头表没有可推送的生成视频');
     const clips = relayoutSequential(rows.map(buildShotClip));
     const captions = input.includeDialogueCaptions ? buildDialogueTrack(rows, clips) : null;
     tracks = [{ id: 'video-1', kind: 'video', name: '主视频轨', clips }, ...(captions ? [captions] : [])];

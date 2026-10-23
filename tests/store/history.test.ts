@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
-import type { BaseNodeData, NodeGroup } from '../../src/types';
+import type { BaseNodeData, NodeGroup, ShotRow } from '../../src/types';
 import { createCanvasNoteData } from '../../src/types';
 
 const fileMocks = vi.hoisted(() => ({
@@ -185,6 +185,114 @@ it('动画帧编排与导入原图一起撤销和重做', async () => {
   expect(useAppStore.getState().nodes[0].data.animationEdits).toBeUndefined();
   expect(await useAppStore.getState().redo()).toBe(true);
   expect(useAppStore.getState().nodes[0].data).toMatchObject({ imageUrl: 'asset://new.png', animationSheet: { frameCount: 6 }, animationLoop: false, animationEdits: [{ sourceIndex: 2, offsetX: 3 }] });
+});
+
+describe('shotlist generated video bindings', () => {
+  const frame = { nodeId: 'image', kind: 'image' as const, url: 'reference.png' };
+  const row = () => useAppStore.getState().nodes.find((item) => item.id === 'sheet')!.data.shotlistRows![0];
+  const replaceVideo = (video: ShotRow['video']) => useAppStore.getState().updateNodeDataTransient('sheet', {
+    shotlistRows: [{ ...row(), video }],
+  });
+  const setup = (video?: ShotRow['video']) => useAppStore.setState({ nodes: [
+    node('sheet', { type: 'ai-shotlist', shotlistRows: [{ id: 'row', shotNo: '1', frame, duration: 4.3, video }] }),
+    node('video', { type: 'ai-video', status: 'idle', shotlistProductionSource: { nodeId: 'sheet', rowId: 'row', kind: 'video' } }),
+    node('imported', { type: 'source-video', videoUrl: 'imported.mp4', videoDuration: 9 }),
+    node('image', { type: 'ai-image', imageUrl: 'reference.png' }),
+  ] });
+
+  it('manual binding accepts ready video sources, preserves frame/duration and participates in undo/redo', async () => {
+    setup();
+    const state = useAppStore.getState();
+    expect(state.bindShotlistVideo('sheet', 'row', 'image')).toBe(false);
+    expect(state.bindShotlistVideo('sheet', 'row', 'video')).toBe(false);
+    expect(state.bindShotlistVideo('sheet', 'missing', 'imported')).toBe(false);
+    expect(state.bindShotlistVideo('sheet', 'row', 'imported')).toBe(true);
+    expect(row()).toMatchObject({ frame, duration: 4.3, video: { nodeId: 'imported', kind: 'video', url: 'imported.mp4', sourceDuration: 9 } });
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(row().video).toBeUndefined();
+    expect(await useAppStore.getState().redo()).toBe(true);
+    expect(row().video?.nodeId).toBe('imported');
+  });
+
+  it.each(['updateNodeData', 'updateNodeDataTransient'] as const)('%s fills only the precise production row and refreshes same-source snapshots', (action) => {
+    setup();
+    useAppStore.getState()[action]('video', { status: 'loading' });
+    useAppStore.getState()[action]('video', { status: 'success', videoUrl: 'first.mp4', filePath: 'project/first.mp4', videoDuration: 5 });
+    expect(row()).toMatchObject({ frame, duration: 4.3, video: { nodeId: 'video', kind: 'video', url: 'first.mp4', sourceDuration: 5 } });
+    useAppStore.getState()[action]('video', { status: 'loading' });
+    useAppStore.getState()[action]('video', { status: 'success', videoUrl: 'second.mp4', filePath: 'project/second.mp4' });
+    expect(row().video?.url).toBe('second.mp4');
+    expect(row().frame).toEqual(frame);
+    expect(row().duration).toBe(4.3);
+  });
+
+  it('does not overwrite a manually chosen different source with an in-flight result', () => {
+    setup();
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.bindShotlistVideo('sheet', 'row', 'imported');
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'late.mp4' });
+    expect(row().video?.nodeId).toBe('imported');
+  });
+
+  it('records only actual transient success bindings for undo/redo, without recording loading or progress', async () => {
+    setup();
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.updateNodeDataTransient('video', { mediaTaskStage: 'querying' });
+    expect(useAppStore.getState().history).toHaveLength(0);
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'ready.mp4' });
+    expect(useAppStore.getState().history).toHaveLength(1);
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'ready.mp4' });
+    expect(useAppStore.getState().history).toHaveLength(1);
+    expect(await useAppStore.getState().undo()).toBe(true);
+    expect(row().video).toBeUndefined();
+    expect(row().frame).toEqual(frame);
+    expect(await useAppStore.getState().redo()).toBe(true);
+    expect(row().video).toMatchObject({ nodeId: 'video', url: 'ready.mp4' });
+    const historyLength = useAppStore.getState().history.length;
+    state.updateNodeDataTransient('video', { mediaTaskStage: undefined });
+    expect(useAppStore.getState().history).toHaveLength(historyLength);
+  });
+
+  it('keeps explicit unlink through repeated loading updates, then allows a deliberate new run', () => {
+    setup({ nodeId: 'video', kind: 'video', url: 'old.mp4' });
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    replaceVideo(null);
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'late.mp4' });
+    expect(row().video).toBeNull();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'new-run.mp4' });
+    expect(row().video?.url).toBe('new-run.mp4');
+  });
+
+  it('does not revive null after choosing and unlinking a source during a run that started from null', () => {
+    setup(null);
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.bindShotlistVideo('sheet', 'row', 'imported');
+    replaceVideo(null);
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'late.mp4' });
+    expect(row().video).toBeNull();
+  });
+
+  it('ignores non-ready results and deleted or changed production rows', () => {
+    setup();
+    const state = useAppStore.getState();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.updateNodeDataTransient('video', { status: 'error', videoUrl: 'partial.mp4' });
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: '' });
+    expect(row().video).toBeUndefined();
+    state.updateNodeDataTransient('video', { status: 'loading' });
+    state.updateNodeDataTransient('sheet', { shotlistRows: [{ id: 'other', shotNo: '1' }] });
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'late.mp4' });
+    expect(row().video).toBeUndefined();
+    state.updateNodeDataTransient('video', { status: 'success', videoUrl: 'late.mp4',
+      shotlistProductionSource: { nodeId: 'sheet', rowId: 'other', kind: 'video' } });
+    expect(row().video).toBeUndefined();
+  });
 });
 
 describe('precise shot duration references', () => {

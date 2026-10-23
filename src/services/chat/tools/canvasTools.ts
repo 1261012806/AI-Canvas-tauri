@@ -1876,9 +1876,25 @@ export function registerCanvasAgentTools(): Array<() => void> {
       execute: async (context, input) => { assertCanvasRevision(context); const before = useAppStore.getState().nodes.some((item) => item.id === input.sourceNodeId); useAppStore.getState().fillStoryboardCell(input.storyboardId, input.cellIndex, input.sourceNodeId); const consumed = before && !useAppStore.getState().nodes.some((item) => item.id === input.sourceNodeId); if (!consumed) return { status: 'error', summary: '宫格、来源图片或目标空位无效', modelContent: '宫格、来源图片或目标空位无效' }; useAppStore.getState().incrementRevision(); return { status: 'success', summary: '已填充分镜宫格', modelContent: JSON.stringify({ storyboardId: input.storyboardId, cellIndex: input.cellIndex, sourceNodeId: input.sourceNodeId, revision: useAppStore.getState().getCurrentRevision() }) }; },
     }),
     registerAgentTool<{ shotlistId: string; rowId: string; sourceNodeId: string }>({
-      id: 'canvas_bind_shotlist_frame', title: '绑定镜头表画面', description: '把图片或视频节点绑定到镜头表指定行。', effect: 'canvas_write',
+      id: 'canvas_bind_shotlist_frame', title: '绑定镜头表媒体', description: '把图片节点绑定到指定行的画面列，把就绪视频节点绑定到独立的生成视频列；视频不覆盖参考画面。保留源节点稳定引用，无需反接到分镜表。', effect: 'canvas_write',
       inputSchema: { type: 'object', required: ['shotlistId', 'rowId', 'sourceNodeId'], additionalProperties: false, properties: { shotlistId: { type: 'string', minLength: 1, maxLength: 160 }, rowId: { type: 'string', minLength: 1, maxLength: 160 }, sourceNodeId: { type: 'string', minLength: 1, maxLength: 160 } } }, authorize: authorizeCurrentProject,
-      execute: async (context, input) => { assertCanvasRevision(context); const before = JSON.stringify(useAppStore.getState().nodes.find((item) => item.id === input.shotlistId)?.data.shotlistRows ?? []); useAppStore.getState().bindShotlistFrame(input.shotlistId, input.rowId, input.sourceNodeId); const after = JSON.stringify(useAppStore.getState().nodes.find((item) => item.id === input.shotlistId)?.data.shotlistRows ?? []); if (before === after) return { status: 'error', summary: '镜头表、行或来源媒体无效', modelContent: '镜头表、行或来源媒体无效' }; useAppStore.getState().incrementRevision(); return { status: 'success', summary: '已绑定镜头表画面', modelContent: JSON.stringify({ shotlistId: input.shotlistId, rowId: input.rowId, sourceNodeId: input.sourceNodeId, revision: useAppStore.getState().getCurrentRevision() }) }; },
+      execute: async (context, input) => {
+        assertCanvasRevision(context);
+        const store = useAppStore.getState();
+        const source = store.nodes.find((item) => item.id === input.sourceNodeId);
+        const target = source && ['ai-video', 'source-video'].includes(source.data.type) ? 'video' : 'frame';
+        const before = JSON.stringify(store.nodes.find((item) => item.id === input.shotlistId)?.data.shotlistRows ?? []);
+        let bound: boolean | undefined;
+        if (target === 'video') bound = store.bindShotlistVideo(input.shotlistId, input.rowId, input.sourceNodeId);
+        else store.bindShotlistFrame(input.shotlistId, input.rowId, input.sourceNodeId);
+        const after = JSON.stringify(useAppStore.getState().nodes.find((item) => item.id === input.shotlistId)?.data.shotlistRows ?? []);
+        if (bound === false || (target === 'frame' && before === after)) {
+          return { status: 'error', summary: '镜头表、行或来源媒体无效', modelContent: '镜头表、行或来源媒体无效' };
+        }
+        if (before !== after) useAppStore.getState().incrementRevision();
+        return { status: 'success', summary: target === 'video' ? '已绑定镜头表生成视频' : '已绑定镜头表画面',
+          modelContent: JSON.stringify({ ...input, target, reused: before === after, revision: useAppStore.getState().getCurrentRevision() }) };
+      },
     }),
     registerAgentTool<NodeTargetInput>({
       id: 'canvas_delete_nodes',

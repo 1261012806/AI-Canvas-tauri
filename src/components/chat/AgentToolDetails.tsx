@@ -11,6 +11,7 @@ import type {
 } from '../../types/agent';
 import { useAppStore } from '../../store/useAppStore';
 import { useT } from '../../i18n';
+import VideoThumbnail from '../shared/VideoThumbnail';
 
 interface AgentToolDetailsProps {
   input?: AgentToolDisplaySnapshot;
@@ -108,12 +109,18 @@ export default function AgentToolDetails({
                   const preview = node && reference.mediaKind === 'image'
                     ? node.data.imageUrl || node.data.thumbnailUrl
                     : node?.data.thumbnailUrl;
+                  const video = reference.mediaKind === 'video'
+                    || node?.data.type === 'ai-video' || node?.data.type === 'source-video';
                   return (
                     <div
                       key={`${reference.kind}-${reference.id}-${index}`}
                       className="flex min-w-0 items-center gap-1.5 rounded border border-canvas-border bg-canvas-surface/60 p-1.5"
                     >
-                      {preview ? (
+                      {video ? (
+                        <VideoThumbnail src={node?.data.videoUrl} filePath={node?.data.filePath}
+                          poster={node?.data.thumbnailUrl} name={reference.label} alt=""
+                          className="block h-9 w-9 shrink-0 overflow-hidden rounded object-cover" />
+                      ) : preview ? (
                         <img
                           src={preview}
                           alt=""

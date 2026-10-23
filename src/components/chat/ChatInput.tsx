@@ -6,7 +6,6 @@
 import { lazy, Suspense, useRef, useEffect, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Icon } from '@iconify/react';
-import { convertFileSrc } from '@tauri-apps/api/core';
 import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import SendShortcutMenu from '../shared/SendShortcutMenu';
 import ModelSelector from '../nodes/shared/ModelSelector';
@@ -23,7 +22,7 @@ import {
   resolveDramaChipPresentation, syncMediaReferenceLabels,
 } from '../nodes/shared/mentionEditorDom';
 import { buildReferenceChipEl } from '../shared/referenceChipDom';
-import type { BaseNodeData, GeneralModelConfig, ModelGroup, ModelOption, PromptSubmitShortcut } from '../../types';
+import type { GeneralModelConfig, ModelGroup, ModelOption, PromptSubmitShortcut } from '../../types';
 import type { SkillPickerOption } from '../../types/agentPackage';
 import type { ContextUsageStat } from '../../services/chat/contextManager';
 import { useAppStore } from '../../store/useAppStore';
@@ -45,7 +44,6 @@ function subscribeInputTheme(onChange: () => void) {
   return () => observer.disconnect();
 }
 
-const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 type ReferenceScope = 'all' | 'nodes' | 'models' | 'assets';
 type PickerTab = 'nodes' | 'assets' | 'models';
 const PICKER_TAB_ORDER: readonly PickerTab[] = ['nodes', 'assets', 'models'];
@@ -136,20 +134,6 @@ function parseReferenceQuery(query: string): { scope: ReferenceScope; query: str
   if (shortcut === 'm') return { scope: 'models', query: '' };
   if (shortcut === 'a') return { scope: 'assets', query: '' };
   return { scope: 'all', query };
-}
-
-function resolveNodeThumbnail(data: BaseNodeData): string | undefined {
-  if (data.imageUrl) {
-    if (data.filePath && IS_TAURI) {
-      try {
-        return convertFileSrc(data.filePath);
-      } catch {
-        return data.thumbnailUrl || data.imageUrl;
-      }
-    }
-    return data.thumbnailUrl || data.imageUrl;
-  }
-  return data.thumbnailUrl;
 }
 
 function fuzzyMatchModel(model: MediaModelOption, rawQuery: string): boolean {
@@ -551,7 +535,9 @@ export default function ChatInput({
         key: `node:${node.id}`,
         domId: index == null ? undefined : `chat-reference-suggestion-${index}`,
         label,
-        thumbnailUrl: resolveNodeThumbnail(node.data),
+        thumbnailUrl: bestNodeThumb(node.data),
+        video: node.data.type === 'ai-video' || node.data.type === 'source-video' || node.data.videoUrl
+          ? { src: node.data.videoUrl, filePath: node.data.filePath } : undefined,
         badge: node.data.displayId != null ? `#${String(node.data.displayId)}` : undefined,
         title: `${label} · ${String(node.data.type)}`,
         onSelect: () => insertNodeMention(node.id, label, node.data.displayId),

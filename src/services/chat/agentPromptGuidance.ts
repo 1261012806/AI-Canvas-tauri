@@ -56,6 +56,7 @@ export function buildAssistantToolGuidance(
   add('canvas_run_nodes', '- 让已有节点按自身提示词和模型生成内容用 canvas_run_nodes；这是付费调用，一次最多 5 个节点，按当前模式处理确认');
   add('canvas_connect_nodes', '- 给两个已存在节点显式连线时用 canvas_connect_nodes；已连线的上游节点会自动作为生成参考输入，无须重复引用');
   add('canvas_disconnect_nodes', '- 删除连线用 canvas_disconnect_nodes');
+  add('canvas_bind_shotlist_frame', '- canvas_bind_shotlist_frame 将图片绑定到画面列，将就绪视频绑定到独立的生成视频列并保留源节点引用；成片不覆盖参考画面，也无需反接分镜表，时间轴读取生成视频列');
   add('canvas_group_nodes', '- 分组用 canvas_group_nodes');
   add('canvas_ungroup_nodes', '- 取消分组用 canvas_ungroup_nodes');
   add('canvas_delete_nodes', '- 删除节点是可撤销的画布修改，永久删除文件是另一类操作');

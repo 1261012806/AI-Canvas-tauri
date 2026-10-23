@@ -4,6 +4,7 @@
  */
 import { mkdir, exists, rename, lstat } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
+import { localMediaUrlToPath } from '../../utils/mediaUrl';
 import {
   normalizeDirectorResultManifestReference,
   normalizeDirectorSceneReference,
@@ -33,6 +34,7 @@ interface NodeFileReferences {
   directorScene?: unknown;
   directorResultManifest?: unknown;
   storyboardOverrides?: unknown;
+  shotlistRows?: unknown;
 }
 
 const DIRECTOR_SCENE_REFERENCE_PREFIX = 'director-scene:';
@@ -80,6 +82,16 @@ export function collectNodeFileReferences(nodeData: NodeFileReferences): Set<str
       if (!value || typeof value !== 'object' || Array.isArray(value)) return;
       const path = stringPath((value as { filePath?: unknown }).filePath);
       if (path) references.add(path);
+    });
+  }
+  if (Array.isArray(nodeData.shotlistRows)) {
+    nodeData.shotlistRows.forEach((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+      for (const binding of [row.frame, row.video]) {
+        if (!binding || typeof binding !== 'object' || Array.isArray(binding)) continue;
+        const path = stringPath(binding.filePath) ?? localMediaUrlToPath(binding.url);
+        if (path) references.add(path);
+      }
     });
   }
   collectDirectorSceneIds(nodeData).forEach((sceneId) => {

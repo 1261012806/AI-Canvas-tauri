@@ -19,6 +19,7 @@ interface TestStore {
   activeNodeId: string | null;
   config: { performanceMode: boolean; providers: Record<string, never> };
   currentProjectId: string | null;
+  projectLoadStatus: 'ready' | 'loading';
   dialogPosition?: { x: number; y: number };
   nodes: TestNode[];
   edges: Array<{ id: string; source: string; target: string }>;
@@ -42,6 +43,8 @@ interface TestStore {
   closeNodeDialog: ReturnType<typeof vi.fn>;
   mergeDramaExtract: ReturnType<typeof vi.fn>;
   openNodeDialog: ReturnType<typeof vi.fn>;
+  bindShotlistFrame: ReturnType<typeof vi.fn>;
+  bindShotlistVideo: ReturnType<typeof vi.fn>;
 }
 
 function deferred<T>() {
@@ -119,6 +122,7 @@ function createStore(nodes: TestNode[], getRevision: () => number): TestStore {
     activeNodeId: null,
     config: { performanceMode: false, providers: {} },
     currentProjectId: 'project-a',
+    projectLoadStatus: 'ready',
     nodes,
     edges: [],
     projects: [{ id: 'project-a', settings: { styleReferenceId: 'style-project' } }],
@@ -149,6 +153,8 @@ function createStore(nodes: TestNode[], getRevision: () => number): TestStore {
     closeNodeDialog: vi.fn(),
     mergeDramaExtract: vi.fn(),
     openNodeDialog: vi.fn(),
+    bindShotlistFrame: vi.fn(),
+    bindShotlistVideo: vi.fn().mockReturnValue(true),
   } satisfies TestStore;
   return store;
 }
@@ -324,16 +330,32 @@ describe('image generation history application', () => {
   });
 });
 
+async function installShotlistTimelineMock() {
+  const { resolveShotlistTimelineRows, resolveShotlistVoiceoverNodes } = await vi.importActual<
+    typeof import('../../src/services/videoEditorService')
+  >('../../src/services/videoEditorService');
+  const hasShotlistTimeline = vi.fn().mockResolvedValue(false);
+  const openVideoEditorForShotlist = vi.fn().mockResolvedValue(undefined);
+  vi.doMock('../../src/services/videoEditorService', () => ({
+    hasShotlistTimeline, openVideoEditorForShotlist, resolveShotlistTimelineRows, resolveShotlistVoiceoverNodes,
+  }));
+  return { hasShotlistTimeline, openVideoEditorForShotlist };
+}
+
 async function setupShotlistWidths(
   widths?: Record<string, number>, rows: Record<string, unknown>[] = [], dragRowId?: string,
   dataOverrides: Record<string, unknown> = {},
+  options: { nodes?: TestNode[]; picker?: Record<string, unknown> } = {},
 ) {
-  await installReactHookDriver((initial, index) => index === 1 ? true : index === 2 ? dragRowId ?? initial : initial);
+  const setters: Array<ReturnType<typeof vi.fn>> = [];
+  await installReactHookDriver((initial, index) => index === 1 ? true
+    : index === 2 ? dragRowId ?? initial : index === 4 ? options.picker ?? initial : initial,
+  undefined, undefined, setters);
   const shotlist: TestNode = {
     id: 'shotlist', type: 'ai-shotlist', position: { x: 0, y: 0 },
     data: { type: 'ai-shotlist', label: '第一场', shotlistColumnWidths: widths, shotlistRows: rows, ...dataOverrides },
   };
-  const store = createStore([shotlist], () => 1);
+  const store = createStore([shotlist, ...(options.nodes ?? [])], () => 1);
   installStoreMock(store);
   installCommonNodeMocks();
   vi.doMock('@xyflow/react', () => ({
@@ -341,9 +363,8 @@ async function setupShotlistWidths(
     Position: { Left: 'left', Right: 'right' },
     useReactFlow: () => ({ setCenter: vi.fn(), getNode: vi.fn() }),
   }));
-  vi.doMock('../../src/services/videoEditorService', () => ({
-    hasShotlistTimeline: vi.fn(), openVideoEditorForShotlist: vi.fn(),
-  }));
+  vi.doMock('react-dom', () => ({ createPortal: (children: unknown) => children }));
+  const timeline = await installShotlistTimelineMock();
   const ShotlistNode = (await import('../../src/components/nodes/ShotlistNode')).default as unknown as (
     props: { id: string; data: Record<string, unknown>; selected: boolean },
   ) => unknown;
@@ -362,7 +383,7 @@ async function setupShotlistWidths(
       hasPointerCapture: () => true, releasePointerCapture: vi.fn(),
     },
   });
-  return { tree, table, store, handle, pointer };
+  return { tree, table, store, handle, pointer, setters, timeline };
 }
 
 beforeEach(() => {
@@ -373,7 +394,7 @@ beforeEach(() => {
 
 function visibleShotRatio(store: TestStore, column: string) {
   const ratios = store.nodes[0].data.shotlistColumnRatios as Record<string, number>;
-  const total = ['frame', 'shotSize', 'camera', 'content', 'dialogue']
+  const total = ['frame', 'video', 'shotSize', 'camera', 'content', 'dialogue']
     .reduce((sum, key) => sum + ratios[key], 0);
   return ratios[column] / total * 100;
 }
@@ -550,6 +571,88 @@ describe('critical canvas node interactions', () => {
     expect(store.updateNodeDataTransient).not.toHaveBeenCalled();
   });
 
+  it('keeps the generated video column visible and opens a separate ready-video picker', async () => {
+    vi.stubGlobal('window', { innerWidth: 1200, innerHeight: 900 });
+    const frame = { nodeId: 'reference', kind: 'image', url: 'asset://reference.png' };
+    const { tree, table, setters } = await setupShotlistWidths(undefined, [
+      { id: 'row-1', shotNo: '1', frame },
+    ], undefined, { shotlistColumns: ['camera', 'dialogue'] }, { nodes: [
+      { id: 'other-video', type: 'source-video', position: { x: 0, y: 0 }, data: { label: '导入视频', videoUrl: 'asset://other.mp4' } },
+      { id: 'shot-video', type: 'ai-video', position: { x: 0, y: 0 }, data: { label: '本镜成片', videoUrl: 'asset://shot.mp4',
+        shotlistProductionSource: { kind: 'video', nodeId: 'shotlist', rowId: 'row-1' } } },
+      { id: 'pending-video', type: 'ai-video', position: { x: 0, y: 0 }, data: { status: 'loading' } },
+      { id: 'reference', type: 'source-image', position: { x: 0, y: 0 }, data: { imageUrl: frame.url } },
+    ] });
+    const videoHeader = findElement(table, (element) => element.type === 'th' && element.props['data-shot-column'] === 'video');
+    expect((videoHeader.props.children as unknown[])[0]).toBe('生成视频');
+    const videoCell = findElement(tree, (element) => element.props['data-shot-video-row'] === 'row-1');
+    const anchor = { getBoundingClientRect: () => ({ left: 200, bottom: 300 }) };
+    (videoCell.props.onClick as (event: unknown) => void)({ currentTarget: anchor });
+    expect(setters[4]).toHaveBeenLastCalledWith(expect.objectContaining({ rowId: 'row-1', target: 'video',
+      candidates: [expect.objectContaining({ nodeId: 'shot-video' }), expect.objectContaining({ nodeId: 'other-video' })],
+    }));
+    const framePicker = findElement(tree, (element) => element.props['aria-label'] === '换一个画面');
+    (framePicker.props.onClick as (event: unknown) => void)({ currentTarget: anchor });
+    expect(setters[4]).toHaveBeenLastCalledWith(expect.objectContaining({ rowId: 'row-1', target: 'frame' }));
+  });
+
+  it('binds a picked generated video through its own Store action', async () => {
+    vi.stubGlobal('document', { body: {} });
+    const frame = { nodeId: 'reference', kind: 'image', url: 'asset://reference.png' };
+    const { tree, store } = await setupShotlistWidths(undefined, [{ id: 'row-1', shotNo: '1', frame }], undefined, {}, {
+      picker: { rowId: 'row-1', target: 'video', projectId: 'project-a', left: 0, top: 0,
+        candidates: [{ nodeId: 'shot-video', kind: 'video', label: '本镜成片' }] },
+    });
+    const candidate = findElement(tree, (element) => element.type === 'button' && element.props.title === '本镜成片');
+    (candidate.props.onClick as () => void)();
+    expect(store.bindShotlistVideo).toHaveBeenCalledWith('shotlist', 'row-1', 'shot-video');
+    expect(store.bindShotlistFrame).not.toHaveBeenCalled();
+    expect((store.nodes[0].data.shotlistRows as Array<Record<string, unknown>>)[0].frame).toBe(frame);
+  });
+
+  it('clears only the generated video binding and preserves the reference frame', async () => {
+    const frame = { nodeId: 'reference', kind: 'image', url: 'asset://reference.png' };
+    const video = { nodeId: 'shot-video', kind: 'video', url: 'asset://shot.mp4' };
+    const { tree, store } = await setupShotlistWidths(undefined, [{ id: 'row-1', shotNo: '1', frame, video }]);
+    const clear = findElement(tree, (element) => element.props['aria-label'] === '解除视频绑定');
+    (clear.props.onClick as () => void)();
+    expect(store.nodes[0].data.shotlistRows).toEqual([{ id: 'row-1', shotNo: '1', frame, video: null }]);
+    expect(store.commitToHistory).toHaveBeenCalledTimes(2);
+    expect(store.bindShotlistFrame).not.toHaveBeenCalled();
+  });
+
+  it('pushes only ready generated videos and reports the skipped shot numbers', async () => {
+    const { tree, store, timeline } = await setupShotlistWidths(undefined, [
+      { id: 'row-1', shotNo: '1', frame: { nodeId: 'reference-video', kind: 'video', url: 'asset://reference.mp4' } },
+      { id: 'row-2', shotNo: '2', frame: { nodeId: 'reference', kind: 'image', url: 'asset://reference.png' },
+        video: { nodeId: 'shot-video', kind: 'video', url: 'asset://old.mp4' } },
+      { id: 'row-3', shotNo: '3', video: { nodeId: 'pending-video', kind: 'video', url: 'asset://stale.mp4' } },
+    ], undefined, {}, { nodes: [
+      { id: 'shot-video', type: 'ai-video', position: { x: 0, y: 0 }, data: { videoUrl: 'asset://ready.mp4' } },
+      { id: 'pending-video', type: 'ai-video', position: { x: 0, y: 0 }, data: {} },
+    ] });
+    const push = findElement(tree, (element) => element.type === 'button' && element.props.className === 'shotlist-btn shotlist-btn--primary');
+    await (push.props.onClick as () => Promise<void>)();
+    expect(timeline.openVideoEditorForShotlist).toHaveBeenCalledOnce();
+    expect(timeline.openVideoEditorForShotlist).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-a', nodeId: 'shotlist', rows: [expect.objectContaining({ id: 'row-2',
+        video: expect.objectContaining({ nodeId: 'shot-video', url: 'asset://ready.mp4' }),
+      })],
+    }));
+    expect(store.showToast).toHaveBeenCalledWith('已推送 1 段视频；跳过未就绪镜头：1、3', 'info');
+  });
+
+  it('does not open or replace a timeline when the table has no ready generated videos', async () => {
+    const { tree, store, timeline } = await setupShotlistWidths(undefined, [{ id: 'row-1', shotNo: '1',
+      frame: { nodeId: 'reference-video', kind: 'video', url: 'asset://reference.mp4' }, video: null,
+    }]);
+    const push = findElement(tree, (element) => element.type === 'button' && element.props.className === 'shotlist-btn shotlist-btn--primary');
+    await (push.props.onClick as () => Promise<void>)();
+    expect(timeline.hasShotlistTimeline).not.toHaveBeenCalled();
+    expect(timeline.openVideoEditorForShotlist).not.toHaveBeenCalled();
+    expect(store.showToast).toHaveBeenCalledWith('请先在“生成视频”列回填已就绪的视频，再推送时间轴', 'error');
+  });
+
   it.each(['add', 'delete', 'reorder'])(
     'renumbers shots after %s while keeping their stable IDs and frame bindings', async (action) => {
       const frame = { nodeId: 'image-source', kind: 'image', url: 'data:image/png;base64,frame' };
@@ -670,7 +773,7 @@ describe('critical canvas node interactions', () => {
   it('converts legacy widths to percentages, redistributes space and resets the layout', async () => {
     const { tree, table, store } = await setupShotlistWidths({ content: 320, dialogue: 180 });
     const input = findElement(tree, (element) => componentName(element) === 'NumberStepper' && element.props['aria-label'] === '内容列宽');
-    expect(input.props.value).toBeCloseTo(320 / (84 + 68 + 68 + 320 + 180) * 100);
+    expect(input.props.value).toBeCloseTo(320 / (84 + 96 + 68 + 68 + 320 + 180) * 100);
     expect(input.props.unit).toBe('%');
     expect((table.props.style as Record<string, string>)['--shotlist-columns']).toContain('minmax(0,');
     expect((table.props.style as Record<string, string>).width).toBeUndefined();
@@ -686,7 +789,7 @@ describe('critical canvas node interactions', () => {
 
   it('supports keyboard resizing with a bounded width', async () => {
     const { handle, store } = await setupShotlistWidths(undefined, [], undefined, {
-      shotlistColumnRatios: { shotNo: 1, frame: 1, shotSize: 1, camera: 1, dialogue: 1, content: 94 },
+      shotlistColumnRatios: { shotNo: 1, frame: 1, video: 1, shotSize: 1, camera: 1, dialogue: 1, content: 94 },
     });
     (handle.props.onKeyDown as (event: unknown) => void)({
       key: 'ArrowRight', shiftKey: true, preventDefault: vi.fn(), stopPropagation: vi.fn(),
@@ -714,7 +817,8 @@ describe('critical canvas node interactions', () => {
     });
     const stepper = findElement(tree, (element) => componentName(element) === 'NumberStepper'
       && element.props['aria-label'] === '内容列宽');
-    expect(stepper.props.value).toBeCloseTo(30 / 95 * 100);
+    // 旧比例未存生成视频列时，为它补默认权重（96 / 全部弹性列 1056）。
+    expect(stepper.props.value).toBeCloseTo(30 / (95 + 96 / 1056 * 100) * 100);
     (stepper.props.onChange as (value: number) => void)(40);
     expect(visibleShotRatio(store, 'content')).toBeCloseTo(40);
     expect((store.nodes[0].data.shotlistColumnRatios as Record<string, number>).note).toBe(20);
@@ -1096,10 +1200,7 @@ describe('critical canvas node interactions', () => {
       Position: { Left: 'left', Right: 'right' },
       useReactFlow: () => ({ setCenter: vi.fn(), getNode: vi.fn() }),
     }));
-    vi.doMock('../../src/services/videoEditorService', () => ({
-      hasShotlistTimeline: vi.fn().mockResolvedValue(false),
-      openVideoEditorForShotlist: vi.fn(),
-    }));
+    await installShotlistTimelineMock();
 
     const ShotlistNode = (await import('../../src/components/nodes/ShotlistNode')).default as unknown as (
       props: { id: string; data: Record<string, unknown>; selected: boolean },

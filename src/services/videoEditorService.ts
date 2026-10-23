@@ -5,10 +5,9 @@
  * 两个窗口同源共享同一个库，因此不需要额外的素材交接通道。
  */
 import type { BaseNodeData, NodeType, ShotRow } from '../types';
+import type { ShotVideoBinding } from '../types/shotlist';
 import {
   SHOTLIST_TRANSITION_DURATION,
-  buildShotPlaceholderText,
-  isShotRowBlank,
   resolveShotDuration,
   resolveShotTransitionKind,
 } from '../types/shotlist';
@@ -167,24 +166,30 @@ export async function openVideoEditorForNodes(params: {
 
 // ── 分镜表 → 时间轴 ──
 
-/** 未填画面的行在时间轴上显示成占位文字，字号比默认标题小一档 */
-const SHOT_PLACEHOLDER_FONT_SIZE = 40;
+/** 对白叠加文字沿用分镜字幕字号。 */
+const SHOT_DIALOGUE_FONT_SIZE = 40;
 
-/** 推送读取实时媒体；只有来源节点已删除时才使用绑定快照。 */
+function hasReadyShotVideo(row: ShotRow): row is ShotRow & { video: ShotVideoBinding } {
+  const video = row.video;
+  return video?.kind === 'video'
+    && ((typeof video.url === 'string' && !!video.url.trim())
+      || (typeof video.filePath === 'string' && !!video.filePath.trim()));
+}
+
+/** 仅返回可推送的生成视频行；活源清空时不复用旧快照，已删除来源才保留快照。 */
 export function resolveShotlistTimelineRows(rows: ShotRow[], nodes: EditableMediaNode[]): ShotRow[] {
-  return rows.map((row) => {
-    if (!row.frame) return row;
-    const source = nodes.find((node) => node.id === row.frame!.nodeId);
-    if (!source) return row;
-    if (!isEditableMediaNode(source)) return { ...row, frame: null };
-    const kind = VIDEO_NODE_TYPES.includes(source.type as NodeType) ? 'video' : 'image';
-    return { ...row, frame: {
-      nodeId: source.id, kind,
-      url: kind === 'video' ? source.data.videoUrl : source.data.imageUrl,
+  return rows.flatMap((row): ShotRow[] => {
+    if (row.video?.kind !== 'video') return [];
+    const source = nodes.find((node) => node.id === row.video!.nodeId);
+    if (!source) return hasReadyShotVideo(row) ? [row] : [];
+    if (!VIDEO_NODE_TYPES.includes(source.type as NodeType)
+      || typeof source.data.videoUrl !== 'string' || !source.data.videoUrl.trim()) return [];
+    return [{ ...row, video: {
+      nodeId: source.id, kind: 'video', url: source.data.videoUrl,
       filePath: source.data.filePath, assetId: source.data.assetId,
-      sourceDuration: kind === 'video' && typeof source.data.videoDuration === 'number'
+      sourceDuration: typeof source.data.videoDuration === 'number'
         && Number.isFinite(source.data.videoDuration) && source.data.videoDuration > 0 ? source.data.videoDuration : undefined,
-    } };
+    } }];
   });
 }
 
@@ -196,7 +201,7 @@ export function buildDialogueTrack(rows: ShotRow[], clips: VideoEditorClip[]): V
     return [{
       id: `dialogue-${row.id}`, kind: 'text', fileName: `对白 ${row.shotNo || index + 1}`,
       timelineStart: clips[index].timelineStart, sourceIn: 0, sourceOut: clips[index].sourceOut,
-      textStyle: { ...DEFAULT_TEXT_STYLE, content, fontSize: SHOT_PLACEHOLDER_FONT_SIZE },
+      textStyle: { ...DEFAULT_TEXT_STYLE, content, fontSize: SHOT_DIALOGUE_FONT_SIZE },
       transform: { ...DEFAULT_TRANSFORM, y: 0.88 },
     }];
   });
@@ -232,10 +237,10 @@ function buildVoiceoverTrack(rows: ShotRow[], clips: VideoEditorClip[], nodeId: 
 /**
  * 按分镜表的一行构造时间轴片段。
  *
- * 与 buildClip 的区别有两处，也正是分镜表必须走独立入口的原因：
- * 时长取自表里的「时长」栏而非图片固定停留时长，且没绑画面的行也要出片段。
+ * 时长取自表内剪辑时长；只接收已回填的生成视频，参考画面不进入成片轨道。
  */
 export function buildShotClip(row: ShotRow, index: number): VideoEditorClip {
+  if (!hasReadyShotVideo(row)) throw new Error('镜头尚无可用的生成视频');
   const duration = resolveShotDuration(row);
   const transitionKind = resolveShotTransitionKind(row.transition);
   // 首个片段之前没有可叠的画面，转场无从谈起
@@ -249,29 +254,16 @@ export function buildShotClip(row: ShotRow, index: number): VideoEditorClip {
     sourceIn: 0,
     sourceOut: duration,
   };
-  const frame = row.frame;
-
-  if (!frame) {
-    return {
-      ...base,
-      kind: 'text',
-      fileName: `镜 ${row.shotNo || index + 1}`,
-      textStyle: {
-        ...DEFAULT_TEXT_STYLE,
-        content: buildShotPlaceholderText(row),
-        fontSize: SHOT_PLACEHOLDER_FONT_SIZE,
-      },
-    };
-  }
+  const video = row.video;
 
   return {
     ...base,
-    kind: frame.kind,
-    filePath: frame.filePath,
-    assetId: frame.assetId,
-    sourceUrl: frame.url,
+    kind: 'video',
+    filePath: video.filePath,
+    assetId: video.assetId,
+    sourceUrl: video.url,
     fileName: `镜 ${row.shotNo || index + 1}`,
-    nodeId: frame.nodeId,
+    nodeId: video.nodeId,
   };
 }
 
@@ -304,9 +296,9 @@ export async function openVideoEditorForShotlist(params: {
   if (!projectId) throw new Error('请先打开一个项目再推送分镜表');
   assertCurrent?.();
 
-  // 全空的行既没画面也没文字，推过去只会是一段空白，直接跳过
-  const usable = rows.filter((row) => !isShotRowBlank(row));
-  if (usable.length === 0) throw new Error('分镜表还没有可推送的镜头');
+  // 缺失生成视频的行不以参考图或文字补位，字幕和配音共用这一有效行列表。
+  const usable = rows.filter(hasReadyShotVideo);
+  if (usable.length === 0) throw new Error('分镜表还没有可推送的生成视频');
 
   const id = buildVideoEditorProjectId(projectId, nodeId);
   const existing = await getVideoEditorProject(id);
@@ -317,7 +309,7 @@ export async function openVideoEditorForShotlist(params: {
   const voiceoverTrack = params.voiceoverNodes ? buildVoiceoverTrack(usable, clips, nodeId, params.voiceoverNodes) : null;
   if (params.voiceoverNodes && !voiceoverTrack) throw new Error('没有可用配音，请先完成语音生成或取消附带配音');
   const sourceNodeIds = [...new Set([...usable
-    .map((row) => row.frame?.nodeId)
+    .map((row) => row.video.nodeId)
     .filter((value): value is string => !!value), ...(voiceoverTrack?.clips.map((clip) => clip.nodeId!) ?? [])])];
 
   await saveVideoEditorProject({

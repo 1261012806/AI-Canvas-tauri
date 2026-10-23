@@ -318,7 +318,8 @@ function nodeDataContainsInlineMedia(data: BaseNodeData | undefined): boolean {
   if (!data) return false;
   if (NODE_MEDIA_URL_KEYS.some((key) => isTransientMediaValue(data[key]))) return true;
   if ((data.storyboardOverrides ?? []).some(assetReferenceContainsInlineMedia)) return true;
-  if ((data.shotlistRows ?? []).some((row) => assetReferenceContainsInlineMedia(row.frame))) return true;
+  if ((data.shotlistRows ?? []).some((row) => assetReferenceContainsInlineMedia(row.frame)
+    || assetReferenceContainsInlineMedia(row.video))) return true;
   if ((data.videoReferences ?? []).some(assetReferenceContainsInlineMedia)) return true;
   return Array.isArray(data.directorCaptureUrls) && data.directorCaptureUrls.some(isTransientMediaValue);
 }
@@ -348,10 +349,14 @@ async function serializeProjectNodes(
     }
     if (Array.isArray(data.shotlistRows)) {
       const shotlistRows = await mapWithConcurrency(data.shotlistRows, 4, async (row) => {
-        if (!row.frame) return row;
-        const materialized = await materializeAssetReference(row.frame, context);
-        const frame = await serializeAssetReference(materialized, context);
-        return { ...row, frame };
+        if (!row.frame && !row.video) return row;
+        const frame = row.frame
+          ? await serializeAssetReference(await materializeAssetReference(row.frame, context), context)
+          : row.frame;
+        const video = row.video
+          ? await serializeAssetReference(await materializeAssetReference(row.video, context), context)
+          : row.video;
+        return { ...row, frame, video };
       });
       data = { ...data, shotlistRows };
     }
@@ -564,11 +569,11 @@ async function refreshProjectAssetIndex(projectId: string, projectDir: string): 
 function nodeAssetReferences(node: PersistedNodeLike): AssetReferenceLike[] {
   if (!node.data) return [];
   const overrides = Array.isArray(node.data.storyboardOverrides) ? node.data.storyboardOverrides : [];
-  const frames = Array.isArray(node.data.shotlistRows)
-    ? node.data.shotlistRows.map((row) => row.frame).filter(Boolean)
+  const shotBindings = Array.isArray(node.data.shotlistRows)
+    ? node.data.shotlistRows.flatMap((row) => [row.frame, row.video]).filter(Boolean)
     : [];
   const videoReferences = Array.isArray(node.data.videoReferences) ? node.data.videoReferences : [];
-  return [node.data, ...overrides, ...frames, ...videoReferences] as AssetReferenceLike[];
+  return [node.data, ...overrides, ...shotBindings, ...videoReferences] as AssetReferenceLike[];
 }
 
 /** 旧视频引用按同一素材 URL 补齐身份，不按角色当前主图或文件名替换已选素材。 */
@@ -652,6 +657,9 @@ async function restoreProjectNodes(nodes: unknown, projectId: string, lookup: Pr
         frame: row.frame
           ? await restoreAssetReferenceSafely(row.frame, projectId, projectDir, lookup)
           : row.frame,
+        video: row.video
+          ? await restoreAssetReferenceSafely(row.video, projectId, projectDir, lookup)
+          : row.video,
       }));
       data = { ...data, shotlistRows };
     }

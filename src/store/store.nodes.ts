@@ -21,6 +21,7 @@ import type {
   NodeGroup,
   ProjectSettings,
   ShotRow,
+  ShotVideoBinding,
   StoryboardCellOverride,
 } from '../types';
 import { createCanvasNoteData, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
@@ -585,10 +586,66 @@ function mergeShotlistReferenceSource(
   };
 }
 
-/** 在同一次 Store 更新中同步稳定关联的镜头时长，沿用调用方的历史快照。 */
+interface ShotVideoAttempt {
+  nodeId: string;
+  rowId: string;
+  binding: ShotRow['video'];
+  row: ShotRow;
+}
+// 仅跟随当前运行期节点数据对象；不把取消/回填快照写进项目或历史数据。
+const shotVideoAttempts = new WeakMap<BaseNodeData, ShotVideoAttempt>();
+
+function isSameShotVideoBinding(previous: ShotRow['video'], next: ShotVideoBinding): boolean {
+  return !!previous && previous.nodeId === next.nodeId && previous.url === next.url
+    && previous.filePath === next.filePath && previous.assetId === next.assetId
+    && previous.sourceDuration === next.sourceDuration;
+}
+
+function syncShotlistVideoResults(
+  previous: Node<BaseNodeData>[], next: Node<BaseNodeData>[], targetIds: Set<string>, patch: Partial<BaseNodeData>,
+): Node<BaseNodeData>[] {
+  let result = next;
+  for (const node of next) {
+    if (!targetIds.has(node.id) || getGenerationNodeType(node.data.type) !== 'ai-video') continue;
+    const oldNode = previous.find((item) => item.id === node.id);
+    const source = node.data.shotlistProductionSource;
+    const attempt = oldNode ? shotVideoAttempts.get(oldNode.data) : undefined;
+    if (source?.kind !== 'video') continue;
+    const sheet = result.find((item) => item.id === source.nodeId && item.data.type === 'ai-shotlist');
+    const row = sheet?.data.shotlistRows?.find((item) => item.id === source.rowId);
+    if (!sheet || !row) continue;
+    if (patch.status === 'loading') {
+      if (oldNode?.data.status !== 'loading') {
+        shotVideoAttempts.set(node.data, { nodeId: source.nodeId, rowId: source.rowId, binding: row.video, row });
+      } else if (attempt) shotVideoAttempts.set(node.data, attempt);
+      continue;
+    }
+    if (attempt) shotVideoAttempts.set(node.data, attempt);
+    if (patch.status !== 'success' || typeof patch.videoUrl !== 'string' || !patch.videoUrl.trim()) continue;
+    if (attempt && (attempt.nodeId !== source.nodeId || attempt.rowId !== source.rowId)) continue;
+    if (row.video && row.video.nodeId !== node.id) continue;
+    // 明确解绑不能被在途结果恢复；后续新一轮生成会记录新的 null 起点。
+    if (row.video === null && (!attempt || attempt.binding !== null || row !== attempt.row)) continue;
+    if (attempt && row.video !== attempt.binding && row.video?.nodeId !== node.id) continue;
+    const video: ShotVideoBinding = {
+      nodeId: node.id, kind: 'video', url: node.data.videoUrl,
+      filePath: node.data.filePath, assetId: node.data.assetId,
+      sourceDuration: typeof node.data.videoDuration === 'number' && Number.isFinite(node.data.videoDuration)
+        && node.data.videoDuration > 0 ? node.data.videoDuration : undefined,
+    };
+    if (isSameShotVideoBinding(row.video, video)) continue;
+    result = result.map((item) => item.id === sheet.id ? { ...item, data: { ...item.data,
+      shotlistRows: item.data.shotlistRows!.map((shot) => shot.id === row.id ? { ...shot, video } : shot),
+    } } : item);
+  }
+  return result;
+}
+
+/** 在同一次 Store 更新中同步镜头视频与时长，沿用调用方的历史快照。 */
 function mergeNodeDataWithShotDurations(nodes: Node<BaseNodeData>[], targetIds: Set<string>, patch: Partial<BaseNodeData>) {
-  const next = nodes.map((node) => targetIds.has(node.id)
+  let next = nodes.map((node) => targetIds.has(node.id)
     ? { ...node, data: mergeShotlistReferenceSource(node.data, mergeNodeData(node.data, patch), patch, nodes) } : node);
+  next = syncShotlistVideoResults(nodes, next, targetIds, patch);
   if (!Array.isArray(patch.shotlistRows)) return next;
   const sheets = new Map(nodes.filter((node) => targetIds.has(node.id) && node.data.type === 'ai-shotlist')
     .map((node) => [node.id, node.data.shotlistRows ?? []]));
@@ -760,6 +817,8 @@ export interface NodeSlice {
   fillStoryboardCell: (storyboardId: string, cellIdx: number, sourceNodeId: string) => void;
   /** 把一个图像/视频节点拖入分镜表的画面格：建立引用，源节点留在画布上 */
   bindShotlistFrame: (shotlistId: string, rowId: string, sourceNodeId: string) => void;
+  /** 独立绑定实际就绪的视频节点，保留参考画面和计划时长。 */
+  bindShotlistVideo: (shotlistId: string, rowId: string, sourceNodeId: string) => boolean;
 }
 
 /** 拖拽会话只驻留内存；React Flow 仍发送源 ID，将其位移转给副本。 */
@@ -1032,9 +1091,12 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
   },
 
   updateNodeDataTransient: (nodeId, data) => {
-    set((state) => ({
-      nodes: mergeNodeDataWithShotDurations(state.nodes, new Set([nodeId]), data),
-    }));
+    const state = get();
+    const nodes = mergeNodeDataWithShotDurations(state.nodes, new Set([nodeId]), data);
+    // 轮询进度不落历史；只有成功结果真正回填分镜结构时保留可撤销快照。
+    if (nodes.some((node, index) => node.id !== nodeId && node.data.type === 'ai-shotlist'
+      && node.data.shotlistRows !== state.nodes[index]?.data.shotlistRows)) state.commitToHistory();
+    set({ nodes });
     rememberMediaParameterUpdate(get(), nodeId, data);
   },
 
@@ -1419,6 +1481,26 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
         idsToDelete,
       ));
     });
+  },
+
+  bindShotlistVideo: (shotlistId, rowId, sourceNodeId) => {
+    const state = get();
+    const sheet = state.nodes.find((node) => node.id === shotlistId && node.data.type === 'ai-shotlist');
+    const source = state.nodes.find((node) => node.id === sourceNodeId);
+    if (!sheet || !source || !['ai-video', 'source-video'].includes(source.data.type)
+      || typeof source.data.videoUrl !== 'string' || !source.data.videoUrl.trim()) return false;
+    const rows = sheet.data.shotlistRows ?? [];
+    const row = rows.find((item) => item.id === rowId);
+    if (!row) return false;
+    const video: ShotVideoBinding = {
+      nodeId: source.id, kind: 'video', url: source.data.videoUrl,
+      filePath: source.data.filePath, assetId: source.data.assetId,
+      sourceDuration: typeof source.data.videoDuration === 'number' && Number.isFinite(source.data.videoDuration)
+        && source.data.videoDuration > 0 ? source.data.videoDuration : undefined,
+    };
+    if (isSameShotVideoBinding(row.video, video)) return true;
+    state.updateNodeData(shotlistId, { shotlistRows: rows.map((row) => row.id === rowId ? { ...row, video } : row) });
+    return true;
   },
 
   bindShotlistFrame: (shotlistId, rowId, sourceNodeId) => {

@@ -104,7 +104,7 @@ describe('资产库胶囊预览', () => {
     const preview = (mediaId: string) => resolveDramaMentionPreview(library(asset), [], [], buildDramaActionMentionId(asset.id, 'run', mediaId), '奔跑');
     expect(preview('image')).toMatchObject({ outputType: 'image', thumbnailUrl: 'pose.png', missing: false });
     expect(preview('gif')).toMatchObject({ outputType: 'image', thumbnailUrl: 'run.gif', description: '创作资产库 · 动作 GIF' });
-    expect(preview('video')).toMatchObject({ outputType: 'video', thumbnailUrl: undefined, text: '', missing: false });
+    expect(preview('video')).toMatchObject({ outputType: 'video', videoUrl: 'run.mp4', thumbnailUrl: undefined, text: '', missing: false });
     expect(preview('deleted')).toMatchObject({ thumbnailUrl: undefined, missing: true, description: '创作资产库 · 动作素材引用已失效' });
     expect(resolveDramaMentionPreview(library(asset), [], [], 'same-id#action/broken', '损坏动作'))
       .toMatchObject({ label: '损坏动作', thumbnailUrl: undefined, missing: true });

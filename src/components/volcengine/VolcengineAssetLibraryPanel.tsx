@@ -5,6 +5,7 @@ import { createAsset, createAssetGroup, deleteAsset, deleteAssetGroup, getAsset,
 import type { VolcengineAsset, VolcengineAssetGroup } from '../../types/volcengineAssetLibrary';
 import { readAppSecret } from '../../services/providerSecretService';
 import ViewportImage from '../shared/ViewportImage';
+import VideoThumbnail from '../shared/VideoThumbnail';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import Select from '../shared/Select';
@@ -147,7 +148,7 @@ export default function VolcengineAssetLibraryPanel({ compact = false, onCountCh
         const isImage = mediaType === 'image' || (!mediaType && Boolean(item.thumbnailUrl));
         return <article key={item.id} className="group overflow-hidden rounded border border-canvas-border bg-canvas-surface">
           <button type="button" className="block aspect-video w-full overflow-hidden bg-canvas-bg text-left" onClick={() => void inspectAsset(item)} aria-label={`查看素材 ${item.name}`}>
-            {isImage && item.thumbnailUrl ? <ViewportImage src={item.thumbnailUrl} alt={item.name} className="h-full w-full object-cover" draggable={false} /> : mediaType === 'video' && item.thumbnailUrl ? <video src={item.thumbnailUrl} className="h-full w-full object-cover" muted preload="metadata" /> : <span className="flex h-full items-center justify-center text-canvas-text-muted"><Icon icon={mediaType === 'audio' ? 'mdi:music-note-outline' : mediaType === 'video' ? 'mdi:video-outline' : 'mdi:image-off-outline'} width="28" /></span>}
+            {isImage && item.thumbnailUrl ? <ViewportImage src={item.thumbnailUrl} alt={item.name} className="h-full w-full object-cover" draggable={false} /> : mediaType === 'video' && item.thumbnailUrl ? <VideoThumbnail src={item.thumbnailUrl} name={item.name} alt="" className="block h-full w-full object-cover" /> : <span className="flex h-full items-center justify-center text-canvas-text-muted"><Icon icon={mediaType === 'audio' ? 'mdi:music-note-outline' : mediaType === 'video' ? 'mdi:video-outline' : 'mdi:image-off-outline'} width="28" /></span>}
           </button>
           <div className="p-2"><div className="flex items-start gap-1"><span className="min-w-0 flex-1 truncate text-xs" title={item.name}>{item.name}</span><span className={item.status === 'Active' ? 'shrink-0 text-[10px] text-emerald-400' : 'shrink-0 text-[10px] text-canvas-text-muted'}>{item.status}</span></div><div className="mt-1 flex items-center justify-end gap-1"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost px-1" onClick={() => openDialog({ kind: 'edit-asset', asset: item })} aria-label={`编辑素材 ${item.name}`}><Icon icon="mdi:pencil-outline" width="13" /></button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost px-1" onClick={() => openDialog({ kind: 'delete-asset', asset: item })} aria-label={`删除素材 ${item.name}`}><Icon icon="mdi:delete-outline" width="13" /></button></div></div>
         </article>;

@@ -99,6 +99,18 @@ describe('ConnectedNodesPreview 交互', () => {
     expect(resolveMentionPreview(nodes, 'sb/cell/9', '不存在的格子').thumbnailUrl).toBeUndefined();
   });
 
+  it('视频悬浮预览分离真实视频与封面，缺封面仍提供同源抽帧输入', () => {
+    const videoUrl = 'https://media.test/clip.mp4?token=preview';
+    const data = { type: 'source-video', videoUrl, thumbnailUrl: videoUrl, filePath: 'C:/media/clip.mp4' } as BaseNodeData;
+    expect(resolveMentionPreview([{ id: 'video', data }], 'video', '视频')).toMatchObject({
+      outputType: 'video', thumbnailUrl: undefined, videoUrl, filePath: data.filePath, missing: false,
+    });
+    expect(resolveMentionPreview([{ id: 'video', data: { ...data, thumbnailUrl: 'cover.png' } }], 'video', '视频'))
+      .toMatchObject({ outputType: 'video', thumbnailUrl: 'cover.png', videoUrl });
+    expect(resolveMentionPreview([{ id: 'video', data: { type: 'ai-video' } as BaseNodeData }], 'video', '待生成'))
+      .toMatchObject({ outputType: 'video', thumbnailUrl: undefined, videoUrl: undefined, missing: false });
+  });
+
   it('单镜预览读取实时融合提示词，按 ID 跟随改号，删除时不退回整表内容', () => {
     const data = { type: 'ai-shotlist', label: '新表名', output: '旧整表输出', shotlistRows: [
       { id: 'row/a', shotNo: '7', content: '站在门口', dialogue: '先别开灯。', audio: '脚步声' },

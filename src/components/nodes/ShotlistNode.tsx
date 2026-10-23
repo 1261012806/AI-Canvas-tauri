@@ -2,11 +2,10 @@
  * ShotlistNode 分镜表 —— 一行一个镜头的可编辑表格
  *
  * 与「宫格分镜」（ai-storyboard）职责不同：那个把一张成图切格取裁片，
- * 这里是前期分镜稿本身。每行的「画面」格引用画布上一个图像/视频节点，
- * 整表可以按行推成视频编辑器的时间轴。
+ * 这里是前期分镜稿本身。「画面」格保存制作参考，「生成视频」格独立引用成片，
+ * 整表仅按已就绪的成片视频推成视频编辑器时间轴。
  *
- * 画面格持有的是引用而非所有权：渲染与推送都读画布上那个节点的实时数据，
- * 源节点重新生成后画面自动跟着变；节点不在了才回落到绑定时的快照。
+ * 两个媒体格持有引用，读取来源节点的实时数据，来源删除后才使用绑定快照。
  *
  * 画面有三种来源：把素材节点拖进格子、从连线进来的节点里挑、直接叫 AI 生成
  * （生成出的图仍然是画布上一个正常的图像节点，表里只存引用）。
@@ -52,6 +51,8 @@ import Select from '../shared/Select';
 import NumberStepper from '../shared/NumberStepper';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
+import ResourceVideoPreview from '../shared/ResourceVideoPreview';
+import VideoThumbnail from '../shared/VideoThumbnail';
 import FullscreenOverlay from '../shared/FullscreenOverlay';
 import { useCanvasNodeLodProtection } from '../../hooks/useCanvasNodeLod';
 import { useT } from '../../i18n';
@@ -61,8 +62,23 @@ import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDeriva
 /** 画面格实时解析出的素材 */
 interface ResolvedFrame {
   url?: string;
+  videoUrl?: string;
+  filePath?: string;
   kind: 'image' | 'video';
   /** 源节点已不在画布上，当前显示的是绑定时的快照 */
+  dangling: boolean;
+}
+
+interface FramePreviewCandidate extends ShotFrameCandidate {
+  videoUrl?: string;
+  filePath?: string;
+}
+
+interface ResolvedShotVideo {
+  url?: string;
+  filePath?: string;
+  poster?: string;
+  available: boolean;
   dangling: boolean;
 }
 
@@ -72,7 +88,7 @@ const TEXT_COLUMNS: ShotlistColumnKey[] = ['content', 'dialogue', 'audio', 'note
 const FIXED_COLUMN_WIDTHS: Partial<Record<ShotlistColumnKey, number>> = { shotNo: 48, duration: 84 };
 const FIXED_TABLE_WIDTH = 26 + 106 + 48 + 84;
 const DEFAULT_COLUMN_WIDTHS: Record<ShotlistColumnKey, number> = {
-  shotNo: 48, frame: 84, shotSize: 68, camera: 68, content: 240,
+  shotNo: 48, frame: 84, video: 96, shotSize: 68, camera: 68, content: 240,
   dialogue: 240, audio: 96, transition: 68, duration: 84, note: 96,
 };
 const FLEXIBLE_COLUMNS = SHOTLIST_COLUMN_ORDER.filter((column) => FIXED_COLUMN_WIDTHS[column] === undefined);
@@ -92,6 +108,7 @@ const OPTION_COLUMNS: Record<string, readonly string[]> = {
 
 function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; selected?: boolean }) {
   const t = useT();
+  const currentProjectId = useAppStore((s) => s.currentProjectId ?? undefined);
   const config = useAppStore((s) => s.config);
   const workflows = useAppStore((s) => s.workflows);
   const imageModels = useMemo(() => getMediaModelOptions(config.generalModels ?? [], config, workflows)
@@ -128,9 +145,11 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
       const frame = row.frame;
       if (!frame) return [];
       const source = s.nodes.find((candidate) => candidate.id === frame.nodeId);
-      if (!source) return [[row.id, { url: frame.url, kind: frame.kind, dangling: true }]];
+      if (!source) return [[row.id, { url: frame.url, videoUrl: frame.kind === 'video' ? frame.url : undefined,
+        filePath: frame.filePath, kind: frame.kind, dangling: true }]];
       const resolved = readShotFrameSource(source);
-      return [[row.id, { url: resolved.url ?? frame.url, kind: resolved.kind, dangling: false }]];
+      return [[row.id, { url: resolved.url ?? frame.url, videoUrl: source.data.videoUrl,
+        filePath: source.data.filePath, kind: resolved.kind, dangling: false }]];
     }),
   ));
 
@@ -138,6 +157,21 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     () => new Map<string, ResolvedFrame>(JSON.parse(frameEntriesJson) as [string, ResolvedFrame][]),
     [frameEntriesJson],
   );
+
+  const videoEntriesJson = useAppStore((state) => {
+    const ready = new Map(resolveShotlistTimelineRows(rows, state.nodes).map((row) => [row.id, row.video]));
+    return JSON.stringify(rows.flatMap<[string, ResolvedShotVideo]>((row) => {
+      if (!row.video) return [];
+      const source = state.nodes.find((node) => node.id === row.video!.nodeId);
+      const video = ready.get(row.id);
+      return [[row.id, {
+        url: video?.url, filePath: video?.filePath,
+        poster: source?.data.thumbnailUrl,
+        available: !!video, dangling: !source,
+      }]];
+    }));
+  });
+  const resolvedVideos = useMemo(() => new Map<string, ResolvedShotVideo>(JSON.parse(videoEntriesJson)), [videoEntriesJson]);
 
   const totalDuration = useMemo(() => computeShotlistDuration(rows), [rows]);
 
@@ -170,8 +204,9 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
    * 否则这张表要跟着画布上任何节点的拖动一起重渲染。
    */
   const [picker, setPicker] = useState<
-    { rowId: string; left: number; top: number; candidates: ShotFrameCandidate[] } | null
+    { rowId: string; target: 'frame' | 'video'; projectId: string | null; left: number; top: number; candidates: FramePreviewCandidate[] } | null
   >(null);
+  const [expandedVideoRowId, setExpandedVideoRowId] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [busyRows, setBusyRows] = useState<string[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
@@ -210,7 +245,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
   const visibleRatioTotal = flexibleColumns.reduce((sum, column) => sum + (columnRatios[column] ?? 0), 0);
   const getColumnRatio = (column: ShotlistColumnKey) => (columnRatios[column] ?? 0) / visibleRatioTotal * 100;
   const tableColumns = ['26px', ...visibleColumns.map((column) => FIXED_COLUMN_WIDTHS[column] !== undefined
-    ? `${FIXED_COLUMN_WIDTHS[column]}px` : `minmax(0, ${getColumnRatio(column)}fr)`), '106px'].join(' ');
+    ? `${FIXED_COLUMN_WIDTHS[column]}px` : `minmax(${column === 'video' ? '96px' : '0'}, ${getColumnRatio(column)}fr)`), '106px'].join(' ');
   const hasCustomColumnWidths = !!data.shotlistColumnRatios || !!data.shotlistColumnWidths;
 
   useEffect(() => () => frameController.current?.abort(), []);
@@ -378,6 +413,13 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     [patchRow, commitToHistory],
   );
 
+  const unbindVideo = useCallback((rowId: string) => {
+    commitToHistory();
+    patchRow(rowId, { video: null });
+    commitToHistory();
+    setExpandedVideoRowId(null);
+  }, [patchRow, commitToHistory]);
+
   /** 点击已绑画面 → 把画布移到那个源节点并选中它 */
   const focusFrameNode = useCallback(
     (nodeId: string) => {
@@ -396,26 +438,46 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     [getNode, setCenter, setSelectedNodeIds],
   );
 
-  const openPicker = useCallback((rowId: string, anchor: HTMLElement) => {
-    prepareFrameModel();
-    const { nodes, edges } = useAppStore.getState();
+  const openPicker = useCallback((rowId: string, anchor: HTMLElement, target: 'frame' | 'video' = 'frame') => {
+    if (target === 'frame') prepareFrameModel();
+    const { nodes, edges, currentProjectId } = useAppStore.getState();
     const rect = anchor.getBoundingClientRect();
     const row = rows.find((item) => item.id === rowId);
     setAiPrompt(row ? buildShotFramePrompt(row) : '');
     setPicker({
       rowId,
+      target,
+      projectId: currentProjectId,
       // 浮层固定宽 360，靠右/靠下时往回收，避免顶出视口
       left: Math.max(8, Math.min(rect.left, window.innerWidth - 368)),
       // @ 候选面板向上弹，底部要给它留出余量
       top: Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 380)),
-      candidates: collectShotFrameCandidates(nodes, edges, id),
+      candidates: target === 'video' ? nodes.filter((node) => (
+        (node.type === 'ai-video' || node.type === 'source-video') && !!node.data.videoUrl
+      )).sort((a, b) => {
+        const isCurrentShot = (node: typeof a) => node.data.shotlistProductionSource?.kind === 'video'
+          && node.data.shotlistProductionSource.nodeId === id && node.data.shotlistProductionSource.rowId === rowId;
+        return Number(isCurrentShot(b)) - Number(isCurrentShot(a));
+      }).map((node) => ({
+        nodeId: node.id, label: node.data.label || '视频', kind: 'video' as const,
+        url: node.data.thumbnailUrl !== node.data.videoUrl ? node.data.thumbnailUrl : undefined,
+        videoUrl: node.data.videoUrl, filePath: node.data.filePath,
+      })) : collectShotFrameCandidates(nodes, edges, id).map((candidate) => {
+        if (candidate.kind !== 'video') return candidate;
+        const source = nodes.find((node) => node.id === candidate.nodeId);
+        return { ...candidate, videoUrl: source?.data.videoUrl, filePath: source?.data.filePath };
+      }),
     });
   }, [id, rows, prepareFrameModel, setAiPrompt, setPicker]);
 
   const chooseCandidate = useCallback((rowId: string, nodeId: string) => {
-    useAppStore.getState().bindShotlistFrame(id, rowId, nodeId);
+    const state = useAppStore.getState();
+    if (!picker || state.currentProjectId !== picker.projectId) return;
+    if (picker.target === 'video') {
+      if (!state.bindShotlistVideo(id, rowId, nodeId)) return;
+    } else state.bindShotlistFrame(id, rowId, nodeId);
     setPicker(null);
-  }, [id, setPicker]);
+  }, [id, picker, setPicker]);
 
   /**
    * 叫 AI 补这一格：在画布上新建一个图像节点并连回本表，生成成功后再绑定。
@@ -485,6 +547,8 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     if (!guard) return;
     const source = store.nodes.find((node) => node.id === id)!;
     const timelineRows = resolveShotlistTimelineRows(source.data.shotlistRows ?? [], store.nodes);
+    const readyRowIds = new Set(timelineRows.map((row) => row.id));
+    const skippedShots = (source.data.shotlistRows ?? []).filter((row) => !readyRowIds.has(row.id)).map((row) => row.shotNo);
     const voiceoverNodes = includeVoiceovers ? resolveShotlistVoiceoverNodes(id, store.nodes) : undefined;
     const snapshot = JSON.stringify([timelineRows, voiceoverNodes]);
     const assertCurrent = () => {
@@ -499,6 +563,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     timelineRunning.current = true;
     setTimelineBusy(true);
     try {
+      if (!timelineRows.length) throw new Error('请先在“生成视频”列回填已就绪的视频，再推送时间轴');
       // 分镜表是时间轴的源，每次推送都按当前表重建，会覆盖上次在剪辑窗口里的调整
       if (await hasShotlistTimeline(projectId, id)) {
         const confirmed = await confirmAction('这张分镜表已经推送过时间轴。继续将按当前表重建，剪辑窗口里的调整会丢失。', { title: '重新推送时间轴' });
@@ -515,6 +580,9 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
         assertCurrent,
         theme: store.config.theme === 'light' ? 'light' : 'dark',
       });
+      store.showToast(skippedShots.length
+        ? `已推送 ${timelineRows.length} 段视频；跳过未就绪镜头：${skippedShots.slice(0, 8).join('、')}${skippedShots.length > 8 ? '…' : ''}`
+        : `已推送 ${timelineRows.length} 段视频`, skippedShots.length ? 'info' : 'success');
     } catch (err: unknown) {
       store.showToast(err instanceof Error ? err.message : '推送时间轴失败', 'error');
     } finally {
@@ -561,6 +629,29 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
   }, [picker]);
 
   const renderCell = (row: ShotRow, column: ShotlistColumnKey, rowIndex: number) => {
+    if (column === 'video') {
+      const video = resolvedVideos.get(row.id);
+      if (!row.video) return <button type="button" className="shot-frame shot-frame--empty nodrag"
+        data-shot-video-row={row.id} onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => openPicker(row.id, event.currentTarget, 'video')}
+        title="选择已生成的视频；按本镜头生成的视频会自动回填">
+        <Icon icon="lucide:video" width={16} aria-hidden="true" />
+        <span className="shot-frame-hint">回填视频</span>
+      </button>;
+      return <div className={`shot-frame shot-video nodrag nowheel${video?.dangling ? ' shot-frame--dangling' : ''}`} data-shot-video-row={row.id}>
+        {video?.available ? <ResourceVideoPreview key={`${row.id}:${video.url ?? video.filePath}`} src={video.url} filePath={video.filePath}
+          poster={video.poster} projectId={currentProjectId} name={`镜头 ${row.shotNo} 生成视频`} expanded={expandedVideoRowId === row.id}
+          onExpandedChange={(expanded) => setExpandedVideoRowId(expanded ? row.id : null)} />
+          : <span className="shot-frame-hint">视频未就绪</span>}
+        <button type="button" className="shot-frame-pick nodrag" onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => openPicker(row.id, event.currentTarget, 'video')} title="更换生成视频" aria-label="更换生成视频">
+          <Icon icon="mdi:video-sync-outline" width={11} aria-hidden="true" />
+        </button>
+        <button type="button" className="shot-frame-unbind nodrag" onClick={() => unbindVideo(row.id)} title="解除视频绑定" aria-label="解除视频绑定">
+          <Icon icon="mdi:close" width={11} aria-hidden="true" />
+        </button>
+      </div>;
+    }
     if (column === 'frame') {
       const frame = resolvedFrames.get(row.id);
       const busy = busyRows.includes(row.id);
@@ -596,7 +687,14 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           >
             <Icon icon="mdi:image-sync-outline" width={11} height={11} />
           </button>
-          {frame?.url ? (
+          {frame?.kind === 'video' ? (
+            <button type="button" className="shot-frame-img nodrag p-0"
+              onClick={() => focusFrameNode(row.frame!.nodeId)}
+              title={frame.dangling ? '源节点已不在画布上，显示的是快照' : '点击定位到源节点'}>
+              <VideoThumbnail src={frame.videoUrl} filePath={frame.filePath} poster={frame.url}
+                name={`镜头 ${row.shotNo} 参考视频`} alt="" className="h-full w-full object-contain" />
+            </button>
+          ) : frame?.url ? (
             <img
               className="shot-frame-img"
               src={frame.url}
@@ -758,7 +856,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             <button
               type="button"
               className="shotlist-btn"
-              onClick={openAiDialog}
+              onClick={(event) => { event.stopPropagation(); openAiDialog(); }}
               disabled={generating}
               title="按剧本让模型拆出整张分镜表（只填当前显示的列）"
             >
@@ -827,7 +925,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               className="shotlist-btn shotlist-btn--primary"
               onClick={pushToTimeline}
               disabled={timelineBusy}
-              title="按当前表重建剪辑时间轴"
+              title="仅按“生成视频”列重建时间轴，跳过没有成片的镜头"
             >
               <Icon icon="mdi:timeline-plus-outline" width={13} height={13} />
               推送时间轴
@@ -971,7 +1069,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           className="shot-picker nodrag nowheel"
           style={{ left: picker.left, top: picker.top }}
         >
-          <div className="shot-picker-title">连线进来的画面</div>
+          <div className="shot-picker-title">{picker.target === 'video' ? '选择已生成的视频（本镜头来源优先）' : '连线进来的画面'}</div>
           {picker.candidates.length > 0 ? (
             <div className="shot-picker-grid">
               {picker.candidates.map((candidate) => (
@@ -982,19 +1080,24 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                   title={candidate.label}
                   onClick={() => chooseCandidate(picker.rowId, candidate.nodeId)}
                 >
-                  {candidate.url
+                  {candidate.kind === 'video'
+                    ? <VideoThumbnail src={candidate.videoUrl} filePath={candidate.filePath} poster={candidate.url}
+                        name={candidate.label} alt="" className="shot-picker-img absolute inset-0" />
+                    : candidate.url
                     ? <img src={candidate.url} alt="" className="shot-picker-img" />
                     : <span className="shot-frame-hint">未出图</span>}
                   {candidate.kind === 'video' && (
                     <Icon className="shot-frame-badge" icon="mdi:play-circle" width={12} height={12} />
                   )}
+                  {picker.target === 'video' && <span className="absolute inset-x-0 bottom-0 truncate bg-canvas-surface/90 px-1 py-0.5 text-left text-[10px] text-canvas-text">{candidate.label}</span>}
                 </button>
               ))}
             </div>
           ) : (
-            <div className="shot-picker-empty">把图像/视频节点连到这张表，这里就能直接挑</div>
+            <div className="shot-picker-empty">{picker.target === 'video' ? '暂无已就绪视频，请先为镜头生成视频或导入视频节点' : '把图像/视频节点连到这张表，这里就能直接挑'}</div>
           )}
 
+          {picker.target === 'frame' && <>
           <button type="button" className="ui-btn ui-btn--sm my-2" onClick={() => { setStoryboardRowId(picker.rowId); setPicker(null); }}>{t('从宫格取画面')}</button>
           <div className="shot-picker-title">AI 生成画面</div>
           <Select value={frameModelRef} onChange={setFrameModelRef}
@@ -1023,6 +1126,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             <Icon icon="mdi:auto-fix" width={13} height={13} />
             生成并绑定
           </button>
+          </>}
         </div>,
         document.body,
       )}

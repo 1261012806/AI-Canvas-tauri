@@ -167,6 +167,13 @@ function collectAssetReferences(record: ProjectSaveData): AssetReferenceLike[] {
         if (isRecord(override)) references.push(override);
       });
     }
+    if (Array.isArray(value.shotlistRows)) {
+      value.shotlistRows.forEach((row) => {
+        if (!isRecord(row)) return;
+        if (isRecord(row.frame)) references.push(row.frame);
+        if (isRecord(row.video)) references.push(row.video);
+      });
+    }
     if (isRecord(value.directorScene)) references.push(value.directorScene);
     if (isRecord(value.directorPrevisScene)) references.push(value.directorPrevisScene);
     if (isRecord(value.directorResultManifest)) references.push(value.directorResultManifest);

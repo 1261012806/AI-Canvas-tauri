@@ -347,6 +347,53 @@ describe('project loading tolerates asset recovery failures', () => {
       .toBe('/project/data/saved.png');
   });
 
+  it('序列化成片快照并在源节点已删除、项目目录变化后恢复同一视频', async () => {
+    mocks.identifyAsset.mockResolvedValue({ assetId: 'shot-video', relativePath: 'final.mp4' });
+    const projectId = `project-shot-video-${Date.now()}`;
+    await saveProject({
+      id: projectId, name: '成片快照', createdAt: 1, updatedAt: 2, edges: [],
+      nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', shotlistRows: [{
+        id: 'shot-1', shotNo: '1', frame: null,
+        video: { nodeId: 'deleted-source', kind: 'video', url: 'asset:///project/data/final.mp4',
+          filePath: '/project/data/final.mp4', sourceDuration: 4.5 },
+      }] } }],
+    });
+    const persisted = await getProjectById(projectId) as unknown as {
+      nodes: Array<{ data: { shotlistRows: Array<{ video: Record<string, unknown> }> } }>;
+    };
+    expect(persisted.nodes[0].data.shotlistRows[0].video).toMatchObject({
+      nodeId: 'deleted-source', kind: 'video', assetId: 'shot-video', relativePath: 'final.mp4', sourceDuration: 4.5,
+    });
+    expect(persisted.nodes[0].data.shotlistRows[0].video).not.toHaveProperty('filePath');
+
+    mocks.getProjectDataDir.mockResolvedValue('/project/moved');
+    mocks.identifyAsset.mockClear();
+    const loaded = await loadProjectData(projectId) as unknown as typeof persisted;
+    expect(loaded.nodes[0].data.shotlistRows[0].video).toMatchObject({
+      nodeId: 'deleted-source', assetId: 'shot-video', relativePath: 'final.mp4',
+      filePath: '/project/moved/final.mp4', url: 'asset:///project/moved/final.mp4',
+    });
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+  });
+
+  it('成片快照素材缺失也触发索引恢复扫描并保留稳定身份', async () => {
+    mocks.exists.mockResolvedValue(false);
+    mocks.walkDirectoryFiles.mockResolvedValue([]);
+    const projectId = `project-shot-video-missing-${Date.now()}`;
+    await saveProjectToDb({ id: projectId, name: '缺失成片', createdAt: 1, updatedAt: 2, edges: [],
+      nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', shotlistRows: [{ id: 'shot-1', shotNo: '1',
+        video: { nodeId: 'deleted-source', kind: 'video', assetId: 'missing-video', relativePath: 'missing.mp4' },
+      }] } }],
+    });
+    const loaded = await loadProjectData(projectId) as unknown as {
+      nodes: Array<{ data: { shotlistRows: Array<{ video: Record<string, unknown> }> } }>;
+    };
+    expect(mocks.walkDirectoryFiles).toHaveBeenCalledWith('/project/data', { excludedRootDirectories: ['.thumbnail'] });
+    expect(loaded.nodes[0].data.shotlistRows[0].video).toEqual({
+      nodeId: 'deleted-source', kind: 'video', assetId: 'missing-video', relativePath: 'missing.mp4',
+    });
+  });
+
   it('excludes the project thumbnail cache when rebuilding the index for a missing asset', async () => {
     mocks.exists.mockResolvedValue(false);
     mocks.walkDirectoryFiles.mockResolvedValue([]);
@@ -694,6 +741,7 @@ describe('project loading tolerates asset recovery failures', () => {
     const projectId = `project-nested-inline-${Date.now()}`;
     const first = 'data:image/png;base64,AQID';
     const second = 'data:image/png;base64,BAUG';
+    const video = 'data:video/mp4;base64,BwgJ';
     const project = {
       id: projectId,
       name: 'Nested inline media',
@@ -712,6 +760,7 @@ describe('project loading tolerates asset recovery failures', () => {
             id: 'shot-1',
             shotNo: '1',
             frame: { nodeId: 'source-1', kind: 'image', url: second },
+            video: { nodeId: 'video-source', kind: 'video', url: video },
           }],
           videoReferences: [{
             id: 'reference-1',
@@ -733,18 +782,19 @@ describe('project loading tolerates asset recovery failures', () => {
     await saveProject(project);
     await saveProject(project);
 
-    expect(mocks.writeFile).toHaveBeenCalledTimes(2);
+    expect(mocks.writeFile).toHaveBeenCalledTimes(3);
     const record = await getProjectById(projectId) as unknown as {
       nodes: Array<{ data: {
         filePath?: string;
         storyboardOverrides: Array<Record<string, unknown>>;
-        shotlistRows: Array<{ frame: Record<string, unknown> }>;
+        shotlistRows: Array<{ frame: Record<string, unknown>; video: Record<string, unknown> }>;
         videoReferences: Array<{ url: string }>;
         directorCaptureUrls: string[];
       } }>;
       settings: { visualStyle: { styleReference: Record<string, unknown> } };
     };
     expect(JSON.stringify(record)).not.toContain('data:image');
+    expect(JSON.stringify(record)).not.toContain('data:video');
     expect(record.nodes[0].data.filePath).not.toBe('/project/data/missing.png');
     expect(record.nodes[0].data.storyboardOverrides[0]).toEqual(expect.objectContaining({
       assetId: expect.any(String),
@@ -755,6 +805,11 @@ describe('project loading tolerates asset recovery failures', () => {
       assetId: expect.any(String),
       relativePath: expect.stringMatching(/^embedded-image-/),
     }));
+    expect(record.nodes[0].data.shotlistRows[0].video).toMatchObject({
+      nodeId: 'video-source', kind: 'video', assetId: expect.any(String),
+      relativePath: expect.stringMatching(/^embedded-video-/),
+    });
+    expect(record.nodes[0].data.shotlistRows[0].video).not.toHaveProperty('filePath');
     expect(record.nodes[0].data.videoReferences[0].url)
       .toMatch(/^asset:\/\/\/project\/data\/embedded-image-/);
     expect(record.nodes[0].data.directorCaptureUrls[0])
@@ -776,6 +831,17 @@ describe('project loading tolerates asset recovery failures', () => {
       updatedAt: 2,
       nodes: [{ id: 'inline-node', data: { imageUrl: 'data:image/png;base64,AQID' } }],
       edges: [],
+    })).rejects.toThrow('没有项目目录');
+    await expect(getProjectById(projectId)).resolves.toBeUndefined();
+  });
+
+  it('只有成片快照含临时媒体且无项目目录时拒绝保存', async () => {
+    mocks.getProjectDataDir.mockResolvedValue(null);
+    const projectId = `project-shot-video-no-directory-${Date.now()}`;
+    await expect(saveProject({ id: projectId, name: '临时成片', createdAt: 1, updatedAt: 2, edges: [],
+      nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', shotlistRows: [{ id: 'shot-1', shotNo: '1',
+        video: { nodeId: 'source', kind: 'video', url: 'data:video/mp4;base64,BwgJ' },
+      }] } }],
     })).rejects.toThrow('没有项目目录');
     await expect(getProjectById(projectId)).resolves.toBeUndefined();
   });

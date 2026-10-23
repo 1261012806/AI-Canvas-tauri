@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 
 const hooks = vi.hoisted(() => ({
   refs: [] as Array<{ current: unknown }>,
@@ -27,6 +28,15 @@ vi.mock('react', async () => ({
 }));
 
 import MentionPicker from '../../src/components/shared/MentionPicker';
+import VideoThumbnail from '../../src/components/shared/VideoThumbnail';
+import ViewportImage from '../../src/components/shared/ViewportImage';
+
+function elements(value: unknown): ReactElement<Record<string, unknown>>[] {
+  if (Array.isArray(value)) return value.flatMap(elements);
+  if (!value || typeof value !== 'object' || !('props' in value)) return [];
+  const element = value as ReactElement<Record<string, unknown>>;
+  return [element, ...elements(element.props.children)];
+}
 
 function render(activeKey?: string, activeChip = 'all') {
   hooks.refCursor = 0;
@@ -48,6 +58,28 @@ beforeEach(() => {
 });
 
 describe('MentionPicker 滚动定位', () => {
+  it('视频卡片使用共享静态缩略图，图片仍走原图片加载器，选择行为保持不变', () => {
+    hooks.refCursor = 0;
+    hooks.layoutCursor = 0;
+    const selectVideo = vi.fn();
+    const tree = MentionPicker({ tabs: [], activeTab: 'nodes', onTabChange: vi.fn(), items: [
+      { key: 'video', label: '视频', thumbnailUrl: 'https://media.test/video.mp4',
+        video: { src: 'https://media.test/video.mp4', filePath: 'C:/media/video.mp4' }, onSelect: selectVideo },
+      { key: 'image', label: '图片', thumbnailUrl: 'cover.png', onSelect: vi.fn() },
+    ] });
+    const rendered = elements(tree);
+    expect(rendered.find((element) => element.type === VideoThumbnail)?.props).toMatchObject({
+      src: 'https://media.test/video.mp4', filePath: 'C:/media/video.mp4', poster: 'https://media.test/video.mp4',
+    });
+    expect(rendered.filter((element) => element.type === ViewportImage).map((element) => element.props.src)).toEqual(['cover.png']);
+    expect(rendered.some((element) => element.type === 'video')).toBe(false);
+    const card = rendered.find((element) => element.type === 'button' && element.props.title === '视频')!;
+    const preventDefault = vi.fn();
+    (card.props.onMouseDown as (event: unknown) => void)({ preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(selectVideo).toHaveBeenCalledOnce();
+  });
+
   it('切换分类复位滚动，单独改变高亮项不会复位', () => {
     render();
     const grid = { scrollTop: 200 };

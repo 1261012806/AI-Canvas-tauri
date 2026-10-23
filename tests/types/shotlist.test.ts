@@ -10,6 +10,7 @@ import {
   isShotRowBlank,
   isShotRowTextOnly,
   resolveShotDuration,
+  resolveShotlistColumns,
   resolveShotTransitionKind,
 } from '../../src/types/shotlist';
 import type { ShotRow } from '../../src/types/shotlist';
@@ -37,19 +38,33 @@ describe('分镜表行状态判定', () => {
     expect(isShotRowBlank(bound)).toBe(false);
     expect(isShotRowTextOnly(bound)).toBe(false);
   });
+
+  it('只有生成视频也不是空行或纯文字行，旧列配置始终显示生成视频', () => {
+    const bound = row({ video: { nodeId: 'video', kind: 'video' } });
+    expect(isShotRowBlank(bound)).toBe(false);
+    expect(isShotRowTextOnly(bound)).toBe(false);
+    expect(resolveShotlistColumns(['frame', 'content']).slice(0, 3)).toEqual(['shotNo', 'frame', 'video']);
+    expect(createShotRow('new', 1).video).toBeUndefined();
+  });
 });
 
 describe('镜头时长解析', () => {
   it('优先用表里填的时长', () => {
-    expect(resolveShotDuration(row({ duration: 7 }))).toBe(7);
+    expect(resolveShotDuration(row({ duration: 7, video: { nodeId: 'n', kind: 'video', sourceDuration: 12 } }))).toBe(7);
   });
 
   it('视频行没填时长时回落到源片长', () => {
     const shot = row({
       duration: undefined,
-      frame: { nodeId: 'n', kind: 'video', sourceDuration: 12 },
+      video: { nodeId: 'n', kind: 'video', sourceDuration: 12 },
     });
     expect(resolveShotDuration(shot)).toBe(12);
+  });
+
+  it('参考视频的片长不会充当成片时长', () => {
+    expect(resolveShotDuration(row({ duration: undefined,
+      frame: { nodeId: 'reference', kind: 'video', sourceDuration: 30 },
+    }))).toBe(DEFAULT_SHOT_DURATION);
   });
 
   it('什么都没有时用默认停留时长', () => {

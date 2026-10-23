@@ -19,6 +19,8 @@ export interface CanvasMentionItem {
   hasOutput: boolean;
   outputType: 'image' | 'video' | 'audio' | 'text';
   thumbnailUrl: string | undefined;
+  videoUrl?: string;
+  filePath?: string;
   isSelf: boolean;
   /** 仅用于候选匹配；文件只保留名称，不暴露完整路径。 */
   searchValues?: Array<string | number | undefined | null>;
@@ -68,6 +70,16 @@ function nodeSearchValues(id: string, data: BaseNodeData): CanvasMentionItem['se
   ];
 }
 
+function nodeMentionMedia(data: BaseNodeData): Pick<CanvasMentionItem, 'outputType' | 'thumbnailUrl' | 'videoUrl' | 'filePath'> {
+  const outputType = data.type === 'ai-video' || data.type === 'source-video' ? 'video'
+    : data.imageUrl ? 'image' : data.videoUrl ? 'video' : data.audioUrl ? 'audio' : 'text';
+  return {
+    outputType, thumbnailUrl: bestNodeThumb(data),
+    videoUrl: outputType === 'video' ? data.videoUrl : undefined,
+    filePath: outputType === 'video' ? data.filePath : undefined,
+  };
+}
+
 export function resolveCanvasMentionNodes(
   nodeId: string | undefined,
   nodes: AppState['nodes'],
@@ -104,8 +116,7 @@ export function resolveCanvasMentionNodes(
       type: node.data.type,
       displayId: node.data.displayId as number | undefined,
       hasOutput: !!node.data.output,
-      outputType: node.data.imageUrl ? 'image' : node.data.videoUrl ? 'video' : node.data.audioUrl ? 'audio' : 'text',
-      thumbnailUrl: bestNodeThumb(node.data),
+      ...nodeMentionMedia(node.data),
       isSelf: false,
       searchValues: nodeSearchValues(node.id, node.data),
     }));
@@ -164,8 +175,7 @@ export function resolveCanvasMentionNodes(
         type: currentNode.data.type,
         displayId: currentNode.data.displayId,
         hasOutput: true,
-        outputType: imageUrl ? 'image' : videoUrl ? 'video' : audioUrl ? 'audio' : 'text',
-        thumbnailUrl: bestNodeThumb(currentNode.data),
+        ...nodeMentionMedia(currentNode.data),
         isSelf: true,
         searchValues: nodeSearchValues(currentNode.id, currentNode.data),
       });

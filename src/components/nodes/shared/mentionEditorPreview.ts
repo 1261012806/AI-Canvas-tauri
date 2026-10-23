@@ -71,6 +71,8 @@ export function resolveDramaMentionPreview(
       label: media?.label || fallbackLabel,
       outputType: media?.kind === 'video' ? 'video' : 'image',
       thumbnailUrl: media && media.kind !== 'video' ? media.url : undefined,
+      videoUrl: media?.kind === 'video' ? media.url : undefined,
+      filePath: media?.kind === 'video' ? media.filePath : undefined,
       missing: !media,
       description: `${source} · ${media ? media.kind === 'video' ? '动作视频' : media.kind === 'gif' ? '动作 GIF' : '动作图片' : '动作素材引用已失效'}`,
     };

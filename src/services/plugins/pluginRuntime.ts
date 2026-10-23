@@ -737,10 +737,26 @@ function visitNodeMediaStrings(
   }
   for (const row of Array.isArray(data.shotlistRows) ? data.shotlistRows : []) {
     visitMediaStrings(recordValue(recordValue(row).frame).url, visitor);
+    visitMediaStrings(recordValue(recordValue(row).video).url, visitor);
   }
   for (const reference of Array.isArray(data.videoReferences) ? data.videoReferences : []) {
     visitMediaStrings(recordValue(reference).url, visitor);
   }
+}
+
+/** 插件可改镜头文本，成片绑定仅保留宿主已有稳定行的真实记录。 */
+function preserveHostShotVideos(
+  data: Record<string, PluginJsonValue>,
+  previousRows: BaseNodeData['shotlistRows'] = [],
+): Record<string, PluginJsonValue> {
+  if (!Array.isArray(data.shotlistRows)) return data;
+  const existing = new Map(previousRows.map((row) => [row.id, row.video]));
+  return { ...data, shotlistRows: data.shotlistRows.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const { video: _video, ...row } = value;
+    const retained = typeof row.id === 'string' ? toPluginJson(existing.get(row.id)) : undefined;
+    return retained === undefined ? row : { ...row, video: retained };
+  }) };
 }
 
 function isSafeCanvasNoteColor(value: unknown): boolean {
@@ -1872,7 +1888,7 @@ async function preparePluginNodeSet(options: {
           const frameKey = typeof row.frameKey === 'string' ? row.frameKey : undefined;
           const frameImage = frameKey ? savedImages.get(frameKey) : undefined;
           if (frameKey && !frameImage) throw new Error(`分镜行引用了无效画面 key: ${frameKey}`);
-          const { frameKey: _frameKey, ...cleanRow } = row;
+          const { frameKey: _frameKey, video: _video, ...cleanRow } = row;
           return {
             ...cleanRow,
             ...(row.frameAnalysis && typeof row.frameAnalysis === 'object' ? {
@@ -2166,7 +2182,8 @@ export async function executeNodePluginTool(
       }
 
       const current = assertExecutionFresh();
-      const data = result.data ?? {};
+      const data = preserveHostShotVideos(result.data ?? {}, pluginTool.tool.output.mode === 'update-current'
+        ? current.nodes.find((node) => node.id === nodeId)?.data.shotlistRows : undefined);
 
       if (pluginTool.tool.output.mode === 'update-current') {
         current.updateNodeData(nodeId, data as Partial<BaseNodeData>);

@@ -149,6 +149,23 @@ describe('mentionEditorSources', () => {
     expect(matchesMentionQuery('private-directory', candidates[0].searchValues ?? [])).toBe(false);
   });
 
+  it('视频候选保留真实视频源，旧视频地址不作为图片封面，自引用保持一致', () => {
+    const videoUrl = 'https://media.test/clip.mp4?token=preview';
+    const nodes = [
+      node('video', 'source-video', { videoUrl, thumbnailUrl: videoUrl, filePath: 'C:/media/clip.mp4' }),
+      node('covered', 'ai-video', { videoUrl: 'asset://covered.mp4', thumbnailUrl: 'asset://cover.png' }),
+      node('pending', 'ai-video'),
+    ];
+    const items = resolveCanvasMentionNodes('video', nodes, [], 'project');
+    expect(items.find((item) => item.id === 'video')).toMatchObject({
+      isSelf: true, outputType: 'video', videoUrl, filePath: 'C:/media/clip.mp4', thumbnailUrl: undefined,
+    });
+    expect(items.find((item) => item.id === 'covered')).toMatchObject({
+      outputType: 'video', videoUrl: 'asset://covered.mp4', thumbnailUrl: 'asset://cover.png',
+    });
+    expect(items.find((item) => item.id === 'pending')).toMatchObject({ outputType: 'video', videoUrl: undefined });
+  });
+
   it('全局角色保留独立身份，可按名称、别名与 ID 搜索，默认不混入', () => {
     const character: DramaCharacter = {
       id: 'hero-id', key: 'hero', name: '水行女侠', aliases: ['银发女性'], kind: 'character', identity: '',

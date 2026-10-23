@@ -11,6 +11,7 @@ import type { CharacterCropRect } from '../../types/dramaAssets';
 import { AVATAR_ASPECT, cropImageStyle } from '../character/characterReferencePresentation';
 import ViewportImage from './ViewportImage';
 import ExpandableSearch, { type ExpandableSearchProps } from './ExpandableSearch';
+import VideoThumbnail from './VideoThumbnail';
 
 export interface MentionPickerTab {
   id: string;
@@ -28,6 +29,7 @@ export interface MentionPickerItem {
   key: string;
   label: string;
   thumbnailUrl?: string;
+  video?: { src?: string; filePath?: string };
   /** 复用角色头像的归一化裁剪参数。 */
   thumbnailCrop?: CharacterCropRect;
   /** 无缩略图时的占位图标（iconify 名） */
@@ -283,8 +285,9 @@ export default function MentionPicker({
             >
               <span className="mention-picker-card-media" style={mediaAspectRatio !== undefined || item.thumbnailCrop ? { aspectRatio: mediaAspectRatio ?? AVATAR_ASPECT } : undefined}>
                 {/* 图标垫在底层：缩略图加载失败时自己隐藏，露出图标而不是空白卡 */}
-                <Icon icon={item.icon || 'mdi:vector-square'} width="26" height="26" />
-                {item.thumbnailUrl && (
+                {!item.video && <Icon icon={item.icon || 'mdi:vector-square'} width="26" height="26" />}
+                {item.video ? <VideoThumbnail src={item.video.src} filePath={item.video.filePath}
+                  poster={item.thumbnailUrl} name={item.label} alt="" className="absolute inset-0 h-full w-full object-cover" /> : item.thumbnailUrl && (
                   <ViewportImage
                     key={item.thumbnailUrl}
                     src={item.thumbnailUrl}

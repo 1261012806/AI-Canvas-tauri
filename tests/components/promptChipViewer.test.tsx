@@ -78,6 +78,18 @@ describe('renderPromptWithChips', () => {
     expect(rendered.some((el) => el.props['data-wf-id'] === 'io-1')).toBe(true);
   });
 
+  it('视频胶囊保留视频图标与双击身份，不把旧视频封面地址交给 img', () => {
+    const videoUrl = 'https://media.test/clip.mp4';
+    const rendered = elements(renderPromptWithChips('@{video:参考视频}', {
+      nodes: [{ id: 'video', data: { type: 'source-video', videoUrl, thumbnailUrl: videoUrl } }],
+    }));
+    expect(rendered.find((element) => element.props['data-ref-id'] === 'video')?.props).toMatchObject({
+      role: 'button', tabIndex: 0, 'data-ref-label': '参考视频',
+    });
+    expect(rendered.some((element) => element.type === 'svg')).toBe(true);
+    expect(rendered.some((element) => element.type === 'img' || element.type === 'video')).toBe(false);
+  });
+
   it('单镜胶囊显示实时镜号和表名，保持稳定引用且不占图片编号，失效可辨认', () => {
     const nodes = [{ id: 'sheet', data: { type: 'ai-shotlist', label: '新表名', displayId: 47,
       shotlistRows: [{ id: 'row/a', shotNo: '9', content: '新内容' }],

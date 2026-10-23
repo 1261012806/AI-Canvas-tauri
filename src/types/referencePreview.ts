@@ -15,6 +15,8 @@ export interface MentionChipPreview {
   outputType: 'image' | 'video' | 'audio' | 'text';
   thumbnailUrl?: string;
   thumbnailUrls?: string[];
+  videoUrl?: string;
+  filePath?: string;
   sprite?: { backgroundSize: string; backgroundPosition: string };
   text: string;
   missing: boolean;
