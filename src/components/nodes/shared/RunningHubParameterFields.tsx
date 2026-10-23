@@ -1,8 +1,12 @@
 import type { RunningHubParameter } from '../../../types/runninghub';
 import { resolveRunningHubParameters, runningHubParameterKey } from '../../../services/runninghubWorkflowService';
+import { isCloudWorkflowScheduler } from '../../../services/cloudWorkflowParameterControls';
 import { runningHubFrameRole, type RunningHubModelDefinition } from '../../../services/ai/providers/runninghubModelManifest';
 import Select from '../../shared/Select';
 import CloudWorkflowParameterField from './CloudWorkflowParameterField';
+
+// 仅用于缺少枚举的旧 RH 参数展示，取自用户确认的调度器列表；不写回定义或执行校验。
+const LEGACY_RH_SCHEDULERS = ['simple', 'sgm_uniform', 'karras', 'exponential', 'ddim_uniform', 'beta', 'normal'];
 
 function frameBindingLabel(field: RunningHubModelDefinition['parameters'][number]): string | undefined {
   const role = runningHubFrameRole(field);
@@ -67,8 +71,11 @@ export default function RunningHubParameterFields({ parameters, values = {}, onC
   if (appearance === 'popover') return <div className="flex min-w-0 flex-col gap-3">
     {resolveRunningHubParameters(parameters).filter((field) => field.source === 'value').map((field) => {
       const key = runningHubParameterKey(field);
+      const options = field.options?.length ? field.options
+        : field.type === 'string' && isCloudWorkflowScheduler(field.fieldName, field.label)
+          && LEGACY_RH_SCHEDULERS.includes(String(field.defaultValue)) ? LEGACY_RH_SCHEDULERS : field.options;
       return <CloudWorkflowParameterField key={key} name={field.fieldName} label={field.label} type={field.type}
-        value={values[key] ?? String(field.defaultValue)} defaultValue={field.defaultValue} options={field.options}
+        value={values[key] ?? String(field.defaultValue)} defaultValue={field.defaultValue} options={options}
         min={field.min} max={field.max} step={field.step} multiline={field.multiline}
         required={field.required} disabled={disabled} onChange={(next) => onChange({ ...values, [key]: next })}
         onReset={values[key] === undefined ? undefined : () => {

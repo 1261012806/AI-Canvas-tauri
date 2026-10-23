@@ -56,13 +56,10 @@ export default function CloudWorkflowParameterField({
     || Array.from({ length: 8 }, (_, tick) => Math.round(tick * (all.length - 1) / 7)).includes(index));
   const renderScalar = () => {
     if (control.kind === 'number') return numberInput();
-    if (control.kind === 'ratio-input') return <>
-      {effectiveValue && <div className="img-rp-quality-segmented rh-video-resolution-seg" aria-label={`${label}当前值`}>
-        <span className="img-rp-quality-item active break-words" title={effectiveValue}>{effectiveValue.match(/\d+(?:\.\d+)?\s*[:：]\s*\d+(?:\.\d+)?/)?.[0] || effectiveValue}</span>
-      </div>}
-      <input id={id} className="ui-input w-full" type="text" value={value} required={required} disabled={disabled}
-        placeholder={defaultValue === undefined ? '未填写' : String(defaultValue)} onChange={(event) => onChange(event.target.value)} />
-    </>;
+    if (control.kind === 'ratio-input') return <div className="img-rp-quality-segmented">
+      <output id={id} aria-labelledby={labelId} className={`img-rp-quality-item flex min-w-0 items-center justify-center break-words text-center ${effectiveValue ? 'active' : ''}`}
+        title={effectiveValue || undefined}>{effectiveValue.match(/\d+(?:\.\d+)?\s*[:：]\s*\d+(?:\.\d+)?/)?.[0] || effectiveValue || '未填写'}</output>
+    </div>;
     return multiline ? <textarea id={id} className="ui-textarea w-full resize-y" rows={3} value={value}
       required={required} disabled={disabled} placeholder={defaultValue === undefined ? '未填写' : String(defaultValue)}
       onChange={(event) => onChange(event.target.value)} />
@@ -84,7 +81,7 @@ export default function CloudWorkflowParameterField({
     {control.kind === 'segments' ? <>
       <div role="group" aria-labelledby={labelId} className={`img-rp-quality-segmented ${control.semantic === 'ratio' ? 'rh-video-resolution-seg' : 'flex-wrap'}`}>
         {control.options.map((option) => <button type="button" key={option.value}
-          className={`img-rp-quality-item min-w-0 break-words disabled:cursor-not-allowed disabled:opacity-50 ${effectiveValue === option.value ? 'active' : ''}`}
+          className={`img-rp-quality-item min-w-0 break-words text-center disabled:cursor-not-allowed disabled:opacity-50 ${effectiveValue === option.value ? 'active' : ''}`}
           title={option.value} aria-pressed={effectiveValue === option.value} disabled={disabled} onClick={() => onChange(option.value)}>{option.label}</button>)}
       </div>
       {!knownValue && <p className="ui-hint break-words">{effectiveValue === '' ? '未填写' : `当前值：${effectiveValue}`}</p>}

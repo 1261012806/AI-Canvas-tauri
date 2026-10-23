@@ -83,13 +83,17 @@ export function importRunningHubDefinition(
       const tuple = Array.isArray(fieldData) && fieldData.length === 2
         && typeof fieldData[0] === 'string' && ['INT', 'FLOAT', 'STRING'].includes(fieldData[0]) && isRecord(fieldData[1])
         ? { type: fieldData[0].toLowerCase(), metadata: fieldData[1] } : undefined;
+      const combo = Array.isArray(fieldData) && fieldData.length === 2
+        && Array.isArray(fieldData[0]) && fieldData[0].every(primitive) && isRecord(fieldData[1])
+        ? { options: fieldData[0] as RunningHubValue[], metadata: fieldData[1] } : undefined;
+      const scalarOptions = combo?.options ?? (Array.isArray(fieldData) && fieldData.every(primitive) ? fieldData as RunningHubValue[] : undefined);
       const fieldType = String(item.fieldType || tuple?.type || '').toLowerCase();
       const tupleMatches = tuple && (fieldType === tuple.type
         || (fieldType === 'number' && ['int', 'float'].includes(tuple.type)));
       if (Array.isArray(fieldData)) {
         options = fieldData.flatMap((entry) => isRecord(entry) && primitive(entry.index) ? [entry.index] : []);
-        const defaults = fieldData.find((entry) => isRecord(entry) && primitive(entry.default));
-        if (item.fieldValue === undefined && isRecord(defaults) && (!tuple || tupleMatches)) value = defaults.default;
+        const defaults = combo?.metadata ?? fieldData.find((entry) => isRecord(entry) && primitive(entry.default));
+        if (item.fieldValue === undefined && isRecord(defaults) && primitive(defaults.default) && (!tuple || tupleMatches)) value = defaults.default;
       }
       if (!primitive(value)) throw new Error('暂不支持此字段的复合值，请选择标量参数');
       const field = parameter(item.nodeId, item.fieldName, value, String(item.description || item.fieldName));
@@ -114,6 +118,7 @@ export function importRunningHubDefinition(
           field.multiline = tuple.metadata.multiline;
         }
       }
+      if (scalarOptions?.length && scalarOptions.every((option) => typeof option === field.type)) options = scalarOptions;
       if (options?.length) field.options = options;
       fields.push(field);
     }

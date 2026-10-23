@@ -37,6 +37,13 @@ export function getCloudWorkflowParameterSemantic(name: string, label: string): 
   return 'other';
 }
 
+/** 调度器枚举统一用下拉；不把名称相似的说明字段当成调度器。 */
+export function isCloudWorkflowScheduler(name: string, label: string): boolean {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  return ['scheduler', 'schedulername'].includes(normalize(name))
+    || label.split(/[·|]/).some((part) => ['调度器', 'scheduler', 'schedulername'].includes(normalize(part)));
+}
+
 function optionLabel(value: string, semantic: CloudWorkflowParameterSemantic, type: CloudWorkflowParameterControlSpec['type']): string {
   if (value === '') return '空值';
   if (type === 'boolean') {
@@ -67,6 +74,7 @@ export function resolveCloudWorkflowParameterControl(spec: CloudWorkflowParamete
   const common = { semantic, options, sliderOptions, specialOptions, currentOptionIndex };
 
   if (options.length) {
+    if (isCloudWorkflowScheduler(spec.name, spec.label)) return { ...common, kind: 'select' };
     if (sliderOptions.length) return { ...common, kind: 'options-slider' };
     const shortOptions = options.length >= 2 && options.length <= 8 && options.every((option) => option.label.length <= 18)
       && options.reduce((total, option) => total + option.label.length, 0) <= 80;

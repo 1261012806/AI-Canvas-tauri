@@ -163,6 +163,31 @@ describe('RunningHub 导入与参数合同', () => {
     expect(runningHubFieldValue(result.parameters[0], '16:9 (Widescreen)')).toBe('16:9 (Widescreen)');
     expect(() => runningHubFieldValue(result.parameters[0], '16:9')).toThrow('选项');
   });
+  it('读取标量列表和 ComfyUI 枚举 tuple，保留实际顺序与精确值', () => {
+    const result = importRunningHubDefinition(JSON.stringify({ nodeInfoList: [
+      { nodeId: '1', fieldName: 'scheduler', fieldType: 'LIST', fieldValue: 'simple', fieldData: JSON.stringify(['simple', 'sgm_uniform', 'karras', 'beta']) },
+      { nodeId: '2', fieldName: 'aspect_ratio', fieldType: 'LIST', fieldData: [['16:9 (Widescreen)', '9:16 (Portrait)'], { default: '9:16 (Portrait)' }] },
+      { nodeId: '3', fieldName: 'count', fieldValue: 0, fieldData: [0, 1, 2] },
+      { nodeId: '4', fieldName: 'enabled', fieldValue: false, fieldData: [[true, false], { default: true }] },
+    ] }), options);
+    expect(result.parameters[0].options).toEqual(['simple', 'sgm_uniform', 'karras', 'beta']);
+    expect(result.parameters[1]).toMatchObject({ defaultValue: '9:16 (Portrait)', options: ['16:9 (Widescreen)', '9:16 (Portrait)'] });
+    expect(result.parameters[2]).toMatchObject({ type: 'number', defaultValue: 0, options: [0, 1, 2] });
+    expect(result.parameters[3]).toMatchObject({ type: 'boolean', defaultValue: false, options: [true, false] });
+    expect(runningHubFieldValue(result.parameters[0], 'sgm_uniform')).toBe('sgm_uniform');
+    expect(() => runningHubFieldValue(result.parameters[0], 'normal')).toThrow('选项');
+  });
+  it('枚举 tuple 不改写显式旧值，不从混合或类型不符的数据补造选项', () => {
+    const result = importRunningHubDefinition(JSON.stringify({ nodeInfoList: [
+      { nodeId: '1', fieldName: 'scheduler', fieldValue: 'old_custom', fieldData: [['simple', 'karras'], { default: 'simple' }] },
+      { nodeId: '2', fieldName: 'scheduler', fieldValue: 'simple', fieldData: ['simple', { unrelated: true }] },
+      { nodeId: '3', fieldName: 'factor', fieldValue: 2, fieldData: [['INT'], { min: 1, max: 5 }] },
+      { nodeId: '4', fieldName: 'text', fieldValue: 'text', fieldData: ['STRING', { multiline: true }] },
+    ] }), options);
+    expect(result.parameters[0]).toMatchObject({ defaultValue: 'old_custom', options: ['simple', 'karras'] });
+    for (const field of result.parameters.slice(1)) expect(field.options).toBeUndefined();
+    expect(result.parameters[3].multiline).toBe(true);
+  });
   it('识别确定的媒体节点且保留各类型顺序与上传格式', () => {
     const result = importRunningHubDefinition(JSON.stringify({ a: { class_type: 'LoadImage', inputs: { image: 'a.png' } }, b: { class_type: 'LoadImageFromUrl', inputs: { image: 'https://cdn.test/b.png' } }, c: { class_type: 'LoadAudio', inputs: { audio: 'a.wav' } } }), options);
     expect(result.parameters).toMatchObject([{ source: 'image', referenceIndex: 0, mediaFormat: 'filename' }, { source: 'image', referenceIndex: 1, mediaFormat: 'url' }, { source: 'audio', referenceIndex: 0 }]);

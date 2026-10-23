@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import RunningHubWorkflowImport from '../../src/components/runninghub/RunningHubWorkflowImport';
 import RunningHubParameterFields from '../../src/components/nodes/shared/RunningHubParameterFields';
 import type { WorkflowDefinition } from '../../src/types';
+import type { RunningHubParameter } from '../../src/types/runninghub';
+import { runningHubFieldValue } from '../../src/services/runninghubWorkflowService';
 
 const workflow: WorkflowDefinition = { id: 'wf-cloud', name: '音频处理', category: 'ai-audio', fileContent: '', fileName: 'RH', createdAt: 1, adapterType: 'runninghub', runninghub: { version: 1, kind: 'app', remoteId: '1904152026220003329', connectionId: 'runninghub-model', parameters: [
   { nodeId: '6', fieldName: 'text', type: 'string', label: '正面提示词', defaultValue: '', source: 'prompt' },
@@ -49,5 +51,25 @@ describe('云工作流参数界面', () => {
     const editor = renderToStaticMarkup(<RunningHubWorkflowImport kind="app" editing={{ ...workflow, runninghub: { ...workflow.runninghub!, parameters } }} onSaved={vi.fn()} />);
     expect(editor).toContain('正面提示词 · 提示词');
     expect(editor).toContain('输入来源');
+  });
+  it('旧 RH 调度器在浮层兼容常用下拉，保留未知当前值且不修改执行合同', () => {
+    const field: RunningHubParameter = { nodeId: '5', fieldName: 'scheduler', label: '调度器', type: 'string', source: 'value', defaultValue: 'simple' };
+    const onChange = vi.fn();
+    const html = renderToStaticMarkup(<RunningHubParameterFields appearance="popover" parameters={[field]}
+      values={{ '5::scheduler': 'old_custom' }} onChange={onChange} />);
+    expect(html).toContain('aria-haspopup="listbox"');
+    expect(html).toContain('当前值：old_custom');
+    expect(html).toContain('sgm_uniform');
+    expect(html).toContain('ddim_uniform');
+    expect(field.options).toBeUndefined();
+    expect(runningHubFieldValue(field, 'old_custom')).toBe('old_custom');
+    expect(onChange).not.toHaveBeenCalled();
+    const actual = renderToStaticMarkup(<RunningHubParameterFields appearance="popover" parameters={[{ ...field, defaultValue: 'custom_a', options: ['custom_a', 'custom_b'] }]} onChange={onChange} />);
+    expect(actual).toContain('aria-haspopup="listbox"');
+    expect(actual).toContain('custom_b');
+    expect(actual).not.toContain('sgm_uniform');
+    const unrelated = renderToStaticMarkup(<RunningHubParameterFields appearance="popover" parameters={[{ ...field, defaultValue: 'other_plugin' }]} onChange={onChange} />);
+    expect(unrelated).not.toContain('aria-haspopup="listbox"');
+    expect(unrelated).toContain('value="other_plugin"');
   });
 });

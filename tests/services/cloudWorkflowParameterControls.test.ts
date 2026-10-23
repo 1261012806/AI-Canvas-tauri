@@ -57,6 +57,15 @@ describe('云工作流参数控件匹配', () => {
     expect(resolve().kind).toBe('text');
     expect(resolve({ value: '第一行\n第二行' }).kind).toBe('textarea');
   });
+  it('调度器有实际枚举时始终用下拉，其他短枚举保持原展示', () => {
+    const options = ['simple', 'sgm_uniform', 'karras', 'exponential', 'ddim_uniform', 'beta', 'normal'];
+    expect(resolve({ options }).kind).toBe('select');
+    expect(resolve({ options: ['custom_a', 'custom_b'] })).toMatchObject({ kind: 'select', options: [
+      { value: 'custom_a', label: 'custom_a' }, { value: 'custom_b', label: 'custom_b' },
+    ] });
+    expect(resolve({ name: 'schedule_mode', label: '调度模式', options: ['fast', 'slow'] }).kind).toBe('segments');
+    expect(resolve({ name: 'scheduler_description', label: '调度器说明', options: ['short', 'long'] }).kind).toBe('segments');
+  });
 
   it('缺少声明时使用固定文档区间，不随已有值扩大或缩小', () => {
     const bounds = createCloudWorkflowSliderBounds({ name: 'resolution', label: '分辨率', type: 'number', value: '1.5' });
