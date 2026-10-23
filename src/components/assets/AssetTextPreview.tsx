@@ -120,7 +120,8 @@ export default function AssetTextPreview({ file: sourceFile, projectId, onClose,
       }
       setSnapshot(saved); setDraft(saved.content);
       setStatus(targets.length && !fresh ? '已保存磁盘；画布已变化，未覆盖节点内容' : '已保存');
-      onSaved?.({ ...file, size: saved.size });
+      onSaved?.({ ...file, size: saved.size,
+        modifiedAt: typeof saved.modified === 'number' && Number.isFinite(saved.modified) ? saved.modified : undefined });
     } catch (reason) {
       if (mounted.current) setError(controller.signal.aborted ? '保存已中止，草稿已保留' : reason instanceof Error ? reason.message : '保存失败，草稿已保留');
     } finally {

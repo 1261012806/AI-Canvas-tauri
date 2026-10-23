@@ -42,6 +42,7 @@ describe('最近使用持久化与资产解析', () => {
       read.onsuccess = () => resolve(read.result);
     });
     expect(raw.entries).toEqual(entries); expect(JSON.stringify(raw)).not.toContain('path');
+    expect(await db.getAssetIndexById('asset-20')).toBeUndefined();
     await expect(db.recordRecentAssetUsage('', 1)).rejects.toThrow('无效');
     await expect(db.recordRecentAssetUsage('asset', Number.NaN)).rejects.toThrow('无效');
   });
@@ -49,8 +50,9 @@ describe('最近使用持久化与资产解析', () => {
   it('读取旧库空状态，过滤损坏记录和多余字段，不提升数据库版本', async () => {
     const { openDB, STORE_METADATA, DB_VERSION } = await import('../../src/services/indexedDb/schema');
     const db = await import('../../src/services/indexedDbService');
-    expect(await db.getRecentAssetUsage()).toEqual([]); expect(DB_VERSION).toBe(22);
+    expect(await db.getRecentAssetUsage()).toEqual([]);
     const database = await openDB();
+    expect(database.version).toBe(DB_VERSION);
     await new Promise<void>((resolve) => {
       const tx = database.transaction(STORE_METADATA, 'readwrite');
       tx.objectStore(STORE_METADATA).put({ id: 'recent-asset-usage', entries: [null, { assetId: 'invalid' },
@@ -58,6 +60,99 @@ describe('最近使用持久化与资产解析', () => {
       tx.oncomplete = () => resolve();
     });
     expect(await db.getRecentAssetUsage()).toEqual([{ assetId: 'asset', usedAt: 2 }]);
+  });
+
+  it('保留超过十项的全量索引时间，首页仍只保留最近十项且读取不增加stat', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    const ids = Array.from({ length: 30 }, (_, i) => `asset-${i}`);
+    await Promise.all(ids.map((id) => db.putAssetIndex(index(id))));
+    await Promise.all(ids.map((id, i) => db.recordRecentAssetUsage(id, i)));
+    const recent = await db.getRecentAssetUsage();
+    expect(recent).toHaveLength(10);
+    expect(recent.map((entry) => entry.assetId)).toEqual(ids.slice(20).reverse());
+    const times = await db.getAssetLastUsedTimes([...ids, ids[0], '', 'missing']);
+    expect(times.size).toBe(30);
+    expect(times.get(ids[0])).toBe(0);
+    expect(times.get(ids[29])).toBe(29);
+    expect(times.has('missing')).toBe(false);
+    expect(await db.getAssetLastUsedTimes([])).toEqual(new Map());
+    expect(driver.stat).not.toHaveBeenCalled();
+  });
+
+  it('陈旧扫描、重命名与并发使用不清空或倒退索引时间，已移出十项的记录仍可保留', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    const scanned = index('asset');
+    await db.putAssetIndex(scanned);
+    await db.recordRecentAssetUsage('asset', 10);
+    const renamed = { ...scanned, path: '/global/file/重命名.png', updatedAt: 100000 };
+    await Promise.all([
+      db.putAssetIndex(renamed), db.recordRecentAssetUsage('asset', 20),
+      db.putAssetIndex({ ...renamed, lastUsedAt: 3 }), db.recordRecentAssetUsage('asset', 15),
+    ]);
+    expect(await db.getAssetIndexById('asset')).toMatchObject({ path: renamed.path, lastUsedAt: 20 });
+    expect(await db.getRecentAssetUsage()).toEqual([{ assetId: 'asset', usedAt: 20 }]);
+    await Promise.all(Array.from({ length: 12 }, (_, i) => db.recordRecentAssetUsage(`other-${i}`, 100 + i)));
+    expect((await db.getRecentAssetUsage()).some((entry) => entry.assetId === 'asset')).toBe(false);
+    await db.recordRecentAssetUsage('asset', 5);
+    await db.putAssetIndex(renamed);
+    expect((await db.getAssetLastUsedTimes(['asset'])).get('asset')).toBe(20);
+    expect((await db.getRecentAssetUsage()).some((entry) => entry.assetId === 'asset')).toBe(false);
+  });
+
+  it('首次新使用前保留旧metadata中仍可恢复的十项时间，后续裁剪不会再丢失', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    const ids = Array.from({ length: 10 }, (_, i) => `legacy-${i}`);
+    await Promise.all(ids.map((id) => db.putAssetIndex(index(id))));
+    const { openDB, STORE_METADATA } = await import('../../src/services/indexedDb/schema');
+    const database = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = database.transaction(STORE_METADATA, 'readwrite');
+      tx.objectStore(STORE_METADATA).put({ id: 'recent-asset-usage', entries: ids.map((assetId, usedAt) => ({ assetId, usedAt })) });
+      tx.oncomplete = () => resolve();
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    });
+    for (let i = 0; i < 11; i++) {
+      await db.putAssetIndex(index(`new-${i}`));
+      await db.recordRecentAssetUsage(`new-${i}`, 100 + i);
+    }
+    expect((await db.getRecentAssetUsage()).every((entry) => entry.assetId.startsWith('new-'))).toBe(true);
+    const times = await db.getAssetLastUsedTimes(ids);
+    expect(times.size).toBe(10);
+    expect(ids.map((id) => times.get(id))).toEqual(ids.map((_, i) => i));
+    expect(driver.stat).not.toHaveBeenCalled();
+  });
+
+  it('批读只返回请求ID，旧metadata回退与索引取最大有效时间且不回写', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    const { openDB, STORE_ASSET_INDEX, STORE_METADATA } = await import('../../src/services/indexedDb/schema');
+    const database = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = database.transaction([STORE_ASSET_INDEX, STORE_METADATA], 'readwrite');
+      const assets = tx.objectStore(STORE_ASSET_INDEX);
+      assets.put(index('index-newer', undefined, { lastUsedAt: 30 }));
+      assets.put(index('metadata-newer', undefined, { lastUsedAt: 4 }));
+      assets.put(index('invalid-index', undefined, { lastUsedAt: Number.NaN }));
+      assets.put(index('invalid-only', undefined, { lastUsedAt: -1 }));
+      assets.put(index('unrequested', undefined, { lastUsedAt: 999 }));
+      tx.objectStore(STORE_METADATA).put({ id: 'recent-asset-usage', entries: [
+        { assetId: 'legacy', usedAt: 8 }, { assetId: 'index-newer', usedAt: 5 },
+        { assetId: 'metadata-newer', usedAt: 12 }, { assetId: 'invalid-index', usedAt: 7 },
+        { assetId: 'unrequested', usedAt: 999 },
+      ] });
+      tx.oncomplete = () => resolve();
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    });
+    const times = await db.getAssetLastUsedTimes(['legacy', 'index-newer', 'metadata-newer', 'invalid-index', 'invalid-only', 'unknown']);
+    expect(times.size).toBe(4);
+    expect(times.get('legacy')).toBe(8);
+    expect(times.get('index-newer')).toBe(30);
+    expect(times.get('metadata-newer')).toBe(12);
+    expect(times.get('invalid-index')).toBe(7);
+    expect(times.has('unrequested')).toBe(false);
+    expect(times.has('invalid-only')).toBe(false);
+    expect(await db.getAssetIndexById('legacy')).toBeUndefined();
+    expect((await db.getAssetIndexById('metadata-newer'))?.lastUsedAt).toBe(4);
+    expect(driver.stat).not.toHaveBeenCalled();
   });
 
   it('只记录已索引的真实素材，扫描时间和虚拟路径不计入使用', async () => {

@@ -22,6 +22,7 @@ const driver = vi.hoisted(() => ({
   nodeFile: null as AssetFileEntry | null,
   globalFolders: [] as AssetFolderEntry[],
   markUsed: vi.fn(),
+  lastUsedTimes: vi.fn(),
   monitorNativeDrag: false, cursor: vi.fn(), origin: vi.fn(), scale: vi.fn(),
   importFiles: vi.fn(), moveFile: vi.fn(),
   nativeDrop: null as null | ((event: { payload: { type: string; paths?: string[]; position?: { x: number; y: number } } }) => void),
@@ -102,6 +103,7 @@ vi.mock('../../src/services/assetVideoDetails', () => ({ loadAssetVideoHistory: 
 vi.mock('../../src/services/indexedDbService', async () => ({
   imageHistoryReferenceKey: (await vi.importActual<typeof import('../../src/services/indexedDbService')>('../../src/services/indexedDbService')).imageHistoryReferenceKey,
   getAllAssetMeta: async () => [], putAssetMeta: vi.fn(), deleteAssetMeta: vi.fn(),
+  getAssetLastUsedTimes: driver.lastUsedTimes,
 }));
 vi.mock('../../src/store/store.dramaAssets', () => ({ countUnreadDramaAssets: () => 0 }));
 vi.mock('../../src/utils/assetDrag', () => ({ startAssetDrag: driver.drag, prepareDragIcon: async () => {} }));
@@ -251,6 +253,7 @@ beforeEach(() => {
   driver.listExternal.mockReset().mockResolvedValue({ files: [], folders: [], truncated: false });
   driver.portal.mockClear();
   driver.markUsed.mockReset().mockResolvedValue(true);
+  driver.lastUsedTimes.mockReset().mockResolvedValue(new Map());
   driver.drag.mockReset(); driver.monitorNativeDrag = false;
   driver.cursor.mockReset().mockResolvedValue({ x: 1400, y: 800 });
   driver.origin.mockReset().mockResolvedValue({ x: 1000, y: 500 });
@@ -491,7 +494,7 @@ describe('启动页资产入口与最近使用', () => {
   it('图片预览才写入使用记录，列表加载和关闭预览不产生记录', async () => {
     key(); render(); await settle(); expect(driver.markUsed).not.toHaveBeenCalled();
     (cards()[0].props.onImagePreview as () => void)(); render();
-    expect(driver.markUsed).toHaveBeenCalledWith(expect.objectContaining({ name: '森林' }));
+    expect(driver.markUsed).toHaveBeenCalledWith(cards()[0].props.file);
     const preview = find((element) => element.type === 'asset-image-preview');
     (preview.props.onClose as () => void)(); render(); expect(driver.markUsed).toHaveBeenCalledOnce();
   });
@@ -519,14 +522,16 @@ describe('资产卡片悬浮提示', () => {
 
   it('停留后读取编辑提示词并展示拖拽说明，悬浮不产生最近使用记录', async () => {
     driver.imageDetails.mockResolvedValue({ record: { prompt: '编辑后的\n提示词' }, history: { prompt: '旧提示词' } });
-    await open(); hover();
+    await open();
+    const index = cards().findIndex((element) => (element.props.file as AssetFileEntry).name === '森林');
+    hover(index);
     expect(driver.imageDetails).not.toHaveBeenCalled();
-    expect(cardElement().props['data-tooltip']).toContain('正在读取');
+    expect(cardElement(index).props['data-tooltip']).toContain('正在读取');
     await readPrompt();
-    expect(driver.imageDetails).toHaveBeenCalledWith(cards()[0].props.file, 'project-1', expect.any(AbortSignal));
-    expect(cardElement().props['data-tooltip']).toBe('拖拽到画布可添加节点；\n提示词：编辑后的 提示词\n标签：\n夜景');
+    expect(driver.imageDetails).toHaveBeenCalledWith(cards()[index].props.file, 'project-1', expect.any(AbortSignal));
+    expect(cardElement(index).props['data-tooltip']).toBe('拖拽到画布可添加节点；\n提示词：编辑后的 提示词\n标签：\n夜景');
     expect(driver.markUsed).not.toHaveBeenCalled();
-    expect(all(cardElement(), (element) => element.type === 'asset-thumb')[0].props.showNativeTooltip).toBe(false);
+    expect(all(cardElement(index), (element) => element.type === 'asset-thumb')[0].props.showNativeTooltip).toBe(false);
   });
 
   it('快速扫过不读取；移开后忽略迟到结果，重新悬浮可读取最新内容', async () => {
@@ -677,7 +682,7 @@ describe('资源管理弹窗拖出后收起', () => {
 describe('资产文件右键操作', () => {
   it('抽屉与弹窗都提供文件复制和打开目录，完整路径不被改写', async () => {
     key(); render(); await settle();
-    let menu = openFileMenu();
+    let menu = openFileMenu(cards().findIndex((element) => (element.props.file as AssetFileEntry).name === '森林'));
     expect(menu).toMatchObject({ name: '森林', canFileActions: true, canCopyPrompt: true, x: 120, y: 180 });
     await menu.onCopy(); expect(driver.copyClipboard).toHaveBeenCalledWith('assets/森林.png');
     await menu.onReveal(); expect(driver.revealFile).toHaveBeenCalledWith('assets/森林.png');
@@ -690,11 +695,12 @@ describe('资产文件右键操作', () => {
   it('图片优先复制用户保存的提示词，清空后的编辑内容不回退到生成历史', async () => {
     key(); render(); await settle();
     driver.imageDetails.mockResolvedValue({ record: { prompt: '用户编辑\n完整提示词' }, history: { prompt: '原始' } });
-    await openFileMenu().onCopyPrompt();
+    const index = cards().findIndex((element) => (element.props.file as AssetFileEntry).name === '森林');
+    await openFileMenu(index).onCopyPrompt();
     expect(driver.copyText).toHaveBeenLastCalledWith('用户编辑\n完整提示词');
     expect(driver.imageDetails).toHaveBeenCalledWith(expect.objectContaining({ path: 'assets/森林.png' }), 'project-1', expect.any(AbortSignal));
     driver.copyText.mockClear(); driver.imageDetails.mockResolvedValue({ record: { prompt: '' }, history: { prompt: '原始' } });
-    await openFileMenu().onCopyPrompt(); render();
+    await openFileMenu(index).onCopyPrompt(); render();
     expect(driver.copyText).not.toHaveBeenCalled(); expect(find((el) => el.props.children === '此资产暂无提示词')).toBeDefined();
   });
   it('视频按项目与完整媒体地址读取，全局资产不限定项目', async () => {
@@ -739,7 +745,8 @@ describe('资产文件右键操作', () => {
     await fileMenu().onDelete().catch(() => {}); expect(driver.deleteFile).not.toHaveBeenCalled();
   });
   it('删除失败保留卡片，成功刷新列表且不重新加入残留节点引用', async () => {
-    key(); render(); await settle(); const menu = openFileMenu();
+    key(); render(); await settle();
+    const menu = openFileMenu(cards().findIndex((element) => (element.props.file as AssetFileEntry).name === '森林'));
     expect(driver.deleteFile).not.toHaveBeenCalled(); driver.deleteFile.mockRejectedValueOnce(new Error('locked'));
     await expect(menu.onDelete()).rejects.toThrow('删除失败'); render(); expect(cards()).toHaveLength(2);
     driver.listProject.mockResolvedValue([file('人物')]);
@@ -763,6 +770,103 @@ describe('资产文件右键操作', () => {
     const preventDefault = vi.fn();
     (cards()[0].props.onContextMenu as (event: unknown) => void)({ target: { closest: () => ({}) }, preventDefault });
     expect(preventDefault).not.toHaveBeenCalled(); expect(all(tree, (el) => el.type === AssetFileContextMenu)).toHaveLength(0);
+  });
+});
+
+describe('资产文件排序', () => {
+  async function open(files: AssetFileEntry[]) {
+    vi.mocked(driver.store!.getState().updateConfig).mockImplementation((patch) => {
+      driver.store!.setState((state) => ({ config: { ...state.config, ...patch } }));
+    });
+    vi.mocked(driver.store!.getState().saveConfig).mockResolvedValue(undefined);
+    driver.listGlobal.mockResolvedValue(files);
+    driver.store!.getState().setAssetsPanelOpen(true, 'page', { tab: 'permanent', folder: { kind: 'all' } });
+    render(); await settle(); await settle();
+  }
+  function choose(value: string) {
+    (button('排序方式').props.onChange as (value: string) => void)(value); render();
+  }
+  function names() { return cards().map((element) => (element.props.file as AssetFileEntry).name); }
+
+  it('默认名称自然升序，大小和真实时间排序保存字段与方向，未知创建时间始终置后', async () => {
+    const files: AssetFileEntry[] = [
+      { ...file('clip10'), size: 10, createdAt: 30, modifiedAt: 100 },
+      { ...file('clip2'), size: 20, createdAt: 10, modifiedAt: 300 },
+      { ...file('clip1'), size: 30, modifiedAt: 200 },
+    ];
+    await open(files);
+    expect(button('排序方式').props.value).toBe('name');
+    expect(button('切换为降序').props.children).toContain('升序');
+    expect(names()).toEqual(['clip1', 'clip2', 'clip10']);
+    choose('size');
+    expect(names()).toEqual(['clip10', 'clip2', 'clip1']);
+    expect(driver.store!.getState().updateConfig).toHaveBeenLastCalledWith({ assetSortBy: 'size', assetSortOrder: 'asc' });
+    choose('createdAt');
+    expect(names()).toEqual(['clip2', 'clip10', 'clip1']);
+    click(button('切换为降序')); render();
+    expect(names()).toEqual(['clip10', 'clip2', 'clip1']);
+    expect(driver.store!.getState().updateConfig).toHaveBeenLastCalledWith({ assetSortBy: 'createdAt', assetSortOrder: 'desc' });
+    expect(button('切换为升序').props.children).toContain('降序');
+    choose('modifiedAt');
+    expect(names()).toEqual(['clip2', 'clip1', 'clip10']);
+    expect(driver.store!.getState().config).toMatchObject({ assetSortBy: 'modifiedAt', assetSortOrder: 'desc' });
+    expect(driver.store!.getState().saveConfig).toHaveBeenCalledTimes(4);
+    expect(driver.store!.getState().saveConfig).toHaveBeenLastCalledWith({ silent: true });
+    expect(files.map((entry) => entry.name)).toEqual(['clip10', 'clip2', 'clip1']);
+  });
+
+  it('先排序完整筛选结果再取第一页，切换排序保留搜索分类标签并关闭图片预览', async () => {
+    await open([
+      ...Array.from({ length: 60 }, (_, index) => ({ ...file(`clip${60 - index}`, ['精选']), size: 60 - index })),
+      { ...file('clip999', ['其他']), size: 999 },
+      { ...file('clip-video', ['精选']), category: 'video', size: 9999 },
+      { ...file('noise', ['精选']), size: 99999 },
+    ]);
+    const search = find((element) => element.props.placeholder === '搜索名称或标签…');
+    (search.props.onChange as (event: unknown) => void)({ target: { value: 'clip' } }); render();
+    click(find((element) => element.type === 'button' && Array.isArray(element.props.children) && element.props.children.includes('图像'))); render();
+    click(find((element) => String(element.props.className).includes('assets-tag-chip')
+      && Array.isArray(element.props.children) && element.props.children.includes('精选'))); render();
+    expect(cards()).toHaveLength(48);
+    // 瀑布流按列存放 DOM；校验第一页成员，避免把列内顺序误认为排序结果。
+    expect(new Set(names())).toEqual(new Set(Array.from({ length: 48 }, (_, index) => `clip${index + 1}`)));
+    (cards()[0].props.onImagePreview as () => void)(); render();
+    expect(find((element) => element.type === 'asset-image-preview')).toBeDefined();
+    choose('size');
+    click(button('切换为降序')); render();
+    expect(cards()).toHaveLength(48);
+    expect(new Set(names())).toEqual(new Set(Array.from({ length: 48 }, (_, index) => `clip${60 - index}`)));
+    expect(find((element) => element.props.placeholder === '搜索名称或标签…').props.value).toBe('clip');
+    expect(find((element) => element.type === 'button' && Array.isArray(element.props.children)
+      && element.props.children.includes('图像')).props.className).toContain('active');
+    expect(find((element) => String(element.props.className).includes('assets-tag-chip')
+      && Array.isArray(element.props.children) && element.props.children.includes('精选')).props.className).toContain('active');
+    expect(all(tree, (element) => element.type === 'asset-image-preview')).toHaveLength(0);
+  });
+
+  it('最近使用默认降序且按稳定资产身份读取记录，使用记录变更会刷新当前排序', async () => {
+    driver.lastUsedTimes.mockResolvedValue(new Map([['ten', 10], ['two', 20]]));
+    await open([
+      { ...file('clip10'), assetId: 'ten' }, { ...file('clip2'), assetId: 'two' }, { ...file('clip1'), assetId: 'one', createdAt: 999 },
+    ]);
+    choose('usedAt'); await settle();
+    expect(names()).toEqual(['clip2', 'clip10', 'clip1']);
+    expect(driver.store!.getState().updateConfig).toHaveBeenLastCalledWith({ assetSortBy: 'usedAt', assetSortOrder: 'desc' });
+    expect(driver.store!.getState().saveConfig).toHaveBeenLastCalledWith({ silent: true });
+    expect(driver.lastUsedTimes).toHaveBeenCalledWith(expect.arrayContaining(['ten', 'two', 'one']));
+    const reads = driver.lastUsedTimes.mock.calls.length;
+    (cards()[0].props.onImagePreview as () => void)(); render();
+    driver.lastUsedTimes.mockResolvedValue(new Map([['one', 30], ['two', 20], ['ten', 10]]));
+    driver.store!.setState((state) => ({ recentAssetsRevision: state.recentAssetsRevision + 1 }));
+    render(); await settle();
+    expect(names()).toEqual(['clip2', 'clip10', 'clip1']);
+    expect(driver.lastUsedTimes.mock.calls.length).toBe(reads);
+    (find((element) => element.type === 'asset-image-preview').props.onClose as () => void)();
+    render(); await settle();
+    expect(driver.lastUsedTimes.mock.calls.length).toBeGreaterThan(reads);
+    expect(names()).toEqual(['clip1', 'clip2', 'clip10']);
+    expect(button('排序方式').props.value).toBe('usedAt');
+    expect(button('切换为升序').props.children).toContain('降序');
   });
 });
 
@@ -899,7 +1003,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(find((el) => el.props.compact === true)).toBeDefined();
     click(button('收起资产库')); render();
     key(); render(); await settle();
-    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['森林', '人物']);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['人物', '森林']);
   });
 
   it('目录导航按本层筛选，子目录和空目录保留，全部资产仍汇总', async () => {
@@ -1125,7 +1229,7 @@ describe('资产库 Tab 抽屉', () => {
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['先完成']);
     expect(all(tree, (el) => el.props.className === 'assets-empty')).toHaveLength(0);
     finish([file('先完成'), file('后完成')]); await settle();
-    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['先完成', '后完成']);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['后完成', '先完成']);
   });
 
   it.each(['drawer', 'modal'] as const)('%s 同范围重开时保留已有卡片，扫描完成后替换为最新列表', async (mode) => {
@@ -1135,7 +1239,7 @@ describe('资产库 Tab 抽屉', () => {
     let finish!: (files: AssetFileEntry[]) => void;
     driver.listProject.mockImplementationOnce(() => new Promise<AssetFileEntry[]>((resolve) => { finish = resolve; }));
     driver.store!.getState().setAssetsPanelOpen(true, mode); render(); render();
-    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['森林', '人物']);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['人物', '森林']);
     expect(all(tree, (el) => el.props.className === 'assets-empty')).toHaveLength(0);
     finish([file('刷新结果')]); await settle();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['刷新结果']);
@@ -1226,7 +1330,7 @@ describe('资产库 Tab 抽屉', () => {
     render();
     await vi.advanceTimersByTimeAsync(100); render();
     expect(driver.listProject).toHaveBeenCalledTimes(2);
-    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['森林', '人物']);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['人物', '森林']);
     expect(all(tree, (el) => el.props.role === 'alert')).toHaveLength(0);
   });
 
@@ -1250,7 +1354,7 @@ describe('资产库 Tab 抽屉', () => {
     driver.listProject.mockImplementation(async (id: string) => [file(id === 'episode-2' ? '第二集素材' : '共享素材')]);
     click(find((el) => el.type === 'button' && el.props.children === '重试加载'));
     await vi.advanceTimersByTimeAsync(0); render();
-    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['共享素材', '第二集素材', '画布图片']);
+    expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['第二集素材', '共享素材', '画布图片']);
     expect(all(tree, (el) => el.props.role === 'alert')).toHaveLength(0);
     expect(driver.store!.getState().assetsPanelOpen).toBe(true);
   });

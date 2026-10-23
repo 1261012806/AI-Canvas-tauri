@@ -179,7 +179,11 @@ async function scanDirectoryFiles(
         const filePath = joinPath(dir, e.name);
         try {
           const s = await stat(filePath);
-          return { name: e.name, filePath, size: s.size ?? 0, mtimeMs: s.mtime?.getTime() ?? 0 };
+          const createdAt = s.birthtime?.getTime();
+          const modifiedAt = s.mtime?.getTime();
+          return { name: e.name, filePath, size: s.size ?? 0, mtimeMs: modifiedAt ?? 0,
+            createdAt: Number.isFinite(createdAt) ? createdAt : undefined,
+            modifiedAt: Number.isFinite(modifiedAt) ? modifiedAt : undefined };
         } catch {
           return null;
         }
@@ -207,6 +211,8 @@ async function scanDirectoryFiles(
           relativePath: identity.relativePath,
           assetUrl,
           size: r.size,
+          createdAt: r.createdAt,
+          modifiedAt: r.modifiedAt,
           category: getFileCategory(r.name),
           availability: 'online',
           source: opts.source,

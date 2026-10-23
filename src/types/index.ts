@@ -795,6 +795,9 @@ export interface CanvasQuickAction {
 export type PromptSubmitShortcut = 'enter' | 'shift-enter' | 'ctrl-enter' | 'alt-enter';
 export type CanvasViewportMode = 'auto' | 'manual' | 'locked';
 
+export type AssetSortBy = 'name' | 'createdAt' | 'modifiedAt' | 'size' | 'usedAt';
+export type AssetSortOrder = 'asc' | 'desc';
+
 export interface AppConfig {
   providers: Record<string, ApiProviderConfig>;
   /** 当前用于 Agent 联网搜索的厂商；旧配置未设置时优先沿用 Tavily。 */
@@ -846,6 +849,8 @@ export interface AppConfig {
   mascotPosition?: MascotPosition; // 吉祥物相对视口位置，未设置时使用右下角默认位置
   assetFolders?: string[];    // 资产管理中登记的外部本地文件夹路径（引用不拷贝）
   assetWaterfallColumns?: number; // 资产管理瀑布流列数，默认 3，范围 2-6
+  assetSortBy?: AssetSortBy; // 资产文件排序字段，默认 name
+  assetSortOrder?: AssetSortOrder; // 资产文件排序方向，默认 asc
   photoshopPath?: string;    // Photoshop 安装路径，自动检测失败时手动配置
   jianyingPath?: string;     // 剪映专业版安装路径，自动检测失败时手动配置
   premierePath?: string;     // Adobe Premiere Pro 安装路径，自动检测失败时手动配置

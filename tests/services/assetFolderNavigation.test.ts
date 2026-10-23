@@ -28,7 +28,7 @@ vi.mock('../../src/services/fs/assetIndex', () => ({
 }));
 vi.mock('../../src/services/fs/trash', () => ({ moveToTrash: vi.fn() }));
 
-import { listExternalFolderContents, listExternalFolderFiles, selectAssetFolderFiles, listGlobalFolderContents, createAssetSubfolder, resolveAssetFolderDirectory, addAssetFilesToGlobal } from '../../src/services/fs/assetLibrary';
+import { listExternalFolderContents, listExternalFolderFiles, selectAssetFolderFiles, listGlobalFolderContents, createAssetSubfolder, resolveAssetFolderDirectory, addAssetFilesToGlobal, walkDirectoryFiles } from '../../src/services/fs/assetLibrary';
 import type { AssetFileEntry } from '../../src/services/fs/core';
 
 function directory(path: string, names: string[]) {
@@ -58,6 +58,24 @@ beforeEach(() => {
 });
 
 describe('global asset folder browsing', () => {
+  it.each([
+    { label: '真实零点创建时间', birthtime: new Date(0), mtime: new Date(20), createdAt: 0, modifiedAt: 20 },
+    { label: '不支持创建时间', birthtime: null, mtime: new Date(20), createdAt: undefined, modifiedAt: 20 },
+    { label: '无效或缺失时间', birthtime: new Date(Number.NaN), mtime: null, createdAt: undefined, modifiedAt: undefined },
+  ])('projects filesystem times for global, project and external entries: $label', async ({ birthtime, mtime, createdAt, modifiedAt }) => {
+    directory('/library', ['root.png']);
+    directory('/global/file', ['global.png']);
+    mocks.stat.mockResolvedValue({ size: 0, birthtime, mtime });
+    const incremental: AssetFileEntry[] = [];
+    const external = await listExternalFolderContents(['/library'], { onFiles: (files) => incremental.push(...files) });
+    const global = await listGlobalFolderContents();
+    const project = await walkDirectoryFiles('/library', { source: 'project', projectId: 'project' });
+    expect([external.files[0], global.files[0], project[0]].map((file) => ({
+      source: file.source, size: file.size, createdAt: file.createdAt, modifiedAt: file.modifiedAt,
+    }))).toEqual(['folder', 'global', 'project'].map((source) => ({ source, size: 0, createdAt, modifiedAt })));
+    expect(incremental).toEqual(external.files);
+  });
+
   it.each([
     { selection: undefined, roots: [], destination: '/global/file/角色.png' },
     { selection: { kind: 'global' as const }, roots: [], destination: '/global/file/角色.png' },

@@ -54,11 +54,12 @@ import {
 import { copyFile, copyText, readClipboardFolders } from '../services/clipboardService';
 import { loadAssetImageDetails } from '../services/assetImageDetails';
 import { loadAssetVideoHistory } from '../services/assetVideoDetails';
-import { getAllAssetMeta, putAssetMeta, deleteAssetMeta, imageHistoryReferenceKey } from '../services/indexedDbService';
+import { getAllAssetMeta, getAssetLastUsedTimes, putAssetMeta, deleteAssetMeta, imageHistoryReferenceKey } from '../services/indexedDbService';
 import { startAssetDrag, prepareDragIcon } from '../utils/assetDrag';
 import { isExternalDropCaptured, setExternalDropCaptured } from '../utils/dropCapture';
 import { nativeDropClientPosition } from '../utils/nativeDropPosition';
 import { ALL_CATEGORIES, CATEGORY_ICONS, shortFolderName } from '../utils/assetFormat';
+import { sortAssetFiles } from '../utils/assetSort';
 import AssetThumb from './shared/AssetThumb';
 import PopupCloseButton from './shared/PopupCloseButton';
 import Select from './shared/Select';
@@ -66,7 +67,7 @@ import Tabs, { type TabItem } from './shared/Tabs';
 import { springSmooth, fadeFast } from '../utils/motion';
 import { countUnreadDramaAssets } from '../store/store.dramaAssets';
 import { distributeToColumns } from './assets/waterfallColumns';
-import { getNodeTypeConfig } from '../types';
+import { getNodeTypeConfig, type AssetSortBy, type AssetSortOrder } from '../types';
 import CanvasNodeCardContent from './assets/CanvasNodeCardContent';
 import AssetFolderNavigation from './assets/AssetFolderNavigation';
 import AssetImagePreview from './assets/AssetImagePreview';
@@ -103,6 +104,13 @@ const MAX_TAG_CHIPS = 24;
 const MIN_WATERFALL_COLUMNS = 2;
 const MAX_WATERFALL_COLUMNS = 6;
 const DEFAULT_WATERFALL_COLUMNS = 3;
+const FILE_SORT_OPTIONS: { value: AssetSortBy; label: string }[] = [
+  { value: 'name', label: '名称' },
+  { value: 'createdAt', label: '创建时间' },
+  { value: 'modifiedAt', label: '修改时间' },
+  { value: 'size', label: '文件大小' },
+  { value: 'usedAt', label: '最近使用' },
+];
 
 function normalizeWaterfallColumns(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_WATERFALL_COLUMNS;
@@ -141,6 +149,9 @@ export default function AssetsPanel() {
     baseDataDir,
     assetFolders,
     assetWaterfallColumns,
+    assetSortBy,
+    assetSortOrder,
+    recentAssetsRevision,
     updateConfig,
     saveConfig,
   } =
@@ -165,6 +176,9 @@ export default function AssetsPanel() {
         baseDataDir: s.config.baseDataDir,
         assetFolders: s.config.assetFolders,
         assetWaterfallColumns: s.config.assetWaterfallColumns,
+        assetSortBy: s.config.assetSortBy,
+        assetSortOrder: s.config.assetSortOrder,
+        recentAssetsRevision: s.recentAssetsRevision,
         updateConfig: s.updateConfig,
         saveConfig: s.saveConfig,
       })),
@@ -205,6 +219,10 @@ export default function AssetsPanel() {
   const isDrawer = assetsPanelMode === 'drawer';
   const isPage = assetsPanelMode === 'page';
   const waterfallColumns = isDrawer ? DEFAULT_WATERFALL_COLUMNS : normalizeWaterfallColumns(assetWaterfallColumns);
+  const sortBy: AssetSortBy = assetSortBy === 'createdAt' || assetSortBy === 'modifiedAt' || assetSortBy === 'size' || assetSortBy === 'usedAt'
+    ? assetSortBy : 'name';
+  const sortOrder: AssetSortOrder = assetSortOrder === 'desc' ? 'desc' : 'asc';
+  const [assetUsage, setAssetUsage] = useState<ReadonlyMap<string, number>>(() => new Map());
 
   const [projectFiles, setProjectFiles] = useState<AssetFileEntry[]>([]);
   const [permanentFiles, setPermanentFiles] = useState<AssetFileEntry[]>([]);
@@ -969,6 +987,7 @@ export default function AssetsPanel() {
     () => rawFiles.map((f) => (tagMap[assetKey(f)] ? { ...f, tags: tagMap[assetKey(f)] } : f)),
     [rawFiles, tagMap],
   );
+  const usageAssetIds = useMemo(() => files.flatMap((file) => file.assetId ? [file.assetId] : []), [files]);
 
   // 分类计数
   const categoryCounts = useMemo(() => {
@@ -1049,10 +1068,10 @@ export default function AssetsPanel() {
     };
   }, [assetsPanelOpen, categoryCounts, measureFilterRowOverflow, tagList, visibleTab]);
 
-  // 过滤（分类 + 标签 + 搜索）
+  // 先筛选、整体排序，再分页和分列，避免只重排已加载的卡片。
   const filteredFiles = useMemo(() => {
     const q = deferredSearch.trim().toLowerCase();
-    return files.filter((f) => {
+    return sortAssetFiles(files.filter((f) => {
       if (activeCategory && f.category !== activeCategory) return false;
       if (activeTag && !(f.tags ?? []).includes(activeTag)) return false;
       if (q) {
@@ -1061,15 +1080,15 @@ export default function AssetsPanel() {
         if (!inName && !inTags) return false;
       }
       return true;
-    });
-  }, [files, activeCategory, activeTag, deferredSearch]);
+    }), sortBy, sortOrder, assetUsage);
+  }, [files, activeCategory, activeTag, deferredSearch, sortBy, sortOrder, assetUsage]);
 
   const visibleFiles = useMemo(() => filteredFiles.slice(0, visibleCount), [filteredFiles, visibleCount]);
   const previewScope = JSON.stringify([currentProjectId, selectedProjectId, activeTab, folderSelection, assetsPanelMode, visibleTab]);
   const batchImages = useMemo(() => [...new Map(filteredFiles.filter((file) => file.category === 'image'
     && !!file.assetUrl && isLocalAssetFile(file)).map((file) => [assetKey(file), file])).values()], [filteredFiles]);
   if (batchReverse && (!assetsPanelOpen || batchReverse.scope !== previewScope)) setBatchReverse(null);
-  const hoverScope = JSON.stringify([assetsPanelOpen, previewScope, search, activeCategory, activeTag]);
+  const hoverScope = JSON.stringify([assetsPanelOpen, previewScope, search, activeCategory, activeTag, sortBy, sortOrder]);
   useEffect(() => cancelHoverRead, [hoverScope, cancelHoverRead]);
   const startHover = (file: AssetFileEntry) => {
     if (hoverRequestRef.current && hoverDetails?.key === assetKey(file) && hoverDetails.scope === hoverScope) return;
@@ -1207,9 +1226,32 @@ export default function AssetsPanel() {
       .some((value) => value.toLowerCase().includes(query)));
   }, [canvasNodeData, canvasNodeIds, deferredNodeSearch]);
   const videoPreview = useResourceVideoPreview(
-    JSON.stringify([assetsPanelOpen, assetsPanelMode, currentProjectId, visibleTab, selectedProjectId, folderSelection, search, nodeSearch, activeCategory, activeTag]),
+    JSON.stringify([assetsPanelOpen, assetsPanelMode, currentProjectId, visibleTab, selectedProjectId, folderSelection, search, nodeSearch, activeCategory, activeTag, sortBy, sortOrder]),
     isNodeList ? filteredNodes.map((node) => node.id) : visibleFiles.map(assetKey),
   );
+  const filePreviewActive = videoPreview.expandedId !== null
+    || imagePreview?.scope === previewScope || textPreview?.scope === previewScope;
+  useEffect(() => {
+    // 打开预览会记录使用时间；等关闭后再重排，避免卡片移列卸载刚打开的播放器。
+    if (!assetsPanelOpen || !isFileTab || isGlobalCreative || sortBy !== 'usedAt' || loading || filePreviewActive) return;
+    let current = true;
+    void getAssetLastUsedTimes(usageAssetIds).then((usage) => {
+      if (current) setAssetUsage(usage);
+    }).catch(() => {
+      if (current) { setAssetUsage(new Map()); toast('最近使用记录读取失败'); }
+    });
+    return () => { current = false; };
+  }, [assetsPanelOpen, isFileTab, isGlobalCreative, sortBy, loading, filePreviewActive, usageAssetIds, recentAssetsRevision, toast]);
+  const changeFileSort = (nextBy: AssetSortBy, nextOrder: AssetSortOrder) => {
+    clearHover();
+    closeFileMenu();
+    setVisibleCount(PAGE_SIZE);
+    setImagePreview(null);
+    setTextPreview(null);
+    videoPreview.setExpanded(null);
+    updateConfig({ assetSortBy: nextBy, assetSortOrder: nextOrder });
+    void saveConfig({ silent: true }).catch(() => toast('排序设置保存失败'));
+  };
   const totalResultCount = isNodeList ? filteredNodes.length : filteredFiles.length;
 
   // 无限滚动哨兵
@@ -1563,12 +1605,23 @@ export default function AssetsPanel() {
                       <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" /><span className="flex-1">{folderProgress}</span>
                       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => folderOperationRef.current?.abort()}>取消操作</button>
                     </div>}
-                    {activeTab === 'permanent' && (
-                      <div className="flex shrink-0 items-center gap-2 px-3 pt-2 text-xs text-canvas-text-secondary">
-                        <span className="min-w-0 flex-1 truncate" title={folderLabel}>{folderLabel}</span>
-                        <span className="shrink-0 text-canvas-text-muted">{files.length} 个文件</span>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-2 text-xs text-canvas-text-secondary">
+                      <span className="min-w-0 truncate" title={activeTab === 'permanent' ? folderLabel : '项目文件'}>
+                        {activeTab === 'permanent' ? folderLabel : '项目文件'}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS} size="sm" className="w-28"
+                          aria-label="排序方式" onChange={(value) => changeFileSort(value, value === 'usedAt' ? 'desc' : sortOrder)} />
+                        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
+                          aria-label={sortOrder === 'asc' ? '切换为降序' : '切换为升序'}
+                          title={sortOrder === 'asc' ? '当前升序，点击切换为降序' : '当前降序，点击切换为升序'}
+                          onClick={() => changeFileSort(sortBy, sortOrder === 'asc' ? 'desc' : 'asc')}>
+                          <Icon icon={sortOrder === 'asc' ? 'lucide:arrow-up-narrow-wide' : 'lucide:arrow-down-wide-narrow'} width={14} aria-hidden="true" />
+                          {sortOrder === 'asc' ? '升序' : '降序'}
+                        </button>
                       </div>
-                    )}
+                      <span className="ml-auto shrink-0 text-canvas-text-muted">{files.length} 个文件</span>
+                    </div>
                     {activeTab === 'permanent' && folderScanTruncated && (
                       <p role="status" className="px-3 pt-2 text-xs text-canvas-text-muted">已达到扫描上限，当前仅显示已扫描的目录和文件。可单独添加子文件夹继续浏览。</p>
                     )}
@@ -1629,7 +1682,7 @@ export default function AssetsPanel() {
 
               {/* 文件瀑布流 */}
               <div className="assets-file-scroll-shell">
-                <div className="assets-file-scroll" key={activeTab === 'permanent' ? JSON.stringify(folderSelection) : 'project'}>
+                <div className="assets-file-scroll" key={JSON.stringify([activeTab, activeTab === 'permanent' ? folderSelection : null, sortBy, sortOrder])}>
                   {!loading && loadError && (
                     <div className="ui-alert ui-alert--warning m-2" role="alert">
                       <span className="min-w-0 flex-1">{loadError}</span>
@@ -1801,7 +1854,8 @@ export default function AssetsPanel() {
         onClose={() => setTextPreview(null)} onSaved={(next) => {
           if (fileScopeRef.current !== previewScope || !useAppStore.getState().assetsPanelOpen
             || useAppStore.getState().currentProjectId !== currentProjectId) return;
-          const replace = (entries: AssetFileEntry[]) => entries.map((entry) => entry.path === next.path ? { ...entry, size: next.size } : entry);
+          const replace = (entries: AssetFileEntry[]) => entries.map((entry) => entry.path === next.path
+            ? { ...entry, size: next.size, modifiedAt: next.modifiedAt } : entry);
           setProjectFiles(replace); setPermanentFiles(replace);
           if (loadControllerRef.current) void loadFiles().then(loadTags);
         }} onRenamed={(previous, next) => {

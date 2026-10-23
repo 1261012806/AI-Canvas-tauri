@@ -770,6 +770,8 @@ export interface AssetFileEntry {
   relativePath?: string;                            // 相对 source root 的位置
   assetUrl?: string;
   size: number;
+  createdAt?: number;                               // 文件系统创建时间（毫秒）；不支持或未知时缺省
+  modifiedAt?: number;                              // 文件系统修改时间（毫秒）；未知时缺省
   category: FileCategory;
   availability?: 'online' | 'offline';
   tags?: string[];                                  // 合并自 assetMeta
@@ -791,6 +793,8 @@ export async function listDirectoryFiles(dirPath: string): Promise<AssetFileEntr
         const fileStat = await stat(filePath);
         const convertFileSrc = await getConvertFileSrc();
         const fileSize = fileStat.size ?? 0;
+        const createdAt = fileStat.birthtime?.getTime();
+        const modifiedAt = fileStat.mtime?.getTime();
         const ext = `.${entry.name.split('.').pop()?.toLowerCase()}`;
         const extLower = ext.toLowerCase();
 
@@ -805,6 +809,8 @@ export async function listDirectoryFiles(dirPath: string): Promise<AssetFileEntr
           path: filePath,
           assetUrl,
           size: fileSize,
+          createdAt: Number.isFinite(createdAt) ? createdAt : undefined,
+          modifiedAt: Number.isFinite(modifiedAt) ? modifiedAt : undefined,
           category: getFileCategory(entry.name),
         });
       } catch {

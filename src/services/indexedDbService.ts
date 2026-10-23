@@ -43,13 +43,25 @@ const LAST_ACTIVE_PROJECT_KEY = 'last-active-project';
 const RECENT_ASSET_USAGE_KEY = 'recent-asset-usage';
 const MAX_RECENT_ASSET_USAGE = 10;
 
+function validAssetUsageTime(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function latestAssetUsageTime(...values: unknown[]): number | undefined {
+  let latest: number | undefined;
+  for (const value of values) {
+    if (validAssetUsageTime(value) && (latest === undefined || value > latest)) latest = value;
+  }
+  return latest;
+}
+
 function normalizeAssetUsage(value: unknown): AssetUsageRecord[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   return value.filter((entry): entry is AssetUsageRecord => {
     if (!entry || typeof entry !== 'object' || typeof entry.assetId !== 'string'
       || !entry.assetId.trim() || entry.assetId.length > 256
-      || typeof entry.usedAt !== 'number' || !Number.isFinite(entry.usedAt) || entry.usedAt < 0) return false;
+      || !validAssetUsageTime(entry.usedAt)) return false;
     return true;
   }).sort((a, b) => b.usedAt - a.usedAt).filter((entry) => {
     if (seen.has(entry.assetId)) return false;
@@ -68,22 +80,68 @@ export async function getRecentAssetUsage(): Promise<AssetUsageRecord[]> {
   });
 }
 
-/** 同一事务读取并合并，多个窗口/快速点击不能相互覆盖最近使用记录。 */
+/** 只读取当前列表的稳定 ID；旧库仍保留的最近十项可作为时间回退，不补造更早历史。 */
+export async function getAssetLastUsedTimes(assetIds: readonly string[]): Promise<Map<string, number>> {
+  const ids = new Set(assetIds.filter((id) => typeof id === 'string' && id.trim() && id.length <= 256));
+  if (!ids.size) return new Map<string, number>();
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_ASSET_INDEX, STORE_METADATA], 'readonly');
+    const times = new Map<string, number>();
+    const merge = (assetId: string, time: unknown) => {
+      const latest = latestAssetUsageTime(times.get(assetId), time);
+      if (latest !== undefined) times.set(assetId, latest);
+    };
+    const recent = tx.objectStore(STORE_METADATA).get(RECENT_ASSET_USAGE_KEY);
+    recent.onsuccess = () => {
+      for (const entry of normalizeAssetUsage(recent.result?.entries)) {
+        if (ids.has(entry.assetId)) merge(entry.assetId, entry.usedAt);
+      }
+    };
+    const store = tx.objectStore(STORE_ASSET_INDEX);
+    for (const assetId of ids) {
+      const request = store.get(assetId);
+      request.onsuccess = () => merge(assetId, request.result?.lastUsedAt);
+    }
+    tx.oncomplete = () => resolve(times);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('资产使用时间读取失败'));
+  });
+}
+
+/** 原子维护最近十项与全量索引时间，多个窗口/旧扫描不能覆盖较新的使用记录。 */
 export async function recordRecentAssetUsage(assetId: string, usedAt = Date.now()): Promise<void> {
   if (normalizeAssetUsage([{ assetId, usedAt }]).length !== 1) throw new Error('最近使用记录无效');
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_METADATA, 'readwrite');
+    const tx = db.transaction([STORE_METADATA, STORE_ASSET_INDEX], 'readwrite');
     const store = tx.objectStore(STORE_METADATA);
     const request = store.get(RECENT_ASSET_USAGE_KEY);
     request.onsuccess = () => {
       const previous = normalizeAssetUsage(request.result?.entries);
       const existing = previous.find((entry) => entry.assetId === assetId);
-      const entries = normalizeAssetUsage([
-        { assetId, usedAt: Math.max(usedAt, existing?.usedAt ?? 0) },
-        ...previous.filter((entry) => entry.assetId !== assetId),
-      ]);
-      store.put({ id: RECENT_ASSET_USAGE_KEY, entries });
+      const assetStore = tx.objectStore(STORE_ASSET_INDEX);
+      // 旧库只在 metadata 留有十项；裁剪前保留仍可恢复的真实时间，不为缺失资产造索引。
+      for (const entry of previous) {
+        if (entry.assetId === assetId) continue;
+        const legacy = assetStore.get(entry.assetId);
+        legacy.onsuccess = () => {
+          const record = legacy.result as AssetIndexRecord | undefined;
+          if (!record) return;
+          const lastUsedAt = latestAssetUsageTime(record.lastUsedAt, entry.usedAt)!;
+          if (lastUsedAt !== record.lastUsedAt) assetStore.put({ ...record, lastUsedAt });
+        };
+      }
+      const indexed = assetStore.get(assetId);
+      indexed.onsuccess = () => {
+        const record = indexed.result as AssetIndexRecord | undefined;
+        const lastUsedAt = latestAssetUsageTime(usedAt, existing?.usedAt, record?.lastUsedAt)!;
+        const entries = normalizeAssetUsage([
+          { assetId, usedAt: lastUsedAt },
+          ...previous.filter((entry) => entry.assetId !== assetId),
+        ]);
+        store.put({ id: RECENT_ASSET_USAGE_KEY, entries });
+        if (record) assetStore.put({ ...record, lastUsedAt });
+      };
     };
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('最近使用记录保存失败'));
@@ -1075,6 +1133,8 @@ export interface AssetIndexRecord {
   fingerprint: string;
   size: number;
   mtimeMs: number;
+  /** 最近一次真实使用时间（毫秒）；扫描刷新不产生或清空使用记录。 */
+  lastUsedAt?: number;
   status: 'online' | 'offline';
   updatedAt: number;
 }
@@ -1113,7 +1173,17 @@ export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_ASSET_INDEX, STORE_METADATA], 'readwrite');
-    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_ASSET_INDEX).put(next));
+    withRelocatedMedia(tx, record, (next) => {
+      const store = tx.objectStore(STORE_ASSET_INDEX);
+      const current = store.get(next.assetId);
+      current.onsuccess = () => {
+        const lastUsedAt = latestAssetUsageTime(next.lastUsedAt, current.result?.lastUsedAt);
+        const merged = { ...next };
+        if (lastUsedAt === undefined) delete merged.lastUsedAt;
+        else merged.lastUsedAt = lastUsedAt;
+        store.put(merged);
+      };
+    });
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
   });
