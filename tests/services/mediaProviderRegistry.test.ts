@@ -113,7 +113,7 @@ describe('MediaProviderRegistry', () => {
     expect(mediaProviderRegistry.supports('apimart', 'audio')).toBe(true);
   });
 
-  it('resolves APIMart connection once inside the image adapter and forwards cancellation', async () => {
+  it('resolves APIMart connection once and forwards cancellation, image quality and background', async () => {
     const signal = new AbortController().signal;
     const adapter = mediaProviderRegistry.getImageAdapter('apimart');
 
@@ -125,6 +125,8 @@ describe('MediaProviderRegistry', () => {
         nodeId: 'image-node',
         imageSize: '2K',
         aspectRatio: '1:1',
+        imageQuality: 'high',
+        imageBackground: 'transparent',
       },
       prompt: 'resolved prompt',
       imageUrls: ['https://cdn.example/reference.png'],
@@ -144,6 +146,8 @@ describe('MediaProviderRegistry', () => {
       2,
       'image-node',
       signal,
+      'high',
+      'transparent',
     );
   });
 

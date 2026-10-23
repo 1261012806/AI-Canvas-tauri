@@ -55,6 +55,7 @@ vi.mock('react', async () => {
     },
   };
 });
+vi.mock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
 vi.mock('../../src/services/assetImageDetails', async () => ({
   ...await vi.importActual<typeof import('../../src/services/assetImageDetails')>('../../src/services/assetImageDetails'),
   loadAssetImageDetails: async (...args: unknown[]) => {

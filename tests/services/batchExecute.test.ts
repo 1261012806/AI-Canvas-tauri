@@ -56,6 +56,7 @@ vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: {
     getState: () => ({
       ...mocks.liveState,
+      config: { providers: {}, generalModels: [] },
       getCurrentRevision: () => mocks.liveState.revision,
       syncDramaAssetImageFromNode: mocks.syncDramaAssetImageFromNode,
     }),

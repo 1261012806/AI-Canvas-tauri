@@ -35,7 +35,6 @@ const nodes = {
   '任务已保留，可继续查询或保存原结果。': 'The task is retained. You can resume checking or saving the original result.',
   '请回主窗口继续处理此任务': 'Return to the main window to resume this task',
   '音频已生成，但保存失败；请继续保存原结果': 'Audio is ready, but saving failed. Resume saving the original result.',
-  '重试查询视频任务': 'Retry video task query',
   '暂时无法继续查询，请检查连接配置': 'Unable to resume the query. Check the connection settings.',
   // ── NodeLabel ──
   '双击重命名': 'Double-click to rename',
@@ -588,7 +587,6 @@ const nodes = {
   '例如：保留主体，补充镜头和光线，让表达更自然…': 'e.g. keep the subject, add camera and lighting, make the wording flow better…',
   '不使用 Skill': 'Do not use a skill',
   '智能体': 'Agent',
-  '使用助手文本模型': 'Use the assistant text model',
   '重新润色': 'Polish again',
   '开始润色': 'Start polishing',
   '智能体正在润色…': 'The agent is polishing…',

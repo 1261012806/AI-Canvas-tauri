@@ -63,10 +63,10 @@ function render() {
   return elements(PromptPolishPanel({ nodeId: 'video-a', onClose: vi.fn() }));
 }
 function editor(tree: Element[]) {
-  return tree.find((element) => element.type === MentionEditor)!.props as ComponentProps<typeof MentionEditor>;
+  return tree.find((element) => element.type === MentionEditor)!.props as unknown as ComponentProps<typeof MentionEditor>;
 }
 function model(tree: Element[]) {
-  return tree.find((element) => element.type === ModelSelector)!.props as ComponentProps<typeof ModelSelector>;
+  return tree.find((element) => element.type === ModelSelector)!.props as unknown as ComponentProps<typeof ModelSelector>;
 }
 function button(tree: Element[], label: string) {
   return tree.find((element) => element.type === 'button' && element.props.children === label)!.props;

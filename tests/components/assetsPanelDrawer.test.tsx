@@ -263,6 +263,7 @@ beforeEach(() => {
     projects: [{ id: 'project-1', name: '项目一' }], config: { assetWaterfallColumns: 6 },
     dramaAssets: { characters: [], scenes: [], props: [], lastViewedAt: 1 },
     setDramaAssetsPanelOpen: (open: boolean) => set({ dramaAssetsPanelOpen: open }),
+    loadGlobalDramaAssets: vi.fn().mockResolvedValue(undefined),
     updateConfig: vi.fn(), saveConfig: vi.fn(), markDramaAssetsViewed: vi.fn(),
     markAssetUsed: driver.markUsed,
     moveGlobalAssetToFolder: driver.moveFile,
@@ -1071,7 +1072,8 @@ describe('资产库 Tab 抽屉', () => {
     click(button('浏览文件夹 素材库')); render();
     expect(cards()).toHaveLength(2);
     expect(find((el) => el.props.placeholder === '搜索名称或标签…').props.value).toBe('人物');
-    (cards()[0].props.onDragStart as (event: { preventDefault: () => void }) => void)({ preventDefault: vi.fn() });
+    const imageCard = cards().find((element) => (element.props.file as AssetFileEntry).path === '/library/hero.png')!;
+    (imageCard.props.onDragStart as (event: { preventDefault: () => void }) => void)({ preventDefault: vi.fn() });
     expect(driver.drag).toHaveBeenCalledWith(expect.objectContaining({ path: '/library/hero.png' }), expect.any(Function), undefined);
   });
 

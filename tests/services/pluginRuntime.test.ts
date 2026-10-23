@@ -1584,7 +1584,7 @@ describe('node plugin runtime', () => {
   });
 
   it('插件改写分镜只保留宿主已有成片身份，不能用已授权 URL 伪造其他节点绑定', async () => {
-    const video = { nodeId: 'real-video', kind: 'video', url: 'asset://localhost/final.mp4', assetId: 'real-asset' };
+    const video = { nodeId: 'real-video', kind: 'video', url: 'https://example.com/final.mp4', assetId: 'real-asset' };
     mocks.state = { ...mocks.state, nodes: [{ id: 'shotlist-node', type: 'ai-shotlist', position: { x: 0, y: 0 },
       data: { label: '分镜表', type: 'ai-shotlist', shotlistRows: [{ id: 'shot-1', shotNo: '1', video }] },
     }], installedPlugins: [shotlistToolPlugin] };

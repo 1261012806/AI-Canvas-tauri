@@ -175,13 +175,14 @@ describe('生成入口的文本与参考分离', () => {
     const adapter = { providerId: 'test', capabilities: ['audio'] as const, generateAudio: vi.fn().mockResolvedValue({ url: 'result.wav' }) };
     vi.spyOn(mediaProviderRegistry, 'getAudioAdapter').mockReturnValue(adapter);
     const history = vi.fn().mockResolvedValue(undefined);
-    useAppStore.setState({ currentProjectId: null, recordOutputHistory: history });
+    const projectId = 'audio-test-project';
+    useAppStore.setState({ currentProjectId: projectId, recordOutputHistory: history });
     useAppStore.getState().updateNodeData('target', { model: 'test', provider: 'test', prompt: '台词', audioSpeechSettings: settings });
     const state = useAppStore.getState();
     if (entry === 'batch') {
       expect(await batchExecuteNodes(['target'], state.nodes, state.edges, {
         commitToHistory: state.commitToHistory, updateNodeDataTransient: state.updateNodeDataTransient,
-        recordOutputHistory: history, currentProjectId: null,
+        recordOutputHistory: history, currentProjectId: projectId,
       })).toEqual({ ok: 1, fail: 0 });
     } else {
       expect((await executeGeneration('target')).success).toBe(true);

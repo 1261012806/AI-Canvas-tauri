@@ -610,6 +610,8 @@ function syncShotlistVideoResults(
     const oldNode = previous.find((item) => item.id === node.id);
     const source = node.data.shotlistProductionSource;
     const attempt = oldNode ? shotVideoAttempts.get(oldNode.data) : undefined;
+    // 行被删除或来源变化时也保留本轮身份，避免后续结果误绑到新行。
+    if (attempt) shotVideoAttempts.set(node.data, attempt);
     if (source?.kind !== 'video') continue;
     const sheet = result.find((item) => item.id === source.nodeId && item.data.type === 'ai-shotlist');
     const row = sheet?.data.shotlistRows?.find((item) => item.id === source.rowId);
@@ -617,10 +619,9 @@ function syncShotlistVideoResults(
     if (patch.status === 'loading') {
       if (oldNode?.data.status !== 'loading') {
         shotVideoAttempts.set(node.data, { nodeId: source.nodeId, rowId: source.rowId, binding: row.video, row });
-      } else if (attempt) shotVideoAttempts.set(node.data, attempt);
+      }
       continue;
     }
-    if (attempt) shotVideoAttempts.set(node.data, attempt);
     if (patch.status !== 'success' || typeof patch.videoUrl !== 'string' || !patch.videoUrl.trim()) continue;
     if (attempt && (attempt.nodeId !== source.nodeId || attempt.rowId !== source.rowId)) continue;
     if (row.video && row.video.nodeId !== node.id) continue;

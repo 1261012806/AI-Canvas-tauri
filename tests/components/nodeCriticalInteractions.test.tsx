@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryRecord } from '../../src/services/indexedDbService';
+import type { BatchContext } from '../../src/utils/batchExecute';
 import type { ComfyNodeProgress } from '../../src/types/comfyProgress';
 
 interface ElementLike {
@@ -34,8 +35,8 @@ interface TestStore {
   addNodeTransient: ReturnType<typeof vi.fn>;
   updateNodeData: ReturnType<typeof vi.fn>;
   updateNodeDataTransient: ReturnType<typeof vi.fn<(nodeId: string, patch: Record<string, unknown>) => void>>;
-  commitToHistory: ReturnType<typeof vi.fn>;
-  recordOutputHistory: ReturnType<typeof vi.fn>;
+  commitToHistory: ReturnType<typeof vi.fn<BatchContext['commitToHistory']>>;
+  recordOutputHistory: ReturnType<typeof vi.fn<BatchContext['recordOutputHistory']>>;
   showToast: ReturnType<typeof vi.fn>;
   renameGroup: ReturnType<typeof vi.fn>;
   toggleGroupCollapsed: ReturnType<typeof vi.fn>;
@@ -144,8 +145,8 @@ function createStore(nodes: TestNode[], getRevision: () => number): TestStore {
         node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
       ));
     }),
-    commitToHistory: vi.fn(),
-    recordOutputHistory: vi.fn().mockResolvedValue(undefined),
+    commitToHistory: vi.fn<BatchContext['commitToHistory']>(),
+    recordOutputHistory: vi.fn<BatchContext['recordOutputHistory']>().mockResolvedValue(undefined),
     showToast: vi.fn(),
     renameGroup: vi.fn(),
     toggleGroupCollapsed: vi.fn(),
@@ -178,6 +179,11 @@ function mockComfyDeliveries() {
     beginComfyNodeDelivery: vi.fn(),
     completeComfyNodeTask: vi.fn(),
     pauseComfyNodeDelivery: vi.fn(),
+    prepareMediaNodeGeneration: vi.fn(),
+    registerMediaNodeOperation: () => vi.fn(),
+    completeMediaNodeTask: vi.fn(),
+    pauseMediaTask: vi.fn(),
+    isMediaTaskPausedError: () => false,
   };
 }
 
@@ -390,6 +396,9 @@ beforeEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // The hook driver renders element trees directly, including the dialog's body portal.
+  vi.doMock('react-dom', () => ({ createPortal: (children: unknown) => children }));
+  vi.stubGlobal('document', { body: {}, documentElement: { getAttribute: () => null } });
 });
 
 function visibleShotRatio(store: TestStore, column: string) {
@@ -1651,7 +1660,7 @@ describe('critical canvas node interactions', () => {
       vi.doMock('../../src/services/pollManager', () => ({
         ...mockComfyDeliveries(),
         getPendingTasksForProject: () => scenario === 'comfy-recovery'
-          ? [{ nodeId: 'video-node', taskType: 'comfyui', comfyRecoveryState: 'pending' }] : [],
+          ? [{ nodeId: 'video-node', taskType: 'comfyui', comfyRecoveryState: 'cancel_pending' }] : [],
       }));
       vi.doMock('../../src/services/generationService', () => ({ executeGeneration }));
       const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
