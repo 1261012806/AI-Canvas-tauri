@@ -35,7 +35,7 @@ import {
 type ComfyStatus = 'idle' | 'starting' | 'ready' | 'failed';
 const ComfyInstallDialog = lazy(() => import('../comfyui/ComfyInstallDialog'));
 
-const INPUT_CLASS = 'text-xs bg-canvas-surface border border-canvas-border rounded-md px-2.5 py-1.5 text-canvas-text placeholder-canvas-text-muted focus:outline-none focus:border-indigo-500 transition-colors';
+const INPUT_CLASS = 'ui-input ui-input--sm';
 const COMFY_ACTION_BUTTON_CLASS = 'ui-btn ui-btn--sm ui-btn--block min-w-0 [&>svg]:shrink-0';
 const DEFAULT_SERVER_STATUS_KEY = '__default__';
 const STATUS_REFRESH_INTERVAL_MS = 15_000;
@@ -592,7 +592,7 @@ export default function ComfyUISettings() {
           <div className="relative">
             <input
               type="text"
-              className={`${INPUT_CLASS} w-full pr-9`}
+              className={`${INPUT_CLASS} [&.ui-input]:pr-9`}
               placeholder="http://127.0.0.1:8188"
               defaultValue={config.comfyUIUrl || ''}
               onBlur={async (event) => {
@@ -635,7 +635,7 @@ export default function ComfyUISettings() {
                   <div key={server.id} className="flex items-center gap-2">
                     <input
                       type="text"
-                      className={`${INPUT_CLASS} w-28 shrink-0`}
+                      className={`${INPUT_CLASS} basis-28 shrink-0`}
                       placeholder={t('服务端名称')}
                       defaultValue={server.name}
                       onBlur={(event) => void patchServer(server.id, { name: event.target.value.trim() })}
@@ -643,7 +643,7 @@ export default function ComfyUISettings() {
                     <div className="relative min-w-0 flex-1">
                       <input
                         type="text"
-                        className={`${INPUT_CLASS} w-full pr-9`}
+                        className={`${INPUT_CLASS} [&.ui-input]:pr-9`}
                         placeholder="http://127.0.0.1:8189"
                         defaultValue={server.url}
                         onBlur={(event) => void patchServer(server.id, { url: event.target.value.trim() })}

@@ -1447,7 +1447,7 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
   gap: 2px;
   padding: 2px;
   border-radius: var(--ui-radius);
-  background: var(--white-alpha-04);
+  background: var(--theme-card);
 }
 .ui-segmented__item {
   padding: 4px 10px;
@@ -1462,7 +1462,7 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
 }
 .ui-segmented__item:hover:not(.is-active) {
   color: var(--theme-text);
-  background: var(--white-alpha-06);
+  background: var(--theme-hover);
 }
 .ui-segmented__item.is-active {
   background: var(--theme-surface);

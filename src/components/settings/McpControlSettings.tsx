@@ -270,7 +270,7 @@ export default function McpControlSettings() {
         <div className="mt-2 grid grid-cols-2 gap-2">
           <button
             type="button"
-            className={`rounded-md border px-3 py-2 text-left transition-colors ${configuredTransport === 'stdio' ? 'border-indigo-500/60 bg-indigo-500/10 text-canvas-text' : 'border-canvas-border bg-canvas-surface text-canvas-text-secondary hover:bg-canvas-hover'}`}
+            className={`rounded-md border px-3 py-2 text-left transition-colors ${configuredTransport === 'stdio' ? 'border-brand/40 bg-brand/10 text-canvas-text' : 'border-canvas-border bg-canvas-surface text-canvas-text-secondary hover:bg-canvas-hover'}`}
             onClick={() => handleTransportChange('stdio')}
           >
             <span className="block text-xs font-medium">{t('本机 stdio')}</span>
@@ -311,7 +311,7 @@ export default function McpControlSettings() {
             max={65535}
             placeholder={t('留空则每次随机分配')}
             defaultValue={configuredPort ?? ''}
-            className="min-w-0 flex-1 rounded-md border border-canvas-border bg-canvas-surface px-3 py-2 text-sm text-canvas-text placeholder-canvas-text-muted transition-colors focus:border-indigo-500 focus:outline-none"
+            className="ui-input min-w-0 flex-1 [&.ui-input]:h-[38px]"
             onBlur={(event) => {
               const raw = event.target.value.trim();
               // 0 持久化显式随机模式，避免字段被省略后重启又继承默认固定端口。

@@ -12,9 +12,15 @@ export function resolveAppearanceTheme(theme: AppearanceTheme): AppearanceTheme 
   const normalized = normalizeAppearanceTheme(theme);
   if (normalized.mode === 'system' && (normalized.id === 'standard-dark' || normalized.id === 'standard-light')) {
     const systemTheme = getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode('system')}`);
+    const originalUi = getBuiltinAppearanceTheme(normalized.id).ui;
+    const customUi: Partial<Pick<AppearanceTheme['ui'], 'card' | 'hover' | 'border'>> = {};
+    for (const key of ['card', 'hover', 'border'] as const) {
+      if (normalized.ui[key] !== originalUi[key]) customUi[key] = normalized.ui[key];
+    }
     return {
       ...systemTheme,
-      ui: { ...systemTheme.ui, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage, canvasPanels: normalized.ui.canvasPanels,
+      ui: { ...systemTheme.ui, ...customUi, button: normalized.ui.button, surfaceImage: normalized.ui.surfaceImage, canvasPanels: normalized.ui.canvasPanels,
+        inputBackground: normalized.ui.inputBackground,
         glassOpacity: normalized.ui.glassOpacity, glassBlur: normalized.ui.glassBlur },
       node: { ...systemTheme.node, backgroundImage: normalized.node.backgroundImage },
       canvas: normalized.canvas.kind === 'image' ? normalized.canvas : systemTheme.canvas,
@@ -260,7 +266,9 @@ export function applyAppearanceTheme(theme: AppearanceTheme | null | undefined):
     '--theme-text': ui.text,
     '--theme-text-secondary': ui.textSecondary,
     '--theme-text-muted': ui.textMuted,
-    '--theme-input-bg': mode === 'light' ? '#FFFFFF' : 'rgba(0, 0, 0, 0.25)',
+    '--theme-input-bg': ui.inputBackground === 'auto'
+      ? mode === 'light' ? '#FFFFFF' : 'rgba(0, 0, 0, 0.25)'
+      : isTransparentColor(ui.inputBackground) ? 'transparent' : ui.inputBackground,
     '--theme-border-subtle': themeBorder === 'transparent' ? 'transparent' : `color-mix(in srgb, ${themeBorder} 58%, transparent)`,
     '--separator-color': themeBorder === 'transparent' ? 'transparent' : `color-mix(in srgb, ${themeBorder} 72%, transparent)`,
     '--border-subtle': themeBorder === 'transparent' ? 'transparent' : `color-mix(in srgb, ${themeBorder} 58%, transparent)`,

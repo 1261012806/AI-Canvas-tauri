@@ -16,6 +16,76 @@ const SVG_BACKGROUND_IMAGE = {
 };
 
 describe('appearance themes', () => {
+  it('fills old input backgrounds with auto while preserving editable colors and transparent values', () => {
+    for (const inputBackground of [undefined, null, 0, {}, '', 'url(https://example.com/image.png)']) {
+      expect(normalizeAppearanceTheme({ ui: { inputBackground } }).ui.inputBackground).toBe('auto');
+    }
+    for (const inputBackground of ['auto', '#', '#1', '123456', '#123456', 'transparent', 'rgba(0, 0, 0, 0)']) {
+      const theme = normalizeAppearanceTheme({ ui: { inputBackground } });
+      expect(theme.ui.inputBackground).toBe(inputBackground);
+      expect(normalizeAppearanceTheme(JSON.parse(JSON.stringify(theme))).ui.inputBackground).toBe(inputBackground);
+    }
+  });
+
+  it.each(['dark', 'light'] as const)('applies custom and transparent input backgrounds and restores automatic defaults in %s mode', (mode) => {
+    const values = new Map<string, string>();
+    const root = {
+      dataset: {},
+      setAttribute: vi.fn(),
+      style: {
+        setProperty: (name: string, value: string) => values.set(name, value),
+        removeProperty: (name: string) => values.delete(name),
+      },
+    } as unknown as HTMLElement;
+    vi.stubGlobal('document', { documentElement: root });
+    try {
+      const base = createBuiltinAppearanceThemes().find((theme) => theme.mode === mode)!;
+      for (const inputBackground of ['#123456', 'transparent', 'rgba(0, 0, 0, 0)', 'auto']) {
+        applyAppearanceTheme({ ...base, ui: { ...base.ui, inputBackground } });
+        const expected = inputBackground === 'auto' ? mode === 'light' ? '#FFFFFF' : 'rgba(0, 0, 0, 0.25)'
+          : inputBackground === 'rgba(0, 0, 0, 0)' ? 'transparent' : inputBackground;
+        expect(values.get('--theme-input-bg')).toBe(expected);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps custom input backgrounds when the system palette changes', () => {
+    let light = false;
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: light }) });
+    try {
+      const theme = normalizeAppearanceTheme({ id: 'standard-dark', mode: 'system', ui: { inputBackground: '#123456' } });
+      expect(resolveAppearanceTheme(theme).ui.inputBackground).toBe('#123456');
+      light = true;
+      expect(resolveAppearanceTheme(theme).ui.inputBackground).toBe('#123456');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['standard-dark', 'standard-light'])('keeps only customized component colors while %s follows the system palette', (id) => {
+    let light = false;
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: light }) });
+    try {
+      const fields = ['card', 'hover', 'border'] as const;
+      for (const customField of fields) {
+        const theme = normalizeAppearanceTheme({ id, mode: 'system', ui: { [customField]: '#123456' } });
+        for (const systemLight of [false, true]) {
+          light = systemLight;
+          const resolved = resolveAppearanceTheme(theme);
+          const systemUi = createBuiltinAppearanceThemes().find((item) => item.id === `standard-${light ? 'light' : 'dark'}`)!.ui;
+          for (const field of fields) {
+            expect(resolved.ui[field]).toBe(field === customField ? '#123456' : systemUi[field]);
+          }
+          expect(resolved.ui.inputBackground).toBe('auto');
+        }
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('restores neutral canvas image adjustments for older snapshots', () => {
     const theme = normalizeAppearanceTheme({ canvas: { kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageOpacity: 0.4 } });
     expect(theme.canvas).toMatchObject({

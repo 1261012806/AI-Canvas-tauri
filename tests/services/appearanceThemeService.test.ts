@@ -32,6 +32,7 @@ const makeTheme = (source: string) => normalizeAppearanceTheme({
   },
   node: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } },
   ui: {
+    inputBackground: '#263748',
     button: { radius: 9, primary: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'contain' } } },
     canvasPanels: {
       shared: { background: '#112233', opacity: 0.4, blur: 18, backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'cover' } },
@@ -80,6 +81,7 @@ describe('appearance theme image persistence and transfer', () => {
     expect(driver.read).toHaveBeenCalledTimes(1);
     const imported = await importAppearanceTheme(new File([exported], '外观.aicanvas-theme'));
     expect(imported.canvas).toEqual(original.canvas);
+    expect(imported.ui.inputBackground).toBe(original.ui.inputBackground);
     expect(imported.node.backgroundImage).toEqual(original.node.backgroundImage);
     expect(imported.ui.button).toEqual(original.ui.button);
     expect(imported.ui.canvasPanels).toEqual(original.ui.canvasPanels);

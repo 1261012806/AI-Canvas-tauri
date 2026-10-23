@@ -111,6 +111,7 @@ export default function StyleGuideWindow() {
         warning: resolved.ui.warning,
         danger: resolved.ui.danger,
         info: resolved.ui.info,
+        inputBackground: resolved.ui.inputBackground,
         button: resolved.ui.button,
         surfaceImage: resolved.ui.surfaceImage,
         canvasPanels: resolved.ui.canvasPanels,

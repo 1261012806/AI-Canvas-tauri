@@ -647,6 +647,8 @@ export interface AppearanceUiTokens {
   card: string;
   hover: string;
   border: string;
+  /** auto 沿用明暗主题的默认输入底色。 */
+  inputBackground: string;
   text: string;
   textSecondary: string;
   textMuted: string;

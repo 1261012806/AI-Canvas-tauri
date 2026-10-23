@@ -7,7 +7,10 @@ const driver = vi.hoisted(() => ({ state: {} as AppState }));
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: (selector: (state: AppState) => unknown) => selector(driver.state),
 }));
-vi.mock('../../src/i18n', () => ({ useT: () => (value: string) => value }));
+vi.mock('../../src/i18n', () => ({
+  useT: () => (value: string, params?: Record<string, string | number>) => Object.entries(params ?? {})
+    .reduce((text, [key, replacement]) => text.replaceAll(`{${key}}`, String(replacement)), value),
+}));
 vi.mock('../../src/services/fileService', () => ({ saveBinaryToLocalFile: vi.fn() }));
 vi.mock('../../src/components/shared/ModalOverlay', () => ({ default: () => null }));
 

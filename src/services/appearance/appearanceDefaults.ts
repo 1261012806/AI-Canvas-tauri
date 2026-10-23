@@ -25,6 +25,7 @@ const DARK_UI = {
   card: '#1a1a26',
   hover: '#252535',
   border: '#2a2a3a',
+  inputBackground: 'auto',
   text: '#dddde4',
   textSecondary: '#8888a0',
   textMuted: '#7d7d91',
@@ -51,6 +52,7 @@ const LIGHT_UI = {
   card: '#F8FAFD',
   hover: '#EEF1F8',
   border: '#E4E8F2',
+  inputBackground: 'auto',
   text: '#33364D',
   textSecondary: '#6E7488',
   textMuted: '#767D92',
@@ -237,6 +239,7 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
       ? Math.max(0, Math.min(max, value)) : base.canvas[key];
   };
   const overlayColor = typeof canvas.imageOverlayColor === 'string' ? canvas.imageOverlayColor.trim() : '';
+  const inputBackground = typeof ui.inputBackground === 'string' ? ui.inputBackground.trim() : '';
   return {
     ...base,
     ...source,
@@ -248,6 +251,8 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
     ui: {
       ...base.ui,
       ...ui,
+      inputBackground: /^(?:auto|#|#?[\da-f]{1,8}|transparent|(?:rgb|hsl)a?\([\d\s.,%/+-]+\))$/i.test(inputBackground)
+        ? inputBackground.toLowerCase() === 'auto' ? 'auto' : inputBackground : 'auto',
       surfaceImage: normalizeAppearanceBackgroundImage(ui.surfaceImage),
       glassOpacity: typeof ui.glassOpacity === 'number' && Number.isFinite(ui.glassOpacity)
         ? Math.max(0, Math.min(1, ui.glassOpacity)) : base.ui.glassOpacity,

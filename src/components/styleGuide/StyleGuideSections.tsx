@@ -1035,6 +1035,7 @@ function SelectionSection() {
       </Demo>
 
       <Demo label="分段控件" code=".ui-segmented > .ui-segmented__item（.is-active 表示选中）">
+        <p className="ui-hint mb-2">容器跟随组件底色，悬浮项跟随组件悬浮底色，选中项跟随窗口底色。切换“跟随外观”查看自定义配色。</p>
         <div className="ui-segmented" role="group" aria-label="视图筛选">
           {[
             { key: 'grid', label: '网格' },
@@ -1133,6 +1134,7 @@ function CardsSection() {
       desc="卡片只负责「一块内容」的容器语义：header 放标题与操作，body 放内容，footer 放行动按钮。选中态用 .is-selected，不要改背景以免和 hover 冲突。"
     >
       <Demo label="基础卡片" code=".ui-card > .ui-card__header / __title / __body / __footer">
+        <p className="ui-hint mb-2">卡片与设置页子卡片共用组件底色和组件边框；修改外观后，两种明暗主题都使用当前配色。</p>
         <div className="ui-card" style={{ maxWidth: 360 }}>
           <div className="ui-card__header">
             <div className="min-w-0">

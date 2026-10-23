@@ -16,6 +16,7 @@ import Select from '../shared/Select';
 import NumberStepper from '../shared/NumberStepper';
 import CanvasImageBackground from '../backgrounds/CanvasImageBackground';
 import AppearanceLayoutPreview, { type AppearanceLayoutTarget } from './AppearanceLayoutPreview';
+import AppearanceComponentPreview from './AppearanceComponentPreview';
 import { useT } from '../../i18n';
 import mercuryImg from '../../assets/images/bg/1_mercury.png';
 import venusImg from '../../assets/images/bg/2_venus.png';
@@ -689,7 +690,7 @@ function ColorCardInput({
           <input
             className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
             type="color"
-            aria-label={t(`${label}选择颜色`)}
+            aria-label={t('{label}选择颜色', { label })}
             value={safeHex}
             onChange={(e) => onChange(e.target.value)}
           />
@@ -713,14 +714,14 @@ function ColorCardInput({
             }
           }}
           placeholder={isAuto ? t('跟随') : isNone ? '无' : '#HEX'}
-          aria-label={`${label}颜色值`}
+          aria-label={t('{label}颜色值', { label })}
         />
         {followThemeVar && (
           <button
             type="button"
             onClick={() => onChange('auto')}
             className={`shrink-0 whitespace-nowrap text-[11px] px-1.5 py-0.5 rounded transition-colors ${isAuto ? 'text-brand-light bg-brand/15' : 'text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover'}`}
-            aria-label={t(`${label}恢复跟随主题`)}
+            aria-label={t('{label}恢复跟随主题', { label })}
             aria-pressed={isAuto}
             title={t('恢复跟随主题配色')}
           >
@@ -1702,13 +1703,32 @@ export default function AppearanceSettings() {
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {layoutControls.background}
             {layoutControls.surface}
-            {layoutControls.card}
-            {layoutControls.hover}
-            {layoutControls.border}
           </div>
         </details>
       </SectionCard>
       {/* END: SurfaceHierarchySection */}
+
+      <SectionCard
+        title={t('内部组件配色')}
+        description={t('调整卡片、列表、分段选项和输入框，让小块背景与窗口协调')}
+        icon={<Icon icon="lucide:panels-top-left" width="16" aria-hidden="true" />}
+        dataPurpose="component-colors"
+      >
+        <p className="ui-hint mb-3">{t('这些配色共用于常规设置、API 厂商卡片、ComfyUI、MCP 等区域；强调选中态沿用主题色。')}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {layoutControls.card}
+          {layoutControls.hover}
+          <ColorCardInput
+            label={t('输入框底色')}
+            value={active.ui.inputBackground}
+            followThemeVar="--theme-input-bg"
+            fallbackColor={resolveAppearanceMode(active.mode) === 'light' ? '#FFFFFF' : '#14141c'}
+            onChange={(inputBackground) => update((theme) => ({ ...theme, ui: { ...theme.ui, inputBackground } }))}
+          />
+          {layoutControls.border}
+        </div>
+        <AppearanceComponentPreview />
+      </SectionCard>
 
       {/* BEGIN: SplineConnectionLinesSection */}
       <SectionCard

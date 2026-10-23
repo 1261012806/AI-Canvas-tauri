@@ -35,7 +35,7 @@ describe('UI Kit appearance synchronization', () => {
       ...base,
       mode: 'system' as const,
       ui: {
-        ...base.ui, accent: '#c24172', surface: 'transparent',
+        ...base.ui, accent: '#c24172', surface: 'transparent', inputBackground: '#263748',
         button: { ...base.ui.button, radius: 0, primary: { ...base.ui.button.primary, background: '#c24172' } },
       },
       canvas: { ...base.canvas, imageDataUrl: 'data:image/png;base64,fixture' },
@@ -45,6 +45,7 @@ describe('UI Kit appearance synchronization', () => {
     expect(snapshot.mode).toBe('system');
     expect(snapshot.ui).toEqual(theme.ui);
     expect(snapshot.ui.button.primary.background).toBe('#c24172');
+    expect(snapshot.ui.inputBackground).toBe('#263748');
     expect(JSON.stringify(snapshot)).not.toContain('data:image');
   });
 
@@ -61,7 +62,7 @@ describe('UI Kit appearance synchronization', () => {
     });
     await subscribed;
     try {
-      theme = { ...theme, ui: { ...theme.ui, accent: '#c24172', card: '#312431' } };
+      theme = { ...theme, ui: { ...theme.ui, accent: '#c24172', card: '#312431', inputBackground: 'transparent' } };
       notify();
       driver.listeners.get('appearance:style-guide-request')?.({ payload: createAppearanceUiSnapshot(theme) });
       expect(driver.emitTo).toHaveBeenCalledTimes(3);
