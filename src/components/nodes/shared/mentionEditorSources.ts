@@ -7,6 +7,7 @@ import type { AppState } from '../../../store/useAppStore';
 import type { BaseNodeData, NodeType, StoryboardCellOverride, WorkflowIONodeType } from '../../../types';
 import { bestNodeThumb } from './mentionEditorDom';
 import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import type { DramaAsset } from '../../../types/dramaAssets';
 import { buildShotlistRowMentionId } from '../../../types/shotlist';
 
 export interface CanvasMentionItem {
@@ -189,43 +190,22 @@ export function resolveDramaMentionItems(
   dramaAssets: AppState['dramaAssets'],
   query: string,
   nodeType?: NodeType,
-  globalCharacters: AppState['globalCharacters'] = [],
+  globalAssets: readonly DramaAsset[] = [],
 ) {
+  const projectAssets: DramaAsset[] = [...dramaAssets.characters, ...dramaAssets.scenes, ...dramaAssets.props];
   const items = [
-    ...[
-      ...dramaAssets.characters,
-      ...globalCharacters.map((asset) => ({ ...asset, id: `global/${asset.id}` })),
-    ].map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      aliases: asset.aliases,
-      kind: asset.kind as string,
-      imageNodeId: asset.imageNodeId,
-      imageUrl: asset.imageUrl,
-      referenceImages: asset.referenceImages,
-      voice: nodeType === 'ai-audio' ? resolveDramaVoiceRef(asset) : null,
-    })),
-    ...dramaAssets.scenes.map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      aliases: undefined,
-      kind: asset.kind as string,
-      imageNodeId: asset.imageNodeId,
-      imageUrl: asset.imageUrl,
-      referenceImages: undefined,
-      voice: null,
-    })),
-    ...dramaAssets.props.map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      aliases: undefined,
-      kind: asset.kind as string,
-      imageNodeId: asset.imageNodeId,
-      imageUrl: asset.imageUrl,
-      referenceImages: undefined,
-      voice: null,
-    })),
-  ];
+    ...projectAssets,
+    ...globalAssets.map((asset) => ({ ...asset, id: `global/${asset.id}` })),
+  ].map((asset) => ({
+    id: asset.id,
+    name: asset.name,
+    aliases: asset.kind === 'character' ? asset.aliases : undefined,
+    kind: asset.kind as string,
+    imageNodeId: asset.id.startsWith('global/') ? undefined : asset.imageNodeId,
+    imageUrl: asset.imageUrl,
+    referenceImages: asset.kind === 'character' ? asset.referenceImages : undefined,
+    voice: nodeType === 'ai-audio' ? resolveDramaVoiceRef(asset) : null,
+  }));
   const candidates = nodeType === 'ai-audio' ? items.filter((item) => item.voice) : items;
   // 分类数量和筛选共用完整候选，不能提前截断而丢失排在后面的场景或道具。
   if (!query) return candidates;

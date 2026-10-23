@@ -6,13 +6,13 @@ import { formatShotVideoPrompt, parseShotlistRowMentionId } from '../types/shotl
 import { gridBoundaries } from '../utils/storyboardGrid';
 import { defaultModelGroups, findMediaModelOption } from '../components/nodes/shared/defaultModels';
 import {
-  collectCharacterReferenceUrls, findDramaAsset, formatDramaAssetTextBrief,
+  collectCharacterReferenceUrls, findDramaAsset, formatDramaAssetTextBrief, listGlobalDramaAssets,
   resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef,
 } from './dramaAssetPrompt';
 import { getAssetUrlFromPath, getFileCategory, readAssetTextFile } from './fileService';
 import { readChatImageReference } from './chat/chatImageReferenceService';
 import { GENERAL_ASSISTANT_SCOPE_ID } from './chat/assistantScope';
-import { loadGlobalCharacterCards } from './characterLibraryService';
+import { loadGlobalDramaAssetCards } from './globalDramaAssetService';
 import { getAssetIndexByPath } from './indexedDbService';
 import { formatSize } from '../utils/assetFormat';
 import { CHARACTER_REFERENCE_KIND_LABELS, CHARACTER_VOICE_KIND_LABELS } from '../components/character/characterReferencePresentation';
@@ -114,7 +114,7 @@ function nodeDetails(source: ReferencePreviewSource, state: PreviewState): Previ
 function dramaDetails(source: ReferencePreviewSource, asset: DramaAsset): PreviewDetails {
   const { assetId, referenceImageId, voiceClipId, actionId, actionMediaId, mergeAll } = parseDramaMentionId(source.id);
   const details: PreviewDetails = [
-    { label: '来源', value: assetId.startsWith('global/') ? '全局角色库' : '创作资产库' },
+    { label: '来源', value: assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库' },
     { label: '资产类型', value: DRAMA_ASSET_KIND_LABEL[asset.kind] },
   ];
   addDetail(details, '资产名称', asset.name);
@@ -268,15 +268,15 @@ async function previewNode(source: ReferencePreviewSource, state: PreviewState, 
 
 async function previewDrama(source: ReferencePreviewSource, state: PreviewState, signal?: AbortSignal): Promise<ReferencePreviewContent> {
   const { assetId } = parseDramaMentionId(source.id);
-  let asset = findDramaAsset(state.dramaAssets, assetId, state.globalCharacters);
+  let asset = findDramaAsset(state.dramaAssets, assetId, listGlobalDramaAssets(state));
   if (!asset && assetId.startsWith('global/')) {
-    // 直接从聊天或只读提示词打开时，角色面板可能尚未加载；临时读取，不改写窗口 Store。
-    const characters = await loadGlobalCharacterCards();
+    // 直接从聊天或只读提示词打开时，资产面板可能尚未加载；临时读取，不改写窗口 Store。
+    const assets = await loadGlobalDramaAssetCards();
     checkAbort(signal);
-    asset = findDramaAsset(state.dramaAssets, assetId, characters);
+    asset = findDramaAsset(state.dramaAssets, assetId, assets);
   }
   if (!asset) return withDetails(unavailable(source.label, '引用的创作资产已不存在'), [
-    { label: '来源', value: assetId.startsWith('global/') ? '全局角色库' : '创作资产库' },
+    { label: '来源', value: assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库' },
   ]);
   return withDetails(await previewDramaContent(source, state, asset, signal), dramaDetails(source, asset));
 }
@@ -284,7 +284,7 @@ async function previewDrama(source: ReferencePreviewSource, state: PreviewState,
 async function previewDramaContent(source: ReferencePreviewSource, state: PreviewState, asset: DramaAsset, signal?: AbortSignal): Promise<ReferencePreviewContent> {
   const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId, mergeAll } = parseDramaMentionId(source.id);
   const title = asset.name || source.label;
-  const description = `${assetId.startsWith('global/') ? '全局角色库' : '创作资产库'} · ${DRAMA_ASSET_KIND_LABEL[asset.kind]}`;
+  const description = `${assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库'} · ${DRAMA_ASSET_KIND_LABEL[asset.kind]}`;
   const text = formatDramaAssetTextBrief(asset);
   const extra = { description, text };
   if (voiceClipId !== undefined) {

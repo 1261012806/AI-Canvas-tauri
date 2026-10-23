@@ -17,6 +17,7 @@ import type { ChatImageReference } from '../../types/chat';
 import { parseChatImageReferences } from '../../services/chat/chatImageReferenceService';
 import MentionPicker, { type MentionPickerItem } from '../shared/MentionPicker';
 import { resolveDramaMentionItems } from '../nodes/shared/mentionEditorSources';
+import { listGlobalDramaAssets } from '../../services/dramaAssetPrompt';
 import {
   bestNodeThumb, buildChipEl, buildDramaChipEl, buildSkillChipEl, getNodeMetaMap,
   resolveDramaChipPresentation, syncMediaReferenceLabels,
@@ -259,6 +260,16 @@ export default function ChatInput({
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const canvasNodes = useAppStore((state) => state.nodes);
   const dramaAssets = useAppStore((state) => state.dramaAssets);
+  const globalCharacters = useAppStore((state) => state.globalCharacters);
+  const globalScenes = useAppStore((state) => state.globalScenes);
+  const globalProps = useAppStore((state) => state.globalProps);
+  const globalAssets = useMemo(() => listGlobalDramaAssets({ globalCharacters, globalScenes, globalProps }),
+    [globalCharacters, globalScenes, globalProps]);
+  const hasGlobalAssetReference = inputValue.includes('@drama{global/');
+  useEffect(() => {
+    if (modelMenuOpen || hasGlobalAssetReference) void useAppStore.getState().loadGlobalDramaAssets()
+      .catch(() => useAppStore.getState().showToast('全局创作资产加载失败，请重试', 'error'));
+  }, [modelMenuOpen, hasGlobalAssetReference]);
   const userSkills = useAppStore((state) => state.userSkills);
   const agentPackageSkills = useAppStore((state) => state.agentPackageSkills);
   const uploadSkill = useAppStore((state) => state.uploadSkill);
@@ -317,8 +328,8 @@ export default function ChatInput({
   );
   // 资产库（短剧人物/场景/道具），与节点提示词的 @ 用同一份数据源
   const filteredDramaAssets = useMemo(
-    () => resolveDramaMentionItems(dramaAssets, modelQuery),
-    [dramaAssets, modelQuery],
+    () => resolveDramaMentionItems(dramaAssets, modelQuery, undefined, globalAssets),
+    [dramaAssets, globalAssets, modelQuery],
   );
   const assetKindChips = useMemo(() => {
     const counts = new Map<string, number>();
@@ -558,7 +569,7 @@ export default function ChatInput({
         label: item.name,
         thumbnailUrl,
         icon: 'mdi:account-box-outline',
-        badge: t(DRAMA_KIND_LABELS[item.kind] ?? item.kind),
+        badge: `${item.id.startsWith('global/') ? `${t('全局')} · ` : ''}${t(DRAMA_KIND_LABELS[item.kind] ?? item.kind)}`,
         title: thumbnailUrl ? t('{name}（引用参考图）', { name: item.name }) : t('{name}（引用设定文字）', { name: item.name }),
         onSelect: () => insertDramaMention(item),
       };

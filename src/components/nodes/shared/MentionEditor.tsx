@@ -35,7 +35,7 @@ import type { CharacterReferenceImage } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../../utils/referencePreviewEvents';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
-import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import {
   bestNodeThumb,
   buildAssetChipEl,
@@ -169,7 +169,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [resourceSearchVisible, setResourceSearchVisible] = useState(SEARCH_PAGE_SIZE);
   const [resourceSearchActiveKey, setResourceSearchActiveKey] = useState<string | null>(null);
   const resourceSearchListId = useId();
-  const globalCharactersRequestedRef = useRef(false);
+  const globalAssetsRequestedRef = useRef(false);
   const mentionEditorWrapRef = useRef<HTMLDivElement>(null);
   const mentionDropdownRef = useRef<HTMLDivElement>(null);
   const [mentionDropdownPosition, setMentionDropdownPosition] = useState({ left: 12, top: 0 });
@@ -189,17 +189,21 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [refmodSession, setRefmodSession] = useState<RefmodEditSession>();
   const refmodSessionRef = useRef<RefmodEditSession | undefined>(undefined);
   const [refmodUiError, setRefmodUiError] = useState('');
-  const { nodes, edges, workflows, dramaAssets, globalCharacters, globalCharactersLoading, currentProjectId } = useAppStore(
+  const { nodes, edges, workflows, dramaAssets, globalCharacters, globalScenes, globalProps, globalDramaAssetsLoading, currentProjectId } = useAppStore(
     useShallow((state) => ({
       nodes: state.nodes,
       edges: state.edges,
       workflows: state.workflows,
       dramaAssets: state.dramaAssets,
       globalCharacters: state.globalCharacters,
-      globalCharactersLoading: state.globalCharactersLoading,
+      globalScenes: state.globalScenes,
+      globalProps: state.globalProps,
+      globalDramaAssetsLoading: state.globalDramaAssetsLoading,
       currentProjectId: state.currentProjectId,
     })),
   );
+  const globalAssets = useMemo(() => listGlobalDramaAssets({ globalCharacters, globalScenes, globalProps }),
+    [globalCharacters, globalScenes, globalProps]);
   const editorOwnerRef = useRef({ projectId: currentProjectId, nodeId });
   useEffect(() => {
     const history = historyRef.current;
@@ -327,7 +331,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     syncImageReferenceLabels(el, nodeMetaMap);
     if (cursorOffset !== null) restoreCursor(el, cursorOffset);
     syncHistory();
-  }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalCharacters, dramaAssets]);
+  }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalAssets, dramaAssets]);
 
   // ── Cursor save/restore ──
   const saveCursor = (root: HTMLElement): number => {
@@ -484,22 +488,25 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     return resolveDramaMentionItems(dramaAssets, mentionQuery, currentNodeType);
   }, [showMention, dramaAssets, mentionQuery, currentNodeType]);
   const allDramaMentionItems = useMemo(
-    () => showMention ? resolveDramaMentionItems(dramaAssets, '', currentNodeType, globalCharacters) : [],
-    [showMention, dramaAssets, currentNodeType, globalCharacters],
+    () => showMention ? resolveDramaMentionItems(dramaAssets, '', currentNodeType, globalAssets) : [],
+    [showMention, dramaAssets, currentNodeType, globalAssets],
   );
   const projectMentionNodes = useMemo(
     () => showMention && resourceSearchExpanded ? resolveCanvasMentionNodes(nodeId, nodes, edges, 'project') : [],
     [showMention, resourceSearchExpanded, nodeId, nodes, edges],
   );
-  const hasGlobalCharacterReference = prompt.includes('@drama{global/');
+  const hasGlobalAssetReference = prompt.includes('@drama{global/');
   useEffect(() => {
     const searching = showMention && resourceSearchExpanded;
-    if (!searching && (!hasGlobalCharacterReference || globalCharactersRequestedRef.current)) return;
+    if (!searching && (!hasGlobalAssetReference || globalAssetsRequestedRef.current)) return;
     const state = useAppStore.getState();
-    // 全局角色按需加载，不依赖用户先打开角色库；读取失败由现有 Action 提示。
-    globalCharactersRequestedRef.current = true;
-    if (!state.globalCharactersLoading) void state.loadGlobalCharacters();
-  }, [showMention, resourceSearchExpanded, hasGlobalCharacterReference]);
+    // 全局创作资产按需加载，不依赖用户先打开资产库。
+    globalAssetsRequestedRef.current = true;
+    if (!state.globalDramaAssetsLoading) void state.loadGlobalDramaAssets().catch(() => {
+      globalAssetsRequestedRef.current = false;
+      useAppStore.getState().showToast('全局创作资产加载失败，请重试', 'error');
+    });
+  }, [showMention, resourceSearchExpanded, hasGlobalAssetReference]);
 
   // 角色参考图 / 动作列表 / 单个动作的素材选择。
   const [dramaRefPickerId, setDramaRefPickerId] = useState<string | null>(null);
@@ -1519,7 +1526,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     if (!chipTip || chipTip.ownerNodeId !== nodeId || chipTip.ownerProjectId !== currentProjectId) return null;
     const { source } = chipTip;
     if (source.kind === 'node') return resolveMentionPreview(nodes, source.id, source.label, nodeMetaMap.get(source.id)?.thumbnailUrl);
-    if (source.kind === 'drama') return resolveDramaMentionPreview(dramaAssets, globalCharacters, nodes, source.id, source.label);
+    if (source.kind === 'drama') return resolveDramaMentionPreview(dramaAssets, globalAssets, nodes, source.id, source.label);
     if (source.kind === 'refmod') {
       try {
         const mention = parseComfyRefmodMentions(source.id).mentions[0];
@@ -1537,7 +1544,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       text: '', missing: !!chipTip.assetUnavailable,
       description: chipTip.assetUnavailable ? '素材图片不可用' : `素材库 · ${{ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]}`,
     };
-  }, [chipTip, currentProjectId, dramaAssets, globalCharacters, nodeId, nodeMetaMap, nodes]);
+  }, [chipTip, currentProjectId, dramaAssets, globalAssets, nodeId, nodeMetaMap, nodes]);
   useEffect(() => {
     // 捕获画布、文字选择和胶囊拖动；原生拖放开始后可能立即收到 pointercancel。
     let nativeDragging = false;
@@ -1641,7 +1648,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     : undefined;
   const drillRefs: CharacterReferenceImage[] = (drillItem?.referenceImages ?? [])
     .filter((reference) => !!reference.imageUrl);
-  const drillAsset = drillItem ? findDramaAsset(dramaAssets, drillItem.id, globalCharacters) : undefined;
+  const drillAsset = drillItem ? findDramaAsset(dramaAssets, drillItem.id, globalAssets) : undefined;
   const drillCharacter = drillAsset?.kind === 'character' ? drillAsset : undefined;
   const drillActions = drillCharacter?.actions ?? [];
   const drillAction = drillActions.find((action) => action.id === dramaActionId);
@@ -1661,7 +1668,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const buildDramaPickerItem = (item: ReturnType<typeof resolveDramaMentionItems>[number]): MentionPickerItem => {
     const references = (item.referenceImages ?? []).filter((reference) => !!reference.imageUrl);
     const multiRef = references.length > 1;
-    const asset = findDramaAsset(dramaAssets, item.id, globalCharacters);
+    const asset = findDramaAsset(dramaAssets, item.id, globalAssets);
     const character = asset?.kind === 'character' ? asset : undefined;
     const hasActions = !!character?.actions?.length;
     const avatarReference = character?.referenceImages?.find((reference) => reference.id === character.avatarReferenceImageId)
@@ -1833,7 +1840,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       };
     } else if (candidate.source === 'drama') {
       item = buildDramaPickerItem(candidate.item);
-      item.badge = candidate.item.id.startsWith('global/') ? '全局角色' : DRAMA_KIND_LABELS[candidate.item.kind];
+      item.badge = `${candidate.item.id.startsWith('global/') ? '全局' : ''}${DRAMA_KIND_LABELS[candidate.item.kind]}`;
     } else if (candidate.source === 'file') {
       const file = candidate.item;
       item = {
@@ -1859,7 +1866,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   });
   const activeSearchItem = resourceSearchItems.find((item) => item.key === resourceSearchActiveKey && !item.disabled)
     ?? resourceSearchItems.find((item) => !item.disabled);
-  const resourceSearchLoading = assetLoading || globalCharactersLoading || refmodOptions.loading;
+  const resourceSearchLoading = assetLoading || globalDramaAssetsLoading || refmodOptions.loading;
 
   const handleResourceSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter 只选择搜索结果，不能冒泡成为节点生成或弹窗快捷键。

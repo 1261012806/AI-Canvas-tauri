@@ -63,6 +63,35 @@ it('rejects an already cancelled lease before creating or submitting a batch', a
   expect(mocks.write).not.toHaveBeenCalled();
   expect(useAppStore.getState().videoBatches.project).toBeUndefined();
 });
+it('holds the busy lock while global assets load and rejects a cancelled batch before submission', async () => {
+  let release!: () => void;
+  const loaded = new Promise<void>((resolve) => { release = resolve; });
+  const loadGlobalDramaAssets = vi.fn(() => loaded);
+  useAppStore.setState({ loadGlobalDramaAssets });
+  useAppStore.getState().updateNodeDataTransient('v1', { prompt: '@drama{global/scene-1:客厅} 运镜' });
+  const items = [inspect()[0]];
+  const controller = new AbortController();
+  const run = useAppStore.getState().startVideoBatch('project', items, { signal: controller.signal, assertFresh: vi.fn() });
+  expect(loadGlobalDramaAssets).toHaveBeenCalledOnce();
+  expect(useAppStore.getState().videoBatchBusy).toBe(true);
+  await expect(useAppStore.getState().startVideoBatch('project', items)).rejects.toThrow('正在执行');
+  controller.abort();
+  release();
+  await expect(run).rejects.toThrow('已取消');
+  expect(mocks.execute).not.toHaveBeenCalled();
+  expect(useAppStore.getState().videoBatchBusy).toBe(false);
+});
+it('rechecks the material fingerprint after loading global asset metadata', async () => {
+  useAppStore.getState().updateNodeDataTransient('v1', { prompt: '@drama{global/scene-1:客厅} 运镜' });
+  const items = [inspect()[0]];
+  useAppStore.setState({ loadGlobalDramaAssets: vi.fn(async () => {
+    useAppStore.setState({ globalScenes: [{ id: 'scene-1', kind: 'scene', name: '客厅', key: '客厅', summary: '', visualNotes: '',
+      importance: 'main', source: 'manual', confirmed: true, createdAt: 1, updatedAt: 1, imageUrl: 'data:image/png;base64,AA==' }] });
+  }) });
+  await expect(useAppStore.getState().startVideoBatch('project', items)).rejects.toThrow('已变化');
+  expect(mocks.execute).not.toHaveBeenCalled();
+  expect(useAppStore.getState().videoBatchBusy).toBe(false);
+});
 it('cancel waiting never interrupts the active request or submits the next one', async () => {
   let release!: () => void;
   mocks.execute.mockImplementationOnce(async () => { await new Promise<void>((r) => { release = r; }); return { success: true }; });

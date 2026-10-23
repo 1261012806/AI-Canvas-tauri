@@ -14,6 +14,8 @@ import ModalOverlay from '../shared/ModalOverlay';
 import ZoomableImage from '../shared/ZoomableImage';
 import { getNodeMetaMap } from '../nodes/shared/mentionEditorDom';
 import { renderPromptWithChips } from '../nodes/shared/PromptChipViewer';
+import { listGlobalDramaAssets } from '../../services/dramaAssetPrompt';
+import { useShallow } from 'zustand/react/shallow';
 import ModelSelector from '../nodes/shared/ModelSelector';
 import { resolveVisionTextModel, reversePromptAndTags } from '../../services/ai/reversePrompt';
 
@@ -44,6 +46,8 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
   const renameAction = useAppStore((state) => state.renameAssetFile);
   const nodes = useAppStore((state) => state.nodes ?? []);
   const dramaAssets = useAppStore((state) => state.dramaAssets);
+  const globalAssets = useAppStore(useShallow((state) => listGlobalDramaAssets(state)));
+  const loadGlobalAssets = useAppStore((state) => state.loadGlobalDramaAssets);
   const nodeMetaMap = useMemo(() => getNodeMetaMap(nodes), [nodes]);
   const [promptReferences, setPromptReferences] = useState<AssetImageReferenceView[]>([]);
   const [draft, setDraft] = useState<{ key: string; prompt: string; tags: string[]; tagInput: string; references: AssetImageReferenceView[]; pending: Array<{ path: string; name: string; url: string }> } | null>(null);
@@ -75,6 +79,9 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
   const reversing = reverseRunningKey === queryKey;
   const busy = reversing || operation?.key === queryKey && operation.busy;
   const prompt = saved?.record?.prompt ?? history?.prompt ?? '';
+  useEffect(() => {
+    if (prompt.includes('@drama{global/')) void loadGlobalAssets().catch(() => {});
+  }, [prompt, loadGlobalAssets]);
   const referenceViews = useMemo(() => {
     if (editing) return draft?.references ?? [];
     const savedRefs = saved?.references ?? [];
@@ -361,6 +368,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
               : <p className="asset-image-preview-prompt whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{renderPromptWithChips(prompt, {
                   nodes,
                   dramaAssets,
+                  globalAssets,
                   nodeMetaMap,
                   emptyText: saved?.record ? '尚未填写提示词' : history ? '此记录未保存提示词' : '暂无生成信息',
                 })}</p>}

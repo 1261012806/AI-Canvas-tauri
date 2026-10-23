@@ -10,7 +10,7 @@ import type { AppState } from '../../../store/useAppStore';
 import { useAppStore } from '../../../store/useAppStore';
 import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
-import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
+import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
 import { buildReferenceChipEl } from '../../shared/referenceChipDom';
 import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
 import { buildComfyRefmodMention, parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
@@ -374,7 +374,7 @@ export function resolveDramaChipPresentation(dramaId: string): { kind: string; t
   try {
     const store = useAppStore.getState();
     const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-    const found = findDramaAsset(store.dramaAssets, assetId, store.globalCharacters);
+    const found = findDramaAsset(store.dramaAssets, assetId, listGlobalDramaAssets(store));
     hasAsset = !!found;
     if (voiceClipId !== undefined) {
       kind = 'voice';
@@ -387,7 +387,7 @@ export function resolveDramaChipPresentation(dramaId: string): { kind: string; t
       const picked = referenceImageId && found.kind === 'character'
         ? found.referenceImages?.find((image) => image.id === referenceImageId)
         : undefined;
-      if (assetId.startsWith('global/')) {
+      if (assetId.startsWith('global/') || referenceImageId !== undefined) {
         thumb = resolveDramaAssetImageRef(found, store.nodes, referenceImageId)?.imageUrl;
       } else if (picked) {
         thumb = picked.imageUrl;
@@ -404,7 +404,7 @@ export function resolveDramaChipPresentation(dramaId: string): { kind: string; t
   return { kind, thumb, hasAsset };
 }
 
-/** 全局角色目录异步加载后只刷新胶囊展示，不改正文、标签或光标所在的外层节点。 */
+/** 全局创作资产异步加载后只刷新胶囊展示，不改正文、标签或光标所在的外层节点。 */
 export function syncGlobalCharacterReferenceChips(root: HTMLElement): void {
   for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-drama-id^="global/"]'))) {
     const id = chip.getAttribute('data-drama-id') || '';
@@ -482,7 +482,7 @@ export function resolveComfyRefmodChipPresentation(raw: string): { thumbnailUrl?
     if (!mention) return null;
     const state = useAppStore.getState();
     const key = comfyRefmodKey(mention.selection);
-    const character = [...state.dramaAssets.characters, ...state.globalCharacters]
+    const character = [...state.dramaAssets.characters, ...state.globalCharacters.map((item) => ({ ...item, id: `global/${item.id}` }))]
       .find((item) => item.refmods?.some((reference) => comfyRefmodKey(reference) === key));
     return { label: mention.label, thumbnailUrl: character ? resolveDramaAssetImageRef(character, state.nodes)?.imageUrl : undefined };
   } catch { return null; }

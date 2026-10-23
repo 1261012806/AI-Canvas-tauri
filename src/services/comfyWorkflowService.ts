@@ -11,7 +11,7 @@ import { comfyBaseUrlFor } from './comfyServers';
 import type { WorkflowDefinition, WorkflowIONode, WorkflowIONodeType } from '../types';
 import type { AIAudioGenParams, AIImageGenParams, AIVideoGenParams, AudioSpeechSettings } from '../types/aiTypes';
 import { mapImageDimensions, mapVideoDimensions, resolveVideoDurationSeconds } from './aiDimensions';
-import { resolveNodeReferences } from './nodeReferenceService';
+import { resolveNodeReferencesAsync } from './nodeReferenceService';
 import {
   cancelNodePolling,
   cleanupNodePolling,
@@ -285,14 +285,14 @@ const DEFAULT_NODE_INPUT_KEYS: Record<WorkflowIONodeType, string[]> = {
 };
 
 /** 将提示词注入到 ComfyUI workflow JSON 的 prompt 类型 IO 节点中 */
-function injectPromptsIntoWorkflow(
+async function injectPromptsIntoWorkflow(
   workflowObj: Record<string, Record<string, unknown>>,
   workflowInputs: Record<string, string> | undefined,
   fallbackPrompt: string,
   ioNodeIds: string[],
   /** 用户没 @ 任何 prompt 节点时，提示词写入这个节点，跳过下面的占位符猜测 */
   defaultPromptNodeId?: string,
-): void {
+): Promise<void> {
   if (defaultPromptNodeId) {
     writeNodeInput(workflowObj, defaultPromptNodeId, DEFAULT_NODE_INPUT_KEYS.prompt, fallbackPrompt);
     return;
@@ -321,7 +321,7 @@ function injectPromptsIntoWorkflow(
     if (!ioNodeIds.includes(ioNodeId)) continue;
 
     const rawValue = workflowInputs[ioNodeId];
-    const resolvedValue = rawValue !== undefined ? resolveNodeReferences(rawValue) : undefined;
+    const resolvedValue = rawValue !== undefined ? await resolveNodeReferencesAsync(rawValue) : undefined;
     const finalValue = (resolvedValue && resolvedValue.trim()) ? resolvedValue : fallbackPrompt;
 
     if (!writeNodeInput(workflowObj, ioNodeId, DEFAULT_NODE_INPUT_KEYS.prompt, finalValue)) {
@@ -521,7 +521,7 @@ async function injectMediaIntoWorkflow(
     for (const { nodeId, key } of targets) {
       const raw = workflowInputs?.[nodeId];
       if (raw !== undefined) {
-        const url = resolveNodeReferences(raw).trim();
+        const url = (await resolveNodeReferencesAsync(raw)).trim();
         if (!url || /@(?:drama|asset)?\{/.test(url)) throw new Error(`${label}节点 #${nodeId} 的引用未解析，请重新选择素材`);
         if (!key) throw new Error(`${label}节点 #${nodeId} 不接受上传文件名，请改用上传型加载节点`);
         assignments.push({ nodeId, key, kind, url });
@@ -1344,7 +1344,7 @@ async function submitComfyUIWorkflow(
   }
 
   // 注入提示词到 prompt 类型 IO 节点（没 @ 时优先写默认节点）
-  injectPromptsIntoWorkflow(workflowObj, workflowInputs, prompt, ioNodeIds,
+  await injectPromptsIntoWorkflow(workflowObj, workflowInputs, prompt, ioNodeIds,
     defaultNodeFor('prompt') ?? (!mentionedTypes.has('prompt') ? speechControls?.textNodeId : undefined));
 
   if (speechControls?.qwen?.conversionNodeId) {
@@ -1597,6 +1597,12 @@ export async function executeComfyUIVideoGenerate(
     // 画面比例决定注入工作流的 width/height；未设置时按 16:9
     seedanceRatio = '16:9',
   } = params;
+  if (`${prompt}\n${JSON.stringify(workflowInputs ?? {})}`.includes('@drama{global/')) {
+    const owner = useAppStore.getState();
+    await owner.loadGlobalDramaAssets();
+    if (externalSignal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+    if (useAppStore.getState().currentProjectId !== owner.currentProjectId) throw new Error('项目已切换，请重新生成视频');
+  }
   let checkRefmodNode: (() => void) | undefined;
   if (params.comfyRefmods?.length) {
     const captured = useAppStore.getState();

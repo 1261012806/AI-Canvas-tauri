@@ -11,6 +11,8 @@ import {
   collectCharacterReferenceUrls,
   findDramaAsset,
   formatDramaAssetTextBrief,
+  listGlobalDramaAssets,
+  loadGlobalDramaAssetsForPrompt,
   resolveDramaAssetImageRef,
   resolveDramaActionMediaRef,
   resolveDramaVoiceRef,
@@ -168,6 +170,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
   const { nodes } = store;
   rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   assertNoComfyRefmodMentions(rawPrompt);
+  const globalAssets = await loadGlobalDramaAssetsForPrompt(rawPrompt, store);
   // groups: 1=@asset  2,3=@drama  4,5=@node
   const chipRegex = /@asset\{([^}]+)\}|@drama\{([^:]+):([^}]+)\}|@\{([^:]+):([^}]+)\}|@image\{(chat-ref-[a-f0-9-]{36}\.(?:png|jpg|webp))\|([^}\r\n]*)\}/g;
   const imageEntries: PromptImageEntry[] = [];
@@ -224,7 +227,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
       const dramaId = match[2];
       const dramaName = match[3] || '';
       const { assetId, referenceImageId, mergeAll, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-      const dramaAsset = findDramaAsset(store.dramaAssets, assetId, store.globalCharacters);
+      const dramaAsset = findDramaAsset(store.dramaAssets, assetId, globalAssets);
       if (voiceClipId !== undefined) {
         const voice = resolveDramaVoiceRef(dramaAsset, voiceClipId);
         if (!voice) throw new Error(`角色音频引用已失效：${dramaName || '未命名角色'}`);
@@ -454,8 +457,11 @@ export interface PromptMediaReferences {
 /** 收集提示词中直接 @ 的视频/音频节点和角色音频，不改变提示词文本。 */
 export function collectPromptNodeMediaUrls(
   rawPrompt: string,
+  loadedGlobalAssets?: readonly DramaAsset[],
 ): Pick<PromptMediaReferences, 'references' | 'videoUrls' | 'audioUrls'> {
-  const { nodes, dramaAssets, globalCharacters } = useAppStore.getState();
+  const store = useAppStore.getState();
+  const { nodes, dramaAssets } = store;
+  const globalAssets = loadedGlobalAssets ?? listGlobalDramaAssets(store);
   rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   const references: MediaReference[] = [];
 
@@ -463,7 +469,7 @@ export function collectPromptNodeMediaUrls(
     if (match[1] !== undefined) {
       const { assetId, voiceClipId } = parseDramaMentionId(match[1]);
       if (voiceClipId === undefined) continue;
-      const voice = resolveDramaVoiceRef(findDramaAsset(dramaAssets, assetId, globalCharacters), voiceClipId);
+      const voice = resolveDramaVoiceRef(findDramaAsset(dramaAssets, assetId, globalAssets), voiceClipId);
       if (!voice) throw new Error(`角色音频引用已失效：${match[2] || '未命名角色'}`);
       references.push({ kind: 'audio', url: voice.url, filePath: voice.filePath, origin: 'prompt', role: 'reference_audio' });
       continue;
@@ -519,6 +525,7 @@ async function resolvePromptReferences(
   const { nodes } = store;
   rawPrompt = expandShotlistRowMentions(rawPrompt, nodes);
   assertNoComfyRefmodMentions(rawPrompt);
+  const globalAssets = await loadGlobalDramaAssetsForPrompt(rawPrompt, store);
   const imageEntries: PromptImageEntry[] = [];
   const mediaReferences: MediaReference[] = [];
   // groups: 1=@asset  2,3=@drama  4,5=@node
@@ -568,7 +575,7 @@ async function resolvePromptReferences(
   for (const m of rawPrompt.matchAll(/@drama\{([^:]+):([^}]+)\}/g)) {
     const { assetId, mergeAll } = parseDramaMentionId(m[1]);
     if (!mergeAll || dramaMergedMap.has(m[1])) continue;
-    const asset = findDramaAsset(store.dramaAssets, assetId, store.globalCharacters);
+    const asset = findDramaAsset(store.dramaAssets, assetId, globalAssets);
     if (!asset) continue;
     const merged = await resolveMergedCharacterImage(
       asset,
@@ -646,11 +653,11 @@ async function resolvePromptReferences(
 
     if (dramaId !== undefined) {
       const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-      const asset = findDramaAsset(store.dramaAssets, assetId, store.globalCharacters);
+      const asset = findDramaAsset(store.dramaAssets, assetId, globalAssets);
       const characterBinding = (usage: PromptCharacterBinding['usage']): PromptCharacterBinding | undefined =>
         asset?.kind === 'character' ? { id: asset.id, name: asset.name, usage } : undefined;
       if (voiceClipId !== undefined) {
-        const voice = resolveDramaVoiceRef(findDramaAsset(store.dramaAssets, assetId, store.globalCharacters), voiceClipId);
+        const voice = resolveDramaVoiceRef(asset, voiceClipId);
         if (!voice) throw new Error(`角色音频引用已失效：${dramaName || '未命名角色'}`);
         if (!extractMediaReferences) return voice.url;
         const key = `drama:${dramaId}`;
@@ -663,7 +670,7 @@ async function resolvePromptReferences(
         return mediaLabel('audio', idx, characterBinding(voice.kind));
       }
       if (actionId !== undefined) {
-        const media = resolveDramaActionMediaRef(findDramaAsset(store.dramaAssets, assetId, store.globalCharacters), actionId, actionMediaId);
+        const media = resolveDramaActionMediaRef(asset, actionId, actionMediaId);
         if (!media) throw new Error(`动作素材引用已失效：${dramaName || '未命名动作'}`);
         const key = `drama:${dramaId}`;
         if (media.kind !== 'video') {
@@ -689,7 +696,7 @@ async function resolvePromptReferences(
         }
         return mediaLabel('image', idx, characterBinding('appearance'));
       }
-      const dramaAsset = findDramaAsset(store.dramaAssets, assetId, store.globalCharacters);
+      const dramaAsset = asset;
       if (dramaAsset) {
         const imgRef = resolveDramaAssetImageRef(
           dramaAsset,

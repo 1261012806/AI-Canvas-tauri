@@ -1,9 +1,11 @@
-import { Children, createElement, isValidElement, useMemo, type ReactNode } from 'react';
+import { Children, createElement, isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
 import { renderMarkdownWithInlineSlots, renderTextWithInlineSlots } from '../../utils/renderMarkdown';
 import { findPromptChipRanges, renderPromptWithChips } from '../nodes/shared/PromptChipViewer';
 import { getNodeMetaMap } from '../nodes/shared/mentionEditorDom';
+import { listGlobalDramaAssets } from '../../services/dramaAssetPrompt';
+import type { DramaAsset } from '../../types/dramaAssets';
 
 const MARKDOWN_ELEMENTS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'ul', 'ol', 'li', 'hr', 'br', 'a', 'img', 'strong', 'em', 'del', 'input', 'span']);
 const MARKDOWN_ATTRIBUTES = ['href', 'src', 'alt', 'title', 'rel', 'type', 'aria-label'] as const;
@@ -46,19 +48,31 @@ export default function ReferencePreviewBody({ value, markdown = false, classNam
   markdown?: boolean;
   className?: string;
 }) {
-  const { nodes, dramaAssets, globalCharacters } = useAppStore(useShallow((state) => ({
+  const { nodes, dramaAssets, globalCharacters, globalScenes, globalProps } = useAppStore(useShallow((state) => ({
     nodes: state.nodes, dramaAssets: state.dramaAssets, globalCharacters: state.globalCharacters,
+    globalScenes: state.globalScenes, globalProps: state.globalProps,
   })));
+  const [loadedGlobalAssets, setLoadedGlobalAssets] = useState<DramaAsset[]>();
+  const hasGlobalReferences = value.includes('@drama{global/');
+  useEffect(() => {
+    if (!hasGlobalReferences) return;
+    let active = true;
+    void import('../../services/globalDramaAssetService').then((service) => service.loadGlobalDramaAssetCards())
+      .then((assets) => { if (active) setLoadedGlobalAssets(assets); }).catch(() => { /* 点击预览时提供读取错误。 */ });
+    return () => { active = false; };
+  }, [hasGlobalReferences, globalCharacters, globalScenes, globalProps]);
+  const globalAssets = useMemo(() => loadedGlobalAssets ?? listGlobalDramaAssets({ globalCharacters, globalScenes, globalProps }),
+    [loadedGlobalAssets, globalCharacters, globalScenes, globalProps]);
   const structure = useMemo(() => markdown ? renderMarkdownWithInlineSlots(value, findPromptChipRanges)
     : renderTextWithInlineSlots(value, findPromptChipRanges), [markdown, value]);
   const nodeMetaMap = useMemo(() => getNodeMetaMap(nodes), [nodes]);
   const body = useMemo(() => {
     const rendered = renderPromptWithChips(structure.tokens.join('\n'), {
-      nodes, dramaAssets, globalCharacters, nodeMetaMap, fallbackToTokenLabel: true,
+      nodes, dramaAssets, globalAssets, nodeMetaMap, fallbackToTokenLabel: true,
     });
     // 一次渲染全部令牌，沿正文顺序统一编号，不能在每个段落重新从「图1」开始。
     const chips = Children.toArray(rendered).filter(isValidElement);
     return renderPreviewStructure(structure.html, chips);
-  }, [dramaAssets, globalCharacters, nodeMetaMap, nodes, structure]);
+  }, [dramaAssets, globalAssets, nodeMetaMap, nodes, structure]);
   return <div className={`${markdown ? 'markdown-rendered' : 'whitespace-pre-wrap'} break-words ${className}`}>{body}</div>;
 }

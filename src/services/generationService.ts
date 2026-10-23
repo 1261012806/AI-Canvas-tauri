@@ -73,6 +73,19 @@ export async function executeGeneration(
   if (lease) {
     try { await assertLease(); } catch { return { success: false, message: '任务已取消' }; }
   }
+  const beforeLoad = useAppStore.getState();
+  const sourceNode = beforeLoad.nodes.find((node) => node.id === nodeId);
+  const inputBeforeLoad = passData ?? sourceNode?.data;
+  if (`${overridePrompt ?? inputBeforeLoad?.prompt ?? ''}\n${JSON.stringify(inputBeforeLoad?.workflowInputs ?? {})}`.includes('@drama{global/')) {
+    try {
+      await beforeLoad.loadGlobalDramaAssets();
+      await assertLease();
+    } catch { return { success: false, message: '全局创作资产读取失败或任务已取消，未提交生成' }; }
+    const latest = useAppStore.getState();
+    if (latest.currentProjectId !== beforeLoad.currentProjectId || latest.nodes.find((node) => node.id === nodeId)?.data !== sourceNode?.data) {
+      return { success: false, message: '项目或生成输入已变化，未提交生成' };
+    }
+  }
   const store = useAppStore.getState();
   const data = resolveGenerationNodeData(passData ?? store.nodes.find((n) => n.id === nodeId)?.data);
   if (!data) return { success: false, message: '节点不存在' };
@@ -184,7 +197,7 @@ export async function executeGeneration(
   const hasShotReference = nodeType === 'ai-video'
     && `${rawPrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes('/shot/');
   const hasProtectedVideoInputs = hasShotReference || (nodeType === 'ai-video'
-    && (Boolean(data.comfyRefmods?.length) || `${effectivePrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes('@refmod')));
+    && (Boolean(data.comfyRefmods?.length) || ['@refmod', '@drama{global/'].some((marker) => `${effectivePrompt}\n${JSON.stringify(data.workflowInputs ?? {})}`.includes(marker))));
   const submissionKey = JSON.stringify([submittingProjectId, nodeId]);
   const videoOwner = nodeType === 'ai-video' ? Symbol(nodeId) : undefined;
   if (videoOwner) videoSubmissionOwners.set(submissionKey, videoOwner);

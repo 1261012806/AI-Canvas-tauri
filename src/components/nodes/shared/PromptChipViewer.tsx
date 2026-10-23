@@ -3,11 +3,12 @@ import { Icon } from '@iconify/react';
 import type {
   CharacterReferenceImage,
   DramaAssetLibrary,
+  DramaAsset,
   DramaCharacter,
 } from '../../../types/dramaAssets';
 import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
-import { findDramaAsset, resolveDramaActionMediaRef } from '../../../services/dramaAssetPrompt';
+import { findDramaAsset, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
 import { bestNodeThumb, getNodeChipIconPath, getNodeMetaMap, numberMediaReferenceLabels } from './mentionEditorDom';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
@@ -39,6 +40,7 @@ const WF_IO_ICON: Record<string, string> = {
 export interface PromptChipRenderOptions {
   nodes?: Array<{ id: string; data?: Record<string, unknown> }>;
   dramaAssets?: DramaAssetLibrary;
+  globalAssets?: readonly DramaAsset[];
   globalCharacters?: readonly DramaCharacter[];
   nodeMetaMap?: ReturnType<typeof getNodeMetaMap>;
   emptyText?: string;
@@ -93,6 +95,7 @@ export function renderPromptWithChips(
 
   const nodes = options.nodes;
   const dramaAssets = options.dramaAssets;
+  const globalAssets = options.globalAssets ?? options.globalCharacters;
   const metaMap = options.nodeMetaMap || (nodes ? getNodeMetaMap(nodes as never) : new Map());
 
   // 与 MentionEditor 共用按媒体类型分别编号的规则。
@@ -107,7 +110,7 @@ export function renderPromptWithChips(
     } else if (scanMatch[2] !== undefined) {
       const dramaId = scanMatch[2];
       const { assetId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-      const asset = dramaAssets ? findDramaAsset(dramaAssets, assetId, options.globalCharacters) : undefined;
+      const asset = dramaAssets ? findDramaAsset(dramaAssets, assetId, globalAssets) : undefined;
       const action = actionId !== undefined ? resolveDramaActionMediaRef(asset, actionId, actionMediaId) : undefined;
       references.push({ kind: voiceClipId !== undefined ? 'audio' : action?.kind === 'video' ? 'video' : 'image', key: `drama:${dramaId}` });
     } else if (scanMatch[4] !== undefined) {
@@ -164,7 +167,7 @@ export function renderPromptWithChips(
 
       if (dramaAssets) {
         const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
-        const found = findDramaAsset(dramaAssets, assetId, options.globalCharacters);
+        const found = findDramaAsset(dramaAssets, assetId, globalAssets);
         if (voiceClipId !== undefined) {
           kind = 'voice';
           icon = '♪';
@@ -179,8 +182,8 @@ export function renderPromptWithChips(
           const picked = referenceImageId && found.kind === 'character'
             ? found.referenceImages?.find((img: CharacterReferenceImage) => img.id === referenceImageId)
             : undefined;
-          if (picked) {
-            thumb = picked.imageUrl;
+          if (referenceImageId !== undefined) {
+            thumb = picked ? resolveDramaAssetImageRef(found, nodes ?? [], referenceImageId)?.imageUrl : undefined;
           } else if (!assetId.startsWith('global/') && found.imageNodeId && nodes) {
             const node = nodes.find((n) => n.id === found.imageNodeId);
             thumb = bestNodeThumb(node?.data ?? {}) || found.imageUrl;

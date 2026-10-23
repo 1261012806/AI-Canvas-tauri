@@ -8,6 +8,7 @@ import { useAppStore } from '../../../store/useAppStore';
 import { isBatchConnectableNode } from '../../../store/store.nodes';
 import { generateId } from '../../../store/store.utils';
 import type { BaseNodeData, NodeType } from '../../../types';
+import type { DramaAsset } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId, resolveShotVideoDuration } from '../../../types/shotlist';
 import { resolveSingleShotlistRowReference } from '../../shotlistPromptService';
 import type { AudioOutputFormat, AudioSpeechSettings, AudioTtsVoice } from '../../../types/aiTypes';
@@ -37,7 +38,7 @@ import {
 } from '../toolRegistry';
 import { listConfiguredModels } from './appTools';
 import { normalizeAiAppReference } from '../../aiApps/aiAppSchema';
-import { findDramaAsset, preferDramaLibraryReferences, preferredDramaMentionForNode } from '../../dramaAssetPrompt';
+import { findDramaAsset, listGlobalDramaAssets, preferDramaLibraryReferences, preferredDramaMentionForNode } from '../../dramaAssetPrompt';
 import { AGENT_NODE_LAYOUT, AGENT_NODE_LAYOUT_GUIDANCE } from '../agentCanvasLayout';
 
 const NODE_TYPES: NodeType[] = [
@@ -471,6 +472,27 @@ function assertCanvasRevision(context: AgentToolContext): void {
   }
 }
 
+async function readGlobalReferenceAssets(context: AgentToolContext): Promise<DramaAsset[]> {
+  const owner = useAppStore.getState();
+  const revision = owner.getCurrentRevision();
+  if (owner.currentProjectId !== context.projectId) throw new Error('目标项目当前未加载');
+  let assets: DramaAsset[];
+  try { assets = await (await import('../../globalDramaAssetService')).loadGlobalDramaAssetCards(); }
+  catch { assets = []; } // 目录不可读时保留原节点引用，普通画布查询仍可用。
+  if (context.signal.aborted) throw new DOMException('请求已取消', 'AbortError');
+  const current = useAppStore.getState();
+  if (current.currentProjectId !== owner.currentProjectId || current.getCurrentRevision() !== revision) {
+    throw new Error('项目或画布已变化，请重新查询后操作');
+  }
+  return assets;
+}
+
+function hasActualNodeReference(prompt: string): boolean {
+  const nodes = useAppStore.getState().nodes;
+  return [...prompt.matchAll(/@\{([^:}\r\n]+):[^}\r\n]*\}/g)]
+    .some((match) => nodes.some((node) => node.id === match[1]));
+}
+
 function resolveTargetIds(input: NodeTargetInput): string[] {
   const store = useAppStore.getState();
   const matched = new Set<string>();
@@ -511,7 +533,7 @@ function truncateText(value: string | undefined, limit = DETAIL_TEXT_LIMIT): {
  * 节点详情。绝不回传 imageUrl / filePath / sourceUrl 等字段：
  * 它们带本机绝对路径，而这份内容会经模型和 MCP 客户端离开本机。
  */
-function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
+function describeNode(node: Node<BaseNodeData>, globalAssets?: readonly DramaAsset[]): Record<string, unknown> {
   const data = node.data;
   const store = useAppStore.getState();
   let aiApp: Record<string, unknown> | undefined;
@@ -540,7 +562,7 @@ function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
     displayLabel: data.displayLabel || data.fileName || data.label,
     dramaAssetId: data.dramaAssetId,
     dramaAssetKind: data.dramaAssetKind,
-    preferredMention: preferredDramaMentionForNode(node.id, store.nodes, store.dramaAssets, store.globalCharacters),
+    preferredMention: preferredDramaMentionForNode(node.id, store.nodes, store.dramaAssets, globalAssets ?? listGlobalDramaAssets(store)),
     role: data.role,
     status: data.status ?? 'idle',
     position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
@@ -579,7 +601,7 @@ function describeNode(node: Node<BaseNodeData>): Record<string, unknown> {
   };
 }
 
-function buildCanvasDetail(targetIds: string[], limit?: number): Record<string, unknown> {
+function buildCanvasDetail(targetIds: string[], limit?: number, globalAssets?: readonly DramaAsset[]): Record<string, unknown> {
   const store = useAppStore.getState();
   const scoped = targetIds.length > 0
     ? store.nodes.filter((node) => targetIds.includes(node.id))
@@ -592,7 +614,7 @@ function buildCanvasDetail(targetIds: string[], limit?: number): Record<string, 
     nodeCount: store.nodes.length,
     edgeCount: store.edges.length,
     selectedNodeIds: store.selectedNodeIds,
-    nodes: nodes.map(describeNode),
+    nodes: nodes.map((node) => describeNode(node, globalAssets)),
     // 只给出与返回节点相关的连线，避免整张图铺满上下文
     edges: store.edges
       .filter((edge) => visibleIds.has(edge.source) || visibleIds.has(edge.target))
@@ -1081,11 +1103,12 @@ export function registerCanvasAgentTools(): Array<() => void> {
         const targetIds = resolveTargetIds(input);
         const result = await executeCanvasCommand('query', targetIds, context, '查询画布');
         if (!input.detail || result.status !== 'success') return result;
+        const globalAssets = await readGlobalReferenceAssets(context);
         return {
           ...result,
           modelContent: JSON.stringify({
             summary: result.summary,
-            ...buildCanvasDetail(targetIds, input.limit),
+            ...buildCanvasDetail(targetIds, input.limit, globalAssets),
           }),
         };
       },
@@ -1220,17 +1243,19 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const message = `content 只能用于文本类节点，${nonText.length} 个节点不是文本节点`;
           return { status: 'error', summary: message, modelContent: message };
         }
+        const mcp = context.conversationId === `mcp-control-${context.projectId}`;
+        const globalAssets = mcp && input.nodes.some((node) => node.prompt && !isSourceNodeType(node.type)
+          && !node.content?.trim() && hasActualNodeReference(node.prompt)) ? await readGlobalReferenceAssets(context) : undefined;
         const projectRatio = useAppStore.getState().projects
           .find((project) => project.id === context.projectId)?.settings?.generation?.videoAspectRatio;
         // 布局与落库共用最终视频比例，不能等插入 Store 后才补项目默认值。
         const referenceState = useAppStore.getState();
-        const mcp = context.conversationId === `mcp-control-${context.projectId}`;
         const nodeInputs = input.nodes.map((node) => ({
           ...node,
           ...(node.type === 'ai-video' && node.aspectRatio === undefined && projectRatio ? { aspectRatio: projectRatio } : {}),
           ...(mcp && node.prompt && !isSourceNodeType(node.type) && !node.content?.trim()
             ? { prompt: preferDramaLibraryReferences(node.prompt, referenceState.nodes,
-              referenceState.dramaAssets, referenceState.globalCharacters) } : {}),
+              referenceState.dramaAssets, globalAssets ?? listGlobalDramaAssets(referenceState)) } : {}),
         }));
         const positions = resolveCreateNodePositions(context, nodeInputs);
         const nodes = nodeInputs.map((nodeInput, index) => createCanvasNode(
@@ -1404,11 +1429,15 @@ export function registerCanvasAgentTools(): Array<() => void> {
           return { status: 'error', summary: message, modelContent: message };
         }
 
+        const mcp = context.conversationId === `mcp-control-${context.projectId}`;
+        const globalAssets = mcp && input.prompt !== undefined && hasActualNodeReference(input.prompt)
+          ? await readGlobalReferenceAssets(context) : undefined;
+
         const patch: Partial<BaseNodeData> = {
           ...(input.label !== undefined ? { label: input.label.trim() } : {}),
-          ...(input.prompt !== undefined ? { prompt: context.conversationId === `mcp-control-${context.projectId}`
+          ...(input.prompt !== undefined ? { prompt: mcp
             ? preferDramaLibraryReferences(input.prompt.trim(), useAppStore.getState().nodes,
-              useAppStore.getState().dramaAssets, useAppStore.getState().globalCharacters)
+              useAppStore.getState().dramaAssets, globalAssets ?? listGlobalDramaAssets(useAppStore.getState()))
             : input.prompt.trim() } : {}),
           ...(input.width !== undefined ? { nodeWidth: Math.round(input.width) } : {}),
           ...(input.height !== undefined ? { nodeHeight: Math.round(input.height) } : {}),

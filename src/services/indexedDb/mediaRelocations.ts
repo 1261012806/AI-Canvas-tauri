@@ -16,7 +16,7 @@ export interface MediaRelocation {
 }
 const JOURNAL_ID = 'media-relocations';
 const STORES = ['projects', 'history', 'chatMessages', 'assetIndex', 'assetMeta', 'assetMetaV2',
-  'globalCharacters', 'videoEditorProjects', 'agentTasks', 'workflows', 'presets'];
+  'globalCharacters', 'globalDramaAssets', 'videoEditorProjects', 'agentTasks', 'workflows', 'presets'];
 const pathKey = (path: string) => {
   const normalized = path.replace(/\\/g, '/').replace(/^\/\/\?\/UNC\//i, '//').replace(/^\/\/\?\//, '');
   return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
@@ -61,6 +61,11 @@ export function relocateMediaReferences<T>(value: T, moves: readonly MediaReloca
     const identityMove = resolve(typeof original.filePath === 'string' ? original.filePath : typeof original.path === 'string' ? original.path : undefined);
     // 旧位置后来放入了另一份资产：旧日志只修复原身份，不能挪走新文件的索引或标签。
     if (identityMove?.assetMove?.assetId && typeof original.assetId === 'string' && original.assetId !== identityMove.assetMove.assetId) return item;
+    const imageMove = typeof original.imageUrl === 'string'
+      ? resolve(localMediaUrlToPath(original.imageUrl))
+        ?? moves.find((move) => move.oldAssetUrl === original.imageUrl) : undefined;
+    if (imageMove?.assetMove && typeof original.imageAssetId === 'string'
+      && original.imageAssetId !== imageMove.assetMove.assetId) return item;
     if (seen.has(item)) return seen.get(item);
     const next: Record<string, unknown> | unknown[] = Array.isArray(item) ? [] : {};
     seen.set(item, next);
@@ -71,6 +76,10 @@ export function relocateMediaReferences<T>(value: T, moves: readonly MediaReloca
       if (rewritten !== child) changed = true;
     }
     const record = item as Record<string, unknown>;
+    if (imageMove && typeof record.imageAssetId === 'string' && !Array.isArray(next)) {
+      next.imageRelativePath = imageMove.relativePath;
+      changed = true;
+    }
     const move = resolve(typeof record.filePath === 'string' ? record.filePath : typeof record.path === 'string' ? record.path : undefined);
     if (move && !Array.isArray(next)) {
       if (move.assetMove) {

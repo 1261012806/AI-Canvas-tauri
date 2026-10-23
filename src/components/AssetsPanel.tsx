@@ -73,12 +73,15 @@ import AssetImagePreview from './assets/AssetImagePreview';
 import AssetFileContextMenu from './assets/AssetFileContextMenu';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import type { AssetImageBatchEntry } from '../types/assetImage';
+import type { DramaAssetKind } from '../types/dramaAssets';
 
 const AssetTextPreview = lazy(() => import('./assets/AssetTextPreview'));
 const DramaAssetsPanel = lazy(() => import('./DramaAssetsPanel'));
 const VolcengineAssetLibraryPanel = lazy(() => import('./volcengine/VolcengineAssetLibraryPanel'));
 const RefModAssetsPanel = lazy(() => import('./assets/RefModAssetsPanel'));
 const AssetImageBatchReverseDialog = lazy(() => import('./assets/AssetImageBatchReverseDialog'));
+const GlobalCreativeAssetsPanel = lazy(() => import('./assets/GlobalCreativeAssetsPanel'));
+const GlobalCreativeAssetFileDialog = lazy(() => import('./assets/GlobalCreativeAssetsPanel').then((module) => ({ default: module.GlobalCreativeAssetFileDialog })));
 
 /** 仅磁盘真实文件可拖拽（排除节点引用的 node:// / virtual:// 虚拟路径）*/
 function isDraggableEntry(file: AssetFileEntry): boolean {
@@ -168,11 +171,16 @@ export default function AssetsPanel() {
     );
 
   const [activeTab, setActiveTab] = useState<FileTabKey>('project');
+  const [globalCreativeKind, setGlobalCreativeKind] = useState<DramaAssetKind | null>(null);
+  const [creativeFile, setCreativeFile] = useState<{ file: AssetFileEntry; kind: DramaAssetKind; scope: string } | null>(null);
+  const creativeCounts = useAppStore(useShallow((state) => ({ character: state.globalCharacters?.length ?? 0, scene: state.globalScenes?.length ?? 0, prop: state.globalProps?.length ?? 0 })));
+  const loadGlobalDramaAssets = useAppStore((state) => state.loadGlobalDramaAssets);
   const [arkLibraryOpen, setArkLibraryOpen] = useState(false);
   const [refmodLibraryOpen, setRefmodLibraryOpen] = useState(false);
   const [refmodCount, setRefmodCount] = useState(0);
   const [nodeListOpen, setNodeListOpen] = useState(false);
   const visibleTab: TabKey = dramaAssetsPanelOpen ? 'drama' : nodeListOpen ? 'nodes' : arkLibraryOpen ? 'ark' : refmodLibraryOpen ? 'refmods' : activeTab;
+  const isGlobalCreative = visibleTab === 'permanent' && globalCreativeKind !== null;
   const isFileTab = visibleTab === 'project' || visibleTab === 'permanent';
   const isNodeList = visibleTab === 'nodes';
   // 只在节点页订阅标识和内容；移动节点不改变 data，避免位置更新重绘整个资产面板。
@@ -269,6 +277,7 @@ export default function AssetsPanel() {
     setPreviousPresentation(presentation);
     setImagePreview(null);
     setFileMenu(null);
+    setCreativeFile(null);
     if (presentation) setMotionMode(presentation);
     if (presentation === 'drawer') {
       setActiveTab('project');
@@ -541,6 +550,10 @@ export default function AssetsPanel() {
 
   useEffect(() => () => { folderOperationRef.current?.abort(); }, [assetsPanelOpen, activeTab, currentProjectId]);
 
+  useEffect(() => {
+    if (assetsPanelOpen && visibleTab === 'permanent') void loadGlobalDramaAssets().catch(() => {});
+  }, [assetsPanelOpen, visibleTab, loadGlobalDramaAssets]);
+
   const handleCreateSubfolder = async (selection: AssetFolderSelection, name: string) => {
     if (folderOperationRef.current) throw new Error('请等待当前目录操作完成');
     const controller = new AbortController();
@@ -602,6 +615,7 @@ export default function AssetsPanel() {
   }, [assetsPanelOpen, markDramaAssetsViewed, unreadDramaAssetCount, visibleTab]);
 
   const handleClose = useCallback(() => {
+    setCreativeFile(null);
     setImagePreview(null);
     setBatchReverse(null);
     setSelectedProjectId(null); // 复位项目选择，下次打开默认当前项目
@@ -655,7 +669,7 @@ export default function AssetsPanel() {
   }, [assetsPanelOpen, isDrawer]);
 
   const folderTargetAt = useCallback((x: number, y: number): AssetFolderSelection | null => {
-    if (!assetsPanelOpen || activeTab !== 'permanent' || visibleTab !== 'permanent' || folderOperationRef.current) return null;
+    if (!assetsPanelOpen || activeTab !== 'permanent' || visibleTab !== 'permanent' || globalCreativeKind || folderOperationRef.current) return null;
     const encoded = document.elementFromPoint?.(x, y)?.closest('[data-asset-folder-target]')?.getAttribute('data-asset-folder-target');
     if (!encoded) return null;
     try {
@@ -665,7 +679,7 @@ export default function AssetsPanel() {
         && folder.rootPath === target.rootPath && folder.relativePath === target.relativePath)) return target;
     } catch { /* 非目录落点不接收文件。 */ }
     return null;
-  }, [assetsPanelOpen, activeTab, visibleTab, globalRootPath, externalFolders]);
+  }, [assetsPanelOpen, activeTab, visibleTab, globalCreativeKind, globalRootPath, externalFolders]);
 
   const highlightFolder = useCallback((target: AssetFolderSelection | null) => {
     setFolderDropTarget((previous) => JSON.stringify(previous) === JSON.stringify(target) ? previous : target);
@@ -908,6 +922,9 @@ export default function AssetsPanel() {
     if (!assetsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || batchReverse) return;
+      const state = useAppStore.getState();
+      if (state.characterLibraryRequest?.origin === 'assets'
+        && (state.characterLibraryOpen || state.characterActionLibraryOpen)) return;
       if (pointerDragStopRef.current) {
         e.preventDefault(); pointerDragStopRef.current(); return;
       }
@@ -938,6 +955,7 @@ export default function AssetsPanel() {
   const folderLabel = folderSelection.kind === 'all' ? '全部资产' : folderSelection.kind === 'global' ? '导入文件'
     : `${shortFolderName(folderSelection.rootPath)}${folderSelection.relativePath ? ` / ${folderSelection.relativePath.replace(/\//g, ' / ')}` : ''}`;
   const handleSelectFolder = useCallback((selection: AssetFolderSelection) => {
+    setGlobalCreativeKind(null);
     setFolderSelection(selection);
     setActiveCategory(null);
     setActiveTag(null);
@@ -1365,7 +1383,7 @@ export default function AssetsPanel() {
                 />
 
                 {/* Toolbar: 搜索 + 添加 */}
-              {visibleTab !== 'drama' && visibleTab !== 'ark' && visibleTab !== 'refmods' ? <div className="assets-toolbar ml-auto">
+              {visibleTab !== 'drama' && visibleTab !== 'ark' && visibleTab !== 'refmods' && !isGlobalCreative ? <div className="assets-toolbar ml-auto">
                 {visibleTab === 'project' && (
                   <Select
                     className="assets-project-select-wrap"
@@ -1532,9 +1550,15 @@ export default function AssetsPanel() {
                       onCopy={(selection) => { void handleFolderClipboard(selection, 'copy'); }}
                       onPaste={(selection) => { void handleFolderClipboard(selection, 'paste'); }}
                       onRemove={(rootPath) => { void handleRemoveFolder(rootPath); }}
+                      creativeKind={globalCreativeKind} creativeCounts={creativeCounts}
+                      onSelectCreative={(kind) => {
+                        setGlobalCreativeKind(kind); setFileMenu(null); setImagePreview(null); setTextPreview(null); dismissHover();
+                      }}
                     />
                   )}
-                  <div className="assets-file-content">
+                  {isGlobalCreative && globalCreativeKind ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">正在打开全局创作资产…</p>}>
+                    <GlobalCreativeAssetsPanel key={globalCreativeKind} kind={globalCreativeKind} compact={isDrawer} />
+                  </Suspense> : <div className="assets-file-content">
                     {folderProgress && <div role="status" className="flex items-center gap-2 p-2 text-xs text-canvas-text-secondary">
                       <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" /><span className="flex-1">{folderProgress}</span>
                       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => folderOperationRef.current?.abort()}>取消操作</button>
@@ -1693,7 +1717,7 @@ export default function AssetsPanel() {
                   </div>
                 </div>
               </div>
-                  </div>
+                  </div>}
                 </div>
               )}
 
@@ -1756,7 +1780,22 @@ export default function AssetsPanel() {
         canFileActions={isLocalAssetFile(fileMenu.file) && isTauriEnv()}
         canCopyPrompt={fileMenu.file.category === 'image' || fileMenu.file.category === 'video'}
         onCopy={() => performFileAction('copy')} onCopyPrompt={() => performFileAction('prompt')}
+        onCreateCreativeAsset={fileMenu.file.category === 'image' && fileMenu.file.availability !== 'offline' ? async (kind) => {
+          const target = fileMenu;
+          fileOperationRef.current?.abort();
+          const controller = new AbortController(); fileOperationRef.current = controller;
+          await loadGlobalDramaAssets();
+          if (controller.signal.aborted || fileScopeRef.current !== target.scope
+            || !useAppStore.getState().assetsPanelOpen || useAppStore.getState().currentProjectId !== currentProjectId) return;
+          setCreativeFile({ file: { ...target.file }, kind, scope: target.scope });
+        } : undefined}
         onReveal={() => performFileAction('reveal')} onDelete={() => performFileAction('delete')} onClose={closeFileMenu} />}
+    {assetsPanelOpen && creativeFile?.scope === previewScope && <Suspense fallback={<p role="status">正在打开创作资产…</p>}>
+      <GlobalCreativeAssetFileDialog key={`${creativeFile.kind}:${creativeFile.file.assetId ?? creativeFile.file.path}`} file={creativeFile.file} kind={creativeFile.kind}
+        onClose={() => setCreativeFile(null)} onSaved={() => {
+          switchTab('permanent'); setGlobalCreativeKind(creativeFile.kind); setCreativeFile(null); toast('已添加到全局创作资产');
+        }} />
+    </Suspense>}
     {assetsPanelOpen && textPreview?.scope === previewScope && <Suspense fallback={<p role="status">正在打开文档…</p>}>
       <AssetTextPreview key={textPreview.scope} file={textPreview.file} projectId={projectIdForFile(textPreview.file)}
         onClose={() => setTextPreview(null)} onSaved={(next) => {

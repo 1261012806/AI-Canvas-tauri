@@ -10,7 +10,7 @@ import type {
   DramaProp,
   DramaScene,
 } from '../types/dramaAssets';
-import { buildDramaMentionId, DRAMA_ASSET_KIND_LABEL, formatDramaMention } from '../types/dramaAssets';
+import { buildDramaMentionId, DRAMA_ASSET_KIND_LABEL, formatDramaMention, parseDramaMentionId } from '../types/dramaAssets';
 
 export type DramaAssetPromptPurpose = 'lookbook' | 'scene_plate' | 'prop_ref';
 
@@ -24,14 +24,36 @@ export function listDramaAssetsFlat(library: DramaAssetLibrary): DramaAsset[] {
   return [...library.characters, ...library.scenes, ...library.props];
 }
 
+/** 全局三类资产复用同一份卡片记录；文件位置不参与业务身份。 */
+export function listGlobalDramaAssets(source: {
+  globalCharacters?: readonly DramaCharacter[];
+  globalScenes?: readonly DramaScene[];
+  globalProps?: readonly DramaProp[];
+}): DramaAsset[] {
+  return [...(source.globalCharacters ?? []), ...(source.globalScenes ?? []), ...(source.globalProps ?? [])];
+}
+
+/** 已在内存中的卡片直接复用；冷引用只读加载，不要求先打开资源库。 */
+export async function loadGlobalDramaAssetsForPrompt(
+  prompt: string,
+  source: Parameters<typeof listGlobalDramaAssets>[0],
+): Promise<DramaAsset[]> {
+  const assets = listGlobalDramaAssets(source);
+  const missing = [...prompt.matchAll(/@drama\{(global\/[^:}]+):[^}]*\}/g)].some((match) => {
+    const id = parseDramaMentionId(match[1]).assetId.slice('global/'.length);
+    return !assets.some((asset) => asset.id === id);
+  });
+  return missing ? (await import('./globalDramaAssetService')).loadGlobalDramaAssetCards() : assets;
+}
+
 export function findDramaAsset(
   library: DramaAssetLibrary,
   id: string,
-  globalCharacters: readonly DramaCharacter[] = [],
+  globalAssets: readonly DramaAsset[] = [],
 ): DramaAsset | undefined {
   if (id.startsWith('global/')) {
-    const character = globalCharacters.find((entry) => entry.id === id.slice('global/'.length));
-    return character ? { ...character, id } : undefined;
+    const asset = globalAssets.find((entry) => entry.id === id.slice('global/'.length));
+    return asset ? { ...asset, id } : undefined;
   }
   return listDramaAssetsFlat(library).find((a) => a.id === id);
 }
@@ -132,19 +154,20 @@ export function resolveDramaAssetImageRef(
   referenceImageId?: string,
 ): { imageNodeId?: string; imageUrl: string } | null {
   const reference = asset.kind === 'character'
-    ? (referenceImageId
+    ? referenceImageId !== undefined
       ? asset.referenceImages?.find((item) => item.id === referenceImageId)
-      : undefined)
-      || asset.referenceImages?.find((item) => item.id === asset.primaryReferenceImageId)
-      || asset.referenceImages?.[0]
+      : asset.referenceImages?.find((item) => item.id === asset.primaryReferenceImageId)
+        || asset.referenceImages?.[0]
     : undefined;
-  const imageNodeId = reference?.sourceNodeId || asset.imageNodeId;
+  if (referenceImageId !== undefined && !reference) return null;
+  const imageNodeId = asset.id.startsWith('global/') ? undefined
+    : referenceImageId !== undefined ? reference?.sourceNodeId : reference?.sourceNodeId || asset.imageNodeId;
   const node = imageNodeId ? nodes.find((item) => item.id === imageNodeId) : undefined;
   const imageUrl =
     (node?.data?.imageUrl as string | undefined)
     || (node?.data?.thumbnailUrl as string | undefined)
     || reference?.imageUrl
-    || asset.imageUrl;
+    || (referenceImageId === undefined ? asset.imageUrl : undefined);
   if (!imageUrl || !String(imageUrl).trim()) return null;
   return { imageNodeId, imageUrl };
 }
@@ -154,7 +177,7 @@ export function preferredDramaMentionForNode(
   nodeId: string,
   nodes: Array<{ id: string; data?: Record<string, unknown> }>,
   library: DramaAssetLibrary,
-  globalCharacters: readonly DramaCharacter[] = [],
+  globalAssets: readonly DramaAsset[] = [],
 ): string | undefined {
   const node = nodes.find((item) => item.id === nodeId);
   if (!node || !['ai-image', 'source-image', 'ai-panorama', 'ai-animation', 'ai-storyboard'].includes(String(node.data?.type))) return undefined;
@@ -168,7 +191,7 @@ export function preferredDramaMentionForNode(
         ? asset.referenceImages.map((reference) => reference.id) : [undefined];
       for (const referenceId of references) {
         if (referenceId && /[:{}\r\n]/.test(referenceId)) continue;
-        if (resolveDramaAssetImageRef(asset, nodes, referenceId)?.imageUrl !== imageUrl) continue;
+        if (resolveDramaAssetImageRef(asset, global ? [] : nodes, referenceId)?.imageUrl !== imageUrl) continue;
         const id = global ? `global/${asset.id}` : asset.id;
         mentions.add(formatDramaMention(buildDramaMentionId(id, referenceId), asset.name));
       }
@@ -177,7 +200,7 @@ export function preferredDramaMentionForNode(
   };
   const projectMentions = candidates(listDramaAssetsFlat(library), false);
   if (projectMentions.length) return projectMentions.length === 1 ? projectMentions[0] : undefined;
-  const globalMentions = candidates(globalCharacters, true);
+  const globalMentions = candidates(globalAssets, true);
   return globalMentions.length === 1 ? globalMentions[0] : undefined;
 }
 
@@ -186,11 +209,11 @@ export function preferDramaLibraryReferences(
   prompt: string,
   nodes: Array<{ id: string; data?: Record<string, unknown> }>,
   library: DramaAssetLibrary,
-  globalCharacters: readonly DramaCharacter[] = [],
+  globalAssets: readonly DramaAsset[] = [],
 ): string {
   const cache = new Map<string, string | undefined>();
   return prompt.replace(/@\{([^:}\r\n]+):[^}\r\n]+\}/g, (token, nodeId: string) => {
-    if (!cache.has(nodeId)) cache.set(nodeId, preferredDramaMentionForNode(nodeId, nodes, library, globalCharacters));
+    if (!cache.has(nodeId)) cache.set(nodeId, preferredDramaMentionForNode(nodeId, nodes, library, globalAssets));
     return cache.get(nodeId) ?? token;
   });
 }
@@ -203,7 +226,7 @@ export function collectCharacterReferenceUrls(
   if (asset.kind !== 'character') return [];
   return (asset.referenceImages ?? [])
     .map((reference) => {
-      const node = reference.sourceNodeId
+      const node = !asset.id.startsWith('global/') && reference.sourceNodeId
         ? nodes.find((item) => item.id === reference.sourceNodeId)
         : undefined;
       return (node?.data?.imageUrl as string | undefined)

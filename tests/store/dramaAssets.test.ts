@@ -7,7 +7,7 @@ import {
   isEligibleCharacterVoiceNode,
 } from '../../src/store/store.dramaAssets';
 import { filterHiddenCanvasElements } from '../../src/store/store.nodes';
-import type { CharacterActionMedia, DramaCharacter } from '../../src/types/dramaAssets';
+import type { CharacterActionMedia, DramaAsset, DramaCharacter, DramaScene } from '../../src/types/dramaAssets';
 import { emptyDramaAssetLibrary } from '../../src/types/dramaAssets';
 import { sortCharactersForLibrary } from '../../src/services/characterOrder';
 import type { BaseNodeData } from '../../src/types';
@@ -22,11 +22,21 @@ const characterLibraryMocks = vi.hoisted(() => ({
 
 vi.mock('../../src/services/characterLibraryService', () => characterLibraryMocks);
 
+const globalDramaMocks = vi.hoisted(() => ({
+  loadGlobalDramaAssetCards: vi.fn(async () => [] as DramaAsset[]),
+  saveGlobalDramaAssetCard: vi.fn(async (asset: DramaAsset) => asset),
+  deleteGlobalDramaAssetCard: vi.fn(async () => undefined),
+}));
+vi.mock('../../src/services/globalDramaAssetService', () => globalDramaMocks);
+
 beforeEach(() => {
   vi.clearAllMocks();
   characterLibraryMocks.loadGlobalCharacterCards.mockResolvedValue([]);
   characterLibraryMocks.saveGlobalCharacterCard.mockImplementation(async (character) => character);
   characterLibraryMocks.saveGlobalCharacterOrder.mockResolvedValue(undefined);
+  globalDramaMocks.loadGlobalDramaAssetCards.mockResolvedValue([]);
+  globalDramaMocks.saveGlobalDramaAssetCard.mockImplementation(async (asset) => asset);
+  globalDramaMocks.deleteGlobalDramaAssetCard.mockResolvedValue(undefined);
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
     saveCurrentProjectSilent: vi.fn(async () => 'p1'),
@@ -59,6 +69,99 @@ function deferred<T>() {
   const promise = new Promise<T>((next) => { resolve = next; });
   return { promise, resolve };
 }
+
+describe('全局创作资产作用域与异步保存', () => {
+  const scene = (): DramaScene => ({
+    kind: 'scene', id: 'global-scene', name: '客厅', key: '客厅', summary: '', visualNotes: '',
+    importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1,
+  });
+
+  it('加载三类共用一个请求，并保留读取期间已保存的编辑', async () => {
+    const original = scene();
+    useAppStore.setState({ globalScenes: [original] });
+    const pending = deferred<DramaAsset[]>();
+    globalDramaMocks.loadGlobalDramaAssetCards.mockReturnValueOnce(pending.promise);
+    const loading = useAppStore.getState().loadGlobalDramaAssets();
+    expect(useAppStore.getState().loadGlobalDramaAssets()).toBe(loading);
+    expect(await useAppStore.getState().saveGlobalDramaAsset({ ...original, name: '编辑后' })).toBe(true);
+    pending.resolve([original, sampleCharacter({ id: 'global-character' }), { ...original, kind: 'prop', id: 'global-prop' }]);
+    await loading;
+    expect(useAppStore.getState().globalScenes[0].name).toBe('编辑后');
+    expect(useAppStore.getState().globalCharacters[0].id).toBe('global-character');
+    expect(useAppStore.getState().globalProps[0].id).toBe('global-prop');
+    expect(useAppStore.getState().dramaAssets).toEqual(emptyDramaAssetLibrary());
+  });
+
+  it('加载失败保留原列表、显示可重试错误并阻止保存', async () => {
+    const original = scene();
+    useAppStore.setState({ globalScenes: [original] });
+    globalDramaMocks.loadGlobalDramaAssetCards.mockRejectedValueOnce(new Error('private diagnostics'));
+    await expect(useAppStore.getState().loadGlobalDramaAssets()).rejects.toThrow('加载失败');
+    expect(useAppStore.getState().globalScenes).toEqual([original]);
+    expect(useAppStore.getState().globalDramaAssetsError).toBe('全局创作资产加载失败，请重试');
+    expect(await useAppStore.getState().saveGlobalDramaAsset({ ...original, name: '错误空库编辑' })).toBe(false);
+    expect(globalDramaMocks.saveGlobalDramaAssetCard).not.toHaveBeenCalled();
+    await useAppStore.getState().loadGlobalDramaAssets();
+    expect(useAppStore.getState().globalDramaAssetsError).toBeNull();
+  });
+
+  it('绑定从真实源节点捕获文件身份，切换项目拒绝迟到写回', async () => {
+    const original = scene();
+    useAppStore.setState({ globalScenes: [original], nodes: [{ id: 'image-source', type: 'source-image',
+      position: { x: 0, y: 0 }, data: { type: 'source-image', label: '图像', imageUrl: 'asset://localhost/source.png',
+        filePath: 'D:/project/source.png', assetId: 'project-image' } }] });
+    const pending = deferred<DramaAsset>();
+    globalDramaMocks.saveGlobalDramaAssetCard.mockReturnValueOnce(pending.promise);
+    const binding = useAppStore.getState().bindGlobalDramaAssetImage('scene', original.id, 'image-source');
+    expect(globalDramaMocks.saveGlobalDramaAssetCard).toHaveBeenCalledWith(expect.objectContaining({ imageAssetId: 'project-image' }),
+      expect.objectContaining({ imageFilePath: 'D:/project/source.png', assertCurrent: expect.any(Function) }));
+    useAppStore.setState({ currentProjectId: 'p2' });
+    pending.resolve({ ...original, imageAssetId: 'global-image', imageUrl: 'asset://localhost/global.png' });
+    expect(await binding).toBe(false);
+    expect(useAppStore.getState().globalScenes).toEqual([original]);
+  });
+
+  it('全局人物委托唯一角色记录，删除场景不改项目库和人物', async () => {
+    const character = sampleCharacter({ id: 'global-character' });
+    const original = scene();
+    expect(await useAppStore.getState().saveGlobalDramaAsset(character)).toBe(true);
+    expect(characterLibraryMocks.saveGlobalCharacterCard).toHaveBeenCalledOnce();
+    expect(globalDramaMocks.saveGlobalDramaAssetCard).not.toHaveBeenCalled();
+    useAppStore.setState({ globalScenes: [original] });
+    expect(await useAppStore.getState().deleteGlobalDramaAsset('scene', original.id)).toBe(true);
+    expect(useAppStore.getState().globalScenes).toEqual([]);
+    expect(useAppStore.getState().globalCharacters[0].id).toBe(character.id);
+    expect(useAppStore.getState().dramaAssets).toEqual(emptyDramaAssetLibrary());
+  });
+
+  it.each(['delete', 'edit', 'sort'] as const)('人物保存期间%s仅排序允许完成，不复活或覆盖其他编辑', async (change) => {
+    const original = sampleCharacter({ id: 'global-character' });
+    useAppStore.setState({ globalCharacters: [original] });
+    const pending = deferred<DramaCharacter>();
+    characterLibraryMocks.saveGlobalCharacterCard.mockReturnValueOnce(pending.promise);
+    const saving = useAppStore.getState().saveCharacterCard('global', { ...original, summary: '待保存' });
+    useAppStore.setState({ globalCharacters: change === 'delete' ? [] : [{ ...original,
+      ...(change === 'edit' ? { name: '其他编辑' } : { libraryOrder: 9 }) }] });
+    pending.resolve({ ...original, summary: '待保存' });
+    expect(await saving).toBe(change === 'sort');
+    const saved = useAppStore.getState().globalCharacters[0];
+    if (change === 'delete') expect(saved).toBeUndefined();
+    else if (change === 'edit') expect(saved.name).toBe('其他编辑');
+    else expect(saved).toMatchObject({ summary: '待保存', libraryOrder: 9 });
+  });
+
+  it('项目场景改绑或解绑图片清除复制时的全局主图身份', () => {
+    const copied = { ...scene(), imageAssetId: 'global-image', imageRelativePath: 'global.png' };
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), scenes: [copied] }, nodes: [{
+      id: 'new-image', type: 'source-image', position: { x: 0, y: 0 },
+      data: { type: 'source-image', label: '新图', imageUrl: 'data:image/png;base64,AA==' },
+    }] });
+    useAppStore.getState().bindDramaAssetImage('scene', copied.id, 'new-image');
+    expect(useAppStore.getState().dramaAssets.scenes[0].imageAssetId).toBeUndefined();
+    useAppStore.getState().unbindDramaAssetImage('scene', copied.id);
+    expect(useAppStore.getState().dramaAssets.scenes[0]).not.toHaveProperty('imageRelativePath');
+  });
+});
 
 describe('角色库排序保存', () => {
   function setup() {

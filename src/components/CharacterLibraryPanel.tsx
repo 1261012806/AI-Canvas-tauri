@@ -197,6 +197,7 @@ export default function CharacterLibraryPanel() {
   const t = useT();
   const {
     open,
+    openRequest,
     actionLibraryOpen,
     setActionLibraryOpen,
     setOpen,
@@ -227,6 +228,7 @@ export default function CharacterLibraryPanel() {
   } = useAppStore(
     useShallow((state) => ({
       open: state.characterLibraryOpen,
+      openRequest: state.characterLibraryRequest,
       setOpen: state.setCharacterLibraryOpen,
       actionLibraryOpen: state.characterActionLibraryOpen,
       setActionLibraryOpen: state.setCharacterActionLibraryOpen,
@@ -294,6 +296,19 @@ export default function CharacterLibraryPanel() {
   const [savingAction, setSavingAction] = useState(false);
   const voicePlayerRef = useRef<HTMLAudioElement>(null);
   const actionMediaInputRef = useRef<HTMLInputElement>(null);
+
+  // 资源库分类可直接定位同一份全局人物、声音或动作，不另建角色状态。
+  useEffect(() => {
+    if (!open || !openRequest) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScope(openRequest.scope);
+    setSelectedCharacterId(openRequest.characterId ?? null);
+    setSelectedReferenceId(null);
+    setSearch('');
+    if (openRequest.section === 'voice') {
+      setVoiceDockState({ context: `${open}:${openRequest.scope}:${openRequest.characterId ?? ''}`, expanded: true });
+    }
+  }, [open, openRequest]);
 
   useEffect(() => {
     if (open || actionLibraryOpen) void loadGlobalCharacters();
@@ -444,6 +459,7 @@ export default function CharacterLibraryPanel() {
   };
 
   const focusNode = (nodeId: string) => {
+    if (openRequest?.origin === 'assets') useAppStore.getState().setAssetsPanelOpen(false);
     setOpen(false);
     setSelectedNodeIds([nodeId]);
     window.dispatchEvent(new CustomEvent('canvas-focus-node', { detail: { nodeId, pulse: true } }));
@@ -649,9 +665,7 @@ export default function CharacterLibraryPanel() {
     }
     if (!nodeId) return;
 
-    setOpen(false);
-    setSelectedNodeIds([nodeId]);
-    window.dispatchEvent(new CustomEvent('canvas-focus-node', { detail: { nodeId, pulse: true } }));
+    focusNode(nodeId);
   };
 
   return (

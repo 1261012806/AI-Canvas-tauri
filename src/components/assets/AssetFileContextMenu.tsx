@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import ModalOverlay from '../shared/ModalOverlay';
+import type { DramaAssetKind } from '../../types/dramaAssets';
 
 export interface AssetFileContextMenuProps {
   name: string;
@@ -15,11 +16,12 @@ export interface AssetFileContextMenuProps {
   onReveal: () => Promise<void>;
   onDelete: () => Promise<void>;
   onClose: () => void;
+  onCreateCreativeAsset?: (kind: DramaAssetKind) => Promise<void>;
 }
 
 /** 资产文件菜单只管理交互；路径、提示词查询及删除由资产面板编排。 */
 export default function AssetFileContextMenu({ name, x, y, canFileActions, canCopyPrompt,
-  confirmDelete = false, onCopy, onCopyPrompt, onReveal, onDelete, onClose }: AssetFileContextMenuProps) {
+  confirmDelete = false, onCopy, onCopyPrompt, onReveal, onDelete, onClose, onCreateCreativeAsset }: AssetFileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [confirming, setConfirming] = useState(confirmDelete);
   const [pending, setPending] = useState(false);
@@ -89,7 +91,7 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
   </ModalOverlay>;
 
   const left = Math.max(8, Math.min(x, (window.innerWidth || 1024) - 216));
-  const top = Math.max(8, Math.min(y, (window.innerHeight || 768) - 172));
+  const top = Math.max(8, Math.min(y, (window.innerHeight || 768) - (onCreateCreativeAsset ? 292 : 172)));
   return createPortal(<div ref={menuRef} role="menu" aria-label={`${name}的文件操作`} className="ui-menu w-52"
     style={{ position: 'fixed', left, top, zIndex: 340 }} onContextMenu={(event) => event.preventDefault()}>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canFileActions || pending} onClick={() => void run(onCopy)}>
@@ -98,6 +100,17 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
       <Icon icon="lucide:clipboard-copy" className="w-4 h-4" />复制提示词</button>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canFileActions || pending} onClick={() => void run(onReveal)}>
       <Icon icon="lucide:folder-open" className="w-4 h-4" />打开文件所在目录</button>
+    {onCreateCreativeAsset && <>
+      <div className="ui-menu__sep" />
+      {([{ kind: 'character', label: '添加到全局人物', icon: 'lucide:contact-round' },
+        { kind: 'scene', label: '添加到全局场景', icon: 'lucide:landmark' },
+        { kind: 'prop', label: '添加到全局道具', icon: 'lucide:box' }] as const).map((item) => (
+        <button key={item.kind} type="button" role="menuitem" className="ui-menu__item" disabled={pending}
+          onClick={() => void run(() => onCreateCreativeAsset(item.kind))}>
+          <Icon icon={item.icon} className="w-4 h-4" aria-hidden="true" />{item.label}
+        </button>
+      ))}
+    </>}
     <div className="ui-menu__sep" />
     <button type="button" role="menuitem" className="ui-menu__item is-danger" disabled={!canFileActions || pending} onClick={() => setConfirming(true)}>
       <Icon icon="lucide:trash-2" className="w-4 h-4" />删除</button>

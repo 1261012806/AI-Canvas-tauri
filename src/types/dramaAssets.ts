@@ -10,6 +10,25 @@ export type DramaAssetKind = 'character' | 'scene' | 'prop';
 export type DramaAssetImportance = 'main' | 'supporting' | 'minor';
 export type DramaAssetSource = 'ai' | 'manual' | 'merge';
 
+export interface CharacterLibraryOpenRequest {
+  scope: 'project' | 'global';
+  characterId?: string;
+  section?: 'voice' | 'action';
+  /** 从资源库打开时保留当前资源库作为弹层背景。 */
+  origin?: 'assets';
+}
+
+/** 仅用于本轮异步保存的取消与上下文校验，不进入持久化记录。 */
+export interface DramaAssetWriteOptions {
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+}
+
+export function assertDramaAssetWriteCurrent(options: DramaAssetWriteOptions = {}): void {
+  if (options.signal?.aborted) throw new Error('资产保存已取消');
+  options.assertCurrent?.();
+}
+
 export type CharacterReferenceKind =
   | 'primary'
   | 'avatar'
@@ -142,6 +161,9 @@ export interface DramaAssetBase {
   appearances?: string[];
   imageNodeId?: string;
   imageUrl?: string;
+  /** 全局场景、道具主图的稳定文件身份，不依赖项目节点。 */
+  imageAssetId?: string;
+  imageRelativePath?: string;
   confirmed: boolean;
   createdAt: number;
   updatedAt: number;

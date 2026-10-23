@@ -1,4 +1,4 @@
-import type { DramaAssetLibrary, DramaCharacter } from '../../../types/dramaAssets';
+import type { DramaAsset, DramaAssetLibrary } from '../../../types/dramaAssets';
 import { DRAMA_ASSET_KIND_LABEL, parseDramaMentionId } from '../../../types/dramaAssets';
 import {
   collectCharacterReferenceUrls,
@@ -34,14 +34,14 @@ export function readMentionPreviewSource(element: Pick<HTMLElement, 'getAttribut
 /** 预览只读取当前库，不修改引用或生成输入。 */
 export function resolveDramaMentionPreview(
   library: DramaAssetLibrary,
-  globalCharacters: readonly DramaCharacter[],
+  globalAssets: readonly DramaAsset[],
   nodes: Array<{ id: string; data?: Record<string, unknown> }>,
   id: string,
   fallbackLabel: string,
 ): MentionChipPreview {
   const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId, mergeAll } = parseDramaMentionId(id);
-  const asset = findDramaAsset(library, assetId, globalCharacters);
-  const source = assetId.startsWith('global/') ? '全局角色库' : '创作资产库';
+  const asset = findDramaAsset(library, assetId, globalAssets);
+  const source = assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库';
   const preview: MentionChipPreview = {
     label: asset?.name || fallbackLabel,
     displayId: undefined,
@@ -95,7 +95,7 @@ export function resolveDramaMentionPreview(
     const reference = asset.kind === 'character'
       ? asset.referenceImages?.find((item) => item.id === referenceImageId)
       : undefined;
-    // 通用生成解析器允许回落主视觉；悬浮预览不能把已删除的指定图显示成另一张图。
+    // 指定图身份失效时不回落主视觉，与实际生成的精确引用一致。
     const image = reference && asset.kind === 'character'
       ? resolveDramaAssetImageRef({ ...asset, imageNodeId: undefined, imageUrl: undefined, referenceImages: [reference] }, sourceNodes, referenceImageId)
       : null;

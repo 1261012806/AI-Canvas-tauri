@@ -78,7 +78,7 @@ beforeEach(() => {
       { id: 'foreign', type: 'ai-text', data: { type: 'ai-text', label: '没有入边的节点', output: '不授权正文' } }],
     edges: [{ id: 'e', source: 'text', target: 'source' }],
     dramaAssets: { version: 2, characters: [character('project')], scenes: [{ id: 'scene', kind: 'scene', name: '街道', summary: '场景正文' }], props: [] },
-    globalCharacters: [character('global')], loadGlobalCharacters: mocks.loadGlobals, config: { assetFolders: ['D:\\registered'] } };
+    globalCharacters: [character('global')], globalScenes: [], globalProps: [], loadGlobalDramaAssets: mocks.loadGlobals, config: { assetFolders: ['D:\\registered'] } };
   mocks.loadGlobals.mockResolvedValue(undefined);
   mocks.globalFiles.mockResolvedValue([{ name: '背景.png', path: 'D:\\private\\背景.png', category: 'image', size: 12, source: 'global' }]);
   mocks.folderFiles.mockResolvedValue([{ name: '背景.png', path: 'D:\\private\\背景.png', category: 'image', size: 12, source: 'folder' },
@@ -118,6 +118,21 @@ describe('plugin prompt reference broker', () => {
     expect(await rewritePluginPromptReferences(reference.token, opts)).toBe('@drama{global/global#side:人物 global}');
     expect(JSON.stringify(page)).not.toMatch(/base64|设定正文|场景正文/);
     expect(mocks.loadGlobals).toHaveBeenCalledTimes(1);
+  });
+  it('全局场景和道具保留独立句柄与版本身份，不泄漏卡片正文', async () => {
+    mocks.state.globalScenes = [{ id: 'scene', kind: 'scene', name: '全局街道', summary: 'private-global-scene', imageUrl: 'data:image/png;base64,c2NlbmU=' }];
+    mocks.state.globalProps = [{ id: 'prop', kind: 'prop', name: '玉玺', summary: 'private-global-prop' }];
+    const opts = options();
+    const page = await queryPluginPromptMentions({ ...opts, source: 'characters' });
+    const scene = page.items.find((item) => item.label === '全局街道（全局）')!;
+    const prop = page.items.find((item) => item.label === '玉玺（全局）')!;
+    expect(scene.kind).toBe('scene');
+    expect(prop.kind).toBe('prop');
+    expect(await rewritePluginPromptReferences(scene.token, opts)).toBe('@drama{global/scene:全局街道}');
+    expect(await rewritePluginPromptReferences(prop.token, opts)).toBe('@drama{global/prop:玉玺}');
+    expect(JSON.stringify(page)).not.toMatch(/private-global|base64/);
+    mocks.state.globalScenes = [{ id: 'scene', kind: 'scene', name: '全局街道', summary: 'changed' }];
+    await expect(rewritePluginPromptReferences(scene.token, opts)).rejects.toThrow('已删除、变更或撤销');
   });
   it('mints exact reference picks backed by a drawable source node and revokes them when that node changes', async () => {
     const project = character('project');

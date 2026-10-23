@@ -4,7 +4,8 @@
 import type { AgentMode, AgentTask } from '../types/agent';
 import type { ConversationContextSummary } from '../types/chat';
 import type { ProjectMemory } from '../types/memory';
-import type { DramaCharacter } from '../types/dramaAssets';
+import type { DramaAssetWriteOptions, DramaCharacter, DramaProp, DramaScene } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import type { ProjectVisualDescription } from '../types/visualMemory';
 import type { AssetUsageRecord } from '../types/assetUsage';
 import { StorageError } from './storageDiagnostics';
@@ -19,6 +20,7 @@ import {
   STORE_CHAT_CONVERSATIONS,
   STORE_CHAT_MESSAGES,
   STORE_GLOBAL_CHARACTERS,
+  STORE_GLOBAL_DRAMA_ASSETS,
   STORE_HISTORY,
   STORE_METADATA,
   STORE_PROJECT_MEMORIES,
@@ -168,22 +170,87 @@ export async function updateProjectSnapshot(id: string, snapshot: string | undef
 // Global character library CRUD
 // ============================================
 
-export async function putGlobalCharacter(character: DramaCharacter): Promise<void> {
+async function putGlobalLibraryRecord(
+  storeName: string,
+  asset: DramaCharacter | DramaScene | DramaProp,
+  options: DramaAssetWriteOptions = {},
+): Promise<void> {
+  assertDramaAssetWriteCurrent(options);
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([storeName, STORE_METADATA], 'readwrite');
+    const store = tx.objectStore(storeName);
+    const abort = () => { try { tx.abort(); } catch { /* 已结束的事务无需再次中止。 */ } };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const current = store.get(asset.id);
+    current.onsuccess = () => {
+      try {
+        assertDramaAssetWriteCurrent(options);
+        if (current.result && current.result.kind !== asset.kind) throw new Error('资产分类已变化，请重新加载');
+        // 编辑器可能早于一次排序打开，人物正文保存不能覆盖最新手动顺序。
+        const next = asset.kind === 'character' && current.result
+          ? { ...asset, libraryOrder: (current.result as DramaCharacter).libraryOrder } : asset;
+        withRelocatedMedia(tx, next, (relocated) => {
+          try {
+            assertDramaAssetWriteCurrent(options);
+            store.put(relocated);
+          } catch (error) {
+            tx.abort();
+            reject(error);
+          }
+        });
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
+    };
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(tx.error ?? new Error('全局创作资产保存失败')); };
+  });
+}
+
+export async function putGlobalCharacter(character: DramaCharacter, options?: DramaAssetWriteOptions): Promise<void> {
+  return putGlobalLibraryRecord(STORE_GLOBAL_CHARACTERS, character, options);
+}
+
+export async function putGlobalDramaAsset(asset: DramaScene | DramaProp, options?: DramaAssetWriteOptions): Promise<void> {
+  return putGlobalLibraryRecord(STORE_GLOBAL_DRAMA_ASSETS, asset, options);
+}
+
+export async function getAllGlobalDramaAssets(): Promise<Array<DramaScene | DramaProp>> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_METADATA], 'readwrite');
-    const store = tx.objectStore(STORE_GLOBAL_CHARACTERS);
-    const current = store.get(character.id);
-    current.onsuccess = () => {
-      // 编辑器可能早于一次排序打开，正文保存不能覆盖最新手动顺序。
-      const existing = current.result as DramaCharacter | undefined;
-      const next = existing ? { ...character, libraryOrder: existing.libraryOrder } : character;
-      withRelocatedMedia(tx, next, (relocated) => store.put(relocated));
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error ?? new Error(`全局角色 ${character.id} 保存失败`));
+    const request = db.transaction(STORE_GLOBAL_DRAMA_ASSETS, 'readonly')
+      .objectStore(STORE_GLOBAL_DRAMA_ASSETS).getAll();
+    request.onsuccess = () => resolve(request.result as Array<DramaScene | DramaProp>);
+    request.onerror = () => reject(request.error);
   });
+}
+
+async function deleteGlobalLibraryRecord(storeName: string, id: string, options: DramaAssetWriteOptions = {}): Promise<void> {
+  assertDramaAssetWriteCurrent(options);
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const abort = () => { try { tx.abort(); } catch { /* 已结束的事务无需再次中止。 */ } };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const request = store.get(id);
+    request.onsuccess = () => {
+      try { assertDramaAssetWriteCurrent(options); store.delete(id); }
+      catch (error) { tx.abort(); reject(error); }
+    };
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(tx.error ?? new Error('全局创作资产删除失败')); };
+  });
+}
+
+export async function deleteGlobalDramaAsset(id: string, options?: DramaAssetWriteOptions): Promise<void> {
+  return deleteGlobalLibraryRecord(STORE_GLOBAL_DRAMA_ASSETS, id, options);
 }
 
 export async function getAllGlobalCharacters(): Promise<DramaCharacter[]> {
@@ -217,14 +284,8 @@ export async function putGlobalCharacterOrder(ids: string[]): Promise<void> {
   });
 }
 
-export async function deleteGlobalCharacter(id: string): Promise<void> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_GLOBAL_CHARACTERS, 'readwrite');
-    tx.objectStore(STORE_GLOBAL_CHARACTERS).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+export async function deleteGlobalCharacter(id: string, options?: DramaAssetWriteOptions): Promise<void> {
+  return deleteGlobalLibraryRecord(STORE_GLOBAL_CHARACTERS, id, options);
 }
 
 export async function clearGlobalCharacters(): Promise<void> {

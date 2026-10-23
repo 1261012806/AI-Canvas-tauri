@@ -17,7 +17,7 @@ vi.mock('../../src/services/videoBatchPlanning', () => ({ videoInputFingerprint:
 vi.mock('../../src/services/comfyPolling', () => ({
   comfyFetch: mocks.fetch, pollComfyHistory: mocks.poll, ComfyPendingError: class extends Error {},
 }));
-vi.mock('../../src/services/nodeReferenceService', () => ({ resolveNodeReferences: (value: string) => value }));
+vi.mock('../../src/services/nodeReferenceService', () => ({ resolveNodeReferences: (value: string) => value, resolveNodeReferencesAsync: async (value: string) => value }));
 vi.mock('../../src/services/pollManager', () => ({
   savePendingTask: vi.fn(), updatePendingTask: vi.fn(), removePendingTask: vi.fn(),
   registerNodePolling: vi.fn(() => undefined), cleanupNodePolling: vi.fn(),

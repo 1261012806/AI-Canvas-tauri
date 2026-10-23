@@ -3,7 +3,7 @@ import { lstat, open } from '@tauri-apps/plugin-fs';
 import type { DramaAsset, DramaAssetLibrary } from '../../types/dramaAssets';
 import { buildDramaMentionId, parseDramaMentionId } from '../../types/dramaAssets';
 import type { PluginInvocationResources, PluginPromptMentionItem, PluginPromptMentionPage, PluginPromptMentionSource } from '../../types/plugin';
-import { resolveDramaAssetImageRef } from '../dramaAssetPrompt';
+import { listGlobalDramaAssets, resolveDramaAssetImageRef } from '../dramaAssetPrompt';
 import { decodeDataUrlBytesAsync, sha256BytesHex } from '../mediaDataUrl';
 import { parseRasterImageDimensions, type RasterImageDimensions } from '../rasterImageDimensions';
 import { localMediaUrlToPath } from '../../utils/mediaUrl';
@@ -145,15 +145,16 @@ async function collectCandidates(source: PluginPromptMentionSource, options: Ref
     assertReferenceLive(options, bag);
     state = useAppStore!.getState();
     if (bag && !bag.globalLoaded) {
-      await state.loadGlobalCharacters().catch(() => { throw new Error('全局角色目录读取失败'); });
+      await state.loadGlobalDramaAssets().catch(() => { throw new Error('全局创作资产目录读取失败'); });
       assertReferenceLive(options, bag);
       bag.globalLoaded = true;
       state = useAppStore!.getState();
     }
     const projectIdentity = (asset: DramaAsset) => isDramaAssetIdentity(asset.id) && !asset.id.startsWith('global/');
     const all: DramaAsset[] = [...state.dramaAssets.characters.filter(projectIdentity),
-      ...state.globalCharacters.filter((character) => isDramaAssetIdentity(character.id)).map((character) => ({ ...character, id: `global/${character.id}` })),
-      ...state.dramaAssets.scenes.filter(projectIdentity), ...state.dramaAssets.props.filter(projectIdentity)];
+      ...state.dramaAssets.scenes.filter(projectIdentity), ...state.dramaAssets.props.filter(projectIdentity),
+      ...listGlobalDramaAssets(state).filter((asset) => isDramaAssetIdentity(asset.id) && !asset.id.startsWith('global/'))
+        .map((asset) => ({ ...asset, id: `global/${asset.id}` }))];
     const candidates: Candidate[] = [];
     // 既有解析器每次最多 20 项，分块复用以提供完整分页而非截断到首屏。
     for (let offset = 0; offset < all.length; offset += PAGE_SIZE) {
@@ -162,15 +163,16 @@ async function collectCandidates(source: PluginPromptMentionSource, options: Ref
         scenes: chunk.filter((item) => item.kind === 'scene'), props: chunk.filter((item) => item.kind === 'prop') };
       for (const item of resolveDramaMentionItems(library, '', 'ai-video')) {
         const asset = chunk.find((entry) => entry.id === item.id)!;
+        const sourceNodes = asset.id.startsWith('global/') ? [] : state.nodes;
         const label = safeLabel(`${item.name}${item.id.startsWith('global/') ? '（全局）' : ''}`);
-        const identity = JSON.stringify([asset, state.nodes.filter((node) => node.id === asset.imageNodeId
+        const identity = JSON.stringify([asset, sourceNodes.filter((node) => node.id === asset.imageNodeId
           || (asset.kind === 'character' && asset.referenceImages?.some((reference) => reference.sourceNodeId === node.id))).map((node) => node.data)]);
         const avatarId = asset.kind === 'character' ? asset.avatarReferenceImageId : undefined;
         const avatar = asset.kind === 'character' && avatarId ? asset.referenceImages?.find((reference) => reference.id === avatarId) : undefined;
-        const avatarSource = avatar?.sourceNodeId ? state.nodes.find((node) => node.id === avatar.sourceNodeId) : undefined;
+        const avatarSource = avatar?.sourceNodeId ? sourceNodes.find((node) => node.id === avatar.sourceNodeId) : undefined;
         const avatarUrl = avatarSource?.data.imageUrl || avatarSource?.data.thumbnailUrl || avatar?.imageUrl;
         // 头像裁剪只应用于实际选中的头像参考图，失效时沿用默认图。
-        const image = typeof avatarUrl === 'string' && avatarUrl.trim() ? avatarUrl : resolveDramaAssetImageRef(asset, state.nodes)?.imageUrl;
+        const image = typeof avatarUrl === 'string' && avatarUrl.trim() ? avatarUrl : resolveDramaAssetImageRef(asset, sourceNodes)?.imageUrl;
         const avatarDrawable = !!(typeof avatarUrl === 'string' && avatarUrl.trim());
         candidates.push({ source, sourceKey: item.id, label, kind: asset.kind,
           canonicalToken: `@drama{${item.id}:${safeLabel(item.name)}}`, identity,
@@ -178,9 +180,9 @@ async function collectCandidates(source: PluginPromptMentionSource, options: Ref
             badge: asset.kind === 'character' && (asset.referenceImages?.length ?? 0) > 1 ? `${asset.referenceImages!.length} 图`
               : !image ? '简介' : item.id.startsWith('global/') ? '全局' : undefined } });
         for (const [index, reference] of (item.referenceImages ?? []).entries()) {
-          const sourceNode = state.nodes.find((node) => node.id === reference.sourceNodeId);
+          const sourceNode = sourceNodes.find((node) => node.id === reference.sourceNodeId);
           const referenceUrl = sourceNode?.data.imageUrl || sourceNode?.data.thumbnailUrl || reference.imageUrl;
-          if (typeof referenceUrl !== 'string' || !referenceUrl.trim() || !resolveDramaAssetImageRef(asset, state.nodes, reference.id)) continue;
+          if (typeof referenceUrl !== 'string' || !referenceUrl.trim() || !resolveDramaAssetImageRef(asset, sourceNodes, reference.id)) continue;
           const id = buildDramaMentionId(item.id, reference.id);
           if (!isCanonicalIdentity(id) || parseDramaMentionId(id).referenceImageId !== reference.id) continue;
           candidates.push({ source, sourceKey: id, label: safeLabel(`${label} · 参考图 ${index + 1}`), kind: 'image',

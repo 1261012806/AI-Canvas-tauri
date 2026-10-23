@@ -27,6 +27,7 @@ vi.mock('../../src/services/pollManager', () => ({
 }));
 vi.mock('../../src/services/nodeReferenceService', () => ({
   resolveNodeReferences: (value: string) => value,
+  resolveNodeReferencesAsync: async (value: string) => value,
 }));
 
 import { comfyBaseUrlFor, probeComfyServer } from '../../src/services/comfyServers';

@@ -32,6 +32,7 @@ vi.mock('../../src/services/fs/assetIndex', () => ({
 import {
   getLastActiveProjectId,
   getProjectById,
+  putAssetIndex,
   saveProjectToDb,
   setLastActiveProjectId,
 } from '../../src/services/indexedDbService';
@@ -46,6 +47,38 @@ describe('project loading tolerates asset recovery failures', () => {
     mocks.resolveUniqueDestPath.mockImplementation(async (dir: string, name: string) => `${dir}/${name}`);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
+  });
+
+  it('项目场景道具保留全局主图身份，重开按全局索引恢复且不复制到项目目录', async () => {
+    const projectId = `project-global-library-${Date.now()}`;
+    await putAssetIndex({ assetId: 'global-scene-shared', path: '/global/new-scene.png', relativePath: 'new-scene.png',
+      rootPath: '/global', source: 'global', fingerprint: '1:1', size: 1, mtimeMs: 1, status: 'online', updatedAt: 1 });
+    const scene = { id: 'scene', kind: 'scene' as const, name: '客厅', key: 'scene', summary: '', visualNotes: '',
+      importance: 'main' as const, confirmed: true, source: 'manual' as const, createdAt: 1, updatedAt: 2,
+      imageAssetId: 'global-scene-shared', imageRelativePath: 'old-scene.png', imageUrl: 'asset:///global/old-scene.png' };
+    mocks.identifyAsset.mockClear(); mocks.writeFile.mockClear();
+    await saveProject({ id: projectId, name: '全局复用', createdAt: 1, updatedAt: 2, nodes: [], edges: [],
+      dramaAssets: { version: 2, characters: [], scenes: [scene], props: [{ ...scene, id: 'prop', kind: 'prop' }] } });
+    const persisted = await getProjectById(projectId) as ProjectSaveData | null;
+    expect(persisted?.dramaAssets?.scenes[0]).toMatchObject({ imageAssetId: 'global-scene-shared', imageRelativePath: 'new-scene.png' });
+    const loaded = await loadProjectData(projectId);
+    expect(loaded?.dramaAssets?.scenes[0].imageUrl).toBe('asset:///global/new-scene.png');
+    expect(loaded?.dramaAssets?.props[0].imageUrl).toBe('asset:///global/new-scene.png');
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('全局主图缺失时保留精确身份并清空旧图，不回落到项目同名图片', async () => {
+    const projectId = `project-global-missing-${Date.now()}`;
+    await saveProjectToDb({ id: projectId, name: '缺图', createdAt: 1, updatedAt: 2, nodes: [], edges: [],
+      dramaAssets: { version: 2, characters: [], props: [], scenes: [{
+        id: 'scene', kind: 'scene', name: '客厅', key: 'scene', summary: '', visualNotes: '', importance: 'main',
+        confirmed: true, source: 'manual', createdAt: 1, updatedAt: 2, imageAssetId: 'global-image-no-index',
+        imageRelativePath: 'scene.png', imageUrl: 'asset:///old/scene.png',
+      }] } } as Parameters<typeof saveProjectToDb>[0]);
+    const loaded = await loadProjectData(projectId);
+    expect(loaded?.dramaAssets?.scenes[0]).toMatchObject({ imageAssetId: 'global-image-no-index', imageUrl: undefined });
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
   });
 
   it('returns the persisted canvas when scanning and indexing an asset fail', async () => {

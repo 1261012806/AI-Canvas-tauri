@@ -13,7 +13,9 @@ import type { BaseNodeData } from '../../../src/types';
 import { emptyDramaAssetLibrary, type DramaAsset } from '../../../src/types/dramaAssets';
 
 const executeGeneration = vi.hoisted(() => vi.fn(async () => ({ success: true })));
+const loadGlobalAssets = vi.hoisted(() => vi.fn<() => Promise<DramaAsset[]>>());
 vi.mock('../../../src/services/generationService', () => ({ executeGeneration }));
+vi.mock('../../../src/services/globalDramaAssetService', () => ({ loadGlobalDramaAssetCards: loadGlobalAssets }));
 
 function node(
   id: string,
@@ -46,6 +48,7 @@ function context(): AgentToolContext {
 beforeEach(() => {
   clearAgentToolRegistryForTests();
   executeGeneration.mockClear();
+  loadGlobalAssets.mockReset().mockResolvedValue([]);
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
     currentProjectId: 'p1',
@@ -59,6 +62,58 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('MCP 冷查询、创建与更新可优先使用已存全局场景，且不要求先打开库', async () => {
+    const global: DramaAsset = { id: 'global-scene', kind: 'scene', name: '全局街道', key: 'street', summary: '', visualNotes: '',
+      importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1,
+      imageUrl: useAppStore.getState().nodes[0].data.imageUrl };
+    loadGlobalAssets.mockResolvedValue([global]);
+    const mcp = { ...context(), conversationId: 'mcp-control-p1' };
+    const queried = await getAgentTool('canvas_query')!.execute(mcp, { nodeIds: ['n1'], detail: true });
+    expect(JSON.parse(queried.modelContent).nodes[0].preferredMention).toBe('@drama{global/global-scene:全局街道}');
+    expect(useAppStore.getState().globalScenes).toEqual([]);
+    expect((await getAgentTool('canvas_create_nodes')!.execute(mcp, { nodes: [
+      { type: 'ai-video', label: '镜头', prompt: '@{n1:场景} @{n2:剧本}' },
+    ] })).status).toBe('success');
+    const created = useAppStore.getState().nodes.at(-1)!;
+    expect(created.data.prompt).toBe('@drama{global/global-scene:全局街道} @{n2:剧本}');
+    expect(useAppStore.getState().edges.filter((edge) => edge.target === created.id).map((edge) => edge.source)).toEqual(['n2']);
+    await getAgentTool('canvas_update_nodes')!.execute(mcp, { nodeIds: [created.id], prompt: '@{n1:新引用}' });
+    expect(useAppStore.getState().nodes.at(-1)?.data.prompt).toBe('@drama{global/global-scene:全局街道}');
+  });
+
+  it('全局目录读取失败仍可查询画布，并保留原节点引用与真实连线', async () => {
+    loadGlobalAssets.mockRejectedValue(new Error('private-path-do-not-expose'));
+    const mcp = { ...context(), conversationId: 'mcp-control-p1' };
+    const queried = await getAgentTool('canvas_query')!.execute(mcp, { nodeIds: ['n1'], detail: true });
+    expect(queried.status).toBe('success');
+    expect(JSON.parse(queried.modelContent).nodes[0].preferredMention).toBeUndefined();
+    expect(queried.modelContent).not.toContain('private-path');
+    expect((await getAgentTool('canvas_create_nodes')!.execute(mcp, { nodes: [
+      { type: 'ai-video', label: '镜头', prompt: '@{n1:原节点}' },
+    ] })).status).toBe('success');
+    const created = useAppStore.getState().nodes.at(-1)!;
+    expect(created.data.prompt).toBe('@{n1:原节点}');
+    expect(useAppStore.getState().edges.some((edge) => edge.target === created.id && edge.source === 'n1')).toBe(true);
+  });
+
+  it.each(['project', 'revision'] as const)('全局目录读取期间 %s 变化阻止旧 MCP 请求写入', async (change) => {
+    let finish!: (assets: DramaAsset[]) => void;
+    loadGlobalAssets.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const mcp = { ...context(), conversationId: 'mcp-control-p1' };
+    const operation = getAgentTool('canvas_create_nodes')!.execute(mcp, { nodes: [
+      { type: 'ai-video', label: '旧请求', prompt: '@{n1:场景}' },
+    ] });
+    // 让动态 import 进入已登记的读取，随后才切换项目或画布版本。
+    await vi.waitFor(() => expect(loadGlobalAssets).toHaveBeenCalledTimes(1));
+    if (change === 'project') useAppStore.setState({ currentProjectId: 'p2' });
+    else useAppStore.getState().incrementRevision();
+    const nodes = useAppStore.getState().nodes;
+    finish([]);
+    await expect(operation).rejects.toThrow('项目或画布已变化');
+    expect(useAppStore.getState().nodes).toBe(nodes);
+    expect(useAppStore.getState().history).toEqual([]);
+  });
+
   it('creates a video from a stable shot reference with one real sheet edge and respects explicit duration', async () => {
     useAppStore.setState({ projectLoadStatus: 'ready', nodes: [node('sheet', {
       type: 'ai-shotlist', label: '分镜', shotlistRows: [{ id: 'r', shotNo: '1', content: '她合上书', duration: 4.3 }],

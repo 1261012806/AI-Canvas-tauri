@@ -1,8 +1,8 @@
 /**
  * 注册短剧资产（人物/场景/道具）与角色库工具：读取让 Agent 先发现已有设定，
- * 再用 @drama{id:name} 引用它们；写入（新增/修改/删除）一律经 Policy 审批后才落库。
+ * 再用 @drama{id:name} 引用它们；写入（新增/修改/删除）一律经 Policy 授权后才落库。
  *
- * scope=project 操作当前项目资产库，scope=global 操作跨项目角色库（只有角色）。
+ * scope=project 操作当前项目资产库，scope=global 操作跨项目的人物、场景与道具。
  */
 import { useAppStore } from '../../../store/useAppStore';
 import type { CharacterLibraryScope } from '../../../store/store.dramaAssets';
@@ -15,8 +15,8 @@ import type {
   DramaAssetKind,
   DramaCharacter,
 } from '../../../types/dramaAssets';
-import { buildDramaMentionId, buildDramaVoiceMentionId, formatDramaMention, normalizeDramaCharacter } from '../../../types/dramaAssets';
-import { findDramaAsset, formatDramaAssetTextBrief, listDramaAssetsFlat, resolveDramaAssetImageRef } from '../../dramaAssetPrompt';
+import { buildDramaActionMentionId, buildDramaMentionId, buildDramaVoiceMentionId, formatDramaMention, normalizeDramaCharacter } from '../../../types/dramaAssets';
+import { formatDramaAssetTextBrief, listDramaAssetsFlat, resolveDramaAssetImageRef } from '../../dramaAssetPrompt';
 import {
   registerAgentTool,
   type AgentToolExecutionResult,
@@ -41,15 +41,32 @@ function authorizeCurrentProject(context: { projectId: string }) {
     : { allowed: false, reason: '目标项目当前未加载，不能读取其他项目的短剧资产' };
 }
 
-/** 全局角色库不属于任何项目，只有 project 作用域需要校验当前项目。 */
+/** 全局创作资产不属于任何项目，只有 project 作用域需要校验当前项目。 */
 function authorizeScope(context: { projectId: string }, input: { scope?: CharacterLibraryScope }) {
   return input.scope === 'global' ? { allowed: true } : authorizeCurrentProject(context);
+}
+
+async function loadScopedAssets(scope: CharacterLibraryScope | undefined): Promise<void> {
+  if (scope === 'global') await useAppStore.getState().loadGlobalDramaAssets();
+}
+
+function scopedContextFailure(context: AgentToolContext, scope?: CharacterLibraryScope): AgentToolExecutionResult | undefined {
+  const authorization = authorizeScope(context, { scope });
+  const message = context.signal?.aborted ? '操作已取消' : !authorization.allowed ? '目标项目当前未加载，请重新查询资产' : undefined;
+  return message ? { status: 'error', summary: message, modelContent: message } : undefined;
+}
+
+function scopedWriteOptions(context: AgentToolContext, scope?: CharacterLibraryScope) {
+  return { signal: context.signal, assertCurrent: () => {
+    const failure = scopedContextFailure(context, scope);
+    if (failure) throw new Error(failure.summary);
+  } };
 }
 
 function listScopedAssets(scope: CharacterLibraryScope | undefined): DramaAsset[] {
   const store = useAppStore.getState();
   return scope === 'global'
-    ? store.globalCharacters
+    ? [...store.globalCharacters, ...store.globalScenes, ...store.globalProps]
     : listDramaAssetsFlat(store.dramaAssets);
 }
 
@@ -57,13 +74,10 @@ function findScopedAsset(
   scope: CharacterLibraryScope | undefined,
   assetId: string,
 ): DramaAsset | undefined {
-  const store = useAppStore.getState();
-  return scope === 'global'
-    ? store.globalCharacters.find((item) => item.id === assetId)
-    : findDramaAsset(store.dramaAssets, assetId);
+  return listScopedAssets(scope).find((item) => item.id === assetId);
 }
 
-/** 全局角色的引用必须携带作用域，不能与项目内同 ID 的资产混淆。 */
+/** 全局资产的引用必须携带作用域，不能与项目内同 ID 的资产混淆。 */
 function assetMention(asset: DramaAsset, scope?: CharacterLibraryScope, pick?: string): string {
   return formatDramaMention(buildDramaMentionId(scope === 'global' ? `global/${asset.id}` : asset.id, pick), asset.name);
 }
@@ -78,10 +92,11 @@ function summarizeAsset(asset: DramaAsset, scope?: CharacterLibraryScope) {
     summary: asset.summary || undefined,
     importance: asset.importance,
     mention: assetMention(asset, scope),
-    imageReady: Boolean(resolveDramaAssetImageRef(asset, useAppStore.getState().nodes)),
+    imageReady: Boolean(resolveDramaAssetImageRef(asset, scope === 'global' ? [] : useAppStore.getState().nodes)),
     ...(scope !== 'global' ? { imageNodeId: asset.imageNodeId } : {}),
     referenceImageCount: character?.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
     voiceClipCount: character?.voiceClips?.length ?? 0,
+    actionCount: character?.actions?.length ?? 0,
     hasVoice: Boolean(character?.primaryVoiceClipId),
   };
 }
@@ -143,14 +158,24 @@ async function bindAssetMedia(
   context: AgentToolContext, input: BindAssetMediaInput, audio: boolean,
 ): Promise<AgentToolExecutionResult> {
   const fail = (message: string): AgentToolExecutionResult => ({ status: 'error', summary: message, modelContent: message });
-  const store = useAppStore.getState();
-  // 即使目标为全局角色，源节点也必须来自本次调用的当前画布。
-  if (store.currentProjectId !== context.projectId) return fail('目标项目当前未加载');
-  if (context.baseRevision !== undefined && context.baseRevision !== store.getCurrentRevision()) {
-    return fail('画布已变更，请重新查询源节点后绑定');
-  }
-  if (context.signal?.aborted) return fail('操作已取消');
+  // 全局目标也只能绑定本次调用的当前画布；加载和媒体落盘期间继续复核。
+  const assertCurrent = () => {
+    const current = useAppStore.getState();
+    if (current.currentProjectId !== context.projectId) throw new Error('目标项目当前未加载');
+    if (context.baseRevision !== undefined && context.baseRevision !== current.getCurrentRevision()) {
+      throw new Error('画布已变更，请重新查询源节点后绑定');
+    }
+    if (context.signal?.aborted) throw new Error('操作已取消');
+  };
   const scope = input.scope ?? 'project';
+  try {
+    assertCurrent();
+    await loadScopedAssets(scope);
+    assertCurrent();
+  } catch {
+    return fail('资产加载失败或画布已变化，请重新查询后绑定');
+  }
+  const store = useAppStore.getState();
   const asset = findScopedAsset(scope, input.assetId);
   if (!asset || (audio && asset.kind !== 'character')) return fail('目标资产不存在或类型不匹配，请先查询资产库');
   const node = store.nodes.find((item) => item.id === input.nodeId);
@@ -160,8 +185,20 @@ async function bindAssetMedia(
   const mediaUrl = audio ? node.data.audioUrl : node.data.imageUrl ?? node.data.thumbnailUrl;
   if (!mediaUrl?.trim()) return fail('源节点没有可用媒体');
   if (!audio && asset.kind !== 'character') {
-    const reused = asset.imageNodeId === node.id && asset.imageUrl === mediaUrl;
-    if (!reused) store.bindDramaAssetImage(asset.kind, asset.id, node.id, mediaUrl);
+    const reused = scope === 'global'
+      ? Boolean(asset.imageAssetId && asset.imageAssetId === node.data.assetId && asset.imageUrl === mediaUrl)
+      : asset.imageNodeId === node.id && asset.imageUrl === mediaUrl;
+    if (scope === 'global') {
+      try {
+        const saved = await store.bindGlobalDramaAssetImage(asset.kind, asset.id, node.id, {
+          signal: context.signal, assertCurrent,
+        });
+        assertCurrent();
+        if (!saved) return fail('全局资产参考图保存失败，请重新查询资产后重试');
+      } catch {
+        return fail('全局资产参考图保存失败或画布已变化，请查询资产核对，勿自动重试');
+      }
+    } else if (!reused) store.bindDramaAssetImage(asset.kind, asset.id, node.id, mediaUrl);
     return {
       status: 'success', summary: '已绑定资产参考图',
       modelContent: JSON.stringify({ assetId: asset.id, kind: asset.kind, scope, nodeId: node.id,
@@ -189,12 +226,13 @@ async function bindAssetMedia(
         kind: (input.kind ?? existing?.kind ?? 'timbre') as CharacterVoiceKind,
         label: input.label?.trim() || character.voiceClips?.find((item) => item.id === media.id)?.label || node.data.label,
         transcript: input.transcript ?? character.voiceClips?.find((item) => item.id === media.id)?.transcript ?? '',
-      }, { makePrimary: input.makePrimary })
+      }, { makePrimary: input.makePrimary, signal: context.signal, assertCurrent })
       : await store.addCharacterReferenceImage(scope, character.id, {
         ...existing, ...media, imageUrl: mediaUrl,
         kind: (input.kind ?? existing?.kind ?? 'other') as CharacterReferenceKind,
         prompt: input.prompt ?? character.referenceImages?.find((item) => item.id === media.id)?.prompt ?? '',
-      }, { makePrimary: input.makePrimary === true || input.kind === 'primary' });
+      }, { makePrimary: input.makePrimary === true || input.kind === 'primary', signal: context.signal, assertCurrent });
+    assertCurrent();
     if (!saved) return fail('角色素材保存失败');
     const mentionAssetId = scope === 'global' ? `global/${character.id}` : character.id;
     const mentionId = audio ? buildDramaVoiceMentionId(mentionAssetId, media.id) : buildDramaMentionId(mentionAssetId, media.id);
@@ -290,7 +328,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       description:
         '列出已入库的人物、场景与道具，含可直接写进提示词的 @drama 引用串。'
         + '优先使用库引用，不为这些素材重新导入节点或连线；imageReady=false 表示只有设定，须先生成/绑定图片再用于 Picture 参考。'
-        + 'scope=project（默认）查当前项目资产库，scope=global 查跨项目角色库。'
+        + 'scope=project（默认）查当前项目资产库，scope=global 查跨项目的人物、场景与道具。'
         + '需要某个资产的完整设定时再调用 drama_asset_get。',
       inputSchema: listInputSchema,
       effect: 'read',
@@ -298,7 +336,10 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       summarizeInput: (input) => input.kind
         ? `查询短剧资产（${input.kind}）`
         : '查询短剧资产',
-      execute: async (_context, input): Promise<AgentToolExecutionResult> => {
+      execute: async (context, input): Promise<AgentToolExecutionResult> => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
         const assets = listScopedAssets(input.scope)
           .filter((asset) => !input.kind || asset.kind === input.kind)
           .map((asset) => summarizeAsset(asset, input.scope));
@@ -314,12 +355,15 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       title: '读取短剧资产',
       description:
         '按 ID 读取一个人物、场景或道具的完整设定简报（身份、外形、声音、关系等），'
-        + '用于生成提示词或分镜时保持设定一致。',
+        + '人物返回参考图、声音片段及动作素材的精确 mention，可直接用于下游提示词；不返回媒体地址或本地路径。',
       inputSchema: getInputSchema,
       effect: 'read',
       authorize: authorizeScope,
       summarizeInput: (input) => `读取短剧资产 ${input.assetId}`,
-      execute: async (_context, input): Promise<AgentToolExecutionResult> => {
+      execute: async (context, input): Promise<AgentToolExecutionResult> => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
         const asset = findScopedAsset(input.scope, input.assetId);
         if (!asset) {
           return {
@@ -329,6 +373,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
           };
         }
         const character = asset.kind === 'character' ? asset as DramaCharacter : undefined;
+        const mentionAssetId = input.scope === 'global' ? `global/${asset.id}` : asset.id;
         return {
           status: 'success',
           summary: `已读取「${asset.name}」`,
@@ -337,7 +382,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
             kind: asset.kind,
             name: asset.name,
             mention: assetMention(asset, input.scope),
-            imageReady: Boolean(resolveDramaAssetImageRef(asset, useAppStore.getState().nodes)),
+            imageReady: Boolean(resolveDramaAssetImageRef(asset, input.scope === 'global' ? [] : useAppStore.getState().nodes)),
             ...(input.scope !== 'global' ? { imageNodeId: asset.imageNodeId } : {}),
             brief: formatDramaAssetTextBrief(asset),
             referenceImageCount: character?.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
@@ -352,6 +397,14 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
               label: clip.label,
               transcript: clip.transcript || undefined,
               isPrimary: clip.id === character.primaryVoiceClipId,
+              mention: formatDramaMention(buildDramaVoiceMentionId(mentionAssetId, clip.id), asset.name),
+            })) ?? [],
+            actions: character?.actions?.map((action) => ({
+              id: action.id, name: action.name, category: action.category, prompt: action.prompt,
+              media: action.media?.map((media) => ({
+                id: media.id, kind: media.kind, name: media.name,
+                mention: formatDramaMention(buildDramaActionMentionId(mentionAssetId, action.id, media.id), asset.name),
+              })) ?? [],
             })) ?? [],
           }),
         };
@@ -362,28 +415,26 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       title: '新增或修改资产',
       description: [
         '新增或修改人物、场景、道具设定。给 assetId 表示改已有资产，省略则新建。',
-        'scope=project（默认）写当前项目资产库；scope=global 写跨项目角色库，只能是 character。',
+        'scope=project（默认）写当前项目资产库；scope=global 写跨项目的人物、场景与道具。',
         '专属字段按类型区分：人物 identity/personality/wardrobeDefault/voiceNotes，',
         '场景 placeType/timeOfDay/atmosphere/spatialNotes，道具 ownerName/category/significance。',
-        '人物/场景/道具的已有参考图通过 drama_reference_image_add 从画布节点绑定；新建 ai-image 时传 dramaAssetId，生成后自动回填。人物音色用 drama_voice_add。返回的 mention 应优先用于下游提示词，减少节点连线。',
+        '人物/场景/道具的已有参考图通过 drama_reference_image_add 从画布节点绑定；仅项目资产的新建 ai-image 可传 dramaAssetId，生成后自动回填。全局资产先生成图片，再以 scope=global 绑定。人物音色用 drama_voice_add。返回的 mention 应优先用于下游提示词，减少节点连线。',
       ].join(''),
       inputSchema: upsertInputSchema,
       effect: 'asset_write',
-      authorize: (context, input) => {
-        if (input.scope === 'global' && input.kind !== 'character') {
-          return { allowed: false, reason: '全局角色库只保存人物资产' };
-        }
-        return authorizeScope(context, input);
-      },
+      authorize: authorizeScope,
       summarizeInput: (input) => {
         const target = input.name || input.assetId || '新资产';
         return `${input.assetId ? '修改' : '新增'}${input.scope === 'global' ? '全局' : '项目'}资产「${target}」`;
       },
-      execute: async (_context, input): Promise<AgentToolExecutionResult> => {
+      execute: async (context, input): Promise<AgentToolExecutionResult> => {
         const collected = collectAssetPatch(input);
         if ('error' in collected) {
           return { status: 'error', summary: collected.error, modelContent: collected.error };
         }
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
         const existing = input.assetId ? findScopedAsset(input.scope, input.assetId) : undefined;
         if (input.assetId && !existing) {
           const message = `资产 ${input.assetId} 不存在，新建时请省略 assetId`;
@@ -417,11 +468,20 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         } as DramaAsset;
 
         const store = useAppStore.getState();
-        if (input.scope === 'global' || merged.kind === 'character') {
+        const options = scopedWriteOptions(context, input.scope);
+        if (input.scope === 'global') {
+          const saved = await store.saveGlobalDramaAsset(merged, options);
+          const afterSaveFailure = scopedContextFailure(context, input.scope);
+          if (afterSaveFailure) return afterSaveFailure;
+          if (!saved) return { status: 'error', summary: '全局资产保存失败', modelContent: '全局资产保存失败，请重新查询后核对' };
+        } else if (merged.kind === 'character') {
           const saved = await store.saveCharacterCard(
             input.scope ?? 'project',
             normalizeDramaCharacter(merged as DramaCharacter),
+            options,
           );
+          const afterSaveFailure = scopedContextFailure(context, input.scope);
+          if (afterSaveFailure) return afterSaveFailure;
           if (!saved) {
             return { status: 'error', summary: '角色保存失败', modelContent: '角色保存失败' };
           }
@@ -446,8 +506,8 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       id: 'drama_asset_delete',
       title: '删除资产',
       description:
-        '从项目资产库或全局角色库删除一个资产。资产库没有撤销，删除后只能重新录入，'
-        + '每次都需要用户二次确认。画布上已生成的图像节点不会被删除。',
+        '从项目资产库或全局创作资产库删除一个人物、场景或道具。资产库没有撤销，删除后只能重新录入，'
+        + '按当前模式执行删除权限策略。保留共用媒体文件与画布上的图像节点。',
       inputSchema: deleteInputSchema,
       effect: 'permanent_delete',
       authorize: authorizeScope,
@@ -455,7 +515,10 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         const asset = findScopedAsset(input.scope, input.assetId);
         return `删除${input.scope === 'global' ? '全局' : '项目'}资产「${asset?.name ?? input.assetId}」`;
       },
-      execute: async (_context, input): Promise<AgentToolExecutionResult> => {
+      execute: async (context, input): Promise<AgentToolExecutionResult> => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
         const asset = findScopedAsset(input.scope, input.assetId);
         if (!asset) {
           const message = `资产 ${input.assetId} 不存在`;
@@ -463,9 +526,11 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         }
         const store = useAppStore.getState();
         if (input.scope === 'global') {
-          const deleted = await store.deleteGlobalCharacter(input.assetId);
+          const deleted = await store.deleteGlobalDramaAsset(asset.kind, input.assetId, scopedWriteOptions(context, input.scope));
+          const afterDeleteFailure = scopedContextFailure(context, input.scope);
+          if (afterDeleteFailure) return afterDeleteFailure;
           if (!deleted) {
-            return { status: 'error', summary: '全局角色删除失败', modelContent: '全局角色删除失败' };
+            return { status: 'error', summary: '全局资产删除失败', modelContent: '全局资产删除失败' };
           }
         } else {
           store.deleteDramaAsset(asset.kind, input.assetId);
@@ -487,7 +552,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       description: (audio ? '把当前画布中已有音频产物绑定到指定角色。' : '把当前画布中已有图片绑定到人物、场景或道具；已生成的场景/道具也必须调用本工具关联，不能只录入文字。')
         + '本机文件先用 file_import_media_to_canvas 导入，再传 nodeId；不接受路径或 URL。'
         + (audio ? 'scope 支持 project/global，仅绑定角色声音，重复绑定复用素材 ID，makePrimary 可设主音色。'
-          : 'scope=project 支持人物、场景、道具，global 仅角色；角色重复绑定复用素材 ID，makePrimary 可设主素材，场景/道具只有一张主参考图。')
+          : 'scope=project/global 均支持人物、场景、道具；全局图片保存为独立受管素材。角色重复绑定复用素材 ID，makePrimary 可设主素材，场景/道具只有一张主参考图。')
         + '不生成媒体，不隐藏或修改源节点。返回可直接写进下游提示词的库引用；库引用不需要额外连线。',
       inputSchema: characterMediaSchema(audio), effect: 'asset_write',
       authorize: authorizeCurrentProject,
@@ -504,12 +569,18 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       } },
       effect: 'asset_write',
       authorize: authorizeScope,
-      execute: async (_context, input) => {
+      execute: async (context, input) => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
         const asset = findScopedAsset(input.scope, input.assetId);
         if (asset?.kind !== 'character' || !asset.voiceClips?.some((clip) => clip.id === input.clipId)) {
           return { status: 'error', summary: '角色声音片段不存在', modelContent: '角色声音片段不存在' };
         }
-        const saved = await useAppStore.getState().updateCharacterVoiceClip(input.scope ?? 'project', asset.id, input.clipId, { kind: input.kind, label: input.label?.trim(), transcript: input.transcript });
+        const saved = await useAppStore.getState().updateCharacterVoiceClip(input.scope ?? 'project', asset.id, input.clipId,
+          { kind: input.kind, label: input.label?.trim(), transcript: input.transcript }, scopedWriteOptions(context, input.scope));
+        const afterSaveFailure = scopedContextFailure(context, input.scope);
+        if (afterSaveFailure) return afterSaveFailure;
         return saved ? { status: 'success', summary: '已更新角色声音片段', modelContent: JSON.stringify({ assetId: asset.id, clipId: input.clipId }) } : { status: 'error', summary: '角色声音更新失败', modelContent: '角色声音更新失败' };
       },
     }),
@@ -520,8 +591,14 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       inputSchema: { type: 'object', required: ['assetId', 'clipId'], additionalProperties: false, properties: { assetId: { type: 'string', minLength: 1, maxLength: 160 }, clipId: { type: 'string', minLength: 1, maxLength: 160 }, scope: scopeProperty } },
       effect: 'asset_write',
       authorize: authorizeScope,
-      execute: async (_context, input) => {
-        const saved = await useAppStore.getState().setCharacterPrimaryVoice(input.scope ?? 'project', input.assetId, input.clipId);
+      execute: async (context, input) => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
+        const saved = await useAppStore.getState().setCharacterPrimaryVoice(input.scope ?? 'project', input.assetId, input.clipId,
+          scopedWriteOptions(context, input.scope));
+        const afterSaveFailure = scopedContextFailure(context, input.scope);
+        if (afterSaveFailure) return afterSaveFailure;
         return saved ? { status: 'success', summary: '已设置角色主声音', modelContent: JSON.stringify({ assetId: input.assetId, clipId: input.clipId }) } : { status: 'error', summary: '角色或声音片段不存在', modelContent: '角色或声音片段不存在' };
       },
     }),
@@ -532,8 +609,14 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       inputSchema: { type: 'object', required: ['assetId', 'clipId'], additionalProperties: false, properties: { assetId: { type: 'string', minLength: 1, maxLength: 160 }, clipId: { type: 'string', minLength: 1, maxLength: 160 }, scope: scopeProperty } },
       effect: 'permanent_delete',
       authorize: authorizeScope,
-      execute: async (_context, input) => {
-        const deleted = await useAppStore.getState().removeCharacterVoiceClip(input.scope ?? 'project', input.assetId, input.clipId);
+      execute: async (context, input) => {
+        await loadScopedAssets(input.scope);
+        const failure = scopedContextFailure(context, input.scope);
+        if (failure) return failure;
+        const deleted = await useAppStore.getState().removeCharacterVoiceClip(input.scope ?? 'project', input.assetId, input.clipId,
+          scopedWriteOptions(context, input.scope));
+        const afterDeleteFailure = scopedContextFailure(context, input.scope);
+        if (afterDeleteFailure) return afterDeleteFailure;
         return deleted ? { status: 'success', summary: '已删除角色声音片段', modelContent: JSON.stringify({ deleted: true, assetId: input.assetId, clipId: input.clipId }) } : { status: 'error', summary: '角色或声音片段不存在', modelContent: '角色或声音片段不存在' };
       },
     }),

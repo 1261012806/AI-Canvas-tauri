@@ -11,7 +11,7 @@ import { executeWorkflowApi } from '../workflowApi/workflowApiAdapter';
 import { parseWorkflowApiFields } from '../workflowApi/workflowApiConfig';
 import { getPendingTasksForProject } from '../pollManager';
 import { DEFAULT_BASE_URLS } from '../../constants/api';
-import { resolveNodeReferences } from '../nodeReferenceService';
+import { resolveNodeReferencesAsync } from '../nodeReferenceService';
 import { expandShotlistRowMentions } from '../shotlistPromptService';
 import { generateDreaminaVideo } from '../dreaminaService';
 import { executeComfyUIVideoGenerate } from '../comfyWorkflowService';
@@ -548,6 +548,12 @@ export async function generateVideo(
     ...(expandedInputs ? { workflowInputs: refmodInputs.workflowInputs } : {}),
     ...(refmodInputs.comfyRefmods.length ? { comfyRefmods: refmodInputs.comfyRefmods } : {}),
   };
+  if (`${rawPrompt}\n${JSON.stringify(params.workflowInputs ?? {})}`.includes('@drama{global/')) {
+    const owner = useAppStore.getState();
+    await owner.loadGlobalDramaAssets();
+    if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+    if (useAppStore.getState().currentProjectId !== owner.currentProjectId) throw new Error('项目已切换，请重新生成视频');
+  }
   if (params.comfyRefmods?.length) {
     const captured = useAppStore.getState();
     const workflow = captured.workflows.find((item) => item.id === params.workflowId);
@@ -579,7 +585,7 @@ export async function generateVideo(
     };
   }
   // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
-  const prompt = resolveNodeReferences(rawPrompt);
+  const prompt = await resolveNodeReferencesAsync(rawPrompt);
 
   // ComfyUI 工作流执行路径：连线音频兜底填充工作流的 audio IO 节点（唇形同步等）
   if (params.workflowId) {

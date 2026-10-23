@@ -103,8 +103,8 @@ describe('resolveDramaAssetImageRef 指定参考图', () => {
     expect(resolveDramaAssetImageRef(character(), [], 'ref-side')?.imageUrl).toBe('side.png');
   });
 
-  it('指定的参考图不存在时回落到主视觉，而不是没有图', () => {
-    expect(resolveDramaAssetImageRef(character(), [], 'ref-gone')?.imageUrl).toBe('front.png');
+  it('指定的参考图不存在时不替换为主视觉', () => {
+    expect(resolveDramaAssetImageRef(character(), [], 'ref-gone')).toBeNull();
   });
 });
 

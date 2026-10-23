@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import type { AssetFolderEntry, AssetFolderSelection } from '../../services/fileService';
+import type { DramaAssetKind } from '../../types/dramaAssets';
 
 export interface AssetFolderNavigationProps {
   folders: AssetFolderEntry[];
@@ -18,6 +19,9 @@ export interface AssetFolderNavigationProps {
   onCopy: (selection: AssetFolderSelection) => void;
   onPaste: (selection: AssetFolderSelection) => void;
   dropTarget?: AssetFolderSelection | null;
+  creativeKind?: DramaAssetKind | null;
+  creativeCounts?: Record<DramaAssetKind, number>;
+  onSelectCreative?: (kind: DramaAssetKind) => void;
 }
 
 function folderKey(folder: AssetFolderEntry): string {
@@ -30,6 +34,7 @@ const folderDropClass = ' outline outline-1 outline-dashed outline-brand -outlin
 export default function AssetFolderNavigation({
   folders, selection, totalCount, globalCount, compact, loading, onSelect, onRemove,
   globalRootPath, onCreate, onOpen, onCopy, onPaste, dropTarget,
+  creativeKind, creativeCounts, onSelectCreative,
 }: AssetFolderNavigationProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ selection: AssetFolderSelection; label: string; x: number; y: number } | null>(null);
@@ -89,7 +94,7 @@ export default function AssetFolderNavigation({
     const isExpanded = expanded[key] ?? (folder.parentRelativePath === null
       || selection.kind === 'folder' && selection.rootPath === folder.rootPath
       && selection.relativePath.startsWith(`${folder.relativePath}/`));
-    const selected = selection.kind === 'folder' && selection.rootPath === folder.rootPath
+    const selected = !creativeKind && selection.kind === 'folder' && selection.rootPath === folder.rootPath
       && selection.relativePath === folder.relativePath;
     const receiving = dropTarget?.kind === 'folder' && dropTarget.rootPath === folder.rootPath && dropTarget.relativePath === folder.relativePath;
     return (
@@ -134,15 +139,33 @@ export default function AssetFolderNavigation({
       </li>
     );
   };
+  const creativeNavigation = onSelectCreative && <>
+    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">创作分类</h4>
+    {([{ kind: 'character', label: '人物', icon: 'lucide:contact-round' },
+      { kind: 'scene', label: '场景', icon: 'lucide:landmark' },
+      { kind: 'prop', label: '道具', icon: 'lucide:box' }] as const).map((item) => (
+      <div key={item.kind} className={`assets-folder-item${creativeKind === item.kind ? ' is-active' : ''}`}>
+        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select" aria-pressed={creativeKind === item.kind}
+          onClick={() => onSelectCreative(item.kind)}>
+          <Icon icon={item.icon} aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
+          <span className="ui-list__trailing">{creativeCounts?.[item.kind] ?? 0}</span>
+        </button>
+      </div>
+    ))}
+    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">文件夹</h4>
+  </>;
   const navigation = (
-    <nav aria-label="全局资产文件夹" className="assets-folder-navigation">
-      {!compact && <h3 className="px-2 pb-2 text-xs font-medium text-canvas-text-secondary">文件夹</h3>}
+    <nav aria-label="全局资产分类与文件夹" className="assets-folder-navigation">
+      {!compact && <h3 className="px-2 pb-2 text-xs font-medium text-canvas-text-secondary">全局资产</h3>}
       {[{ kind: 'all' as const, label: '全部资产', count: totalCount, icon: 'lucide:folders' },
         { kind: 'global' as const, label: '导入文件', count: globalCount, icon: 'lucide:folder-down' }].map((item) => (
-        <div className={`assets-folder-item${folderMotionClass}${selection.kind === item.kind || dropTarget?.kind === item.kind ? ' is-active' : ''}${dropTarget?.kind === item.kind ? folderDropClass : ''}`} key={item.kind}
+        <div key={item.kind}>
+        {item.kind === 'global' && creativeNavigation}
+        <div className={`assets-folder-item${folderMotionClass}${(!creativeKind && selection.kind === item.kind) || dropTarget?.kind === item.kind ? ' is-active' : ''}${dropTarget?.kind === item.kind ? folderDropClass : ''}`}
           data-asset-folder-target={!loading && item.kind === 'global' && globalRootPath ? JSON.stringify({ kind: 'global' }) : undefined}>
           <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select"
-            aria-label={item.label} aria-pressed={selection.kind === item.kind} disabled={loading}
+            aria-label={item.label} aria-pressed={!creativeKind && selection.kind === item.kind} disabled={loading}
             aria-haspopup={item.kind === 'global' ? 'menu' : undefined}
             onContextMenu={(event) => openMenu(event, { kind: item.kind }, item.label)}
             onClick={() => onSelect({ kind: item.kind })}>
@@ -150,6 +173,7 @@ export default function AssetFolderNavigation({
             <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
             <span className="ui-list__trailing">{item.count}</span>
           </button>
+        </div>
         </div>
       ))}
       {globalRootPath && <ul className="assets-folder-children">
@@ -198,7 +222,7 @@ export default function AssetFolderNavigation({
   return compact ? (
     <details className="assets-folder-picker">
       <summary className="ui-btn ui-btn--ghost ui-btn--sm">
-        <Icon icon="lucide:folder" aria-hidden="true" />文件夹 · {label}
+        <Icon icon="lucide:folder" aria-hidden="true" />{creativeKind ? `创作分类 · ${{ character: '人物', scene: '场景', prop: '道具' }[creativeKind]}` : `文件夹 · ${label}`}
         <Icon icon="lucide:chevron-down" className="ml-auto" aria-hidden="true" />
       </summary>
       {navigation}

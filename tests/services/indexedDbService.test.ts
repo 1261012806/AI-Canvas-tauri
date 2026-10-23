@@ -12,6 +12,7 @@ const EXPECTED_STORES = [
   'chatMessages',
   'config',
   'globalCharacters',
+  'globalDramaAssets',
   'history',
   'metadata',
   'plugins',
@@ -376,8 +377,9 @@ describe('indexedDbService schema', () => {
     newer.close();
   });
 
-  it('creates the complete v22 schema for a fresh database', async () => {
+  it('creates the complete current schema for a fresh database', async () => {
     const service = await import('../../src/services/indexedDbService');
+    const { DB_VERSION } = await import('../../src/services/indexedDb/schema');
     await service.saveProjectToDb({
       id: 'project-fresh',
       name: 'Fresh project',
@@ -388,7 +390,7 @@ describe('indexedDbService schema', () => {
     });
 
     const db = await openDatabase(DB_NAME);
-    expect(db.version).toBe(22);
+    expect(db.version).toBe(DB_VERSION);
     expect([...db.objectStoreNames]).toEqual(EXPECTED_STORES);
 
     const taskStore = db.transaction('agentTasks', 'readonly').objectStore('agentTasks');
@@ -485,7 +487,8 @@ describe('indexedDbService schema', () => {
       }),
     }));
     const upgradedDb = await openDatabase(DB_NAME);
-    expect(upgradedDb.version).toBe(22);
+    const { DB_VERSION } = await import('../../src/services/indexedDb/schema');
+    expect(upgradedDb.version).toBe(DB_VERSION);
     expect([...upgradedDb.objectStoreNames]).toEqual(EXPECTED_STORES);
     upgradedDb.close();
   });

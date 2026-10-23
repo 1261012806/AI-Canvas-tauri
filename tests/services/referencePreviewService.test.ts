@@ -7,7 +7,7 @@ import { resolveReferencePreview } from '../../src/services/referencePreviewServ
 import { getAssetUrlFromPath, readAssetTextFile } from '../../src/services/fileService';
 import { readChatImageReference } from '../../src/services/chat/chatImageReferenceService';
 import { GENERAL_ASSISTANT_SCOPE_ID } from '../../src/services/chat/assistantScope';
-import { loadGlobalCharacterCards } from '../../src/services/characterLibraryService';
+import { loadGlobalDramaAssetCards } from '../../src/services/globalDramaAssetService';
 import { getAssetIndexByPath } from '../../src/services/indexedDbService';
 import { defaultModelGroups } from '../../src/components/nodes/shared/defaultModels';
 
@@ -20,9 +20,9 @@ vi.mock('../../src/services/chat/chatImageReferenceService', async (original) =>
   ...await original<typeof import('../../src/services/chat/chatImageReferenceService')>(),
   readChatImageReference: vi.fn(async () => 'data:image/png;base64,aW1hZ2U='),
 }));
-vi.mock('../../src/services/characterLibraryService', async (original) => ({
-  ...await original<typeof import('../../src/services/characterLibraryService')>(),
-  loadGlobalCharacterCards: vi.fn(async () => []),
+vi.mock('../../src/services/globalDramaAssetService', async (original) => ({
+  ...await original<typeof import('../../src/services/globalDramaAssetService')>(),
+  loadGlobalDramaAssetCards: vi.fn(async () => []),
 }));
 vi.mock('../../src/services/indexedDbService', async (original) => ({
   ...await original<typeof import('../../src/services/indexedDbService')>(),
@@ -41,7 +41,7 @@ function character(id = 'character'): DramaCharacter {
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   vi.mocked(readAssetTextFile).mockReset();
-  vi.mocked(loadGlobalCharacterCards).mockReset().mockResolvedValue([]);
+  vi.mocked(loadGlobalDramaAssetCards).mockReset().mockResolvedValue([]);
   vi.mocked(getAssetIndexByPath).mockReset().mockResolvedValue(undefined);
 });
 
@@ -123,10 +123,10 @@ describe('引用大屏内容读取', () => {
       referenceImages: [{ id: 'side', kind: 'turnaround', imageUrl: 'https://media.test/side.png', prompt: '侧面姿态', createdAt: 1, updatedAt: 1 }],
       voiceClips: [{ id: 'voice', kind: 'line', label: '对白样本', transcript: '你好', audioUrl: 'https://media.test/voice.wav', durationSec: 2.25, createdAt: 1, updatedAt: 1 }],
     };
-    vi.mocked(loadGlobalCharacterCards).mockResolvedValue([asset]);
+    vi.mocked(loadGlobalDramaAssetCards).mockResolvedValue([asset]);
     const preview = await resolveReferencePreview({ kind: 'drama', id: 'global/character#side', label: '旧角色名' });
     expect(preview.details).toEqual(expect.arrayContaining([
-      { label: '来源', value: '全局角色库' }, { label: '资产类型', value: '人物' }, { label: '资产名称', value: '小绘' },
+      { label: '来源', value: '全局创作资产库' }, { label: '资产类型', value: '人物' }, { label: '资产名称', value: '小绘' },
       { label: '参考图用途', value: '转面' }, { label: '引用内容', value: '指定参考图' },
       { label: '简介', value: longText }, { label: '外观约束', value: '白紫渐变长发' }, { label: '默认服装', value: '白紫长裙' },
     ]));
@@ -286,23 +286,23 @@ describe('引用大屏内容读取', () => {
     const project = { ...character(), imageUrl: 'https://media.test/project.png' };
     useAppStore.setState({ nodes: [node('local', 'source-image', { imageUrl: 'https://media.test/project-node.png' })],
       dramaAssets: { version: 2, characters: [project], scenes: [], props: [] }, globalCharacters: [] });
-    vi.mocked(loadGlobalCharacterCards).mockResolvedValue([global]);
+    vi.mocked(loadGlobalDramaAssetCards).mockResolvedValue([global]);
     const snapshot = useAppStore.getState();
     expect(await resolveReferencePreview({ kind: 'drama', id: 'global/character#one', label: '全局角色' }))
       .toMatchObject({ title: '全局小绘', mediaUrl: 'https://media.test/global.png', prompt: longText });
-    expect(loadGlobalCharacterCards).toHaveBeenCalledTimes(1);
+    expect(loadGlobalDramaAssetCards).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState()).toBe(snapshot);
     expect(useAppStore.getState().globalCharacters).toEqual([]);
     const missing = await resolveReferencePreview({ kind: 'drama', id: 'global/character#deleted', label: '指定旧图' });
     expect(missing.unavailable).toBeTruthy();
     expect(missing.mediaUrl).toBeUndefined();
-    vi.mocked(loadGlobalCharacterCards).mockClear();
+    vi.mocked(loadGlobalDramaAssetCards).mockClear();
     expect((await resolveReferencePreview({ kind: 'drama', id: 'character', label: '项目角色' })).mediaUrl)
       .toBe('https://media.test/project.png');
-    expect(loadGlobalCharacterCards).not.toHaveBeenCalled();
+    expect(loadGlobalDramaAssetCards).not.toHaveBeenCalled();
     useAppStore.setState({ globalCharacters: [global] });
     await resolveReferencePreview({ kind: 'drama', id: 'global/character#one', label: '全局角色' });
-    expect(loadGlobalCharacterCards).not.toHaveBeenCalled();
+    expect(loadGlobalDramaAssetCards).not.toHaveBeenCalled();
   });
 
   it('全局角色临时读取完成后仍检查取消，缺失与读取失败不泄漏或回落项目角色', async () => {
@@ -312,7 +312,7 @@ describe('引用大屏内容读取', () => {
     expect(missing.unavailable).toBeTruthy();
     expect(missing.mediaUrl).toBeUndefined();
     let finish!: (characters: DramaCharacter[]) => void;
-    vi.mocked(loadGlobalCharacterCards).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    vi.mocked(loadGlobalDramaAssetCards).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const controller = new AbortController();
     const snapshot = useAppStore.getState();
     const pending = resolveReferencePreview(source, { signal: controller.signal });
@@ -320,10 +320,10 @@ describe('引用大屏内容读取', () => {
     finish([character()]);
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(useAppStore.getState()).toBe(snapshot);
-    const before = vi.mocked(loadGlobalCharacterCards).mock.calls.length;
+    const before = vi.mocked(loadGlobalDramaAssetCards).mock.calls.length;
     await expect(resolveReferencePreview(source, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
-    expect(loadGlobalCharacterCards).toHaveBeenCalledTimes(before);
-    vi.mocked(loadGlobalCharacterCards).mockRejectedValueOnce(new Error('private-global-path token=never-expose'));
+    expect(loadGlobalDramaAssetCards).toHaveBeenCalledTimes(before);
+    vi.mocked(loadGlobalDramaAssetCards).mockRejectedValueOnce(new Error('private-global-path token=never-expose'));
     const failed = await resolveReferencePreview(source);
     expect(failed.unavailable).toBeTruthy();
     expect(JSON.stringify(failed)).not.toMatch(/private-global-path|never-expose/);

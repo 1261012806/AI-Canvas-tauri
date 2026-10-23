@@ -3,6 +3,7 @@
  */
 import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow, stripAudioSpeechReferences } from './audioSpeechSettings';
 import { resolveNodeReferences } from '../nodeReferenceService';
+import { loadGlobalDramaAssetsForPrompt } from '../dramaAssetPrompt';
 import { useAppStore } from '../../store/useAppStore';
 import { executeWorkflowApiMedia } from '../workflowApi/workflowApiAdapter';
 import { parseWorkflowApiFields } from '../workflowApi/workflowApiConfig';
@@ -140,17 +141,20 @@ export async function generateAudio(
 ): Promise<AudioGenerationResult> {
   const { prompt: rawPrompt, model, provider } = params;
   const state = useAppStore.getState();
+  const globalAssets = await loadGlobalDramaAssetsForPrompt(`${rawPrompt}\n${JSON.stringify(params.workflowInputs ?? {})}`, state);
+  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+  if (useAppStore.getState().currentProjectId !== state.currentProjectId) throw new Error('项目已切换，请重新生成音频');
   const selectedWorkflow = params.workflowId ? state.workflows.find((item) => item.id === params.workflowId) : undefined;
   if (resolveAudioSpeechWorkflow(selectedWorkflow)) {
     const invalid = collectAudioSpeechReferences(rawPrompt, params.nodeId, state.nodes, state.edges,
-      state.dramaAssets, selectedWorkflow, params.workflowInputs).find((reference) => !reference.url);
+      state.dramaAssets, selectedWorkflow, params.workflowInputs, globalAssets).find((reference) => !reference.url);
     if (invalid) throw new Error(`参考语音已失效：${invalid.label}，请重新选择`);
   }
 
   const isRunningHub = params.workflowId ? isRunningHubWorkflow(selectedWorkflow) : provider === 'runninghub';
   const runninghubMedia = isRunningHub ? await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true }) : undefined;
   // 参考音频通过独立媒体通道传递，不混入朗读正文。
-  const mentionedMedia = runninghubMedia ?? collectPromptNodeMediaUrls(rawPrompt);
+  const mentionedMedia = runninghubMedia ?? collectPromptNodeMediaUrls(rawPrompt, globalAssets);
   const connectedMedia = collectConnectedReferenceMedia(params.nodeId);
   const connectedReferences = runninghubMedia ? connectedMedia.references.map((reference) => {
     const local = runninghubMedia.references.find((candidate) => candidate.kind === 'image' && reference.kind === 'image'
@@ -164,7 +168,7 @@ export async function generateAudio(
   const prompt = runninghubMedia ? runninghubMusic
     ? compileVideoReferencePrompt(runninghubMedia, references, { target: 'local' })
     : stripAudioSpeechReferences(runninghubMedia.segments?.filter((segment): segment is string => typeof segment === 'string').join('') ?? '', state.nodes)
-    : resolveNodeReferences(stripAudioSpeechReferences(rawPrompt, state.nodes));
+    : resolveNodeReferences(stripAudioSpeechReferences(rawPrompt, state.nodes), globalAssets);
   const referenceAudioUrls = getMediaReferenceUrls(references, 'audio', runninghubMedia ? 'local' : 'remote');
   warnIfTooManyReferences({ audio: referenceAudioUrls.length });
 

@@ -7,6 +7,7 @@ import {
   saveProjectToDb,
   getAllProjects,
   getProjectById,
+  getAssetIndexById,
   deleteProjectFromDb,
   saveWorkflowToDb,
   getAllWorkflows,
@@ -45,7 +46,7 @@ import {
 } from './fs/core';
 import { walkDirectoryFiles } from './fs/assetLibrary';
 import { identifyAsset, resolveIndexedAssetPath } from './fs/assetIndex';
-import type { DramaAssetLibrary } from '../types/dramaAssets';
+import type { DramaAssetLibrary, DramaProp, DramaScene } from '../types/dramaAssets';
 import { normalizeDramaAssetLibrary } from '../types/dramaAssets';
 import { deleteProviderSecretIfUnchanged, hasPlaintextSecret, readProviderSecretFingerprint, restoreConfigSecrets, stripConfigSecrets } from './providerSecretService';
 import { enqueueConfigPersistence } from './configPersistenceQueue';
@@ -701,6 +702,21 @@ async function restoreProjectSettings(
   };
 }
 
+/** 项目内复制的全局场景/道具只引用全局身份，不按项目目录重建索引或复制文件。 */
+async function resolveGlobalDramaImage<T extends DramaScene | DramaProp>(asset: T, lookup: ProjectFileLookup): Promise<T> {
+  if (!asset.imageAssetId) return asset;
+  const detached = { ...asset } as T & AssetReferenceLike;
+  delete detached.imageNodeId;
+  delete detached.filePath;
+  delete detached.assetId;
+  delete detached.relativePath;
+  const indexed = await getAssetIndexById(asset.imageAssetId).catch(() => undefined);
+  if (!indexed || indexed.status !== 'online' || !await projectFileExists(indexed.path, lookup).catch(() => false)) {
+    return { ...detached, imageUrl: undefined };
+  }
+  return { ...detached, imageRelativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
+}
+
 /** 角色库参考图与角色声音与画布节点共用本地文件，落库时同样只保留 assetId + relativePath */
 async function serializeProjectDramaAssets(
   library: DramaAssetLibrary | undefined,
@@ -734,8 +750,10 @@ async function serializeProjectDramaAssets(
       imageUrl: primaryReference?.imageUrl ?? topLevel.imageUrl,
     };
   });
-  const scenes = await mapWithConcurrency(library.scenes, 2, serializeReference);
-  const props = await mapWithConcurrency(library.props, 2, serializeReference);
+  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => asset.imageAssetId
+    ? resolveGlobalDramaImage(asset, context) : serializeReference(asset));
+  const props = await mapWithConcurrency(library.props, 2, (asset) => asset.imageAssetId
+    ? resolveGlobalDramaImage(asset, context) : serializeReference(asset));
   return { ...library, characters, scenes, props };
 }
 
@@ -793,8 +811,10 @@ async function restoreProjectDramaAssets(
       imageUrl: primaryReference?.imageUrl ?? topLevel.imageUrl,
     };
   });
-  const scenes = await mapWithConcurrency(library.scenes, 2, restoreReference);
-  const props = await mapWithConcurrency(library.props, 2, restoreReference);
+  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => asset.imageAssetId
+    ? resolveGlobalDramaImage(asset, lookup) : restoreReference(asset));
+  const props = await mapWithConcurrency(library.props, 2, (asset) => asset.imageAssetId
+    ? resolveGlobalDramaImage(asset, lookup) : restoreReference(asset));
   return { ...library, characters, scenes, props };
 }
 

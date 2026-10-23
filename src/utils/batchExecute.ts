@@ -68,6 +68,13 @@ async function executeOneNode(
   useAppStore: typeof import('../store/useAppStore').useAppStore,
 ): Promise<boolean> {
   const d = node.data!;
+  if (`${d.prompt ?? ''}\n${JSON.stringify(d.workflowInputs ?? {})}`.includes('@drama{global/')) {
+    const before = useAppStore.getState();
+    const sourceData = before.nodes.find((item) => item.id === node.id)?.data;
+    try { await before.loadGlobalDramaAssets(); } catch { return false; }
+    const current = useAppStore.getState();
+    if (current.currentProjectId !== ctx.currentProjectId || current.nodes.find((item) => item.id === node.id)?.data !== sourceData) return false;
+  }
   if (d.provider === 'workflow-api') {
     if (useAppStore.getState().currentProjectId !== ctx.currentProjectId) return false;
     const { executeGeneration } = await import('../services/generationService');
@@ -84,7 +91,7 @@ async function executeOneNode(
   const prompt = (d.prompt as string) || '';
   const rawVideoInputs = `${prompt}\n${JSON.stringify(d.workflowInputs ?? {})}`;
   const hasProtectedVideoInputs = nt === 'ai-video' && (Boolean(d.comfyRefmods?.length)
-    || rawVideoInputs.includes('@refmod') || rawVideoInputs.includes('/shot/'));
+    || rawVideoInputs.includes('@refmod') || rawVideoInputs.includes('/shot/') || rawVideoInputs.includes('@drama{global/'));
   const refmodFingerprint = hasProtectedVideoInputs ? videoInputFingerprint(node, useAppStore.getState()) : undefined;
   let taskReceipt: MediaTaskReceipt | undefined;
   let mediaDelivered = false;

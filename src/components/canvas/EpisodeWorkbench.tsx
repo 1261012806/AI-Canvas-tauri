@@ -1,10 +1,11 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { CheckCircle2, LayoutGrid, ListVideo, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useT } from '../../i18n';
 import { episodeWorkbenchSummary, shotVideoNodes } from '../../utils/episodeLayout';
 import { checkVideoServices, inspectVideoNode } from '../../services/videoBatchPlanning';
+import { expandShotlistRowMentions } from '../../services/shotlistPromptService';
 import type { VideoBatchItemStatus, VideoBatchScope, VideoPreflightItem } from '../../types/videoBatch';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
@@ -27,6 +28,7 @@ function EpisodeWorkbench() {
   const loadBatches = useAppStore((s) => s.loadVideoBatches);
   const [columns, setColumns] = useState(3);
   const [checking, setChecking] = useState(false);
+  const inspectController = useRef<AbortController | null>(null);
   const [panel, setPanel] = useState<'check' | 'queue' | null>(null);
   const [check, setCheck] = useState<{ projectId: string; items: VideoPreflightItem[] } | null>(null);
   const [regenerate, setRegenerate] = useState(false);
@@ -39,6 +41,7 @@ function EpisodeWorkbench() {
 
   useEffect(() => {
     if (projectId) void loadBatches(projectId).catch(() => useAppStore.getState().showToast('无法读取视频队列记录', 'error'));
+    return () => { inspectController.current?.abort(); };
   }, [projectId, loadBatches]);
 
   const focus = (ids: string[]) => {
@@ -49,20 +52,34 @@ function EpisodeWorkbench() {
   };
 
   const inspect = async (ids?: string[]) => {
-    if (checking || !projectId) return;
-    const state = useAppStore.getState();
-    const list = ids ? state.nodes.filter((n) => ids.includes(n.id) && n.data.type === 'ai-video')
-      : shotVideoNodes(state.nodes, scope === 'selected' ? state.selectedNodeIds : undefined);
-    const planned = list.map((n) => inspectVideoNode(n, state))
-      .filter((i) => ids || scope !== 'pending' || !i.existing || i.stale
-        || state.nodes.find((n) => n.id === i.nodeId)?.data.status === 'error');
+    if (checking || !projectId || inspectController.current) return;
+    const controller = new AbortController();
+    inspectController.current = controller;
+    const isCurrent = () => !controller.signal.aborted && useAppStore.getState().currentProjectId === projectId;
     setChecking(true); setRegenerate(Boolean(ids)); setAcknowledged(false);
     try {
+      const initial = useAppStore.getState();
+      if (!isCurrent()) return;
+      const initialNodes = ids ? initial.nodes.filter((n) => ids.includes(n.id) && n.data.type === 'ai-video')
+        : shotVideoNodes(initial.nodes, scope === 'selected' ? initial.selectedNodeIds : undefined);
+      const needsGlobals = initialNodes.some((node) => [node.data.prompt || '', ...Object.values(node.data.workflowInputs ?? {})]
+        .some((text) => {
+          try { return expandShotlistRowMentions(text, initial.nodes).includes('@drama{global/'); }
+          catch { return text.includes('@drama{global/'); }
+        }));
+      if (needsGlobals) await initial.loadGlobalDramaAssets();
+      if (!isCurrent()) return;
+      const state = useAppStore.getState();
+      const targetIds = new Set(initialNodes.map((node) => node.id));
+      const list = state.nodes.filter((node) => targetIds.has(node.id) && node.data.type === 'ai-video');
+      const planned = list.map((node) => inspectVideoNode(node, state))
+        .filter((item) => ids || scope !== 'pending' || !item.existing || item.stale
+          || state.nodes.find((node) => node.id === item.nodeId)?.data.status === 'error');
       const checked = await checkVideoServices(planned, state);
-      if (useAppStore.getState().currentProjectId !== projectId) return;
+      if (!isCurrent()) return;
       setCheck({ projectId, items: checked }); setPanel('check');
-    } catch (error) { notify(error); }
-    finally { setChecking(false); }
+    } catch (error) { if (isCurrent()) notify(error); }
+    finally { if (inspectController.current === controller) { inspectController.current = null; setChecking(false); } }
   };
 
   const layout = () => {

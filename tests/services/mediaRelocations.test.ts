@@ -10,6 +10,23 @@ beforeEach(() => {
 const move = { projectId: 'p', oldPath: 'D:/p/a.png', newPath: 'D:/p/group/a-new.png',
   oldAssetUrl: 'asset://old', assetUrl: 'asset://new', relativePath: 'group/a-new.png' };
 
+it('迁移全局场景道具主图身份及相对路径，迟到保存不能恢复旧地址', async () => {
+  const service = await import('../../src/services/indexedDbService');
+  const relocation = await import('../../src/services/indexedDb/mediaRelocations');
+  const scene = { id: 'global-scene', kind: 'scene' as const, name: '客厅', key: '客厅', summary: '', visualNotes: '',
+    source: 'manual' as const, importance: 'main' as const, confirmed: true, createdAt: 1, updatedAt: 1,
+    imageAssetId: 'stable-image', imageRelativePath: 'a.png', imageUrl: move.oldAssetUrl };
+  await service.putGlobalDramaAsset(scene);
+  await relocation.persistMediaRelocation(move);
+  expect((await service.getAllGlobalDramaAssets())[0]).toMatchObject({
+    imageAssetId: 'stable-image', imageRelativePath: move.relativePath, imageUrl: move.assetUrl,
+  });
+  await service.putGlobalDramaAsset({ ...scene, name: '迟到编辑' });
+  expect((await service.getAllGlobalDramaAssets())[0]).toMatchObject({
+    name: '迟到编辑', imageRelativePath: move.relativePath, imageUrl: move.assetUrl,
+  });
+});
+
 it('global asset moves preserve identity, tags and prompt records while repairing project-relative references', async () => {
   const { openDB } = await import('../../src/services/indexedDb/schema');
   const relocation = await import('../../src/services/indexedDb/mediaRelocations');

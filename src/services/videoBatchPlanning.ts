@@ -8,10 +8,10 @@ import { comfyBaseUrlFor, probeComfyServer } from './comfyServers';
 import { expandShotlistRowMentions } from './shotlistPromptService';
 import { isShotRowBlank } from '../types/shotlist';
 import { parseDramaMentionId } from '../types/dramaAssets';
-import { collectCharacterReferenceUrls, findDramaAsset, resolveDramaAssetImageRef } from './dramaAssetPrompt';
+import { collectCharacterReferenceUrls, findDramaAsset, listGlobalDramaAssets, resolveDramaAssetImageRef } from './dramaAssetPrompt';
 
 type Workspace = Pick<AppState, 'nodes' | 'edges' | 'workflows' | 'projects' | 'currentProjectId' | 'config'>
-  & Partial<Pick<AppState, 'dramaAssets' | 'globalCharacters'>>;
+  & Partial<Pick<AppState, 'dramaAssets' | 'globalCharacters' | 'globalScenes' | 'globalProps'>>;
 
 export function videoInputData(node: Node<BaseNodeData>, state: Workspace): BaseNodeData {
   const fallback = parseProjectModelRef(state.projects.find((p) => p.id === state.currentProjectId)?.settings?.defaultModels?.video);
@@ -59,7 +59,7 @@ export function videoInputFingerprint(node: Node<BaseNodeData>, state: Workspace
   const dramaRefs = library ? [...new Set([...input.text.matchAll(/@drama\{([^:}]+):[^}]*\}/g)].map((match) => match[1]))]
     .map((id) => {
       const parsed = parseDramaMentionId(id);
-      const asset = findDramaAsset(library, parsed.assetId, state.globalCharacters);
+      const asset = findDramaAsset(library, parsed.assetId, listGlobalDramaAssets(state));
       return [id, asset, asset ? resolveDramaAssetImageRef(asset, state.nodes, parsed.referenceImageId) : undefined,
         asset && parsed.mergeAll ? collectCharacterReferenceUrls(asset, state.nodes) : undefined];
     }) : [];

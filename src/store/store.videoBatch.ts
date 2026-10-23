@@ -52,7 +52,17 @@ export const createVideoBatchSlice: StateCreator<AppState, [], [], VideoBatchSli
         if (state.currentProjectId !== projectId) projectChanged = true;
       });
       try {
+        const hasGlobalAssetReferences = items.some((item) => {
+          const data = get().nodes.find((node) => node.id === item.nodeId)?.data;
+          return data && /@drama\{global\//.test(`${data.prompt || ''}\n${JSON.stringify(data.workflowInputs || {})}`);
+        });
+        if (hasGlobalAssetReferences) {
+          await get().loadGlobalDramaAssets();
+          if (lease?.signal?.aborted) throw new Error('视频批次已取消，未提交');
+          if (projectChanged || get().currentProjectId !== projectId) throw new Error('项目已切换');
+        }
         await get().loadVideoBatches(projectId);
+        if (lease?.signal?.aborted) throw new Error('视频批次已取消，未提交');
         if (projectChanged || get().currentProjectId !== projectId) throw new Error('项目已切换');
         for (const item of items) {
           const node = get().nodes.find((n) => n.id === item.nodeId);

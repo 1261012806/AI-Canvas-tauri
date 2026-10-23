@@ -1,6 +1,6 @@
 import type { BaseNodeData, WorkflowDefinition } from '../../types';
 import type { AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowControls } from '../../types/aiTypes';
-import type { DramaAssetLibrary } from '../../types/dramaAssets';
+import type { DramaAsset, DramaAssetLibrary } from '../../types/dramaAssets';
 import { parseDramaMentionId } from '../../types/dramaAssets';
 import { findDramaAsset, resolveDramaVoiceRef } from '../dramaAssetPrompt';
 import { applyQwenSpeechSettings, inspectQwenSpeechGraph } from './qwenSpeechSettings';
@@ -87,6 +87,7 @@ export function collectAudioSpeechReferences(
   prompt: string, nodeId: string | undefined, nodes: readonly SpeechNode[],
   edges: readonly { id: string; source: string; target: string }[],
   library: DramaAssetLibrary, workflow?: WorkflowDefinition, inputs?: Record<string, string>,
+  globalAssets: readonly DramaAsset[] = [],
 ): AudioSpeechReference[] {
   const result: AudioSpeechReference[] = [];
   const collectTokens = (text: string) => {
@@ -94,7 +95,7 @@ export function collectAudioSpeechReferences(
       if (match[1]) {
         const { assetId, voiceClipId } = parseDramaMentionId(match[1]);
         if (voiceClipId === undefined) continue;
-        const voice = resolveDramaVoiceRef(findDramaAsset(library, assetId), voiceClipId);
+        const voice = resolveDramaVoiceRef(findDramaAsset(library, assetId, globalAssets), voiceClipId);
         result.push({ key: match[0], token: match[0], label: voice?.label ?? match[2], url: voice?.url });
       } else {
         const node = nodes.find((item) => item.id === match[3]);

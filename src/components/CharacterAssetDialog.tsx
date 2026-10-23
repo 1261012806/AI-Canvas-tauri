@@ -948,7 +948,7 @@ function CharacterAssetEditorDialog({
   scope,
   character,
   initialReferenceId,
-  onClose,
+  onClose: closeEditor,
   onSaved,
 }: CharacterAssetEditorDialogProps) {
   const { saveCharacterCard, showToast, currentProjectId } = useAppStore(
@@ -979,6 +979,13 @@ function CharacterAssetEditorDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const voiceInputRef = useRef<HTMLInputElement>(null);
   const voicePlayerRef = useRef<HTMLAudioElement>(null);
+
+  const saveController = useRef<AbortController | null>(null);
+  useEffect(() => () => saveController.current?.abort(), []);
+  const onClose = () => {
+    saveController.current?.abort(); saveController.current = null; setSaving(false);
+    closeEditor();
+  };
 
   const selectedReference = useMemo(
     () => draft.referenceImages?.find((reference) => reference.id === selectedReferenceId) ?? null,
@@ -1200,12 +1207,14 @@ function CharacterAssetEditorDialog({
   };
 
   const handleSave = async () => {
+    if (saveController.current) return;
     const name = draft.name.trim();
     if (!name) {
       showToast('请填写角色名称', 'error');
       return;
     }
     setSaving(true);
+    const controller = new AbortController(); saveController.current = controller;
     const references = draft.referenceImages ?? [];
     const primaryReference = references.find(
       (reference) => reference.id === draft.primaryReferenceImageId,
@@ -1220,8 +1229,9 @@ function CharacterAssetEditorDialog({
       imageUrl: primaryReference?.imageUrl,
       updatedAt: Date.now(),
     };
-    const saved = await saveCharacterCard(scope, payload);
-    setSaving(false);
+    const saved = await saveCharacterCard(scope, payload, { signal: controller.signal });
+    if (controller.signal.aborted) return;
+    saveController.current = null; setSaving(false);
     if (!saved) return;
     showToast(scope === 'project' ? '角色已保存到本项目' : '角色已保存到全局资产');
     onSaved(payload.id);

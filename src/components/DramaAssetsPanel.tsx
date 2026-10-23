@@ -55,7 +55,7 @@ function resolveThumb(
   return asset.imageUrl;
 }
 
-function DramaAssetCard({
+export function DramaAssetCard({
   asset,
   thumb,
   imageNodes,
@@ -68,6 +68,12 @@ function DramaAssetCard({
   onCopyBrief,
   onUploadImage,
   uploading,
+  onOpen,
+  onManageVoice,
+  onManageActions,
+  onCopyToScope,
+  copyToScopeLabel,
+  manageUploadedImage = false,
 }: {
   asset: DramaAsset;
   thumb?: string;
@@ -77,10 +83,16 @@ function DramaAssetCard({
   onDelete: () => void;
   onSaveFields: (patch: { name: string; summary: string; visualNotes: string; storyRole: string }) => void;
   onBindImage: (nodeId: string) => void;
-  onUnbindImage: () => void;
+  onUnbindImage?: () => void;
   onCopyBrief: () => void;
   onUploadImage: () => void;
   uploading: boolean;
+  onOpen?: () => void;
+  onManageVoice?: () => void;
+  onManageActions?: () => void;
+  onCopyToScope?: () => void;
+  copyToScopeLabel?: string;
+  manageUploadedImage?: boolean;
 }) {
   const [name, setName] = useState(asset.name);
   const [summary, setSummary] = useState(asset.summary);
@@ -111,9 +123,17 @@ function DramaAssetCard({
 
   return (
     <div
-      className="drama-asset-card ui-card min-w-0 p-3 hover:border-indigo-500/30 transition-colors"
+      className={`drama-asset-card ui-card min-w-0 p-3 hover:border-indigo-500/30 transition-colors${onOpen && !editing ? ' relative isolate' : ''}`}
       data-asset-kind={asset.kind}
     >
+      {onOpen && !editing ? (
+        <button
+          type="button"
+          className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+          aria-label={`打开${DRAMA_ASSET_KIND_LABEL[asset.kind]}：${asset.name}`}
+          onClick={onOpen}
+        />
+      ) : null}
       <div className="drama-asset-card-layout">
         {/* Thumb */}
         <div className={`drama-asset-thumbnail w-20 rounded-lg overflow-hidden shrink-0 bg-canvas-hover border border-canvas-border flex items-center justify-center${asset.kind === 'character' ? ' character-avatar drama-asset-thumbnail--character' : ' h-20'}`}>
@@ -226,7 +246,7 @@ function DramaAssetCard({
 
           {/* Bind image picker */}
           {bindOpen && (
-            <div className="drama-asset-bind-picker mt-2 p-2 rounded-lg border border-canvas-border bg-canvas-surface/80 max-h-32 overflow-y-auto space-y-1">
+            <div className={`drama-asset-bind-picker mt-2 p-2 rounded-lg border border-canvas-border bg-canvas-surface/80 max-h-32 overflow-y-auto space-y-1${onOpen && !editing ? ' relative z-20' : ''}`}>
               {imageNodes.length === 0 ? (
                 <p className="text-[11px] text-canvas-text-muted px-1">画布上暂无图像节点</p>
               ) : (
@@ -256,7 +276,7 @@ function DramaAssetCard({
         </div>
 
         {/* Actions — 仅管理，生图请在画布图像节点 @ + slash */}
-        <div className="drama-asset-actions flex flex-wrap items-center gap-1">
+        <div className={`drama-asset-actions flex flex-wrap items-center gap-1${onOpen && !editing ? ' relative z-20' : ''}`}>
           <button
             type="button"
             className="drama-asset-action-copy ui-btn ui-btn--ghost ui-btn--sm"
@@ -272,13 +292,13 @@ function DramaAssetCard({
           >
             {editing ? '收起' : '编辑'}
           </button>
-          {!hasUploadedImage && (
+          {(!hasUploadedImage || manageUploadedImage) && (
             <>
               <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={uploading} onClick={onUploadImage}>
                 上传图片
               </button>
               {asset.imageNodeId || asset.imageUrl ? (
-                <button
+                onUnbindImage && <button
                   type="button"
                   className="drama-asset-action-unbind ui-btn ui-btn--ghost ui-btn--sm"
                   onClick={onUnbindImage}
@@ -296,6 +316,15 @@ function DramaAssetCard({
               )}
             </>
           )}
+          {onManageVoice && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onManageVoice}>
+            声音{asset.kind === 'character' && asset.voiceClips?.length ? ` ${asset.voiceClips.length}` : ''}
+          </button>}
+          {onManageActions && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onManageActions}>
+            动作{asset.kind === 'character' && asset.actions?.length ? ` ${asset.actions.length}` : ''}
+          </button>}
+          {onCopyToScope && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onCopyToScope}>
+            {copyToScopeLabel}
+          </button>}
           <button
             type="button"
             className="drama-asset-action-delete ui-btn ui-btn--ghost ui-btn--sm ml-auto text-red-400/80 hover:bg-red-500/10"
@@ -631,6 +660,25 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                       showToast('已解绑');
                     }}
                     onCopyBrief={() => void copyBrief(asset)}
+                    onCopyToScope={() => {
+                      const initial = useAppStore.getState();
+                      const projectId = initial.currentProjectId;
+                      void (async () => {
+                        if (asset.kind === 'character') {
+                          if (await initial.copyCharacterToGlobal(asset.id)) showToast('已复制到全局人物');
+                          return;
+                        }
+                        const saved = await initial.saveGlobalDramaAsset({
+                          ...asset, id: `${asset.kind}-${generateId()}`,
+                          imageUrl: resolveThumb(asset, initial.nodes as Array<{ id: string; data: Record<string, unknown> }>),
+                          createdAt: Date.now(), updatedAt: Date.now(),
+                        }, { assertCurrent: () => {
+                          if (useAppStore.getState().currentProjectId !== projectId) throw new Error('项目已切换');
+                        } });
+                        if (saved) showToast('已复制到全局创作资产');
+                      })();
+                    }}
+                    copyToScopeLabel="复制到全局"
                     uploading={uploading}
                     onUploadImage={() => void handleUpload(asset.kind, asset.id)}
                   />

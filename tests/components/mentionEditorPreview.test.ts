@@ -52,7 +52,7 @@ describe('资产库胶囊预览', () => {
     expect(resolveDramaMentionPreview(library(), [global], nodes, 'same-id', '旧名称'))
       .toMatchObject({ label: '项目人物', thumbnailUrl: 'front.png', description: '创作资产库 · 人物参考图' });
     expect(resolveDramaMentionPreview(library(), [global], nodes, 'global/same-id', '旧名称'))
-      .toMatchObject({ label: '全局人物', thumbnailUrl: 'global.png', description: '全局角色库 · 人物参考图' });
+      .toMatchObject({ label: '全局人物', thumbnailUrl: 'global.png', description: '全局创作资产库 · 人物参考图' });
     expect(resolveDramaMentionPreview(library(), [], nodes, 'global/same-id', '全局人物'))
       .toMatchObject({ label: '全局人物', missing: true, thumbnailUrl: undefined });
   });

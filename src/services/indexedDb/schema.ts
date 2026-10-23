@@ -6,7 +6,7 @@
 import { toProjectSummaryRecord } from './projectSummary';
 
 export const DB_NAME = 'ai-canvas-db';
-export const DB_VERSION = 22;
+export const DB_VERSION = 23;
 
 export const STORE_PROJECTS = 'projects';
 export const STORE_PROJECT_SUMMARIES = 'projectSummaries';
@@ -26,6 +26,8 @@ export const STORE_PROJECT_MEMORIES = 'projectMemories';
 export const STORE_TOOLBAR_LAYOUTS = 'toolbarLayouts';
 export const STORE_METADATA = 'metadata';
 export const STORE_GLOBAL_CHARACTERS = 'globalCharacters';
+/** 人物继续保存在原表；此表仅存全局场景和道具。 */
+export const STORE_GLOBAL_DRAMA_ASSETS = 'globalDramaAssets';
 export const STORE_SUB_AGENT_PROFILES = 'subAgentProfiles';
 export const STORE_VIDEO_EDITOR_PROJECTS = 'videoEditorProjects';
 export const STORE_PROJECT_VISUAL_DESCRIPTIONS = 'projectVisualDescriptions';
@@ -138,6 +140,11 @@ export function openDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_GLOBAL_CHARACTERS)) {
         const characterStore = db.createObjectStore(STORE_GLOBAL_CHARACTERS, { keyPath: 'id' });
         characterStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_GLOBAL_DRAMA_ASSETS)) {
+        const assetStore = db.createObjectStore(STORE_GLOBAL_DRAMA_ASSETS, { keyPath: 'id' });
+        assetStore.createIndex('kind', 'kind', { unique: false });
+        assetStore.createIndex('updatedAt', 'updatedAt', { unique: false });
       }
       if (!db.objectStoreNames.contains(STORE_SUB_AGENT_PROFILES)) {
         const subAgentStore = db.createObjectStore(STORE_SUB_AGENT_PROFILES, { keyPath: 'id' });

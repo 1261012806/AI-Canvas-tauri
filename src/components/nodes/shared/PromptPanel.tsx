@@ -39,7 +39,7 @@ import VideoParamSelector from './VideoParamSelector';
 import AudioParamSelector from './AudioParamSelector';
 import CharacterVoiceSelector, { type CharacterVoiceChoice } from './CharacterVoiceSelector';
 import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow } from '../../../services/ai/audioSpeechSettings';
-import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { listGlobalDramaAssets, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import { buildDramaVoiceMentionId } from '../../../types/dramaAssets';
 import StyleSelector from './StyleSelector';
 import MentionEditor, { type MentionEditorHandle } from './MentionEditor';
@@ -854,7 +854,7 @@ export default function PromptPanel({
   };
   // 返回稳定标量，避免其他节点移动时让弹窗重渲染。
   const audioReferenceSnapshot = useAppStore((state) => speechControls ? JSON.stringify(collectAudioSpeechReferences(
-    prompt, nodeId, state.nodes, state.edges, state.dramaAssets, selectedAudioWorkflow, workflowInputs,
+    prompt, nodeId, state.nodes, state.edges, state.dramaAssets, selectedAudioWorkflow, workflowInputs, listGlobalDramaAssets(state),
   )) : '[]');
   const audioReferences = JSON.parse(audioReferenceSnapshot) as AudioSpeechReference[];
   const addAudioReference = () => {

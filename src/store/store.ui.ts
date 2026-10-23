@@ -8,6 +8,7 @@ import type { AssetFileEntry, AssetFolderSelection, FileTransferOptions, NodeOut
 import type { AssetImageRecord, AssetImageSaveInput } from '../types/assetImage';
 import type { AppUpdateProgress } from '../services/updateService';
 import type { ComfyNodeProgress } from '../types/comfyProgress';
+import type { CharacterLibraryOpenRequest } from '../types/dramaAssets';
 
 export type { ComfyNodeProgress, ComfyNodeProgressStage } from '../types/comfyProgress';
 
@@ -42,6 +43,7 @@ export interface UISlice {
   /** 同一资产库的展示方式，仅用于当前界面，不持久化。 */
   assetsPanelMode: 'modal' | 'drawer' | 'page';
   characterLibraryOpen: boolean;
+  characterLibraryRequest: CharacterLibraryOpenRequest | null;
   /** 角色库里的动作库弹层；圆环快捷入口要能越过角色列表直接打开它 */
   characterActionLibraryOpen: boolean;
   historyPanelOpen: boolean;
@@ -93,7 +95,7 @@ export interface UISlice {
   openNodeDialog: (nodeId: string, position?: { x: number; y: number }) => void;
   closeNodeDialog: () => void;
   setAssetsPanelOpen: (open: boolean, mode?: UISlice['assetsPanelMode'], request?: UISlice['assetsPanelRequest']) => void;
-  setCharacterLibraryOpen: (open: boolean) => void;
+  setCharacterLibraryOpen: (open: boolean, request?: CharacterLibraryOpenRequest) => void;
   setCharacterActionLibraryOpen: (open: boolean) => void;
   setHistoryPanelOpen: (open: boolean) => void;
   toggleMinimap: () => void;
@@ -144,6 +146,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
   assetsPanelOpen: false,
   assetsPanelMode: 'modal',
   characterLibraryOpen: false,
+  characterLibraryRequest: null,
   characterActionLibraryOpen: false,
   historyPanelOpen: false,
   minimapVisible: true,
@@ -201,7 +204,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
     return { activeNodeId: nodeId, dialogPosition: position ?? null };
   }),
   closeNodeDialog: () => set({ activeNodeId: null, dialogPosition: null, pendingPresetAction: null }),
-  setAssetsPanelOpen: (open, mode = 'modal', request = null) => set(open
+  setAssetsPanelOpen: (open, mode = 'modal', request = null) => set((state) => open
     ? {
         settingsOpen: false,
         assetsPanelOpen: true,
@@ -210,29 +213,41 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
         ...(request ? { dramaAssetsPanelOpen: false } : {}),
         characterLibraryOpen: false,
         characterActionLibraryOpen: false,
+        characterLibraryRequest: null,
         historyPanelOpen: false,
         dramaAssetsPanelOpen: false,
         chatOpen: false,
       }
-    : { assetsPanelOpen: false, assetsPanelMode: 'modal', assetsPanelRequest: null, dramaAssetsPanelOpen: false }),
-  setCharacterLibraryOpen: (open) => set(open
+    : {
+        assetsPanelOpen: false,
+        assetsPanelMode: 'modal',
+        assetsPanelRequest: null,
+        dramaAssetsPanelOpen: false,
+        ...(state.characterLibraryRequest?.origin === 'assets' ? {
+          characterLibraryOpen: false,
+          characterActionLibraryOpen: false,
+          characterLibraryRequest: null,
+        } : {}),
+      }),
+  setCharacterLibraryOpen: (open, request) => set((state) => open
     ? {
         settingsOpen: false,
-        assetsPanelOpen: false,
+        assetsPanelOpen: request?.origin === 'assets' && state.assetsPanelOpen,
         characterLibraryOpen: true,
-        characterActionLibraryOpen: false,
+        characterLibraryRequest: request ?? null,
+        characterActionLibraryOpen: request?.section === 'action',
         historyPanelOpen: false,
-        dramaAssetsPanelOpen: false,
+        dramaAssetsPanelOpen: request?.origin === 'assets' && state.assetsPanelOpen && state.dramaAssetsPanelOpen,
         chatOpen: false,
       }
-    : { characterLibraryOpen: false, characterActionLibraryOpen: false }),
+    : { characterLibraryOpen: false, characterActionLibraryOpen: false, characterLibraryRequest: null }),
   // 角色库里点开时两个都开着（关掉动作库退回角色库）；圆环直接进来时只开这一个
-  setCharacterActionLibraryOpen: (open) => set(open
+  setCharacterActionLibraryOpen: (open) => set((state) => open
     ? {
         settingsOpen: false,
-        assetsPanelOpen: false,
+        assetsPanelOpen: state.characterLibraryOpen && state.characterLibraryRequest?.origin === 'assets' && state.assetsPanelOpen,
         historyPanelOpen: false,
-        dramaAssetsPanelOpen: false,
+        dramaAssetsPanelOpen: state.characterLibraryOpen && state.characterLibraryRequest?.origin === 'assets' && state.assetsPanelOpen && state.dramaAssetsPanelOpen,
         chatOpen: false,
         characterActionLibraryOpen: true,
       }

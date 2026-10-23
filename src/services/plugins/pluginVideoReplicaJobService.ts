@@ -10,6 +10,7 @@ import { getNodeBounds, videoNodeDimensionsForAspectRatio } from '../../utils/no
 import { registerCanvasDerivation, completeCanvasDerivation, isCanvasDerivationFresh } from '../canvasDerivationGuard';
 import { sha256BytesHex } from '../mediaDataUrl';
 import { resolvePromptToChatContent, resolvePromptWithMediaRefs } from '../ai/promptResolver';
+import { listGlobalDramaAssets } from '../dramaAssetPrompt';
 import { VLM_MAX_IMAGES } from '../ai/imageUtils';
 import { resolveMediaModel } from '../ai/generationRuntime';
 import { resolveVideoModelCapability } from '../ai/videoModelCapabilityResolver';
@@ -194,7 +195,7 @@ async function captureRequirements(context: StartContext, request: PluginVideoRe
   const fingerprint = async () => {
     const state = useAppStore.getState();
     const ids = [...canonical.matchAll(/@\{([^:}]+):[^}]*\}/gu)].map((match) => match[1]);
-    const library = canonical.includes('@drama{') ? [state.dramaAssets, state.globalCharacters] : [];
+    const library = canonical.includes('@drama{') ? [state.dramaAssets, listGlobalDramaAssets(state)] : [];
     const forAnalysis = canonical.replace(/@\{([^:}]+):([^}]*)\}/gu, (token, id: string, label: string) => {
       const data = state.nodes.find((node) => node.id === id)?.data;
       return data && ['source-video', 'ai-video', 'source-audio', 'ai-audio'].includes(data.type) ? `[${label}]` : token;
@@ -601,8 +602,17 @@ async function runJob(job: ReplicaJob, context: StartContext, request: PluginVid
       assertFresh: check, prepare,
       generate: async (nodeId) => {
         await checkInputs();
-        const node = useAppStore.getState().nodes.find((item) => item.id === nodeId)!;
-        const preflight = inspectVideoNode(node, useAppStore.getState());
+        let workspace = useAppStore.getState();
+        let node = workspace.nodes.find((item) => item.id === nodeId);
+        if (!node) throw new ReplicaFailure('分段生成节点已不存在');
+        if (`${node.data.prompt || ''}\n${JSON.stringify(node.data.workflowInputs ?? {})}`.includes('@drama{global/')) {
+          await workspace.loadGlobalDramaAssets();
+          await checkInputs();
+          workspace = useAppStore.getState();
+          node = workspace.nodes.find((item) => item.id === nodeId);
+          if (!node) throw new ReplicaFailure('分段生成节点已不存在');
+        }
+        const preflight = inspectVideoNode(node, workspace);
         if (preflight.issues.length) throw new ReplicaFailure('分段生成预检未通过，请检查已创建的节点');
         await update({ status: 'generating', stage: `正在生成第 ${job.summary.completedSegments + 1}/${plan.segments.length} 段`,
           segmentNodeIds: [...job.summary.segmentNodeIds, nodeId] });
