@@ -25,6 +25,8 @@ export interface MediaGenerationIntent {
 export type MediaGenerationStatus =
   | 'queued'
   | 'generating'
+  | 'paused'
+  | 'submit_unknown'
   | 'succeeded'
   | 'failed';
 
@@ -43,6 +45,8 @@ export type CanvasMaterializationStatus =
 export type MediaPersistenceStatus = 'saved' | 'skipped' | 'failed';
 
 export interface MediaGenerationResult {
+  /** 异步生成的交付回执；只有保存及目标回填成功后才能确认。 */
+  taskReceipt?: import('./aiTypes').MediaTaskReceipt;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];
   workflowApiTaskId?: string;
   runninghubOutputs?: import('./runninghub').RunningHubOutput[];

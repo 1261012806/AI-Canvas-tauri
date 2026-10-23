@@ -45,7 +45,7 @@ describe('declarative task result download', () => {
     const result = await executeModelProtocol({ ...options(), signal: controller.signal });
     expect(result).toEqual({ urls: ['data:video/mp4;base64,AQID'], taskId: 'video-1' });
     expect(fetchMock).toHaveBeenNthCalledWith(3, 'https://gateway.example/v1/videos/video-1/content',
-      expect.objectContaining({ method: 'GET', signal: controller.signal,
+      expect.objectContaining({ method: 'GET', signal: expect.any(AbortSignal),
         headers: { Accept: 'video/mp4', Authorization: 'Bearer connection-secret' } }));
     expect(fetchMock.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
   });
@@ -141,5 +141,28 @@ describe('declarative task result download', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(executeModelProtocol({ ...options(), signal: controller.signal })).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds a stalled binary result read and cancels only that download request', async () => {
+    vi.useFakeTimers();
+    try {
+      let downloadSignal!: AbortSignal;
+      const fetchMock = vi.fn().mockResolvedValueOnce(json({ id: 'stalled-binary' }))
+        .mockResolvedValueOnce(json({ status: 'completed' }))
+        .mockImplementationOnce(async (_url, init) => {
+          downloadSignal = init.signal;
+          const response = video();
+          vi.spyOn(response, 'arrayBuffer').mockReturnValue(new Promise<ArrayBuffer>(() => {}));
+          return response;
+        });
+      vi.stubGlobal('fetch', fetchMock);
+      const pending = executeModelProtocol(options());
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'PollTimeoutError' });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await rejected;
+      expect(downloadSignal.aborted).toBe(true);
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
   });
 });

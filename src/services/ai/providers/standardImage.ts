@@ -13,8 +13,12 @@ import {
   parseGeneralImageResponses,
 } from '../helpers';
 import { runBatchTasks } from '../batchUtils';
+import { useAppStore } from '../../../store/useAppStore';
+import { pollResolvedModelProtocol } from '../modelProtocol';
+import { PollTaskFailedError } from '../../pollTask';
+import { cleanupNodePolling, pauseMediaTask, registerNodePolling, removePendingTask, savePendingTask, updatePendingTask, VIDEO_POLL_MAX_DURATION_MS } from '../../pollManager';
 import type { ImageReferenceRequestMode } from '../../../types';
-import type { BatchImageResult, ImageGenerationResult } from '../../../types/aiTypes';
+import type { BatchImageResult, ImageGenerationResult, MediaTaskReceipt, ResolvedModelProtocolPoll } from '../../../types/aiTypes';
 import { buildStandardImageRequestBody } from '../imageParameterMappings';
 import { prepareReferenceImageUpload } from '../referenceImageUpload';
 
@@ -26,6 +30,10 @@ export interface StandardImageParams {
   dimensions: { width: number; height: number };
   imageUrls?: string[];
   imageReferenceRequestMode?: ImageReferenceRequestMode;
+  /** 仅已确认的 CCC 连接允许按其 Tasks API 解释异步响应。 */
+  asyncTaskProvider?: 'cccapi';
+  providerConfigId?: string;
+  nodeId?: string;
 }
 
 interface ReferenceImageFile {
@@ -111,6 +119,7 @@ async function requestStandardImages(
   params: StandardImageParams,
   count: number,
   signal?: AbortSignal,
+  beforeSend?: () => void,
 ): Promise<Response> {
   const { apiKey, baseUrl, modelName, prompt, dimensions, imageUrls = [] } = params;
 
@@ -122,6 +131,8 @@ async function requestStandardImages(
     const bytes = files.reduce((total, file) => total + file.size, 0);
     const startedAt = Date.now();
     try {
+      signal?.throwIfAborted();
+      beforeSend?.();
       const response = await corsSafeFetch(apiUrl, {
         method: 'POST', headers: buildMultipartAuthHeaders(apiKey), body, signal,
       });
@@ -145,6 +156,8 @@ async function requestStandardImages(
   });
   if (isOpenAIGptImageModel(modelName)) delete requestBody.response_format;
 
+  signal?.throwIfAborted();
+  beforeSend?.();
   return corsSafeFetch(apiUrl, {
     method: 'POST',
     headers: buildAuthHeaders(apiKey),
@@ -153,10 +166,9 @@ async function requestStandardImages(
   });
 }
 
-async function parseStandardResponse(
+async function readStandardResponse(
   response: Response,
-  dimensions: { width: number; height: number },
-): Promise<ImageGenerationResult[]> {
+): Promise<Record<string, unknown>> {
   if (!response.ok) await parseResponseError(response, `图片生成失败 (${response.status})`);
 
   const responseText = await response.text();
@@ -170,8 +182,107 @@ async function parseStandardResponse(
     }
     throw new Error(`图片接口返回了非 JSON 响应 (${contentType})`);
   }
-  const imageUrls = parseGeneralImageResponses(json);
+  return json;
+}
+
+async function parseStandardResponse(
+  response: Response,
+  dimensions: { width: number; height: number },
+): Promise<ImageGenerationResult[]> {
+  const imageUrls = parseGeneralImageResponses(await readStandardResponse(response));
   return imageUrls.map((url) => ({ url, width: dimensions.width, height: dimensions.height }));
+}
+
+async function generateCccImagesBatch(
+  params: StandardImageParams,
+  requestedCount: number,
+  externalSignal?: AbortSignal,
+): Promise<BatchImageResult> {
+  const projectId = useAppStore.getState().currentProjectId;
+  const nodeSignal = params.nodeId ? registerNodePolling(params.nodeId) : undefined;
+  const signal = nodeSignal && externalSignal ? AbortSignal.any([nodeSignal, externalSignal]) : nodeSignal ?? externalSignal;
+  let receipt: MediaTaskReceipt | undefined;
+  let requestSent = false;
+  let rejected = false;
+  let allTasksFailed = false;
+  try {
+    if (params.nodeId && projectId && params.providerConfigId) {
+      receipt = savePendingTask({ nodeId: params.nodeId, projectId, nodeType: 'ai-image',
+        provider: 'general', providerConfigId: params.providerConfigId, taskType: 'custom-protocol',
+        taskId: '', submitted: false, batchCount: requestedCount });
+    }
+    signal?.throwIfAborted();
+    const response = await requestStandardImages(params, requestedCount, signal, () => { requestSent = true; });
+    rejected = !response.ok && response.status < 500 && ![408, 429].includes(response.status);
+    const payload = await readStandardResponse(response);
+    const data = Array.isArray(payload.data) ? payload.data : [];
+    const taskIds = [...new Set(data.flatMap((item) => item && typeof item === 'object'
+      && typeof item.task_id === 'string' && item.task_id.trim() ? [item.task_id] : []))];
+    if (!taskIds.length) {
+      const urls = parseGeneralImageResponses(payload);
+      if (!urls.length) throw new Error('CCC 图片响应未返回任务 ID 或图片结果，请先到平台确认提交状态');
+      if (receipt) removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+      return { requestedCount, results: urls.slice(0, requestedCount).map((url) => ({ url, ...params.dimensions })),
+        failedCount: Math.max(0, requestedCount - urls.length) };
+    }
+    // 同一连接解析出的 ID 只用于查询该次提交，绝不按缺少的图片数量重发生成。
+    const polls: ResolvedModelProtocolPoll[] = taskIds.map((taskId) => ({
+      method: 'GET', url: `${params.baseUrl.replace(/\/+$/, '')}/tasks/${encodeURIComponent(taskId)}`,
+      auth: { type: 'bearer' }, statusPath: 'data.status', successValues: ['completed'], failureValues: ['failed'],
+      resultUrlPath: 'data.result.images.*.url', intervalMs: 3000, maxDurationMs: VIDEO_POLL_MAX_DURATION_MS,
+    }));
+    if (params.nodeId) receipt = updatePendingTask(params.nodeId, { taskId: taskIds[0], taskIds,
+      protocolPoll: polls[0], protocolPolls: polls, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
+    const failedIds = new Set<string>();
+    let interrupted: unknown;
+    const queryController = new AbortController();
+    const batchQuerySignal = signal ? AbortSignal.any([signal, queryController.signal]) : queryController.signal;
+    const completed = await runBatchTasks(polls.length, 3, async (index) => {
+      try {
+        const result = await pollResolvedModelProtocol(polls[index], params.apiKey, batchQuerySignal, params.baseUrl, (raw) => {
+          const payload = raw as { data?: { status?: string; error?: { message?: unknown } }; error?: { message?: unknown } } | null;
+          if (payload?.data?.status !== 'failed') return;
+          const detail = payload.data.error?.message ?? payload.error?.message;
+          throw new PollTaskFailedError(typeof detail === 'string' && detail.trim() ? `CCC 图片任务失败：${detail}` : 'CCC 图片任务失败');
+        });
+        if (!result.urls?.length) throw new Error('CCC 任务完成但未返回图片');
+        return result.urls;
+      } catch (error) {
+        if (error instanceof PollTaskFailedError) failedIds.add(taskIds[index]);
+        else {
+          interrupted ??= error;
+          queryController.abort(error);
+        }
+        throw error;
+      }
+    });
+    if (interrupted) throw interrupted;
+    allTasksFailed = failedIds.size === taskIds.length;
+    const urls = completed.results.flat().slice(0, requestedCount);
+    if (!urls.length) throw new PollTaskFailedError('CCC 图片任务失败，请查看平台任务详情');
+    if (params.nodeId && failedIds.size) {
+      const remainingPolls = polls.filter((_, index) => !failedIds.has(taskIds[index]));
+      const remainingIds = taskIds.filter((id) => !failedIds.has(id));
+      receipt = updatePendingTask(params.nodeId, { taskId: remainingIds[0], taskIds: remainingIds,
+        protocolPoll: remainingPolls[0], protocolPolls: remainingPolls }, receipt?.taskId, receipt?.attemptId) ?? receipt;
+    }
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+    return { requestedCount, results: urls.map((url) => ({ url, ...params.dimensions,
+      ...(receipt ? { taskReceipt: receipt } : {}) })), failedCount: Math.max(0, requestedCount - urls.length),
+      allTasksSettled: true, ...(receipt ? { taskReceipt: receipt } : {}) };
+  } catch (error) {
+    if (receipt) {
+      if (!requestSent || rejected || allTasksFailed) {
+        removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+      } else {
+        const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+        if (paused) throw paused;
+      }
+    }
+    throw error;
+  } finally {
+    if (params.nodeId) cleanupNodePolling(params.nodeId, nodeSignal);
+  }
 }
 
 export async function generateImageStandardBatch(
@@ -180,6 +291,7 @@ export async function generateImageStandardBatch(
   signal?: AbortSignal,
 ): Promise<BatchImageResult> {
   const requestedCount = Math.max(1, Math.floor(count));
+  if (params.asyncTaskProvider === 'cccapi') return generateCccImagesBatch(params, requestedCount, signal);
   const initialResponse = await requestStandardImages(params, requestedCount, signal);
 
   // User-configured OpenAI-compatible endpoints do not always implement n.

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   persistAudioGenerationResult: vi.fn(),
   persistMediaUrlToProjectData: vi.fn(),
   syncDramaAssetImageFromNode: vi.fn(),
+  completeMedia: vi.fn(), pauseMedia: vi.fn(() => new Error('任务已保留')), endOperation: vi.fn(),
   liveState: { currentProjectId: null as string | null, nodes: [] as Node<BaseNodeData>[], revision: 0 },
 }));
 
@@ -38,12 +39,18 @@ vi.mock('../../src/services/fileService', () => ({
   persistMediaUrlToProjectData: mocks.persistMediaUrlToProjectData,
 }));
 vi.mock('../../src/services/pollManager', () => ({
+  prepareMediaNodeGeneration: vi.fn(), completeMediaNodeTask: mocks.completeMedia, pauseMediaTask: mocks.pauseMedia,
+  registerMediaNodeOperation: () => mocks.endOperation,
+  isMediaTaskPausedError: (error: unknown) => error instanceof Error && error.message === '视频查询已暂停',
+  beginComfyNodeDelivery: vi.fn(), completeComfyNodeTask: vi.fn(), pauseComfyNodeDelivery: vi.fn(),
   prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
   getPendingTasksForProject: () => [],
   VideoPollingPausedError: class extends Error {
     constructor() { super('视频查询已暂停'); }
   },
 }));
+vi.mock('../../src/services/workflowExecutionService', () => ({ getCloudWorkflowPersistedOutput: () => undefined }));
+vi.mock('../../src/services/ai/providers/runninghubWorkflow', () => ({ completeRunningHubNodeTask: vi.fn() }));
 
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: {
@@ -97,6 +104,7 @@ function createContext(): BatchContext {
 }
 
 beforeEach(() => {
+  mocks.completeMedia.mockClear(); mocks.pauseMedia.mockClear(); mocks.endOperation.mockClear();
   mocks.liveState = { currentProjectId: null, nodes: [], revision: 0 };
   mocks.generateText.mockReset();
   mocks.generateImage.mockReset();
@@ -114,6 +122,33 @@ beforeEach(() => {
 });
 
 describe('batchExecuteNodes', () => {
+  it('异步图片落盘失败时保留同一个任务，不清理或再次生成', async () => {
+    const node = createNode('image', 'ai-image');
+    const receipt = { projectId: 'project', nodeId: node.id, taskId: 'original', attemptId: 'first' };
+    mocks.liveState = { currentProjectId: 'project', nodes: [node], revision: 0 };
+    const ctx = createContext(); ctx.currentProjectId = 'project';
+    mocks.generateImage.mockResolvedValueOnce({ url: 'remote.png', width: 1, height: 1, taskReceipt: receipt });
+    mocks.persistMediaUrlToProjectData.mockRejectedValueOnce(new Error('disk full'));
+    await batchExecuteNodes([node.id], [node], [], ctx);
+    expect(mocks.completeMedia).not.toHaveBeenCalled();
+    expect(mocks.pauseMedia).toHaveBeenCalledWith(receipt, expect.any(Error), 'delivery_pending');
+    expect(mocks.generateImage).toHaveBeenCalledOnce();
+    expect(mocks.endOperation).toHaveBeenCalledOnce();
+  });
+
+  it('只有保存和Store回填成功才确认异步图片原任务', async () => {
+    const node = createNode('image', 'ai-image');
+    const receipt = { projectId: 'project', nodeId: node.id, taskId: 'original', attemptId: 'first' };
+    mocks.liveState = { currentProjectId: 'project', nodes: [node], revision: 0 };
+    const ctx = createContext(); ctx.currentProjectId = 'project';
+    mocks.generateImage.mockResolvedValueOnce({ url: 'remote.png', width: 1, height: 1, taskReceipt: receipt });
+    await batchExecuteNodes([node.id], [node], [], ctx);
+    expect(mocks.completeMedia).toHaveBeenCalledWith(receipt);
+    const updateNode = vi.mocked(ctx.updateNodeDataTransient);
+    const successCallIndex = updateNode.mock.calls.findIndex((call) => call[1].status === 'success');
+    expect(successCallIndex).toBeGreaterThanOrEqual(0);
+    expect(updateNode.mock.invocationCallOrder[successCallIndex]).toBeLessThan(mocks.completeMedia.mock.invocationCallOrder[0]);
+  });
   it('does not mark a paused video query as a failed node or resubmit it', async () => {
     mocks.generateVideo.mockRejectedValueOnce(new VideoPollingPausedError());
     const node = createNode('slow-video', 'ai-video');
@@ -352,6 +387,7 @@ describe('batchExecuteNodes', () => {
     });
     const ctx = createContext();
     ctx.currentProjectId = 'project-a';
+    mocks.liveState = { currentProjectId: 'project-a', nodes: [node], revision: 0 };
 
     await expect(batchExecuteNodes([node.id], [node], [], ctx)).resolves.toEqual({ ok: 1, fail: 0 });
 

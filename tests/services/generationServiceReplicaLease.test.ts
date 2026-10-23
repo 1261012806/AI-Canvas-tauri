@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     recordOutputHistory: vi.fn(), showToast: vi.fn() },
   generate: vi.fn(), persist: vi.fn(), guardFresh: true, completeGuard: vi.fn(),
   image: vi.fn(), audio: vi.fn(), persistAudio: vi.fn(), completeComfy: vi.fn(), pauseComfy: vi.fn(),
+  completeMedia: vi.fn(), pauseMedia: vi.fn(() => new Error('任务已保留')), endOperation: vi.fn(), prepareMedia: vi.fn(),
 }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.store } }));
 vi.mock('../../src/store/store.utils', () => ({ generateId: () => 'test-id', derivedNodePlacement: vi.fn() }));
@@ -27,6 +28,9 @@ vi.mock('../../src/services/canvasDerivationGuard', () => ({ registerCanvasDeriv
   isCanvasDerivationFresh: () => mocks.guardFresh, completeCanvasDerivation: mocks.completeGuard }));
 vi.mock('../../src/services/videoBatchPlanning', () => ({ videoInputFingerprint: () => 'video-fingerprint' }));
 vi.mock('../../src/services/pollManager', () => ({
+  prepareMediaNodeGeneration: mocks.prepareMedia, completeMediaNodeTask: mocks.completeMedia, pauseMediaTask: mocks.pauseMedia,
+  registerMediaNodeOperation: () => mocks.endOperation,
+  isMediaTaskPausedError: (error: unknown) => error instanceof Error && error.message === '视频查询已暂停',
   prepareVideoNodeGeneration: vi.fn(), completeVideoNodeTask: vi.fn(), pauseVideoNodeTask: vi.fn(),
   beginComfyNodeDelivery: vi.fn(), completeComfyNodeTask: mocks.completeComfy, pauseComfyNodeDelivery: mocks.pauseComfy,
   getPendingTasksForProject: () => [],
@@ -199,5 +203,39 @@ describe('ComfyUI 图片与音频交付边界', () => {
     expect(mocks.store.updateNodeData).not.toHaveBeenCalled();
     expect(mocks.completeComfy).not.toHaveBeenCalled();
     expect(mocks.pauseComfy).toHaveBeenCalledWith('media', 'original', expect.any(Function));
+  });
+});
+
+describe('跨媒体异步任务交付确认', () => {
+  const receipt = { projectId: 'p', nodeId: 'video', taskId: 'original', attemptId: 'first' };
+
+  it('保存和节点写入完成之后，才确认当次返回的任务身份', async () => {
+    mocks.generate.mockResolvedValueOnce({ url: 'generated.mp4', taskReceipt: receipt });
+    expect(await run()).toEqual({ success: true });
+    expect(mocks.completeMedia).toHaveBeenCalledWith(receipt);
+    expect(mocks.store.updateNodeData.mock.invocationCallOrder[0]).toBeLessThan(mocks.completeMedia.mock.invocationCallOrder[0]);
+    expect(mocks.endOperation).toHaveBeenCalledOnce();
+  });
+
+  it('本地保存失败保留原任务，不确认或重新生成', async () => {
+    mocks.generate.mockResolvedValueOnce({ url: 'generated.mp4', taskReceipt: receipt });
+    mocks.persist.mockRejectedValueOnce(new Error('disk full'));
+    expect((await run()).success).toBe(false);
+    expect(mocks.completeMedia).not.toHaveBeenCalled();
+    expect(mocks.pauseMedia).toHaveBeenCalledWith(receipt, expect.any(Error), 'delivery_pending');
+    expect(mocks.generate).toHaveBeenCalledOnce();
+  });
+
+  it('保存期间目标已变化，旧回调只暂停原receipt，不确认新任务', async () => {
+    const saving = deferred<{ mediaUrl: string; sourceUrl: string }>();
+    mocks.generate.mockResolvedValueOnce({ url: 'generated.mp4', taskReceipt: receipt });
+    mocks.persist.mockReturnValueOnce(saving.promise);
+    const pending = run();
+    await vi.waitFor(() => expect(mocks.persist).toHaveBeenCalledOnce());
+    mocks.guardFresh = false;
+    saving.resolve({ mediaUrl: 'saved.mp4', sourceUrl: 'generated.mp4' });
+    expect((await pending).success).toBe(false);
+    expect(mocks.completeMedia).not.toHaveBeenCalled();
+    expect(mocks.pauseMedia).toHaveBeenCalledWith(receipt, undefined, 'canvas_changed');
   });
 });

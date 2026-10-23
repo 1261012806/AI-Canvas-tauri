@@ -59,7 +59,7 @@ import {
   cancelScheduledAgentExecution,
 } from '../../services/chat/agentScheduler';
 import { rewindAgentTaskCanvas } from '../../services/chat/agentRewindService';
-import { retryMediaArtifactPersist } from '../../services/ai/generationRuntime';
+import { completeMediaMessageDelivery, getRecoverableMessageTask, retryMediaArtifactPersist, retryMediaMessageTask } from '../../services/ai/generationRuntime';
 import { estimateConversationUsage } from '../../services/chat/contextManager';
 import {
   getAgentModeToast,
@@ -632,18 +632,29 @@ export default function ChatPanel({
     if (detached) return;
     const store = useAppStore.getState();
     const message = store.messages.find((item) => item.id === messageId);
-    if (!message?.mediaResult) return;
-
+    if (!message) return;
+    const projectId = store.currentProjectId;
     try {
+      if (getRecoverableMessageTask(messageId, projectId)) {
+        await retryMediaMessageTask(messageId);
+        if (!getRecoverableMessageTask(messageId, projectId)) store.showToast(t('产物已保存到项目'));
+        return;
+      }
+      if (!message.mediaResult) return;
       const artifact = await retryMediaArtifactPersist(
         message.mediaResult,
-        store.currentProjectId,
+        projectId,
       );
       const currentStore = useAppStore.getState();
+      if (currentStore.currentProjectId !== projectId
+        || !currentStore.messages.some((item) => item.id === messageId && item.conversationId === message.conversationId
+          && item.mediaResult?.id === message.mediaResult?.id)) return;
       currentStore.updateMessage(messageId, { mediaResult: artifact });
+      let canvasReady = true;
       if (message.canvasNodeId) {
-        currentStore.settleMediaPlaceholder(message.canvasNodeId, artifact);
+        canvasReady = currentStore.settleMediaPlaceholder(message.canvasNodeId, artifact);
       }
+      await completeMediaMessageDelivery(messageId, artifact, canvasReady);
       currentStore.showToast(t('产物已保存到项目'));
     } catch (error) {
       useAppStore.getState().showToast(

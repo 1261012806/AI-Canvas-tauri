@@ -4,7 +4,7 @@
  * 轮询请求同样强制同源（调用方传入 allowedBaseUrl 时再校验一次），
  * 只对瞬时网络错误与可重试 HTTP 状态码退避重试，避免把业务错误也重放一遍。
  */
-import { pollTask, PollTimeoutError } from '../pollTask';
+import { pollTask, PollTimeoutError, withPollRequestDeadline } from '../pollTask';
 import type {
   ModelProtocolAuthConfig,
   ModelProtocolPollRetryConfig,
@@ -227,7 +227,7 @@ export async function pollResolvedModelProtocol(
   let consecutiveErrors = 0;
   let pendingExtraDelayMs = 0;
   const result = await pollTask<ProtocolJsonValue, ExecuteModelProtocolResult>({
-    fetchState: async () => {
+    fetchState: async (querySignal) => {
       if (pendingExtraDelayMs > 0) {
         const maxDurationMs = poll.maxDurationMs ?? Infinity;
         if (Date.now() - pollStartedAt + pendingExtraDelayMs >= maxDurationMs) {
@@ -235,14 +235,14 @@ export async function pollResolvedModelProtocol(
         }
         const delayMs = pendingExtraDelayMs;
         pendingExtraDelayMs = 0;
-        await waitForRetryDelay(delayMs, signal);
+        await waitForRetryDelay(delayMs, querySignal);
       }
       try {
         const response = await corsSafeFetch(
           applyQueryAuthentication(poll.url, poll.auth, apiKey),
           {
             ...buildResolvedRequestInit(poll, apiKey),
-            signal,
+            signal: querySignal,
           },
         );
         const payload = await readJsonResponse(response, '模型任务查询失败', poll.errorPath);
@@ -303,25 +303,27 @@ export async function pollResolvedModelProtocol(
     signal,
   });
   if (poll.resultDownload) {
+    const download = poll.resultDownload;
     return {
-      urls: await fetchSameOriginResultUrls(
-        [poll.resultDownload.url], allowedBaseUrl!, poll.auth, apiKey,
-        poll.resultMimeType, signal, poll.resultDownload.headers,
-      ),
+      urls: await withPollRequestDeadline((querySignal) => fetchSameOriginResultUrls(
+        [download.url], allowedBaseUrl!, poll.auth, apiKey,
+        poll.resultMimeType, querySignal, download.headers,
+      ), signal),
     };
   }
   if (result.urls && poll.resultFetchUrl) {
     if (!allowedBaseUrl) throw new Error('同源结果下载缺少厂商连接地址');
+    const urls = result.urls;
     return {
       ...result,
-      urls: await fetchSameOriginResultUrls(
-        result.urls,
+      urls: await withPollRequestDeadline((querySignal) => fetchSameOriginResultUrls(
+        urls,
         allowedBaseUrl,
         poll.auth,
         apiKey,
         poll.resultMimeType,
-        signal,
-      ),
+        querySignal,
+      ), signal),
     };
   }
   return result;

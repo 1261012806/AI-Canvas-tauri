@@ -3,16 +3,19 @@
  */
 import { DEFAULT_BASE_URLS } from '../../../constants/api';
 import { useAppStore } from '../../../store/useAppStore';
-import type { AIAudioGenParams, AIVideoGenParams, AudioGenerationResult } from '../../../types/aiTypes';
+import type { AIAudioGenParams, AIVideoGenParams, AudioGenerationResult, MediaTaskReceipt } from '../../../types/aiTypes';
 import type { BaseNodeData } from '../../../types';
 import { mapImageDimensions } from '../../aiDimensions';
-import { pollTask } from '../../pollTask';
+import { pollTask, PollTaskFailedError } from '../../pollTask';
+import { ModelProtocolHttpError } from '../modelProtocolHttp';
 import {
   cleanupNodePolling,
   registerNodePolling,
   removePendingTask,
   savePendingTask,
   updatePendingTask,
+  pauseMediaTask,
+  VIDEO_POLL_MAX_DURATION_MS,
 } from '../../pollManager';
 import {
   extractFlowMusicLyrics,
@@ -95,13 +98,14 @@ function waitForFlowMusicTask(
   signal?: AbortSignal,
 ): Promise<FlowMusicTaskState> {
   return pollTask<FlowMusicTaskState, FlowMusicTaskState>({
-    fetchState: () => fetchFlowMusicTask(apiKey, baseUrl, taskId, signal),
+    fetchState: (querySignal) => fetchFlowMusicTask(apiKey, baseUrl, taskId, querySignal),
     isComplete: (task) => task.status === 'completed' ? task : null,
     isFailed: (task) =>
       task.status === 'failed' || task.status === 'error' || task.status === 'cancelled'
         ? `APIMart 音乐任务失败: ${typeof task.error === 'string' ? task.error : task.error?.message || task.status}`
         : null,
     interval: 3000,
+    maxDuration: VIDEO_POLL_MAX_DURATION_MS,
     signal,
   });
 }
@@ -119,13 +123,15 @@ async function generateFlowMusic(
   const shouldGenerateLyrics = params.autoGenerateLyrics === true && model === 'flowmusic';
   const initialStage = shouldGenerateLyrics ? 'lyrics' : 'music';
   const projectId = useAppStore.getState().currentProjectId;
+  let receipt: MediaTaskReceipt | undefined;
+  let requestSent = false;
   const nodeSignal = params.nodeId ? registerNodePolling(params.nodeId) : undefined;
   const signal = nodeSignal && externalSignal
     ? AbortSignal.any([nodeSignal, externalSignal])
     : nodeSignal ?? externalSignal;
 
   if (params.nodeId && projectId) {
-    savePendingTask({
+    receipt = savePendingTask({
       nodeId: params.nodeId,
       projectId,
       nodeType: 'ai-audio',
@@ -141,9 +147,12 @@ async function generateFlowMusic(
   try {
     let generatedLyrics: { title: string; lyrics: string } | undefined;
     if (shouldGenerateLyrics) {
-      const lyricsTaskId = await submitFlowMusicLyrics(apiKey, baseUrl, prompt, signal);
+      signal?.throwIfAborted();
+      const submission = submitFlowMusicLyrics(apiKey, baseUrl, prompt, signal);
+      requestSent = true;
+      const lyricsTaskId = await submission;
       if (params.nodeId) {
-        updatePendingTask(params.nodeId, { taskId: lyricsTaskId, submitted: true });
+        receipt = updatePendingTask(params.nodeId, { taskId: lyricsTaskId, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
       }
       generatedLyrics = extractFlowMusicLyrics(
         await waitForFlowMusicTask(apiKey, baseUrl, lyricsTaskId, signal),
@@ -160,36 +169,52 @@ async function generateFlowMusic(
         });
       }
       if (params.nodeId) {
-        updatePendingTask(params.nodeId, {
+        receipt = updatePendingTask(params.nodeId, {
           taskId: '',
           audioTaskStage: 'music',
           submitted: false,
-        });
+          mediaRecoveryState: undefined,
+        }, receipt?.taskId, receipt?.attemptId) ?? receipt;
       }
+      requestSent = false;
     }
 
-    const musicTaskId = isSuno
-      ? await submitSunoGeneration(apiKey, baseUrl, {
+    signal?.throwIfAborted();
+    const musicSubmission = isSuno
+      ? submitSunoGeneration(apiKey, baseUrl, {
         version: model === 'suno' ? 'v6' : model.slice('suno-'.length) as 'v6' | 'v6-wild' | 'v6-mini',
         prompt, lyrics: params.autoGenerateLyrics ? undefined : params.musicLyrics,
         title: params.musicTitle, duration: params.musicDuration,
       }, signal)
-      : await submitFlowMusicGeneration(apiKey, baseUrl, buildFlowMusicRequest(params, prompt, generatedLyrics), signal);
+      : submitFlowMusicGeneration(apiKey, baseUrl, buildFlowMusicRequest(params, prompt, generatedLyrics), signal);
+    requestSent = true;
+    const musicTaskId = await musicSubmission;
     if (params.nodeId) {
-      updatePendingTask(params.nodeId, {
+      receipt = updatePendingTask(params.nodeId, {
         taskId: musicTaskId,
         audioTaskStage: 'music',
         submitted: true,
-      });
+      }, receipt?.taskId, receipt?.attemptId) ?? receipt;
     }
-    return extractFlowMusicTrack(
+    const result = extractFlowMusicTrack(
       await waitForFlowMusicTask(apiKey, baseUrl, musicTaskId, signal),
     );
-  } finally {
-    if (params.nodeId) {
-      cleanupNodePolling(params.nodeId);
-      removePendingTask(params.nodeId);
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+    return { ...result, ...(receipt ? { taskReceipt: receipt } : {}) };
+  } catch (error) {
+    if (receipt) {
+      const rejected = !receipt.taskId && error instanceof ModelProtocolHttpError
+        && error.status < 500 && ![408, 429].includes(error.status);
+      if (!requestSent || rejected || error instanceof PollTaskFailedError) {
+        removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+      } else {
+        const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+        if (paused) throw paused;
+      }
     }
+    throw error;
+  } finally {
+    if (params.nodeId) cleanupNodePolling(params.nodeId, nodeSignal);
   }
 }
 

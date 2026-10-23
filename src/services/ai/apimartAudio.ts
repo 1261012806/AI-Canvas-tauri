@@ -6,6 +6,7 @@ import type {
 } from '../../types/aiTypes';
 import { buildAuthHeaders, parseResponseError } from './httpUtils';
 import { corsSafeFetch } from './httpTransport';
+import { ModelProtocolHttpError } from './modelProtocolHttp';
 import {
   getAudioCapability,
   type AudioCapabilityKind,
@@ -90,7 +91,11 @@ async function submitFlowMusicTask(
     signal,
   });
   if (!response.ok) {
-    await parseResponseError(response, `${errorLabel} (${response.status})`);
+    try {
+      await parseResponseError(response, `${errorLabel} (${response.status})`);
+    } catch (error) {
+      throw new ModelProtocolHttpError(response.status, error instanceof Error ? error.message : errorLabel);
+    }
   }
   const taskId = readTaskId(await response.json());
   if (!taskId) throw new Error(`${errorLabel}：未返回 task_id`);

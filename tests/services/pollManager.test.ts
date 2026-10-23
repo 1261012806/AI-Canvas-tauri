@@ -8,11 +8,23 @@ import {
   pauseVideoNodeTaskOnTimeout,
   prepareVideoNodeGeneration,
   resumeVideoNodeTask,
+  bindMediaTaskContext,
+  completeMediaNodeTask,
+  discardMediaTask,
+  getMediaTaskReceipt,
+  pauseMediaTask,
+  prepareMediaNodeGeneration,
+  registerMediaMessageRecoveryHandler,
+  registerMediaNodeOperation,
+  resumeMediaNodeTask,
+  settleMediaTaskQueries,
+  updatePendingTask,
   type PendingTask,
 } from '../../src/services/pollManager';
-import { PollTimeoutError, PollTaskFailedError } from '../../src/services/pollTask';
+import { pollTask, PollTimeoutError, PollTaskFailedError } from '../../src/services/pollTask';
 import { useAppStore } from '../../src/store/useAppStore';
 import * as fileService from '../../src/services/fileService';
+import * as comfyPolling from '../../src/services/comfyPolling';
 
 beforeEach(() => {
   localStorage.clear();
@@ -21,6 +33,258 @@ beforeEach(() => {
 });
 
 describe('pending generation task recovery', () => {
+  it('stops sibling queries after a non-terminal batch failure while retaining explicit failure semantics', async () => {
+    let siblingSignal!: AbortSignal;
+    const results = await settleMediaTaskQueries<string>([
+      async () => { throw new TypeError('query disconnected'); },
+      async (signal) => {
+        siblingSignal = signal;
+        return await pollTask({ signal, fetchState: async () => await new Promise<null>(() => {}), isComplete: () => 'unused' });
+      },
+    ]);
+    expect(siblingSignal.aborted).toBe(true);
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    let remainingAborted = true;
+    const terminal = await settleMediaTaskQueries<string>([
+      async () => { throw new PollTaskFailedError('remote failure'); },
+      async (signal) => { remainingAborted = signal.aborted; return 'completed sibling'; },
+    ]);
+    expect(remainingAborted).toBe(false);
+    expect(terminal[1]).toEqual({ status: 'fulfilled', value: 'completed sibling' });
+  });
+  it('does not mark a live synchronous operation as an orphan during a recovery scan', async () => {
+    useAppStore.setState({ nodes: [{ id: 'live-sync', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Live image', status: 'loading' } }] });
+    const releaseOuter = registerMediaNodeOperation('live-sync');
+    const releaseInner = registerMediaNodeOperation('live-sync');
+    releaseInner();
+    await resumePendingTasks('project-1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    await resumePendingTasks('another-project');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    releaseOuter();
+    await resumePendingTasks('project-1');
+    expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBe('submit_unknown');
+  });
+
+  it('requires the original attempt receipt to pause, discard, or acknowledge a task', () => {
+    const task: PendingTask = { nodeId: 'receipt-node', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'general', taskType: 'general', submitted: true, taskId: 'same-remote-id' };
+    const oldReceipt = savePendingTask(task);
+    const freshReceipt = savePendingTask(task);
+    expect(freshReceipt.attemptId).not.toBe(oldReceipt.attemptId);
+    expect(pauseMediaTask(oldReceipt)).toBeUndefined();
+    completeMediaNodeTask(oldReceipt);
+    discardMediaTask(oldReceipt);
+    expect(getMediaTaskReceipt('receipt-node')).toEqual(freshReceipt);
+    completeMediaNodeTask(freshReceipt);
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it('observes the captured submit receipt without serializing callbacks or affecting another project with the same node ID', () => {
+    const observer = vi.fn();
+    const release = bindMediaTaskContext('shared-node', { projectId: 'project-1', messageId: 'original-message' }, observer);
+    const receipt = savePendingTask({ nodeId: 'shared-node', projectId: 'project-2', nodeType: 'ai-video',
+      provider: 'comfyui', taskType: 'comfyui', submitted: false, taskId: '' });
+    const accepted = updatePendingTask(receipt.nodeId, { submitted: true, taskId: 'original-prompt' }, '', receipt.attemptId)!;
+    expect(observer.mock.calls.map(([value]) => value.taskId)).toEqual(['', 'original-prompt']);
+    release();
+    savePendingTask({ nodeId: 'shared-node', projectId: 'project-2', nodeType: 'ai-image',
+      provider: 'general', taskType: 'general', submitted: true, taskId: 'other-project-task' });
+    expect(getPendingTasksForProject('project-1')).toHaveLength(1);
+    completeMediaNodeTask(accepted);
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+    expect(getPendingTasksForProject('project-2')[0].taskId).toBe('other-project-task');
+    expect(observer).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('observer');
+  });
+
+  it('keeps an unknown submission without allowing a resume request or completion acknowledgement', async () => {
+    const receipt = savePendingTask({ nodeId: 'unknown-node', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'general', taskType: 'general', submitted: false, taskId: '' });
+    useAppStore.setState({ nodes: [{ id: 'unknown-node', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Unknown image', status: 'loading' } }] });
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await resumePendingTasks('project-1');
+    await expect(resumeMediaNodeTask('unknown-node')).rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: receipt });
+    completeMediaNodeTask(receipt);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ submitted: false, mediaRecoveryState: 'submit_unknown' });
+    discardMediaTask(receipt);
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it('binds message-only tasks to their originating project and delivers through the registered handler', async () => {
+    const releaseContext = bindMediaTaskContext('media-message-original', { projectId: 'project-1',
+      conversationId: 'original-conversation', messageId: 'original-message', deliveryMode: 'message', modelId: 'image-model' });
+    const receipt = savePendingTask({ nodeId: 'media-message-original', projectId: 'incorrect-current-project',
+      nodeType: 'ai-image', provider: 'general', providerConfigId: 'message-provider', taskType: 'custom-protocol', submitted: true,
+      taskId: 'message-task', protocolPoll: { method: 'GET', url: 'https://gateway.example/tasks/message-task', intervalMs: 1,
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    releaseContext();
+    expect(receipt.projectId).toBe('project-1');
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'message-provider': { name: 'Message provider', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/image.png' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = vi.fn(async (task: PendingTask, urls: string[]) => {
+      expect(task.mediaContext).toMatchObject({ conversationId: 'original-conversation', messageId: 'original-message' });
+      expect(urls).toEqual(['https://cdn.example/image.png']);
+      expect(getPendingTasksForProject('project-1')).toHaveLength(1);
+      completeMediaNodeTask(receipt);
+    });
+    const unregister = registerMediaMessageRecoveryHandler(handler);
+    try {
+      await resumePendingTasks('project-1');
+      expect(handler).not.toHaveBeenCalled();
+      await resumeMediaNodeTask('media-message-original');
+      expect(handler).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(useAppStore.getState().nodes).toEqual([]);
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } finally { unregister(); }
+  });
+
+  it('keeps the old image batch targets when its source starts a new single-image generation', async () => {
+    useAppStore.setState((state) => ({ nodes: [
+      { id: 'batch-source', type: 'ai-image', position: { x: 0, y: 0 }, data: {
+        type: 'ai-image', label: 'Batch', status: 'idle', batchCount: 1, batchGroupId: 'old-batch' } },
+      { id: 'batch-second', type: 'ai-image', position: { x: 320, y: 0 }, data: {
+        type: 'ai-image', label: 'Batch 2', status: 'idle', batchGroupId: 'old-batch' } },
+    ], config: { ...state.config, providers: { ...state.config.providers,
+      recovery: { name: 'Recovery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    savePendingTask({ nodeId: 'batch-source', projectId: 'project-1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'recovery', taskType: 'custom-protocol', taskId: 'old-task', submitted: true,
+      batchCount: 2, mediaRecoveryState: 'query_paused', protocolPoll: {
+        method: 'GET', url: 'https://gateway.example/tasks/old-task', intervalMs: 1,
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'urls.*' } });
+    prepareMediaNodeGeneration('batch-source');
+    const recovery = getPendingTasksForProject('project-1')[0];
+    expect(useAppStore.getState().nodes.find((node) => node.id === 'batch-source')?.data.batchGroupId).toBeUndefined();
+    expect(useAppStore.getState().nodes.find((node) => node.id === recovery.nodeId)?.data.batchGroupId).toBe('old-batch');
+    useAppStore.getState().updateNodeDataTransient('batch-source', { status: 'success', imageUrl: 'asset://new-single-image' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'completed', urls: ['old-one', 'old-two'] }))));
+    vi.spyOn(fileService, 'persistMediaUrlToProjectData').mockImplementation(async (url) => ({ mediaUrl: `asset://${url}`, sourceUrl: url }));
+    vi.spyOn(useAppStore.getState(), 'recordOutputHistory').mockResolvedValue(undefined);
+    await resumeMediaNodeTask(recovery.nodeId);
+    const nodes = useAppStore.getState().nodes;
+    expect(nodes.find((node) => node.id === recovery.nodeId)?.data.imageUrl).toBe('asset://old-one');
+    expect(nodes.find((node) => node.id === 'batch-second')?.data.imageUrl).toBe('asset://old-two');
+    expect(nodes.find((node) => node.id === 'batch-source')?.data.imageUrl).toBe('asset://new-single-image');
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it('installs message delivery on demand when a recovered canvas node is resumed first', async () => {
+    useAppStore.setState((state) => ({ nodes: [{ id: 'message-node', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Message image', status: 'idle' } }],
+    config: { ...state.config, providers: { ...state.config.providers,
+      recovery: { name: 'Recovery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const receipt = savePendingTask({ nodeId: 'message-node', projectId: 'project-1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'recovery', taskType: 'custom-protocol', taskId: 'original-message-task', submitted: true,
+      mediaContext: { projectId: 'project-1', conversationId: 'original-conversation', messageId: 'original-message',
+        deliveryMode: 'node+message', canvasNodeId: 'message-node' }, protocolPoll: {
+        method: 'GET', url: 'https://gateway.example/tasks/original-message-task', intervalMs: 1,
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'completed', url: 'original-result' }))));
+    const runtime = await import('../../src/services/ai/generationRuntime');
+    const handler = vi.fn(async () => { completeMediaNodeTask(receipt); });
+    let unregister: (() => void) | undefined;
+    const ensure = vi.spyOn(runtime, 'ensureMediaMessageRecoveryHandler').mockImplementation(() => {
+      unregister = registerMediaMessageRecoveryHandler(handler);
+    });
+    try {
+      await resumeMediaNodeTask('message-node');
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } finally { unregister?.(); ensure.mockRestore(); }
+  });
+
+  it('preserves a paused video start time when restoring its node state', async () => {
+    useAppStore.setState({ nodes: [{ id: 'paused-video', type: 'ai-video', position: { x: 0, y: 0 },
+      data: { type: 'ai-video', label: 'Video', status: 'loading' } }] });
+    savePendingTask({ nodeId: 'paused-video', projectId: 'project-1', nodeType: 'ai-video', provider: 'general',
+      taskType: 'general', taskId: 'video-task', submitted: true, mediaRecoveryState: 'query_paused',
+      videoGenerationStartedAt: 123456 });
+    await resumePendingTasks('project-1');
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'idle', videoTaskState: 'paused', generationStartedAt: 123456 });
+  });
+
+  it('continues legacy disconnected ComfyUI image recovery after reopening its project', async () => {
+    useAppStore.setState({ nodes: [{ id: 'legacy-comfy', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Comfy image', status: 'error', error: 'ComfyUI connection interrupted' } }] });
+    savePendingTask({ nodeId: 'legacy-comfy', projectId: 'project-1', nodeType: 'ai-image', provider: 'comfyui',
+      taskType: 'comfyui', baseUrl: 'http://comfy.example:8188', taskId: 'old-prompt', submitted: true, comfyRecoveryState: 'disconnected' });
+    vi.spyOn(comfyPolling, 'pollComfyHistory').mockResolvedValue({ url: 'http://comfy.example:8188/result.png' });
+    vi.spyOn(fileService, 'persistMediaUrlToProjectData').mockResolvedValue({ mediaUrl: 'asset://comfy-result', sourceUrl: 'http://comfy.example:8188/result.png' });
+    await resumePendingTasks('project-1');
+    await vi.waitFor(() => expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'success', imageUrl: 'asset://comfy-result' }));
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it.each(['ai-image', 'ai-audio'] as const)('keeps %s tasks after local saving fails and only re-queries the original ID', async (nodeType) => {
+    useAppStore.setState((state) => ({ nodes: [{ id: 'save-media', type: nodeType, position: { x: 0, y: 0 },
+      data: { type: nodeType, label: 'Media save', status: 'loading' } }], config: { ...state.config, providers: {
+      ...state.config.providers, saved: { name: 'Saved provider', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const receipt = savePendingTask({ nodeId: 'save-media', projectId: 'project-1', nodeType, provider: 'general',
+      providerConfigId: 'saved', taskType: 'custom-protocol', submitted: true, taskId: 'already-completed', protocolPoll: {
+        method: 'GET', url: 'https://gateway.example/tasks/already-completed', intervalMs: 1, statusPath: 'status',
+        successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/result' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const persist = vi.spyOn(fileService, 'persistMediaUrlToProjectData').mockRejectedValueOnce(new Error('disk unavailable'))
+      .mockResolvedValueOnce({ mediaUrl: 'asset://saved-result', sourceUrl: 'https://cdn.example/result' });
+    await resumeMediaNodeTask('save-media');
+    expect(getMediaTaskReceipt('save-media')).toEqual(receipt);
+    expect(getPendingTasksForProject('project-1')[0].mediaRecoveryState).toBe('delivery_pending');
+    await resumeMediaNodeTask('save-media');
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every(([, init]) => init.method === 'GET')).toBe(true);
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it('recovers a message-only ComfyUI result without creating a node or clearing a failed message delivery', async () => {
+    const release = bindMediaTaskContext('media-message-comfy', { projectId: 'project-1',
+      conversationId: 'comfy-conversation', messageId: 'comfy-message', deliveryMode: 'message' });
+    const receipt = savePendingTask({ nodeId: 'media-message-comfy', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'comfyui', taskType: 'comfyui', taskId: 'original-comfy-prompt', submitted: true, baseUrl: 'http://comfy.example:8188' });
+    release();
+    const poll = vi.spyOn(comfyPolling, 'pollComfyHistory').mockResolvedValue({ url: 'http://comfy.example:8188/view?filename=image.png' });
+    const handler = vi.fn().mockRejectedValueOnce(new Error('message save failed')).mockImplementationOnce(async () => {
+      completeMediaNodeTask(receipt);
+    });
+    const unregister = registerMediaMessageRecoveryHandler(handler);
+    try {
+      await resumePendingTasks('project-1');
+      await resumeMediaNodeTask('media-message-comfy');
+      expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ taskId: 'original-comfy-prompt',
+        comfyRecoveryState: 'save_pending', mediaRecoveryState: 'delivery_pending' });
+      await resumeMediaNodeTask('media-message-comfy');
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(poll).toHaveBeenCalledTimes(2);
+      expect(poll.mock.calls.every(([, promptId]) => promptId === 'original-comfy-prompt')).toBe(true);
+      expect(useAppStore.getState().nodes).toEqual([]);
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } finally { unregister(); }
+  });
+
+  it('rejects a message-only remote video failure even after the terminal task record is cleared', async () => {
+    const release = bindMediaTaskContext('failed-message-video', { projectId: 'project-1',
+      conversationId: 'original-conversation', messageId: 'original-message', deliveryMode: 'message' });
+    savePendingTask({ nodeId: 'failed-message-video', projectId: 'project-1', nodeType: 'ai-video', provider: 'general',
+      providerConfigId: 'failed-message-provider', taskType: 'custom-protocol', taskId: 'failed-task', submitted: true,
+      protocolPoll: { method: 'GET', url: 'https://gateway.example/tasks/failed-task', intervalMs: 1, statusPath: 'status',
+        successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    release();
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'failed-message-provider': { name: 'Failed message provider', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'failed' }))));
+    await expect(resumeMediaNodeTask('failed-message-video')).rejects.toBeInstanceOf(PollTaskFailedError);
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+    expect(useAppStore.getState().nodes).toEqual([]);
+  });
+
   it.each([
     { type: 'source-image', generationType: 'ai-image', field: 'imageUrl', extension: 'png' },
     { type: 'source-video', generationType: 'ai-video', field: 'videoUrl', extension: 'mp4' },
@@ -126,7 +390,7 @@ describe('pending generation task recovery', () => {
     const task = pausedVideo();
     expect(pauseVideoNodeTaskOnTimeout(task.nodeId, new PollTaskFailedError('upstream timeout'), task.taskId)).toBeUndefined();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'failed' }))));
-    await resumeVideoNodeTask(task.nodeId);
+    await expect(resumeVideoNodeTask(task.nodeId)).rejects.toBeInstanceOf(PollTaskFailedError);
     expect(useAppStore.getState().nodes[0].data.status).toBe('error');
     expect(getPendingTasksForProject('project-1')).toEqual([]);
   });
@@ -256,7 +520,7 @@ describe('pending generation task recovery', () => {
       'batch-placeholder',
     ]);
     expect([...getPendingTaskCoveredNodeIds(nodes, [{ ...task, submitted: false }])])
-      .toEqual(['batch-source']);
+      .toEqual(['batch-source', 'batch-placeholder']);
   });
 
   it('marks loading nodes without a pending task as recoverable errors', async () => {
@@ -277,11 +541,12 @@ describe('pending generation task recovery', () => {
 
     expect(useAppStore.getState().nodes[0].data).toMatchObject({
       status: 'error',
-      error: '任务未完成提交，请重新点击生成',
+      error: '生成请求状态未知：本机没有可续查的任务 ID，请先到平台确认是否已生成，避免重复提交',
+      mediaTaskState: 'submit_unknown',
     });
   });
 
-  it('marks every loading node in a failed recovered batch as an error', async () => {
+  it('pauses every batch placeholder when connection configuration is missing without losing its remote task', async () => {
     useAppStore.setState({
       nodes: [
         {
@@ -323,12 +588,13 @@ describe('pending generation task recovery', () => {
     await resumePendingTasks('project-1');
     await vi.waitFor(() => {
       expect(useAppStore.getState().nodes.map((node) => node.data.status))
-        .toEqual(['error', 'error']);
+        .toEqual(['idle', 'idle']);
     });
-    expect(useAppStore.getState().nodes[1].data.error).toBe('任务恢复失败：缺少 API 配置');
+    expect(useAppStore.getState().nodes[1].data.mediaTaskState).toBe('paused');
+    expect(getPendingTasksForProject('project-1')[0].taskId).toBe('remote-batch-task');
   });
 
-  it('removes stale pending records for nodes that already finished', async () => {
+  it('retains an unacknowledged task even when its node already displays a result', async () => {
     useAppStore.setState({
       nodes: [{
         id: 'finished-node',
@@ -353,7 +619,7 @@ describe('pending generation task recovery', () => {
 
     await resumePendingTasks('project-1');
 
-    expect(getPendingTasksForProject('project-1')).toEqual([]);
+    expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ taskId: 'remote-task', mediaRecoveryState: 'query_paused' });
   });
 
   it('keeps pending task records isolated by project', () => {

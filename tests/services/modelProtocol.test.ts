@@ -22,7 +22,7 @@ import { useAppStore } from '../../src/store/useAppStore';
 import { createWorkflowApiDraft } from '../../src/services/workflowApi/workflowApiDefinition';
 import { readModelProtocolPathValues } from '../../src/services/ai/modelProtocolResponse';
 import { buildGeneralVideoProtocolVariables } from '../../src/services/ai/generateVideo';
-import { getPendingTasksForProject, VideoPollingPausedError } from '../../src/services/pollManager';
+import { getPendingTasksForProject, MediaTaskPausedError, VideoPollingPausedError } from '../../src/services/pollManager';
 
 const jsonResponse = (
   payload: unknown,
@@ -38,6 +38,50 @@ beforeEach(() => {
 });
 
 describe('declarative model execution protocol', () => {
+  it.each(['image', 'audio'] as const)('retains a submitted %s task after a non-timeout query failure', async (category) => {
+    localStorage.clear();
+    useAppStore.setState((state) => ({ currentProjectId: 'media-query-project',
+      nodes: [{ id: 'media-query-node', type: category === 'image' ? 'ai-image' : 'ai-audio', position: { x: 0, y: 0 },
+        data: { type: category === 'image' ? 'ai-image' : 'ai-audio', label: 'Media', status: 'loading' } }],
+      config: { ...state.config, providers: { ...state.config.providers,
+        recovery: { name: 'Recovery', apiKey: 'fixture-secret', baseUrl: 'https://gateway.example/v1' } } } }));
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'async',
+      submit: { method: 'POST', path: '/generate', body: { model: '{{model}}', prompt: '{{prompt}}' } },
+      response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/tasks/{{submit.id}}',
+        retry: { maxRetries: 0 }, response: { statusPath: 'status', successValues: ['completed'],
+          failureValues: ['failed'], result: { urlPath: 'url' } } } };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'original-media-task' }))
+      .mockRejectedValueOnce(new TypeError('network disconnected'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(runConfiguredModelProtocol({ category, nodeId: 'media-query-node',
+      model: { id: 'media', name: 'Media', modelId: 'media', category, providerConfigId: 'recovery',
+        executionProfile: { preset: 'custom', protocol } }, variables: { model: 'media', prompt: 'private prompt' } }))
+      .rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: { taskId: 'original-media-task' } });
+    expect(getPendingTasksForProject('media-query-project')[0]).toMatchObject({ taskId: 'original-media-task', submitted: true,
+      mediaRecoveryState: 'query_paused', protocolPoll: { url: 'https://gateway.example/v1/tasks/original-media-task' } });
+    expect(JSON.stringify(getPendingTasksForProject('media-query-project'))).not.toContain('private prompt');
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    localStorage.clear();
+  });
+
+  it('keeps an interrupted async submit as unknown without claiming that the provider rejected it', async () => {
+    localStorage.clear();
+    useAppStore.setState((state) => ({ currentProjectId: 'unknown-submit', nodes: [],
+      config: { ...state.config, providers: { ...state.config.providers,
+        recovery: { name: 'Recovery', apiKey: 'fixture-secret', baseUrl: 'https://gateway.example/v1' } } } }));
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'async',
+      submit: { method: 'POST', path: '/images', body: { model: '{{model}}', prompt: '{{prompt}}' } },
+      response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/images/{{submit.id}}', response: {
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], result: { urlPath: 'url' } } } };
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('connection lost')));
+    await expect(runConfiguredModelProtocol({ category: 'image', nodeId: 'unknown-node', model: {
+      id: 'unknown-model', name: 'Unknown model', category: 'image', modelId: 'unknown-model', providerConfigId: 'recovery',
+      executionProfile: { preset: 'custom', protocol } }, variables: { model: 'unknown-model', prompt: 'image' } }))
+      .rejects.toBeInstanceOf(MediaTaskPausedError);
+    expect(getPendingTasksForProject('unknown-submit')[0]).toMatchObject({ taskId: '', submitted: false,
+      mediaRecoveryState: 'submit_unknown' });
+    localStorage.clear();
+  });
   it('retains an async video query descriptor when the declared polling budget expires', async () => {
     localStorage.clear();
     useAppStore.setState((state) => ({ currentProjectId: 'slow-project',
@@ -1607,7 +1651,8 @@ describe('declarative model execution protocol', () => {
       name: 'AbortError',
     });
 
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).not.toBe(controller.signal);
   });
 
   it('uses the configured consecutive query retry limit', async () => {

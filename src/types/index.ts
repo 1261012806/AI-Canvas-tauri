@@ -229,6 +229,9 @@ export interface BaseNodeData {
   generationStartedAt?: number;
   /** 已提交的视频任务暂停本地查询，仍可续查或提交新的生成。 */
   videoTaskState?: 'paused';
+  /** 已提交的图片／音频／视频只续取原任务；无 ID 时不能承诺可查询。 */
+  mediaTaskState?: 'paused' | 'submit_unknown' | 'delivery_pending';
+  mediaTaskStage?: 'submitting' | 'querying' | 'saving';
   model?: string;             // 模型 ID；空字符串表示主动清除，不回填偏好或项目默认模型
   provider?: string;          // 选择的供应商 ID（如 apimart）
   workflowId?: string;        // 选择的工作流 ID

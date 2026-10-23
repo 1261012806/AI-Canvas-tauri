@@ -4,7 +4,11 @@ import { subscribeAgentLifecycle } from './agentLifecycle';
  * 对话提交与恢复的统一控制层，按会话模式分派普通回复、Agent 任务和显式媒体生成。
  * 组件只调用本模块，不直接拼接运行时、调度器或审批流程。
  */
-import { MEDIA_PERSIST_FAILED_MESSAGE, runMediaGeneration } from '../ai/generationRuntime';
+import { completeMediaMessageDelivery, MEDIA_PERSIST_FAILED_MESSAGE, runMediaGeneration } from '../ai/generationRuntime';
+import { getPendingTasksForProject, isMediaTaskPausedError } from '../pollManager';
+import { completeCanvasDerivation } from '../canvasDerivationGuard';
+import { completeRunningHubNodeTask } from '../ai/providers/runninghubWorkflow';
+import { persistMessage } from './chatHistoryService';
 import { workflowExecution } from '../workflowExecutionService';
 import { completeWorkflowApiNodeTask } from '../workflowApi/workflowApiAdapter';
 import {
@@ -616,7 +620,7 @@ function tryInterjectConversationMessage(
   return taskId;
 }
 
-async function triggerMediaGeneration(
+export async function triggerMediaGeneration(
   messageId: string,
   intent: MediaGenerationIntent,
 ): Promise<void> {
@@ -624,7 +628,7 @@ async function triggerMediaGeneration(
   const projectId = store.currentProjectId;
   const originMessage = store.messages.find((message) => message.id === messageId);
   const apiWorkflow = store.workflows.find((workflow) => workflow.adapterType === 'workflow-api' && `workflow-api/${workflow.id}` === intent.modelRef);
-  const taskContext = apiWorkflow && projectId && originMessage ? {
+  const taskContext = projectId && originMessage ? {
     projectId, conversationId: originMessage.conversationId, messageId, deliveryMode: intent.deliveryMode,
   } : undefined;
   const isCurrentApiMessage = () => useAppStore.getState().currentProjectId === projectId
@@ -652,8 +656,8 @@ async function triggerMediaGeneration(
   });
   try {
     store.updateMessage(messageId, { mediaStatus: 'generating' });
-    const result = await runMediaGeneration(intent, projectId, undefined, apiWorkflow ? targetNodeId : undefined, taskContext);
-    if (apiWorkflow && !isCurrentApiMessage()) return;
+    const result = await runMediaGeneration(intent, projectId, undefined, targetNodeId, taskContext);
+    if (!isCurrentApiMessage()) return;
     const nodeCreated = placeholderLifecycle
       ? settleMediaPlaceholderLifecycle(placeholderLifecycle, result)
       : targetNodeId ? useAppStore.getState().settleMediaPlaceholder(targetNodeId, result) : false;
@@ -665,6 +669,24 @@ async function triggerMediaGeneration(
       canvasNodeId: targetNodeId,
       canvasError: targetNodeId && !nodeCreated ? MEDIA_PLACEHOLDER_STALE_ERROR : undefined,
     });
+    await completeMediaMessageDelivery(messageId, result, !targetNodeId || nodeCreated);
+    if (projectId && ['runninghub', 'runninghubwf'].includes(result.provider)
+      && result.persistence !== 'failed' && (!targetNodeId || nodeCreated)) {
+      const trackingId = targetNodeId ?? `runninghub-message-${messageId}`;
+      const originalTask = getPendingTasksForProject(projectId).find((task) => task.nodeId === trackingId
+        && task.runninghubMessage?.messageId === messageId);
+      const deliveredMessage = useAppStore.getState().messages.find((message) => message.id === messageId
+        && message.mediaResult?.id === result.id);
+      if (originalTask && deliveredMessage) {
+        await persistMessage(deliveredMessage, projectId, deliveredMessage.conversationId);
+        if (isCurrentApiMessage()
+          && useAppStore.getState().messages.some((message) => message.id === messageId && message.mediaResult?.id === result.id)
+          && getPendingTasksForProject(projectId).some((task) => task.nodeId === trackingId
+            && task.taskId === originalTask.taskId && task.attemptId === originalTask.attemptId)) {
+          completeRunningHubNodeTask(trackingId);
+        }
+      }
+    }
     if (result.workflowApiTaskId && (!targetNodeId || nodeCreated)) completeWorkflowApiNodeTask(targetNodeId ?? `workflow-api-message-${messageId}`, result.workflowApiTaskId);
     // 生成成功不代表已可靠保存，落盘失败必须让用户知道并能重试
     if (result.persistence === 'failed') {
@@ -674,17 +696,20 @@ async function triggerMediaGeneration(
       );
     }
   } catch (error) {
-    if (apiWorkflow && !isCurrentApiMessage()) return;
+    if (!isCurrentApiMessage()) return;
+    const recoverable = isMediaTaskPausedError(error);
+    const submissionUnknown = recoverable && 'reason' in error && error.reason === 'submit_unknown';
     const message = error instanceof Error ? error.message : '未知错误';
-    if (placeholderLifecycle) failMediaPlaceholderLifecycle(placeholderLifecycle, message);
+    if (placeholderLifecycle && recoverable) completeCanvasDerivation(placeholderLifecycle.guard);
+    else if (placeholderLifecycle) failMediaPlaceholderLifecycle(placeholderLifecycle, message);
     else if (targetNodeId) useAppStore.getState().failMediaPlaceholder(targetNodeId, message);
     store.updateMessage(messageId, {
-      mediaStatus: 'failed',
+      mediaStatus: submissionUnknown ? 'submit_unknown' : recoverable ? 'paused' : 'failed',
       mediaError: message,
       canvasStatus: targetNodeId ? 'failed' : 'none',
       canvasNodeId: targetNodeId,
       canvasError: targetNodeId ? message : undefined,
     });
-    store.showToast(`${mediaLabel}生成失败: ${message}`, 'error');
+    store.showToast(recoverable ? `${mediaLabel}任务已保留，可继续查询原任务` : `${mediaLabel}生成失败: ${message}`, recoverable ? 'info' : 'error');
   }
 }

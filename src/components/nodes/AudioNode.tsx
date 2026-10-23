@@ -20,6 +20,7 @@ import { transcribeAudio } from '../../services/ai/transcribeAudio';
 import { textNodeHeight } from '../../utils/num';
 import { useT } from '../../i18n';
 import NodeGenerationProgress from './shared/NodeGenerationProgress';
+import MediaTaskStatus from './shared/MediaTaskStatus';
 import FullscreenOverlay from '../shared/FullscreenOverlay';
 import CanvasAudioPreview from '../shared/CanvasAudioPreview';
 import { useCanvasNodeLodProtection } from '../../hooks/useCanvasNodeLod';
@@ -550,7 +551,7 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               <span>{t('上传中...')}</span>
             </div>
           ) : data.status === 'loading' ? (
-            <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成音频中...')} compactSpinner />
+            <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成音频中...')} compactSpinner />
           ) : (
             <div className="node-preview-placeholder">
               {isSource ? (
@@ -570,8 +571,9 @@ function AIAudioNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             </div>
           )}
           {data.audioUrl && data.status === 'loading' && (
-            <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成音频中...')} overlay />
+            <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成音频中...')} overlay />
           )}
+          {data.mediaTaskState && data.status !== 'loading' && <MediaTaskStatus nodeId={id} overlay />}
         </div>
         {data.error && <NodeError nodeId={id} message={data.error} />}
         <Handle type="source" position={Position.Left} id="left" className="node-handle handle-source handle-audio" >

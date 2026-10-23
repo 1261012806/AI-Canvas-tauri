@@ -19,6 +19,14 @@ const interjectionMocks = vi.hoisted(() => ({
   enqueue: vi.fn(() => true),
 }));
 
+const mediaRuntimeMocks = vi.hoisted(() => ({ generate: vi.fn(), complete: vi.fn() }));
+const mediaHistoryMocks = vi.hoisted(() => ({ persist: vi.fn() }));
+vi.mock('../../../src/services/ai/generationRuntime', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../src/services/ai/generationRuntime')>(),
+  runMediaGeneration: mediaRuntimeMocks.generate,
+  completeMediaMessageDelivery: mediaRuntimeMocks.complete,
+}));
+
 vi.mock('../../../src/services/chat/agentScheduler', () => ({
   getActiveConversationAgentTaskId: () => schedulerMocks.activeTaskId,
   scheduleConversationAgentExecution: schedulerMocks.schedule,
@@ -38,15 +46,18 @@ vi.mock('../../../src/services/chat/tools', () => ({
 vi.mock('../../../src/services/chat/chatHistoryService', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../src/services/chat/chatHistoryService')>(),
   loadMessages: vi.fn(async () => ({ messages: [], total: 0 })),
+  persistMessage: mediaHistoryMocks.persist,
 }));
 
 import {
   resumeAgentTaskExecution,
   submitConversationMessage,
+  triggerMediaGeneration,
 } from '../../../src/services/chat/conversationExecutionController';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { DEFAULT_AGENT_TASK_BUDGET, type AgentTask } from '../../../src/types/agent';
 import { GENERAL_ASSISTANT_SCOPE_ID, isGeneralAssistantTool } from '../../../src/services/chat/assistantScope';
+import { getPendingTasksForProject, MediaTaskPausedError, savePendingTask } from '../../../src/services/pollManager';
 
 function arrangeConversation(): void {
   useAppStore.setState(useAppStore.getInitialState(), true);
@@ -71,6 +82,11 @@ function arrangeConversation(): void {
 }
 
 beforeEach(() => {
+  localStorage.removeItem('ai_canvas_pending_tasks');
+  mediaRuntimeMocks.generate.mockReset();
+  mediaRuntimeMocks.complete.mockReset();
+  mediaHistoryMocks.persist.mockReset();
+  mediaHistoryMocks.persist.mockResolvedValue(undefined);
   arrangeConversation();
   schedulerMocks.activeTaskId = undefined;
   schedulerMocks.scheduledTaskIds.clear();
@@ -85,6 +101,71 @@ beforeEach(() => {
   );
   interjectionMocks.enqueue.mockReset();
   interjectionMocks.enqueue.mockReturnValue(true);
+});
+
+describe('ordinary conversation media recovery', () => {
+  it('passes message context to ordinary providers and acknowledges only after message delivery', async () => {
+    const artifact = { id: 'artifact-1', kind: 'image', deliveryMode: 'chat', url: 'asset://saved.png', sourceUrl: 'https://cdn.test/image.png',
+      persistence: 'saved', prompt: '猫', provider: 'general', modelId: 'general/image', createdAt: 1,
+      taskReceipt: { projectId: 'project-1', nodeId: 'tracking-1', taskId: 'remote-1', attemptId: 'attempt-1' } };
+    mediaRuntimeMocks.generate.mockResolvedValue(artifact);
+    useAppStore.getState().addMessage({ id: 'media-message', conversationId: 'conversation-1', role: 'assistant', content: '', timestamp: 1, status: 'done' });
+    await triggerMediaGeneration('media-message', { kind: 'image', prompt: '猫', modelRef: 'general/image', deliveryMode: 'chat' });
+    expect(mediaRuntimeMocks.generate).toHaveBeenCalledWith(expect.anything(), 'project-1', undefined, undefined,
+      expect.objectContaining({ projectId: 'project-1', messageId: 'media-message', conversationId: 'conversation-1' }));
+    expect(useAppStore.getState().messages.find((message) => message.id === 'media-message')?.mediaResult).toEqual(artifact);
+    expect(mediaRuntimeMocks.complete).toHaveBeenCalledWith('media-message', artifact, true);
+  });
+
+  it('shows a paused original task instead of reporting generation failure', async () => {
+    const receipt = { projectId: 'project-1', nodeId: 'tracking-1', taskId: 'remote-1', attemptId: 'attempt-1' };
+    mediaRuntimeMocks.generate.mockRejectedValue(new MediaTaskPausedError(receipt, 'query_timeout'));
+    useAppStore.getState().addMessage({ id: 'media-message', conversationId: 'conversation-1', role: 'assistant', content: '', timestamp: 1, status: 'done' });
+    await triggerMediaGeneration('media-message', { kind: 'image', prompt: '猫', modelRef: 'general/image', deliveryMode: 'chat' });
+    expect(useAppStore.getState().messages.find((message) => message.id === 'media-message')?.mediaStatus).toBe('paused');
+    expect(mediaRuntimeMocks.complete).not.toHaveBeenCalled();
+  });
+
+  it.each(['chat', 'both'] as const)('completes a RunningHub %s task only after its message is saved', async (deliveryMode) => {
+    const artifact = { id: 'runninghub-artifact', kind: 'image', deliveryMode, url: 'asset://saved.png', sourceUrl: 'https://cdn.test/image.png',
+      filePath: 'saved.png', persistence: 'saved', prompt: '猫', provider: 'runninghubwf', modelId: 'runninghubwf/image', createdAt: 1 };
+    let trackingId = '';
+    mediaRuntimeMocks.generate.mockImplementation(async (_intent, _projectId, _signal, targetNodeId, taskContext) => {
+      trackingId = targetNodeId ?? 'runninghub-message-media-message';
+      savePendingTask({ projectId: 'project-1', nodeId: trackingId, nodeType: 'ai-image', provider: 'runninghubwf',
+        taskType: 'runninghub-workflow', taskId: 'runninghub-original', submitted: true,
+        runninghubRecoveryState: 'save_pending', runninghubMessage: taskContext });
+      return artifact;
+    });
+    let finishSave!: () => void;
+    const saved = new Promise<void>((resolve) => { finishSave = resolve; });
+    mediaHistoryMocks.persist.mockImplementation((message) => message.mediaResult?.id === artifact.id ? saved : Promise.resolve());
+    useAppStore.getState().addMessage({ id: 'media-message', conversationId: 'conversation-1', role: 'assistant', content: '', timestamp: 1, status: 'done' });
+    const generation = triggerMediaGeneration('media-message', { kind: 'image', prompt: '猫', modelRef: 'runninghubwf/image', deliveryMode });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getPendingTasksForProject('project-1')).toHaveLength(1);
+    if (deliveryMode === 'both') expect(useAppStore.getState().nodes.find((node) => node.id === trackingId)?.data.imageUrl).toBe(artifact.url);
+    finishSave();
+    await generation;
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+  });
+
+  it('retains a RunningHub task when saving its completed message fails', async () => {
+    const artifact = { id: 'runninghub-artifact', kind: 'image', deliveryMode: 'chat', url: 'asset://saved.png', sourceUrl: 'https://cdn.test/image.png',
+      filePath: 'saved.png', persistence: 'saved', prompt: '猫', provider: 'runninghubwf', modelId: 'runninghubwf/image', createdAt: 1 };
+    mediaRuntimeMocks.generate.mockImplementation(async (_intent, _projectId, _signal, _targetNodeId, taskContext) => {
+      savePendingTask({ projectId: 'project-1', nodeId: 'runninghub-message-media-message', nodeType: 'ai-image', provider: 'runninghubwf',
+        taskType: 'runninghub-workflow', taskId: 'runninghub-original', submitted: true,
+        runninghubRecoveryState: 'save_pending', runninghubMessage: taskContext });
+      return artifact;
+    });
+    mediaHistoryMocks.persist.mockImplementation((message) => message.mediaResult?.id === artifact.id
+      ? Promise.reject(new Error('message save failed')) : Promise.resolve());
+    useAppStore.getState().addMessage({ id: 'media-message', conversationId: 'conversation-1', role: 'assistant', content: '', timestamp: 1, status: 'done' });
+    await triggerMediaGeneration('media-message', { kind: 'image', prompt: '猫', modelRef: 'runninghubwf/image', deliveryMode: 'chat' });
+    expect(getPendingTasksForProject('project-1')).toEqual([expect.objectContaining({ taskId: 'runninghub-original', runninghubRecoveryState: 'save_pending' })]);
+  });
 });
 
 describe('conversation execution controller', () => {

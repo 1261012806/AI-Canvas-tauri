@@ -2,10 +2,10 @@
  * ai/apimartGen — APIMart 图片/视频生成 + 通用异步任务执行器
  */
 import { useAppStore } from '../../store/useAppStore';
-import { pollTask, PollTimeoutError } from '../pollTask';
-import { savePendingTask, updatePendingTask, removePendingTask, registerNodePolling, cleanupNodePolling, pauseVideoNodeTaskOnTimeout, VIDEO_POLL_MAX_DURATION_MS } from '../pollManager';
+import { pollTask, PollTaskFailedError, PollTimeoutError } from '../pollTask';
+import { savePendingTask, updatePendingTask, removePendingTask, registerNodePolling, cleanupNodePolling, pauseMediaTask, VIDEO_POLL_MAX_DURATION_MS } from '../pollManager';
 import { parseMultiPathResponse, splitCommaSeparatedUrls } from './helpers';
-import type { BatchImageResult } from '../../types/aiTypes';
+import type { BatchImageResult, MediaTaskReceipt } from '../../types/aiTypes';
 import {
   buildApimartSeedanceRequest,
   type ApimartSeedanceRequestParams,
@@ -53,6 +53,11 @@ function getApimartFailureMessage(
   const detail = typeof task.error === 'string' ? task.error : task.error?.message;
   return detail?.trim() ? `${label}: ${detail}` : `${label}: ${task.status}`;
 }
+
+function discardTask(receipt: MediaTaskReceipt | undefined): void {
+  if (!receipt) return;
+  removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+}
 /**
  * 通用异步任务执行器 — 提交 + 轮询，兼容支持 task_id 模式的 OpenAI 兼容接口
  */
@@ -66,9 +71,10 @@ export async function executeGeneralAsyncTask(
   nodeId?: string,
   externalSignal?: AbortSignal,
   requestBody?: Record<string, unknown>,
-): Promise<{ url: string }> {
-  let submittedTaskId: string | undefined;
-  let keepPending = false;
+): Promise<{ url: string; taskReceipt?: MediaTaskReceipt }> {
+  let receipt: MediaTaskReceipt | undefined;
+  let requestSent = false;
+  let rejected = false;
   const nodeSignal = nodeId ? registerNodePolling(nodeId) : undefined;
   const signal = nodeSignal && externalSignal
     ? AbortSignal.any([nodeSignal, externalSignal])
@@ -78,7 +84,7 @@ export async function executeGeneralAsyncTask(
     if (nodeId) {
       const projectId = useAppStore.getState().currentProjectId;
       if (projectId) {
-        savePendingTask({
+        receipt = savePendingTask({
           nodeId,
           projectId,
           nodeType: resultField === 'videos' ? 'ai-video' : resultField === 'audios' ? 'ai-audio' : 'ai-image',
@@ -93,6 +99,8 @@ export async function executeGeneralAsyncTask(
 
     const resource = resultField === 'audios' ? 'audio' : resultField;
     const apiUrl = `${baseUrl.replace(/\/+$/, '')}/${resource}/generations`;
+    signal?.throwIfAborted();
+    requestSent = true;
     const submitResp = await corsSafeFetch(apiUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -101,6 +109,7 @@ export async function executeGeneralAsyncTask(
     });
 
     if (!submitResp.ok) {
+      rejected = submitResp.status < 500 && ![408, 429].includes(submitResp.status);
       const errBody = await submitResp.text().catch(() => '');
       throw new Error(`提交失败 (${submitResp.status}): ${errBody.slice(0, 200)}`);
     }
@@ -112,25 +121,24 @@ export async function executeGeneralAsyncTask(
     // 无 task_id 时尝试直接从响应中解析结果（同步完成，无需轮询）
     if (!taskId) {
       const url = parseMultiPathResponse(submitResult, resultField);
-      if (url) return { url };
+      if (url) { discardTask(receipt); return { url }; }
       // 尝试标准 OpenAI 图片格式
       const dataArr = submitResult.data as Array<{ url: string }> | undefined;
-      if (dataArr?.[0]?.url) return { url: dataArr[0].url };
+      if (dataArr?.[0]?.url) { discardTask(receipt); return { url: dataArr[0].url }; }
       throw new Error('响应格式异常：未返回 task_id 或结果 URL');
     }
 
     // 回填 taskId，标记为已提交
-    submittedTaskId = taskId;
     if (nodeId) {
-      updatePendingTask(nodeId, { taskId, submitted: true });
+      receipt = updatePendingTask(nodeId, { taskId, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
     }
 
     // 视频达到本地等待预算后暂停，用户续查时不会再次提交。
     const result = await pollTask<Record<string, unknown>, { url: string }>({
-      fetchState: async () => {
+      fetchState: async (querySignal) => {
         const pollResp = await corsSafeFetch(`${baseUrl}/tasks/${taskId}?language=zh`, {
           headers: { Authorization: `Bearer ${apiKey}` },
-          signal,
+          signal: querySignal,
         });
         if (resultField === 'videos' && [408, 504].includes(pollResp.status)) throw new PollTimeoutError();
         if (!pollResp.ok) throw new Error(`HTTP ${pollResp.status}`);
@@ -151,19 +159,20 @@ export async function executeGeneralAsyncTask(
           ? `任务失败: ${task.status}` : null;
       },
       interval: 3000,
-      maxDuration: resultField === 'videos' ? VIDEO_POLL_MAX_DURATION_MS : undefined,
+      maxDuration: VIDEO_POLL_MAX_DURATION_MS,
       signal,
     });
-    keepPending = resultField === 'videos';
-    return result;
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+    return { ...result, ...(receipt ? { taskReceipt: receipt } : {}) };
   } catch (error) {
-    const paused = resultField === 'videos' ? pauseVideoNodeTaskOnTimeout(nodeId, error, submittedTaskId) : undefined;
-    if (paused) { keepPending = true; throw paused; }
+    if (rejected || !requestSent || error instanceof PollTaskFailedError) discardTask(receipt);
+    else if (receipt) {
+      const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+      if (paused) throw paused;
+    }
     throw error;
   } finally {
-    if (nodeId && cleanupNodePolling(nodeId, nodeSignal) && !keepPending) {
-      removePendingTask(nodeId, submittedTaskId);
-    }
+    if (nodeId) cleanupNodePolling(nodeId, nodeSignal);
   }
 }
 export async function generateApimartImagesBatch(
@@ -195,6 +204,10 @@ export async function generateApimartImagesBatch(
     ? requestedBatchCount
     : (capabilityRequest?.requestedCount ?? requestedBatchCount);
   const effectiveDimensions = capabilityRequest?.dimensions ?? dimensions;
+  let receipt: MediaTaskReceipt | undefined;
+  let requestSent = false;
+  let uncertainSubmission = false;
+  let allTasksFailed = false;
   const nodeSignal = nodeId ? registerNodePolling(nodeId) : undefined;
   const signal = nodeSignal && externalSignal
     ? AbortSignal.any([nodeSignal, externalSignal])
@@ -204,7 +217,7 @@ export async function generateApimartImagesBatch(
     if (nodeId) {
       const projectId = useAppStore.getState().currentProjectId;
       if (projectId) {
-        savePendingTask({
+        receipt = savePendingTask({
           nodeId,
           projectId,
           nodeType: 'ai-image',
@@ -237,7 +250,11 @@ export async function generateApimartImagesBatch(
     const taskIdsBySubmission: string[][] = [];
     let firstError: unknown;
     const submitted = await runBatchTasks(submitBodies.length, 3, async (index) => {
+      let sent = false;
+      let rejected = false;
       try {
+        signal?.throwIfAborted();
+        sent = requestSent = true;
         const submitResp = await corsSafeFetch(`${baseUrl}/images/generations`, {
           method: 'POST',
           headers: {
@@ -250,6 +267,7 @@ export async function generateApimartImagesBatch(
           signal,
         });
         if (!submitResp.ok) {
+          rejected = submitResp.status < 500 && ![408, 429].includes(submitResp.status);
           const errBody = await submitResp.text().catch(() => '');
           throw new Error(`APIMart 生成提交失败 (${submitResp.status}): ${errBody.slice(0, 200)}`);
         }
@@ -265,26 +283,36 @@ export async function generateApimartImagesBatch(
         taskIdsBySubmission[index] = taskIds;
         if (nodeId) {
           const persistedTaskIds = taskIdsBySubmission.flatMap((ids) => ids ?? []);
-          updatePendingTask(nodeId, {
+          receipt = updatePendingTask(nodeId, {
             taskId: persistedTaskIds[0],
             taskIds: persistedTaskIds,
             submitted: true,
-          });
+          }, receipt?.taskId, receipt?.attemptId) ?? receipt;
         }
         return taskIds;
       } catch (error) {
+        if (sent && !rejected) uncertainSubmission = true;
         firstError ??= error;
         throw error;
       }
     });
     const taskIds = submitted.results.flat();
+    // 其他子提交可能已被上游接受，不能用部分成功掩盖没有拿到 ID 的请求。
+    if (uncertainSubmission) {
+      if (receipt) updatePendingTask(receipt.nodeId, { mediaSubmissionUncertain: true }, receipt.taskId, receipt.attemptId);
+      throw firstError || new Error('部分图片任务提交状态待确认');
+    }
     if (taskIds.length === 0) throw firstError || new Error('APIMart 生成提交失败');
 
     // 单个任务可返回多张图，也可能一次提交返回多个任务；两种形态统一汇总。
+    const failedTaskIds = new Set<string>();
+    let queryInterrupted = false;
+    const queryController = new AbortController();
+    const batchQuerySignal = signal ? AbortSignal.any([signal, queryController.signal]) : queryController.signal;
     const completed = await runBatchTasks(taskIds.length, 3, async (index) => {
       try {
         return await pollTask<ApimartTaskResult<ApimartMediaResult>, string[]>({
-          fetchState: () => fetchApimartTask(apiKey, baseUrl, taskIds[index], signal),
+          fetchState: (querySignal) => fetchApimartTask(apiKey, baseUrl, taskIds[index], querySignal),
           isComplete: (task) => {
             if (task.status !== 'completed') return null;
             const urls = extractApimartImageUrls(task.result);
@@ -293,30 +321,51 @@ export async function generateApimartImagesBatch(
           },
           isFailed: (task) => getApimartFailureMessage(task, 'APIMart 图片生成失败'),
           interval: 2000,
-          signal,
+          maxDuration: VIDEO_POLL_MAX_DURATION_MS,
+          signal: batchQuerySignal,
         });
       } catch (error) {
+        if (error instanceof PollTaskFailedError) failedTaskIds.add(taskIds[index]);
+        else {
+          queryInterrupted = true;
+          queryController.abort(error);
+        }
         firstError ??= error;
         throw error;
       }
     });
+    // 未完成任务先一起保留，续取时仍查询原批次，避免部分回填后重复创建节点。
+    if (queryInterrupted) throw firstError || new Error('图片任务查询已中断');
     const urls = completed.results.flat().slice(0, requestedCount);
+    allTasksFailed = failedTaskIds.size === taskIds.length;
     if (urls.length === 0) throw firstError || new Error('APIMart 生成完成但未返回图片');
+    if (nodeId && failedTaskIds.size) {
+      const remaining = taskIds.filter((taskId) => !failedTaskIds.has(taskId));
+      receipt = updatePendingTask(nodeId, { taskId: remaining[0], taskIds: remaining }, receipt?.taskId, receipt?.attemptId) ?? receipt;
+    }
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
     const results = urls.map((url) => ({
       url,
       width: effectiveDimensions.width,
       height: effectiveDimensions.height,
+      ...(receipt ? { taskReceipt: receipt } : {}),
     }));
     return {
       requestedCount,
       results,
       failedCount: Math.max(0, requestedCount - results.length),
+      allTasksSettled: true,
+      ...(receipt ? { taskReceipt: receipt } : {}),
     };
-  } finally {
-    if (nodeId) {
-      cleanupNodePolling(nodeId);
-      removePendingTask(nodeId);
+  } catch (error) {
+    if (!requestSent || allTasksFailed || (!receipt?.taskId && !uncertainSubmission)) discardTask(receipt);
+    else if (receipt) {
+      const paused = pauseMediaTask(receipt, error, uncertainSubmission ? 'submit_unknown' : undefined);
+      if (paused) throw paused;
     }
+    throw error;
+  } finally {
+    if (nodeId) cleanupNodePolling(nodeId, nodeSignal);
   }
 }
 /** 获取单次 APIMart 轮询数据并标准化为 task 对象 */
@@ -360,9 +409,10 @@ export async function generateApimartVideo(
   nodeId?: string,
   params: ApimartSeedanceRequestParams = {},
   externalSignal?: AbortSignal,
-): Promise<{ url: string }> {
-  let submittedTaskId: string | undefined;
-  let keepPending = false;
+): Promise<{ url: string; taskReceipt?: MediaTaskReceipt }> {
+  let receipt: MediaTaskReceipt | undefined;
+  let requestSent = false;
+  let rejected = false;
   const nodeSignal = nodeId ? registerNodePolling(nodeId) : undefined;
   const signal = nodeSignal && externalSignal
     ? AbortSignal.any([nodeSignal, externalSignal])
@@ -372,7 +422,7 @@ export async function generateApimartVideo(
     if (nodeId) {
       const projectId = useAppStore.getState().currentProjectId;
       if (projectId) {
-        savePendingTask({
+        receipt = savePendingTask({
           nodeId,
           projectId,
           nodeType: 'ai-video',
@@ -394,6 +444,8 @@ export async function generateApimartVideo(
     });
 
     // 步骤 1: 提交视频生成任务
+    signal?.throwIfAborted();
+    requestSent = true;
     const submitResp = await corsSafeFetch(`${baseUrl}${submitPath}`, {
       method: 'POST',
       headers: {
@@ -405,6 +457,7 @@ export async function generateApimartVideo(
     });
 
     if (!submitResp.ok) {
+      rejected = submitResp.status < 500 && ![408, 429].includes(submitResp.status);
       const errBody = await submitResp.text().catch(() => '');
       throw new Error(`APIMart 视频提交失败 (${submitResp.status}): ${errBody.slice(0, 200)}`);
     }
@@ -417,16 +470,15 @@ export async function generateApimartVideo(
 
     // 回填 taskId，标记为已提交
     if (nodeId) {
-      updatePendingTask(nodeId, { taskId, submitted: true });
+      receipt = updatePendingTask(nodeId, { taskId, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
     }
 
-    submittedTaskId = taskId;
     // 步骤 2: 限制本地等待时间，不取消上游生成。
     const result = await pollTask<
       ApimartTaskResult<{ images?: Array<{ url: string[] }>; videos?: Array<{ url: string[] }> }>,
       { url: string }
     >({
-      fetchState: () => fetchApimartTask(apiKey, baseUrl, taskId, signal, true),
+      fetchState: (querySignal) => fetchApimartTask(apiKey, baseUrl, taskId, querySignal, true),
       isComplete: (task) => {
         if (task.status === 'completed') {
           const videoUrls = task.result?.videos?.flatMap((v) => splitCommaSeparatedUrls(v.url)) ?? [];
@@ -442,15 +494,16 @@ export async function generateApimartVideo(
       maxDuration: VIDEO_POLL_MAX_DURATION_MS,
       signal,
     });
-    keepPending = true;
-    return result;
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+    return { ...result, ...(receipt ? { taskReceipt: receipt } : {}) };
   } catch (error) {
-    const paused = pauseVideoNodeTaskOnTimeout(nodeId, error, submittedTaskId);
-    if (paused) { keepPending = true; throw paused; }
+    if (rejected || !requestSent || error instanceof PollTaskFailedError) discardTask(receipt);
+    else if (receipt) {
+      const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+      if (paused) throw paused;
+    }
     throw error;
   } finally {
-    if (nodeId && cleanupNodePolling(nodeId, nodeSignal) && !keepPending) {
-      removePendingTask(nodeId, submittedTaskId);
-    }
+    if (nodeId) cleanupNodePolling(nodeId, nodeSignal);
   }
 }

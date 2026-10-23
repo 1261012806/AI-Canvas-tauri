@@ -1,7 +1,10 @@
 /** GRSAI H3 复用声明式提交、轮询与恢复；生成提交不重试。 */
 import { GRSAI_BASE_URL } from '../../../constants/api';
 import { useAppStore } from '../../../store/useAppStore';
-import { captureVideoTaskGeneration, cleanupNodePolling, pauseVideoNodeTaskOnTimeout, registerNodePolling, removePendingTask, savePendingTask } from '../../pollManager';
+import { captureVideoTaskGeneration, cleanupNodePolling, pauseMediaTask, registerNodePolling, removePendingTask, savePendingTask, updatePendingTask } from '../../pollManager';
+import { PollTaskFailedError } from '../../pollTask';
+import { ModelProtocolHttpError } from '../modelProtocolHttp';
+import type { MediaTaskReceipt } from '../../../types/aiTypes';
 import { resolveMediaReferenceUrl } from '../../uploadService';
 import { getMediaReferenceUrl } from '../connectedReferenceMedia';
 import { getGrsaiVideoCapability, GRSAI_H3_PROTOCOL } from '../grsaiModels';
@@ -37,8 +40,9 @@ export const grsaiMediaProviderAdapter: MediaProviderAdapter = {
     const nodeSignal = params.nodeId ? registerNodePolling(params.nodeId) : undefined;
     const projectId = useAppStore.getState().currentProjectId;
     const videoGeneration = captureVideoTaskGeneration(params.nodeId);
-    let submittedTaskId: string | undefined;
-    let keepPending = false;
+    let receipt: MediaTaskReceipt | undefined;
+    let requestSent = false;
+    let rejected = false;
     const signal = nodeSignal && externalSignal ? AbortSignal.any([nodeSignal, externalSignal]) : nodeSignal ?? externalSignal;
     try {
       signal?.throwIfAborted();
@@ -52,29 +56,41 @@ export const grsaiMediaProviderAdapter: MediaProviderAdapter = {
       signal?.throwIfAborted();
       if (beforeSubmit) await beforeSubmit();
       signal?.throwIfAborted();
+      if (params.nodeId && projectId) receipt = savePendingTask({ nodeId: params.nodeId, projectId, nodeType: 'ai-video',
+        provider: 'grsai', providerConfigId: 'grsai', taskId: '', taskType: 'custom-protocol', videoGeneration, submitted: false });
+      requestSent = true;
       const submitted = await submitModelProtocol({ apiKey: provider.apiKey, baseUrl, protocol: GRSAI_H3_PROTOCOL, signal,
         variables: { model, prompt: input.prompt, resolution, duration, aspectRatio: ratio === '9:16' ? 'portrait' : 'landscape', imageUrls, audioUrls },
         validateResponse: (payload) => {
           const result = payload as { status?: string; error?: string } | null;
-          if (result?.status === 'failed' || result?.status === 'violation') throw new Error(result.error || 'GRSAI H3 提交失败');
+          if (result?.status === 'failed' || result?.status === 'violation') {
+            rejected = true;
+            throw new Error(result.error || 'GRSAI H3 提交失败');
+          }
         },
       });
       if (!submitted.taskId || !submitted.poll) throw new Error('GRSAI H3 未返回任务 ID');
-      submittedTaskId = submitted.taskId;
-      if (params.nodeId && projectId) savePendingTask({ nodeId: params.nodeId, projectId, nodeType: 'ai-video',
-        provider: 'grsai', providerConfigId: 'grsai', taskId: submitted.taskId, taskType: 'custom-protocol',
-        protocolPoll: submitted.poll, videoGeneration, submitted: true });
+      if (params.nodeId) receipt = updatePendingTask(params.nodeId, { taskId: submitted.taskId,
+        protocolPoll: submitted.poll, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
       const result = await pollResolvedModelProtocol(submitted.poll, provider.apiKey, signal, baseUrl);
       const url = result.urls?.[0];
       if (!url) throw new Error('GRSAI H3 完成但没有返回视频');
-      keepPending = true;
-      return { url };
+      if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+      return { url, ...(receipt ? { taskReceipt: receipt } : {}) };
     } catch (error) {
-      const paused = pauseVideoNodeTaskOnTimeout(params.nodeId, error, submittedTaskId);
-      if (paused) { keepPending = true; throw paused; }
+      const certainHttpRejection = !receipt?.taskId && error instanceof ModelProtocolHttpError
+        && error.status < 500 && ![408, 429].includes(error.status);
+      if (receipt) {
+        if (rejected || !requestSent || certainHttpRejection || error instanceof PollTaskFailedError) {
+          removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+        } else {
+          const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+          if (paused) throw paused;
+        }
+      }
       throw error;
     } finally {
-      if (params.nodeId && cleanupNodePolling(params.nodeId, nodeSignal) && !keepPending) removePendingTask(params.nodeId, submittedTaskId);
+      if (params.nodeId) cleanupNodePolling(params.nodeId, nodeSignal);
     }
   },
 };

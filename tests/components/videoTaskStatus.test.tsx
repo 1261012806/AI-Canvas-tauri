@@ -12,7 +12,7 @@ vi.mock('react', async () => ({ ...await vi.importActual<typeof import('react')>
 }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: (selector: (state: typeof mocks.state) => unknown) => selector(mocks.state) }));
 vi.mock('../../src/services/pollManager', () => ({
-  getPendingTasksForProject: () => mocks.tasks, resumeVideoNodeTask: mocks.resume,
+  getPendingTasksForProject: () => mocks.tasks, resumeMediaNodeTask: mocks.resume, discardMediaTask: vi.fn(),
 }));
 vi.mock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
 import VideoTaskStatus from '../../src/components/nodes/shared/VideoTaskStatus';
@@ -52,9 +52,10 @@ describe('video task retry entry', () => {
     expect(retryButton().props.disabled).toBe(false);
   });
 
-  it('is available only for a paused, submitted task in the current project', () => {
-    expect(retryButton().props['aria-label']).toBe('重试查询视频任务');
-    mocks.tasks[0].taskId = ''; expect(render()).toBeNull();
+  it('only queries submitted tasks and keeps unknown submission distinct', () => {
+    expect(retryButton().props['aria-label']).toBe('继续查询 / 保存');
+    mocks.tasks[0].taskId = '';
+    expect(elements(render(true)).some((element) => element.props['aria-label'] === '继续查询 / 保存')).toBe(false);
     mocks.tasks[0].taskId = 'task'; mocks.state.currentProjectId = null; expect(render()).toBeNull();
   });
 

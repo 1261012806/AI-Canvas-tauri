@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiProviderConfig, GeneralModelConfig, WorkflowDefinition } from '../../src/types';
+import type { MediaTaskContext, MediaTaskReceipt } from '../../src/types/aiTypes';
 
 const mocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
@@ -9,6 +10,15 @@ const mocks = vi.hoisted(() => ({
   persistMediaUrlToProjectData: vi.fn(),
   isTauriEnv: vi.fn(() => true),
   tagGeneratedProjectAssetSafely: vi.fn(),
+  bindMediaTaskContext: vi.fn<(_id: string, _context: MediaTaskContext, _observer?: (receipt: MediaTaskReceipt) => void) => () => void>(() => vi.fn()),
+  registerMediaNodeOperation: vi.fn(() => vi.fn()),
+  registerMediaMessageRecoveryHandler: vi.fn(),
+  getPendingTasksForProject: vi.fn<() => unknown[]>(() => []),
+  getMediaTaskReceipt: vi.fn(),
+  resumeMediaNodeTask: vi.fn(),
+  completeMediaNodeTask: vi.fn(),
+  pauseMediaTask: vi.fn(),
+  updatePendingTask: vi.fn(),
   storeState: {
     config: {
       generalModels: [] as GeneralModelConfig[],
@@ -55,16 +65,32 @@ vi.mock('../../src/services/fileService', () => ({
 vi.mock('../../src/services/fs/generatedAssetTags', () => ({
   tagGeneratedProjectAssetSafely: mocks.tagGeneratedProjectAssetSafely,
 }));
+vi.mock('../../src/services/pollManager', () => ({
+  bindMediaTaskContext: mocks.bindMediaTaskContext,
+  registerMediaNodeOperation: mocks.registerMediaNodeOperation,
+  registerMediaMessageRecoveryHandler: mocks.registerMediaMessageRecoveryHandler,
+  getPendingTasksForProject: mocks.getPendingTasksForProject,
+  getMediaTaskReceipt: mocks.getMediaTaskReceipt,
+  resumeMediaNodeTask: mocks.resumeMediaNodeTask,
+  completeMediaNodeTask: mocks.completeMediaNodeTask,
+  pauseMediaTask: mocks.pauseMediaTask,
+  updatePendingTask: mocks.updatePendingTask,
+}));
+vi.mock('../../src/services/chat/chatHistoryService', () => ({ persistMessage: vi.fn() }));
 
 import {
   MEDIA_PERSIST_FAILED_MESSAGE,
   retryMediaArtifactPersist,
   runMediaGeneration,
+  retryMediaMessageTask,
 } from '../../src/services/ai/generationRuntime';
 import type { MediaGenerationResult } from '../../src/types/media';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.bindMediaTaskContext.mockReturnValue(vi.fn());
+  mocks.getPendingTasksForProject.mockReturnValue([]);
+  mocks.getMediaTaskReceipt.mockReset();
   mocks.storeState.currentProjectId = 'project-1';
   mocks.storeState.projects = [];
   mocks.storeState.customStyles = [];
@@ -444,5 +470,48 @@ describe('retryMediaArtifactPersist', () => {
     mocks.isTauriEnv.mockReturnValue(false);
 
     await expect(retryMediaArtifactPersist(unsaved, 'project-1')).rejects.toThrow('浏览器模式');
+  });
+});
+
+describe('async media task identity', () => {
+  it('captures the receipt from the submission observer when a provider omits it from the result', async () => {
+    const receipt = { projectId: 'project-1', nodeId: 'node-1', taskId: 'remote-video', attemptId: 'attempt-video' };
+    let observer: ((value: MediaTaskReceipt) => void) | undefined;
+    mocks.bindMediaTaskContext.mockImplementation((_id, _context, onReceipt) => { observer = onReceipt; return () => {}; });
+    mocks.generateVideo.mockImplementation(async () => { observer?.(receipt); return { url: 'https://cdn.example/video.mp4' }; });
+    mocks.getPendingTasksForProject.mockReturnValue([{ ...receipt, submitted: true }]);
+    const result = await runMediaGeneration({ kind: 'video', prompt: '移动镜头', modelRef: 'openai/video-model', deliveryMode: 'canvas' },
+      'project-1', undefined, 'node-1');
+    expect(result.taskReceipt).toEqual(receipt);
+    expect(mocks.getMediaTaskReceipt).not.toHaveBeenCalled();
+    expect(mocks.completeMediaNodeTask).not.toHaveBeenCalled();
+  });
+
+  it('tracks ordinary chat image tasks and carries the exact receipt until delivery', async () => {
+    const receipt = { projectId: 'project-1', nodeId: 'tracking-1', taskId: 'remote-1', attemptId: 'attempt-1' };
+    mocks.generateImage.mockResolvedValue({ url: 'https://cdn.example/image.png', width: 1, height: 1, taskReceipt: receipt });
+    const result = await runMediaGeneration({ kind: 'image', prompt: '一只猫', modelRef: 'openai/image-model', deliveryMode: 'chat' },
+      'project-1', undefined, undefined, { projectId: 'project-1', conversationId: 'conversation-1', messageId: 'message-1', deliveryMode: 'chat' });
+    expect(mocks.bindMediaTaskContext).toHaveBeenCalledWith(expect.stringMatching(/^media-message-message-1-/), expect.objectContaining({ messageId: 'message-1', projectId: 'project-1' }), expect.any(Function));
+    expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ nodeId: expect.stringMatching(/^media-message-message-1-/) }), undefined);
+    expect(result.taskReceipt).toEqual(receipt);
+    expect(mocks.completeMediaNodeTask).not.toHaveBeenCalled();
+  });
+
+  it('retains an async task when its result cannot be saved', async () => {
+    const receipt = { projectId: 'project-1', nodeId: 'node-1', taskId: 'remote-1', attemptId: 'attempt-1' };
+    mocks.generateImage.mockResolvedValue({ url: 'https://cdn.example/image.png', width: 1, height: 1, taskReceipt: receipt });
+    mocks.persistMediaUrlToProjectData.mockRejectedValue(new Error('磁盘不可写'));
+    const result = await runMediaGeneration({ kind: 'image', prompt: '一只猫', modelRef: 'openai/image-model', deliveryMode: 'canvas' }, 'project-1', undefined, 'node-1');
+    expect(result.persistence).toBe('failed');
+    expect(mocks.pauseMediaTask).toHaveBeenCalledWith(receipt, undefined, 'delivery_pending');
+    expect(mocks.completeMediaNodeTask).not.toHaveBeenCalled();
+  });
+
+  it('does not resubmit when the original submission has no confirmed task ID', async () => {
+    mocks.getPendingTasksForProject.mockReturnValue([{ nodeId: 'tracking-1', projectId: 'project-1', taskId: '', submitted: false, mediaContext: { messageId: 'message-1' } }]);
+    await expect(retryMediaMessageTask('message-1')).rejects.toThrow('提交状态未知');
+    expect(mocks.resumeMediaNodeTask).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 });

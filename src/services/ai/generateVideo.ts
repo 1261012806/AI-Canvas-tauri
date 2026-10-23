@@ -24,6 +24,7 @@ import type {
   VideoGenerationOperation,
   VideoGenerationReferenceInput,
   VideoModelCapability,
+  MediaTaskReceipt,
 } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
 import { resolvePromptWithMediaRefs } from './promptResolver';
@@ -50,7 +51,7 @@ import {
   resolveVideoDurationSeconds,
   videoFramesFromDuration,
 } from '../aiDimensions';
-import { savePendingTask, updatePendingTask, removePendingTask, registerNodePolling, cleanupNodePolling, pauseVideoNodeTaskOnTimeout, VIDEO_POLL_MAX_DURATION_MS } from '../pollManager';
+import { savePendingTask, updatePendingTask, removePendingTask, registerNodePolling, cleanupNodePolling, pauseMediaTask, VIDEO_POLL_MAX_DURATION_MS } from '../pollManager';
 import { corsSafeFetch } from './httpTransport';
 import { resolveImageUrlArray } from './imageUtils';
 import { resolveMediaReferenceUrl } from '../uploadService';
@@ -510,7 +511,7 @@ export async function generateVideo(
   signal?: AbortSignal,
   /** 宿主任务在素材准备完成后、实际提交前复核运行时租约。 */
   beforeSubmit?: () => void | Promise<void>,
-): Promise<{ url: string; runninghubOutputs?: import('../../types/runninghub').RunningHubOutput[];
+): Promise<{ url: string; taskReceipt?: MediaTaskReceipt; comfyTaskId?: string; runninghubOutputs?: import('../../types/runninghub').RunningHubOutput[];
   workflowApiOutputs?: import('../../types/workflowApi').CloudWorkflowOutput[]; workflowApiTaskId?: string }> {
   // 内置 Provider 与本地工作流暂时保持旧归一化；通用模型交给 capability-aware
   // canonical resolver，避免在读到模型的 30 秒能力前先被全局 15 秒上限截断。
@@ -833,7 +834,7 @@ export async function generateVideo(
       });
       const url = urls[0];
       if (!url) throw new Error('视频生成完成但未返回结果');
-      return { url };
+      return { url, ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) };
     }
     const connectionName = connection.provider.name.trim() || connection.providerConfigId;
     const preset = gm.executionProfile?.preset;
@@ -869,10 +870,10 @@ async function generateVolcengineVideo(
   params: AIVideoGenParams,
   externalSignal?: AbortSignal,
   beforeSubmit?: () => void | Promise<void>,
-): Promise<{ url: string }> {
+): Promise<{ url: string; taskReceipt?: MediaTaskReceipt }> {
   const nodeId = params.nodeId;
   let billingRun: Awaited<ReturnType<typeof createBillingRun>> = null;
-  let submittedTaskId: string | undefined;
+  let receipt: MediaTaskReceipt | undefined;
   let requestSent = false;
   let remoteFailed = false;
   let remoteCancelled = false;
@@ -886,7 +887,7 @@ async function generateVolcengineVideo(
     if (nodeId) {
       const projectId = useAppStore.getState().currentProjectId;
       if (projectId) {
-        savePendingTask({
+        receipt = savePendingTask({
           nodeId,
           projectId,
           nodeType: 'ai-video',
@@ -942,7 +943,7 @@ async function generateVolcengineVideo(
     });
 
     if (!submitResp.ok) {
-      remoteFailed = true;
+      remoteFailed = submitResp.status < 500 && ![408, 429].includes(submitResp.status);
       const errBody = await submitResp.text().catch(() => '');
       let errorMsg = `提交失败 (${submitResp.status})`;
       try {
@@ -959,20 +960,19 @@ async function generateVolcengineVideo(
     if (!taskId) {
       throw new Error('火山方舟视频生成提交失败: 未返回任务 ID');
     }
-    submittedTaskId = taskId;
 
     // 回填 taskId
     if (nodeId) {
-      updatePendingTask(nodeId, { taskId, submitted: true });
+      receipt = updatePendingTask(nodeId, { taskId, submitted: true }, receipt?.taskId, receipt?.attemptId) ?? receipt;
     }
     billingRun = await updateBillingRun(billingRun, { status: 'running', taskId });
 
     // 轮询
     const completed = await pollTask<Record<string, unknown>, { url: string; completionTokens?: number }>({
-      fetchState: async () => {
+      fetchState: async (querySignal) => {
         const pollResp = await corsSafeFetch(`${baseUrl}/contents/generations/tasks/${taskId}`, {
           headers: { Authorization: `Bearer ${apiKey}` },
-          signal,
+          signal: querySignal,
         });
         if ([408, 504].includes(pollResp.status)) throw new PollTimeoutError();
         if (!pollResp.ok) throw new Error(`HTTP ${pollResp.status}`);
@@ -1014,7 +1014,8 @@ async function generateVolcengineVideo(
       amountConfidence: measured === null ? 'unknown' : 'usage',
       inputJson: JSON.stringify({ ...JSON.parse(billingRun?.inputJson || '{}'), completionTokens: completed.completionTokens ?? null }),
     });
-    return { url: completed.url };
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId) ?? receipt;
+    return { url: completed.url, ...(receipt ? { taskReceipt: receipt } : {}) };
 
   } catch (error) {
     await updateBillingRun(billingRun, {
@@ -1023,13 +1024,17 @@ async function generateVolcengineVideo(
       amountConfidence: remoteFailed || !requestSent ? 'calculated' : 'unknown',
       errorMessage: error instanceof Error ? error.message.slice(0, 500) : '视频请求失败',
     });
-    const paused = pauseVideoNodeTaskOnTimeout(nodeId, error, submittedTaskId);
-    if (paused) throw paused;
+    if (receipt) {
+      if (remoteFailed || !requestSent) {
+        removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
+      } else {
+        const paused = pauseMediaTask(receipt, error, receipt.taskId ? undefined : 'submit_unknown');
+        if (paused) throw paused;
+      }
+    }
     throw error;
   } finally {
-    if (nodeId && cleanupNodePolling(nodeId, nodeSignal)) {
-      if (!submittedTaskId || remoteFailed) removePendingTask(nodeId, submittedTaskId || undefined);
-    }
+    if (nodeId) cleanupNodePolling(nodeId, nodeSignal);
   }
 }
 

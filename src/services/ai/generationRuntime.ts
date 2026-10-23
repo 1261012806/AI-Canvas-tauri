@@ -36,7 +36,16 @@ import { findMediaModelOption } from '../../components/nodes/shared/defaultModel
 import { videoLongSideFromLabel } from '../aiDimensions';
 import { resolveProjectGenerationPrompt } from '../projectSettingsService';
 import type { BaseNodeData, NodeType } from '../../types';
+import type { MediaTaskReceipt } from '../../types/aiTypes';
 import { tagGeneratedProjectAssetSafely } from '../fs/generatedAssetTags';
+import {
+  bindMediaTaskContext, completeMediaNodeTask, getMediaTaskReceipt, getPendingTasksForProject, pauseMediaTask,
+  registerMediaMessageRecoveryHandler, registerMediaNodeOperation, resumeMediaNodeTask,
+  updatePendingTask,
+  type PendingTask,
+} from '../pollManager';
+import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from '../canvasDerivationGuard';
+import { persistMessage } from '../chat/chatHistoryService';
 
 const MODEL_MENTION_RE = /@model\{([^|}\s]+)(?:\|[^}]*)?\}/i;
 
@@ -202,6 +211,54 @@ export async function runMediaGeneration(
   runninghubTaskContext?: import('../../types/runninghub').RunningHubTaskContext,
 ): Promise<MediaGenerationResult> {
   throwIfAborted(signal);
+  if (!stripModelMentions(intent.prompt)) throw new Error('媒体生成提示词不能为空');
+  const model = resolveMediaModel(intent.kind, intent.modelRef);
+  ensureMediaMessageRecoveryHandler();
+  const nativeCloud = ['runninghubwf', 'runninghub', 'workflow-api'].includes(model.provider);
+  const trackingId = targetNodeId ?? (!nativeCloud && runninghubTaskContext
+    ? `media-message-${runninghubTaskContext.messageId}-${crypto.randomUUID()}` : undefined);
+  let operationReceipt: MediaTaskReceipt | undefined;
+  const taskProjectId = runninghubTaskContext?.projectId ?? projectId ?? useAppStore.getState().currentProjectId;
+  const unbind = trackingId && !nativeCloud && taskProjectId ? bindMediaTaskContext(trackingId, {
+    projectId: taskProjectId,
+    conversationId: runninghubTaskContext?.conversationId,
+    messageId: runninghubTaskContext?.messageId,
+    deliveryMode: runninghubTaskContext ? intent.deliveryMode === 'chat' ? 'message' : 'node+message' : 'node',
+    canvasNodeId: targetNodeId,
+    modelId: model.configId,
+  }, (receipt) => { operationReceipt = receipt; }) : undefined;
+  const finishOperation = trackingId ? registerMediaNodeOperation(trackingId) : undefined;
+  try {
+    const artifact = await generateMediaArtifact(intent, projectId, signal, trackingId, runninghubTaskContext, model);
+    if (!artifact.taskReceipt && operationReceipt && getPendingTasksForProject(operationReceipt.projectId).some((task) =>
+      task.nodeId === operationReceipt!.nodeId && task.taskId === operationReceipt!.taskId && task.attemptId === operationReceipt!.attemptId)) {
+      artifact.taskReceipt = operationReceipt;
+    }
+    if (artifact.taskReceipt && artifact.persistence === 'failed') {
+      pauseMediaTask(artifact.taskReceipt, undefined, 'delivery_pending');
+    }
+    return artifact;
+  } catch (error) {
+    if (operationReceipt) {
+      const paused = pauseMediaTask(operationReceipt, error, operationReceipt.taskId ? 'query_interrupted' : 'submit_unknown');
+      if (paused) throw paused;
+    }
+    throw error;
+  } finally {
+    finishOperation?.();
+    unbind?.();
+  }
+}
+
+async function generateMediaArtifact(
+  intent: MediaGenerationIntent,
+  projectId: string | null | undefined,
+  signal: AbortSignal | undefined,
+  targetNodeId: string | undefined,
+  runninghubTaskContext: import('../../types/runninghub').RunningHubTaskContext | undefined,
+  model: ResolvedMediaModel,
+): Promise<MediaGenerationResult> {
+  throwIfAborted(signal);
 
   const prompt = stripModelMentions(intent.prompt);
   if (!prompt) throw new Error('媒体生成提示词不能为空');
@@ -222,7 +279,6 @@ export async function runMediaGeneration(
     customStyles: store.customStyles,
   });
 
-  const model = resolveMediaModel(intent.kind, intent.modelRef);
   if (model.provider === 'runninghubwf' && [intent.aspectRatio, intent.resolution, intent.duration].some((value) => value !== undefined)) throw new Error('请通过工作流参数设置比例、分辨率或时长');
   if (model.provider === 'workflow-api' && useAppStore.getState().workflows.find((workflow) => workflow.id === model.workflowId)?.workflowApi?.version === 2
     && [intent.aspectRatio, intent.resolution, intent.duration].some((value) => value !== undefined)) throw new Error('自定义工作流请通过 workflowInputs 设置参数');
@@ -256,15 +312,16 @@ export async function runMediaGeneration(
       aspectRatio: projectSettings?.generation?.imageAspectRatio || '1:1',
       workflowId: model.workflowId,
       workflowInputs: intent.workflowInputs, runninghubModelParameters: model.provider === 'runninghub' ? runninghubModelParameters : undefined,
-      nodeId: ['runninghubwf', 'runninghub', 'workflow-api'].includes(model.provider) ? targetNodeId : undefined,
+      nodeId: targetNodeId,
       runninghubTaskContext,
 
       workflowApiTaskContext: model.provider === 'workflow-api' ? runninghubTaskContext : undefined,
     }, signal);
+    const taskReceipt = result.taskReceipt ?? (result.comfyTaskId && targetNodeId ? getMediaTaskReceipt(targetNodeId, result.comfyTaskId) : undefined);
     throwIfAborted(signal);
     const savedCloud = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url);
     const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id);
-    if (persisted.status === 'failed' && isTransientMediaUrl(result.url)) {
+    if (persisted.status === 'failed' && isTransientMediaUrl(result.url) && !taskReceipt) {
       throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     }
     await tagSavedGeneratedMedia(persisted.filePath, projectId, effectivePrompt);
@@ -272,6 +329,7 @@ export async function runMediaGeneration(
     return {
       id,
       kind: intent.kind,
+      taskReceipt,
       runninghubOutputs: result.runninghubOutputs,
 
       workflowApiOutputs: result.workflowApiOutputs, workflowApiTaskId: result.workflowApiTaskId,
@@ -309,14 +367,15 @@ export async function runMediaGeneration(
       videoResolution: directGeneralProtocol ? undefined : videoLongSideFromLabel(resolution),
       workflowId: model.workflowId,
       workflowInputs: intent.workflowInputs, runninghubModelParameters: model.provider === 'runninghub' ? runninghubModelParameters : undefined,
-      nodeId: ['runninghubwf', 'runninghub', 'workflow-api'].includes(model.provider) ? targetNodeId : undefined,
+      nodeId: targetNodeId,
       runninghubTaskContext,
       workflowApiTaskContext: model.provider === 'workflow-api' ? runninghubTaskContext : undefined,
     }, signal);
+    const taskReceipt = result.taskReceipt ?? (result.comfyTaskId && targetNodeId ? getMediaTaskReceipt(targetNodeId, result.comfyTaskId) : undefined);
     throwIfAborted(signal);
     const savedCloud = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url);
     const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id);
-    if (persisted.status === 'failed' && isTransientMediaUrl(result.url)) {
+    if (persisted.status === 'failed' && isTransientMediaUrl(result.url) && !taskReceipt) {
       throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     }
     await tagSavedGeneratedMedia(persisted.filePath, projectId, effectivePrompt);
@@ -324,6 +383,7 @@ export async function runMediaGeneration(
     return {
       id,
       kind: intent.kind,
+      taskReceipt,
       runninghubOutputs: result.runninghubOutputs,
       workflowApiOutputs: result.workflowApiOutputs, workflowApiTaskId: result.workflowApiTaskId,
       deliveryMode: intent.deliveryMode,
@@ -345,11 +405,12 @@ export async function runMediaGeneration(
     provider: model.provider,
     workflowId: model.workflowId,
     workflowInputs: intent.workflowInputs, runninghubModelParameters: model.provider === 'runninghub' ? runninghubModelParameters : undefined,
-    nodeId: ['runninghubwf', 'runninghub', 'workflow-api'].includes(model.provider) ? targetNodeId : undefined,
+    nodeId: targetNodeId,
     runninghubTaskContext,
 
     workflowApiTaskContext: model.provider === 'workflow-api' ? runninghubTaskContext : undefined,
   }, signal);
+  const taskReceipt = result.taskReceipt ?? (result.comfyTaskId && targetNodeId ? getMediaTaskReceipt(targetNodeId, result.comfyTaskId) : undefined);
   throwIfAborted(signal);
   const persisted = await persistAudioGenerationResult(
     result,
@@ -361,6 +422,7 @@ export async function runMediaGeneration(
   return {
     id,
     kind: intent.kind,
+    taskReceipt,
     runninghubOutputs: result.runninghubOutputs,
 
     workflowApiOutputs: result.workflowApiOutputs, workflowApiTaskId: result.workflowApiTaskId,
@@ -411,4 +473,137 @@ export async function retryMediaArtifactPersist(
     persistence: 'saved',
     persistError: undefined,
   };
+}
+
+/** 只暴露原消息的任务身份，不从消息或模型提供的 URL 重建查询协议。 */
+export function getRecoverableMessageTask(messageId: string, projectId?: string | null): PendingTask | undefined {
+  const targetProjectId = projectId ?? useAppStore.getState().currentProjectId;
+  if (!targetProjectId) return undefined;
+  return getPendingTasksForProject(targetProjectId).find((task) => task.mediaContext?.messageId === messageId);
+}
+
+export async function retryMediaMessageTask(messageId: string): Promise<void> {
+  const task = getRecoverableMessageTask(messageId);
+  if (!task) throw new Error('未找到该消息的待恢复任务');
+  if (!task.taskId || !task.submitted) throw new Error('提交状态未知，请先到对应平台核对任务，避免重复生成');
+  ensureMediaMessageRecoveryHandler();
+  try {
+    await resumeMediaNodeTask(task.nodeId);
+  } catch (error) {
+    const state = useAppStore.getState();
+    const message = state.messages.find((item) => item.id === messageId && item.conversationId === task.mediaContext?.conversationId);
+    if (state.currentProjectId === task.projectId && message
+      && !getRecoverableMessageTask(messageId, task.projectId)
+      && (!message.mediaResult || message.mediaResult.taskReceipt?.taskId === task.taskId
+        && message.mediaResult.taskReceipt.attemptId === task.attemptId)) {
+      state.updateMessage(messageId, { mediaStatus: 'failed', mediaError: error instanceof Error ? error.message : '原任务未返回可交付结果' });
+    }
+    throw error;
+  }
+}
+
+/** 消息与画布采用相同交付边界，持久化消息失败时保留原任务。 */
+export async function completeMediaMessageDelivery(messageId: string, artifact: MediaGenerationResult, canvasReady: boolean): Promise<void> {
+  const receipt = artifact.taskReceipt;
+  if (!receipt) return;
+  if (artifact.persistence === 'failed' || !canvasReady) {
+    pauseMediaTask(receipt, undefined, artifact.persistence === 'failed' ? 'delivery_pending' : 'canvas_changed');
+    return;
+  }
+  const state = useAppStore.getState();
+  const message = state.messages.find((item) => item.id === messageId && item.mediaResult?.id === artifact.id);
+  if (state.currentProjectId !== receipt.projectId || !message) {
+    pauseMediaTask(receipt, undefined, 'canvas_changed');
+    return;
+  }
+  try {
+    await persistMessage(message, receipt.projectId, message.conversationId);
+    const current = useAppStore.getState();
+    if (current.currentProjectId !== receipt.projectId
+      || !current.messages.some((item) => item.id === messageId && item.mediaResult?.id === artifact.id)) {
+      pauseMediaTask(receipt, undefined, 'canvas_changed');
+      return;
+    }
+    completeMediaNodeTask(receipt);
+  } catch (error) {
+    pauseMediaTask(receipt, error, 'delivery_pending');
+  }
+}
+
+async function recoverMediaMessage(task: PendingTask, urls: string[]): Promise<void> {
+  const context = task.mediaContext;
+  if (!context?.messageId || !context.conversationId) throw new Error('任务缺少原消息身份');
+  const receipt = { projectId: task.projectId, nodeId: task.nodeId, taskId: task.taskId, attemptId: task.attemptId };
+  const isCurrent = () => {
+    const state = useAppStore.getState();
+    return state.currentProjectId === task.projectId
+      && state.messages.some((message) => message.id === context.messageId && message.conversationId === context.conversationId)
+      && getPendingTasksForProject(task.projectId).some((saved) => saved.nodeId === task.nodeId
+        && saved.taskId === task.taskId && saved.attemptId === task.attemptId);
+  };
+  if (!isCurrent()) throw new Error('请回到原项目和对话继续取回任务');
+  const kind: MediaKind = task.nodeType === 'ai-audio' ? 'audio' : task.nodeType === 'ai-video' ? 'video' : 'image';
+  const sourceUrl = urls[0];
+  if (!sourceUrl) throw new Error('任务已完成，但没有可保存的媒体结果');
+  const state = useAppStore.getState();
+  const existing = state.messages.find((message) => message.id === context.messageId)?.mediaResult;
+  const previous = existing?.taskReceipt?.taskId === task.taskId
+    && existing.taskReceipt.attemptId === task.attemptId ? existing : undefined;
+  const nodeId = context.deliveryMode === 'node+message' ? context.canvasNodeId ?? task.nodeId : undefined;
+  const guard = nodeId ? registerCanvasDerivation(state, nodeId) : null;
+  try {
+    const persisted = await persistGeneratedMedia(sourceUrl, task.projectId, kind, previous?.id ?? `recovered-${task.attemptId ?? task.taskId}`);
+    if (!isCurrent()) throw new Error('原项目或对话已变化，任务仍保留');
+    if (persisted.status === 'failed') throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
+    const artifact: MediaGenerationResult = {
+      ...previous,
+      id: previous?.id ?? `recovered-${task.attemptId ?? task.taskId}`,
+      kind,
+      taskReceipt: receipt,
+      deliveryMode: context.deliveryMode === 'message' ? 'chat' : previous?.deliveryMode ?? 'both',
+      url: persisted.assetUrl || sourceUrl,
+      sourceUrl: persisted.sourceUrl || sourceUrl,
+      filePath: persisted.filePath,
+      persistence: persisted.status,
+      persistError: undefined,
+      prompt: previous?.prompt ?? '',
+      modelId: previous?.modelId ?? context.modelId ?? task.provider,
+      provider: previous?.provider ?? task.provider,
+      createdAt: previous?.createdAt ?? Date.now(),
+    };
+    const current = useAppStore.getState();
+    const currentArtifact = current.messages.find((message) => message.id === context.messageId)?.mediaResult;
+    const appendRecovered = !!currentArtifact && (currentArtifact.taskReceipt?.taskId !== task.taskId
+      || currentArtifact.taskReceipt?.attemptId !== task.attemptId);
+    const deliveryMessageId = appendRecovered ? `media-recovered-${task.nodeId}-${task.attemptId ?? task.taskId}` : context.messageId;
+    if (appendRecovered) {
+      if (!current.messages.some((message) => message.id === deliveryMessageId)) {
+        current.addMessage({ id: deliveryMessageId, conversationId: context.conversationId, role: 'assistant',
+          content: '已取回原媒体任务', timestamp: Date.now(), status: 'done' });
+      }
+      updatePendingTask(task.nodeId, { mediaContext: { ...context, messageId: deliveryMessageId } }, task.taskId, task.attemptId);
+    }
+    const canvasReady = !nodeId || !!guard && isCanvasDerivationFresh(guard, current)
+      && current.settleMediaPlaceholder(nodeId, artifact);
+    current.updateMessage(deliveryMessageId, {
+      mediaResult: artifact, mediaStatus: 'succeeded', mediaError: undefined,
+      canvasStatus: nodeId ? canvasReady ? 'created' : 'failed' : 'none', canvasNodeId: nodeId,
+      canvasError: canvasReady ? undefined : '原画布已变化，结果已保存，任务尚待回填',
+    });
+    const message = useAppStore.getState().messages.find((item) => item.id === deliveryMessageId);
+    if (message) await persistMessage(message, task.projectId, context.conversationId);
+    if (!isCurrent()) throw new Error('原项目或对话已变化，任务仍保留');
+    if (!canvasReady) {
+      pauseMediaTask(receipt, undefined, 'canvas_changed');
+      throw new Error('结果已保存，原画布尚未回填，任务已保留');
+    }
+    completeMediaNodeTask(receipt);
+  } finally {
+    if (guard) completeCanvasDerivation(guard);
+  }
+}
+
+/** 按调用入口安装，避免模块加载时写入轮询运行时。 */
+export function ensureMediaMessageRecoveryHandler(): void {
+  registerMediaMessageRecoveryHandler(recoverMediaMessage);
 }

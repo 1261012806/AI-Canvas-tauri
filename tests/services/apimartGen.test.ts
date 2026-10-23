@@ -1,17 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const pollingMocks = vi.hoisted(() => ({
+const pollingMocks = vi.hoisted(() => {
+  const receipts = new Map<string, { projectId: string; nodeId: string; taskId: string; attemptId: string }>();
+  return {
+  receipts,
   cleanupNodePolling: vi.fn(() => true),
   VIDEO_POLL_MAX_DURATION_MS: 30 * 60 * 1000,
-  pauseVideoNodeTaskOnTimeout: vi.fn((nodeId: string | undefined, error: unknown, taskId?: string) => {
-    if (!nodeId || !taskId || !(error instanceof Error) || error.name !== 'PollTimeoutError') return undefined;
-    return Object.assign(new Error('视频查询已暂停'), { name: 'VideoPollingPausedError' });
-  }),
+  pauseMediaTask: vi.fn((receipt: { taskId: string }, _error?: unknown, reason?: string) => Object.assign(new Error('任务查询已暂停'),
+    { name: 'MediaTaskPausedError', taskReceipt: receipt, reason: reason ?? 'query_interrupted' })),
+  getMediaTaskReceipt: vi.fn((nodeId: string) => receipts.get(nodeId)),
   registerNodePolling: vi.fn(() => new AbortController().signal),
-  removePendingTask: vi.fn(),
-  savePendingTask: vi.fn(),
-  updatePendingTask: vi.fn(),
-}));
+  removePendingTask: vi.fn((nodeId: string) => { receipts.delete(nodeId); }),
+  savePendingTask: vi.fn((task: { nodeId: string; projectId: string; taskId: string }) => {
+    const receipt = { projectId: task.projectId, nodeId: task.nodeId, taskId: task.taskId, attemptId: 'attempt' };
+    receipts.set(task.nodeId, receipt); return receipt;
+  }),
+  updatePendingTask: vi.fn((nodeId: string, patch: { taskId?: string }) => {
+    const current = receipts.get(nodeId); if (!current) return undefined;
+    const receipt = { ...current, ...(patch.taskId === undefined ? {} : { taskId: patch.taskId }) };
+    receipts.set(nodeId, receipt); return receipt;
+  }),
+}; });
 
 const serviceMocks = vi.hoisted(() => ({
   storeState: {
@@ -146,7 +155,7 @@ describe('APIMart Omni 视频合同', () => {
     });
   });
 
-  it('取消 Omni 提交时传播信号并清理任务', async () => {
+  it('取消 Omni 提交时传播信号并保留提交未知记录', async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
@@ -155,8 +164,9 @@ describe('APIMart Omni 视频合同', () => {
     const request = generateApimartVideo('key', 'https://api.example/v1', 'gemini-omni-1.1-flash', 'prompt', 'node-omni', {}, controller.signal);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     controller.abort();
-    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(request).rejects.toMatchObject({ name: 'MediaTaskPausedError', reason: 'submit_unknown' });
     expect(pollingMocks.cleanupNodePolling).toHaveBeenCalledWith('node-omni', expect.any(AbortSignal));
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -234,7 +244,7 @@ describe('APIMart image polling', () => {
       });
       expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/tasks/gpt-25-task?language=zh');
       expect(batch).toEqual({
-        requestedCount: 4, failedCount: 0,
+        requestedCount: 4, failedCount: 0, allTasksSettled: true,
         results: outputUrls.map((url) => ({ url, width: 3840, height: 2160 })),
       });
     },
@@ -392,7 +402,7 @@ describe('APIMart image polling', () => {
       taskId: 'native-task-1',
       taskIds: ['native-task-1', 'native-task-2'],
       submitted: true,
-    });
+    }, '', 'attempt');
   });
 
   it('splits multi-image requests into independent tasks when the model has no native batch support', async () => {
@@ -471,10 +481,10 @@ describe('APIMart image polling', () => {
 
     controller.abort();
 
-    await expect(generation).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(generation).rejects.toMatchObject({ name: 'MediaTaskPausedError', reason: 'submit_unknown' });
     expect(submitSignal?.aborted).toBe(true);
-    expect(pollingMocks.cleanupNodePolling).toHaveBeenCalledWith('node-1');
-    expect(pollingMocks.removePendingTask).toHaveBeenCalledWith('node-1');
+    expect(pollingMocks.cleanupNodePolling).toHaveBeenCalledWith('node-1', expect.any(AbortSignal));
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
   });
 });
 
@@ -788,7 +798,7 @@ describe('APIMart 新视频模型', () => {
     const controller = new AbortController();
     const fetchMock = vi.fn().mockImplementationOnce(() => { controller.abort(); return Promise.resolve(jsonResponse({ code: 200, data: [{ task_id: 'new-video' }] })); });
     vi.stubGlobal('fetch', fetchMock);
-    await expect(generateApimartVideo('key', 'https://api.example/v1', 'flux-3-video', 'prompt', undefined, {}, controller.signal)).rejects.toThrow('取消');
+    await expect(generateApimartVideo('key', 'https://api.example/v1', 'flux-3-video', 'prompt', undefined, {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -862,14 +872,75 @@ describe('APIMart MiniMax-H3 video', () => {
   });
 });
 
+describe('媒体任务交付回执', () => {
+  beforeEach(() => { vi.clearAllMocks(); pollingMocks.receipts.clear(); vi.unstubAllGlobals(); });
+
+  it('图片拿到结果后保留真实 ID，等待调用方保存和回填确认', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'image-delivery' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: { status: 'completed', result: { images: [{ url: ['https://cdn.example/image.png'] }] } } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateApimartImagesBatch('key', 'https://api.example/v1', 'gpt-image', 'prompt', '2K', '1:1',
+      { width: 2048, height: 2048 }, [], 1, 'image-node');
+    expect(result.taskReceipt).toMatchObject({ nodeId: 'image-node', taskId: 'image-delivery', attemptId: 'attempt' });
+    expect(result.results[0].taskReceipt).toEqual(result.taskReceipt);
+    expect(result.allTasksSettled).toBe(true);
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
+    expect(pollingMocks.updatePendingTask).toHaveBeenCalledWith('image-node', { mediaRecoveryState: 'delivery_pending' }, 'image-delivery', 'attempt');
+  });
+
+  it('图片查询断网保留原任务，不自动重提', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'image-network' }] }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(generateApimartImagesBatch('key', 'https://api.example/v1', 'gpt-image', 'prompt', '2K', '1:1',
+      { width: 2048, height: 2048 }, [], 1, 'image-node')).rejects.toMatchObject({
+      name: 'MediaTaskPausedError', taskReceipt: { taskId: 'image-network' },
+    });
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('批次中其他任务还未确认时不交付成功子集，也不清除恢复记录', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/images/generations')) return jsonResponse({ data: [{ task_id: 'ready' }, { task_id: 'disconnected' }] });
+      if (url.includes('/disconnected?')) throw new TypeError('Failed to fetch');
+      return jsonResponse({ data: { status: 'completed', result: { images: [{ url: ['https://cdn.example/ready.png'] }] } } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(generateApimartImagesBatch('key', 'https://api.example/v1', 'gpt-image', 'prompt', '2K', '1:1',
+      { width: 2048, height: 2048 }, [], 2, 'image-node')).rejects.toMatchObject({ name: 'MediaTaskPausedError' });
+    expect(pollingMocks.updatePendingTask).toHaveBeenCalledWith('image-node', expect.objectContaining({ taskIds: ['ready', 'disconnected'] }), '', 'attempt');
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/images/generations'))).toHaveLength(1);
+  });
+
+  it('一个查询断网时中止同批慢查询的本地等待，保留全部上游任务', async () => {
+    let slowSignal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/images/generations')) return Promise.resolve(jsonResponse({ data: [{ task_id: 'slow' }, { task_id: 'offline' }] }));
+      if (url.includes('/offline?')) return Promise.reject(new TypeError('Failed to fetch'));
+      slowSignal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('本地查询已中止', 'AbortError')), { once: true });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(generateApimartImagesBatch('key', 'https://api.example/v1', 'gpt-image', 'prompt', '2K', '1:1',
+      { width: 2048, height: 2048 }, [], 2, 'image-node')).rejects.toMatchObject({ name: 'MediaTaskPausedError' });
+    expect(slowSignal?.aborted).toBe(true);
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
+
 describe('legacy general media requests', () => {
   it('retains a known video task on query HTTP 504 without sending another POST', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ task_id: 'slow-task' }))
       .mockResolvedValueOnce(new Response('', { status: 504 }));
     vi.stubGlobal('fetch', fetchMock);
     await expect(executeGeneralAsyncTask('key', 'https://api.example/v1', 'video', 'prompt', 'videos', 'custom', 'node'))
-      .rejects.toMatchObject({ name: 'VideoPollingPausedError' });
-    expect(pollingMocks.updatePendingTask).toHaveBeenCalledWith('node', { taskId: 'slow-task', submitted: true });
+      .rejects.toMatchObject({ name: 'MediaTaskPausedError' });
+    expect(pollingMocks.updatePendingTask).toHaveBeenCalledWith('node', { taskId: 'slow-task', submitted: true }, '', 'attempt');
     expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
@@ -879,7 +950,7 @@ describe('legacy general media requests', () => {
       .mockResolvedValueOnce(new Response('', { status: 504 }));
     vi.stubGlobal('fetch', fetchMock);
     await expect(generateApimartVideo('key', 'https://api.example/v1', 'wan3.0-video', 'prompt', 'node'))
-      .rejects.toMatchObject({ name: 'VideoPollingPausedError' });
+      .rejects.toMatchObject({ name: 'MediaTaskPausedError' });
     expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

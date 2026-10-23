@@ -364,7 +364,7 @@ describe('ComfyUI 任务恢复合同', () => {
     mocks.history.mockImplementation(async () => json({ 'prompt-1': { status: { status_str: 'error',
       messages: [['execution_error', { exception_message: 'video encode failed' }]],
     } } }));
-    await resumeVideoNodeTask('n1');
+    await expect(resumeVideoNodeTask('n1')).rejects.toThrow('video encode failed');
     expect(pending()).toEqual([]);
     expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'error', error: expect.stringContaining('video encode failed') });
 

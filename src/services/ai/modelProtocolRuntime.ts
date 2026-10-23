@@ -1,18 +1,21 @@
 /** Model-level declarative protocol runtime with resumable async polling. */
 import { useAppStore } from '../../store/useAppStore';
 import type { GeneralModelCategory, GeneralModelConfig, NodeType } from '../../types';
-import type { ProtocolJsonValue, VideoModelCapability } from '../../types/aiTypes';
+import type { MediaProtocolUrls, MediaTaskReceipt, ProtocolJsonValue, VideoModelCapability } from '../../types/aiTypes';
 import {
   cleanupNodePolling,
   captureVideoTaskGeneration,
-  pauseVideoNodeTaskOnTimeout,
-  VIDEO_POLL_MAX_DURATION_MS,
+  pauseMediaTask,
+  MEDIA_POLL_MAX_DURATION_MS,
+  registerMediaNodeOperation,
   registerNodePolling,
   removePendingTask,
   savePendingTask,
+  updatePendingTask,
 } from '../pollManager';
 import {
   collectModelProtocolForEachVariables,
+  buildModelProtocolRequest,
   collectModelProtocolTemplatePaths,
   MODEL_PROTOCOL_MAX_FOR_EACH_ITEMS,
   pollResolvedModelProtocol,
@@ -20,6 +23,8 @@ import {
   submitModelProtocol,
   type ModelProtocolVariables,
 } from './modelProtocol';
+import { ModelProtocolHttpError } from './modelProtocolHttp';
+import { PollTaskFailedError, isPollTimeoutError } from '../pollTask';
 import { REFERENCE_PROTOCOL_VARIABLES } from './modelProtocolVariables';
 import { readModelProtocolPathValues } from './modelProtocolResponse';
 import { readGoogleImagePartsReferenceUrls } from './imageModelTemplates';
@@ -333,7 +338,7 @@ export function findModelProtocolForEachCapabilityConflicts(
 
 export async function runConfiguredModelProtocol(
   options: RunConfiguredModelProtocolOptions,
-): Promise<string[]> {
+): Promise<MediaProtocolUrls> {
   const protocol = resolveModelExecutionProfile(options.model.executionProfile);
   if (!protocol) throw new Error(`模型“${options.model.name}”未配置调用协议`);
   const expansionConflicts = findModelProtocolForEachCapabilityConflicts(
@@ -349,13 +354,23 @@ export async function runConfiguredModelProtocol(
 
   const projectId = useAppStore.getState().currentProjectId;
   const videoGeneration = options.category === 'video' ? captureVideoTaskGeneration(options.nodeId) : undefined;
-  let submittedTaskId: string | undefined;
-  let keepPending = false;
+  let receipt: MediaTaskReceipt | undefined;
+  const releaseOperation = options.nodeId ? registerMediaNodeOperation(options.nodeId) : undefined;
   const nodeSignal = options.nodeId ? registerNodePolling(options.nodeId) : undefined;
   const signal = nodeSignal && options.signal
     ? AbortSignal.any([nodeSignal, options.signal])
     : nodeSignal ?? options.signal;
   try {
+    signal?.throwIfAborted();
+    const submitOptions = { apiKey: provider.apiKey || '', baseUrl, protocol, variables: options.variables, signal };
+    // 在记录“提交中”之前完成本地构建校验，避免将输入错误误称为提交状态未知。
+    buildModelProtocolRequest(submitOptions);
+    if (protocol.mode === 'async' && options.nodeId && projectId) {
+      receipt = savePendingTask({ nodeId: options.nodeId, projectId,
+        nodeType: NODE_TYPE_BY_CATEGORY[options.category], provider: 'general', providerConfigId: options.model.providerConfigId,
+        taskId: '', taskType: 'custom-protocol', submitted: false, videoGeneration,
+        batchCount: readBatchCount(options.variables.n) });
+    }
     const submitted = await submitModelProtocol({
       apiKey: provider.apiKey || '',
       baseUrl,
@@ -365,25 +380,8 @@ export async function runConfiguredModelProtocol(
     });
     if (submitted.urls) return submitted.urls;
     if (!submitted.poll || !submitted.taskId) throw new Error('异步调用协议未返回轮询配置');
-    submittedTaskId = submitted.taskId;
-    const poll = options.category === 'video'
-      ? { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? VIDEO_POLL_MAX_DURATION_MS } : submitted.poll;
-    const canPersist = !!options.nodeId && !!projectId;
-    if (canPersist) {
-      savePendingTask({
-        nodeId: options.nodeId!,
-        projectId,
-        nodeType: NODE_TYPE_BY_CATEGORY[options.category],
-        provider: 'general',
-        providerConfigId: options.model.providerConfigId,
-        taskId: submitted.taskId,
-        taskType: 'custom-protocol',
-        protocolPoll: poll,
-        videoGeneration,
-        batchCount: readBatchCount(options.variables.n),
-        submitted: true,
-      });
-    }
+    const poll = { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS };
+    if (receipt) receipt = updatePendingTask(receipt.nodeId, { taskId: submitted.taskId, protocolPoll: poll, submitted: true }, receipt.taskId, receipt.attemptId);
 
     const result = await pollResolvedModelProtocol(
       poll,
@@ -392,17 +390,21 @@ export async function runConfiguredModelProtocol(
       baseUrl,
     );
     if (!result.urls) throw new Error('媒体模型任务完成但未返回结果 URL');
-    // 视频交付由节点入口确认，本地保存失败时仍能下载同一个任务。
-    keepPending = options.category === 'video';
-    return result.urls;
+    if (receipt) updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId);
+    // 每类媒体都在本地保存和目标回填后确认，数组携带当次身份而非读取最新节点任务。
+    return Object.assign(result.urls, receipt ? { taskReceipt: receipt } : {});
   } catch (error) {
-    const paused = options.category === 'video'
-      ? pauseVideoNodeTaskOnTimeout(options.nodeId, error, submittedTaskId) : undefined;
-    if (paused) { keepPending = true; throw paused; }
+    const rejected = !receipt?.taskId && error instanceof ModelProtocolHttpError
+      && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
+    if (receipt && !(error instanceof PollTaskFailedError) && !rejected) {
+      const paused = pauseMediaTask(receipt, error, !receipt.taskId ? 'submit_unknown'
+        : isPollTimeoutError(error) ? 'query_timeout' : 'query_interrupted');
+      if (paused) throw paused;
+    }
+    if (receipt && (error instanceof PollTaskFailedError || rejected)) removePendingTask(receipt.nodeId, receipt.taskId, receipt.attemptId);
     throw error;
   } finally {
-    if (options.nodeId && cleanupNodePolling(options.nodeId, nodeSignal) && !keepPending) {
-      removePendingTask(options.nodeId, submittedTaskId);
-    }
+    if (options.nodeId) cleanupNodePolling(options.nodeId, nodeSignal);
+    releaseOperation?.();
   }
 }

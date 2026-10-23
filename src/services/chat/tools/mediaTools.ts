@@ -23,7 +23,11 @@ import {
   extractModelMention,
   MEDIA_PERSIST_FAILED_MESSAGE,
   runMediaGeneration,
+  completeMediaMessageDelivery,
+  ensureMediaMessageRecoveryHandler,
 } from '../../ai/generationRuntime';
+import { canResumeMediaTask, getPendingTasksForProject, isMediaTaskPausedError, resumeMediaNodeTask } from '../../pollManager';
+import { completeCanvasDerivation } from '../../canvasDerivationGuard';
 import type { AgentToolDisplaySnapshot } from '../../../types/agent';
 import {
   registerAgentTool,
@@ -178,6 +182,57 @@ function getAssistantMessageId(taskId: string): string | undefined {
 
 export function registerMediaAgentTools(): Array<() => void> {
   return [
+    registerAgentTool<Record<string, never>>({
+      id: 'media_pending_tasks', title: '查看待恢复媒体任务', effect: 'read',
+      description: '列出当前项目已保留的媒体任务身份和阶段，不返回凭据、文件路径、请求正文或媒体地址。canResume=true 时可用 media_resume_task 续取，其余任务沿用原专用恢复入口；不能重新调用 media_generate。',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+      authorize: (context) => ({ allowed: context.projectId === useAppStore.getState().currentProjectId, reason: '只能读取当前项目的待恢复任务' }),
+      execute: async (context) => ({ status: 'success', summary: '已读取待恢复媒体任务', modelContent: JSON.stringify(
+        getPendingTasksForProject(context.projectId).map((task) => ({ nodeId: task.nodeId, taskId: task.taskId,
+          provider: task.provider, category: task.nodeType, stage: task.mediaRecoveryState ?? task.videoRecoveryState ?? 'querying',
+          messageId: task.mediaContext?.messageId, conversationId: task.mediaContext?.conversationId,
+          canResume: canResumeMediaTask(task) })),
+      ) }),
+    }),
+    registerAgentTool<{ nodeId: string; taskId: string }>({
+      id: 'media_resume_task', title: '续取原媒体任务', effect: 'canvas_write',
+      description: '查询并保存已经提交的原媒体任务，不重新提交生成。必须使用 media_pending_tasks 中 canResume=true 的当前项目 nodeId 和 taskId；没有任务 ID 时须先到平台核对。对话任务须打开原对话。',
+      inputSchema: { type: 'object', required: ['nodeId', 'taskId'], additionalProperties: false,
+        properties: { nodeId: { type: 'string', minLength: 1, maxLength: 300 }, taskId: { type: 'string', minLength: 1, maxLength: 256 } } },
+      authorize: (context, input) => ({ allowed: context.projectId === useAppStore.getState().currentProjectId
+        && getPendingTasksForProject(context.projectId).some((task) => task.nodeId === input.nodeId && task.taskId === input.taskId
+          && canResumeMediaTask(task)),
+      reason: '只能续取当前项目已保存的同一个媒体任务' }),
+      execute: async (context, input) => {
+        if (context.signal.aborted) return { status: 'error', summary: '已停止本次查询', modelContent: '原任务仍保留', errorCode: 'MEDIA_RECOVERY_STOPPED' };
+        const original = getPendingTasksForProject(context.projectId).find((task) => task.nodeId === input.nodeId && task.taskId === input.taskId
+          && canResumeMediaTask(task));
+        if (useAppStore.getState().currentProjectId !== context.projectId || !original) {
+          return { status: 'error', summary: '原任务身份已变化', modelContent: '请重新读取待恢复任务列表，不会续查同节点的新任务。', errorCode: 'MEDIA_RECOVERY_STALE' };
+        }
+        try {
+          ensureMediaMessageRecoveryHandler();
+          await resumeMediaNodeTask(input.nodeId);
+        } catch (error) {
+          const state = useAppStore.getState();
+          const message = state.messages.find((item) => item.id === original.mediaContext?.messageId
+            && item.conversationId === original.mediaContext?.conversationId);
+          const pending = getPendingTasksForProject(context.projectId).some((task) => task.nodeId === original.nodeId
+            && task.taskId === original.taskId && task.attemptId === original.attemptId);
+          const detail = error instanceof Error ? error.message : '原任务未返回可交付结果';
+          if (state.currentProjectId === context.projectId && message && !pending
+            && (!message.mediaResult || message.mediaResult.taskReceipt?.taskId === original.taskId
+              && message.mediaResult.taskReceipt.attemptId === original.attemptId)) {
+            state.updateMessage(message.id, { mediaStatus: 'failed', mediaError: detail });
+          }
+          return { status: 'error', summary: detail, modelContent: detail, errorCode: 'MEDIA_RECOVERY_FAILED' };
+        }
+        const pending = getPendingTasksForProject(context.projectId).some((task) => task.nodeId === input.nodeId && task.taskId === input.taskId);
+        return { status: pending ? 'error' : 'success', summary: pending ? '原任务仍保留，查询或保存尚未完成' : '原任务已取回并交付',
+          modelContent: pending ? '任务仍保留；请核对原项目、对话及连接后继续查询，不要重新提交生成。' : '已查询并保存原任务结果，没有重新提交生成。',
+          ...(pending ? { errorCode: 'MEDIA_RECOVERY_PENDING' } : {}) };
+      },
+    }),
     registerAgentTool<{ modelRef: string }>({
       id: 'media_model_parameters', title: '读取模型专属参数', effect: 'read',
       description: '读取当前可选 RunningHub 标准模型的操作、输入媒体、必填字段、默认值和限制。通过 media_generate.modelParameters 提交专属参数；首尾帧、编辑或动作控制需选择对应操作。',
@@ -486,6 +541,7 @@ export function registerMediaAgentTools(): Array<() => void> {
               ? MEDIA_PLACEHOLDER_STALE_ERROR
               : undefined,
           });
+          await completeMediaMessageDelivery(assistantMessageId, result, !targetNodeId || nodeCreated);
           if (!targetNodeId && ['runninghubwf', 'runninghub'].includes(result.provider)) completeRunningHubNodeTask(`runninghub-message-${assistantMessageId}`);
           if (result.workflowApiTaskId && (!targetNodeId || nodeCreated)) {
             if (targetNodeId) currentStore.updateNodeDataTransient(targetNodeId, { workflowApiOutputs: result.workflowApiOutputs });
@@ -524,16 +580,19 @@ export function registerMediaAgentTools(): Array<() => void> {
             },
           };
         } catch (error) {
+          const recoverable = isMediaTaskPausedError(error);
+          const submissionUnknown = recoverable && 'reason' in error && error.reason === 'submit_unknown';
           const stopped = context.signal.aborted
             || (error instanceof DOMException && error.name === 'AbortError');
           const message = stopped
             ? '已停止本地跟踪；供应商未确认远端取消，任务可能继续并产生费用'
             : error instanceof Error ? error.message : '未知错误';
           const currentStore = useAppStore.getState();
-          if (placeholderLifecycle) failMediaPlaceholderLifecycle(placeholderLifecycle, message);
+          if (placeholderLifecycle && recoverable) completeCanvasDerivation(placeholderLifecycle.guard);
+          else if (placeholderLifecycle) failMediaPlaceholderLifecycle(placeholderLifecycle, message);
           else if (targetNodeId) currentStore.failMediaPlaceholder(targetNodeId, message);
           currentStore.updateMessage(assistantMessageId, {
-            mediaStatus: 'failed',
+            mediaStatus: submissionUnknown ? 'submit_unknown' : recoverable ? 'paused' : 'failed',
             mediaError: message,
             canvasStatus: targetNodeId ? 'failed' : 'none',
             canvasNodeId: targetNodeId,
@@ -541,11 +600,11 @@ export function registerMediaAgentTools(): Array<() => void> {
           });
           return {
             status: 'error',
-            summary: stopped ? message : `媒体生成失败：${message}`,
-            modelContent: stopped ? message : `媒体生成失败：${message}`,
+            summary: recoverable ? '媒体任务已保留，可继续查询原任务' : stopped ? message : `媒体生成失败：${message}`,
+            modelContent: recoverable ? `${message}；不要再次调用 media_generate，可通过 media_pending_tasks 和 media_resume_task 续取原任务。` : stopped ? message : `媒体生成失败：${message}`,
             errorCode: stopped
               ? 'AGENT_MEDIA_TRACKING_STOPPED'
-              : 'AGENT_MEDIA_GENERATION_FAILED',
+              : recoverable ? 'AGENT_MEDIA_RECOVERY_PENDING' : 'AGENT_MEDIA_GENERATION_FAILED',
           };
         }
       },

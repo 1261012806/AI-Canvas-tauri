@@ -55,7 +55,7 @@ export async function generateImage(
   const batch = await generateImagesBatch(params, 1, signal);
   const result = batch.results[0];
   if (!result) throw new Error('图片生成返回结果为空');
-  return result;
+  return batch.taskReceipt ? { ...result, taskReceipt: batch.taskReceipt } : result;
 }
 
 function singleResult(result: ImageGenerationResult): BatchImageResult {
@@ -363,12 +363,14 @@ export async function generateImagesBatch(
               ? { googleImageParts: buildGoogleImageParts(prompt, allImageUrls) } : {}),
           },
         });
-        const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions }));
+        const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions,
+          ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) }));
         if (results.length === 0) throw new Error('图片生成返回结果为空');
         return {
           requestedCount,
           results,
           failedCount: Math.max(0, requestedCount - results.length),
+          ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt, allTasksSettled: true } : {}),
         };
       }
       return generateImageStandardBatch({
@@ -379,6 +381,8 @@ export async function generateImagesBatch(
         dimensions,
         imageUrls: allImageUrls,
         imageReferenceRequestMode,
+        ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,
+          providerConfigId: connection.providerConfigId, nodeId: params.nodeId } : {}),
       }, requestedCount, signal);
     }
 
@@ -422,6 +426,8 @@ export async function generateImagesBatch(
         dimensions,
         imageUrls: allImageUrls,
         imageReferenceRequestMode,
+        ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,
+          providerConfigId: provider, nodeId: params.nodeId } : {}),
       }, requestedCount, signal);
     }
   }

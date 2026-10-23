@@ -233,7 +233,7 @@ export async function generateAudio(
       });
       const url = urls[0];
       if (!url) throw new Error('音频生成完成但未返回结果');
-      return normalizeProtocolAudioResult(url);
+      return { ...normalizeProtocolAudioResult(url), ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) };
     }
     return executeGeneralAsyncTask(
       connection.apiKey,

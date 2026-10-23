@@ -22,6 +22,7 @@ import { analyzeModelProtocolExamples } from '../../src/services/ai/modelProtoco
 import { useAppStore } from '../../src/store/useAppStore';
 import { createImageQuickAdaptTemplate } from '../../src/services/ai/imageModelTemplates';
 import { uploadToRemote } from '../../src/services/uploadService';
+import { getPendingTasksForProject } from '../../src/services/pollManager';
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -37,6 +38,103 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('CCC 图片异步任务与旧同步响应', () => {
+  function configureCcc() {
+    useAppStore.getState().saveProviderConfig('cccapi-discount', {
+      name: 'CCC', catalogId: 'cccapi', cccGroup: 'discount', apiKey: 'discount-fixture', baseUrl: 'https://cccapi.cn/v1',
+      selectedModels: [{ id: 'gpt-image-2', name: 'GPT Image 2', category: 'image', provider: 'cccapi-discount' }],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'cccapi-discount')!;
+    useAppStore.setState({ currentProjectId: 'ccc-project', nodes: [{ id: 'ccc-image', type: 'ai-image',
+      position: { x: 0, y: 0 }, data: { type: 'ai-image', label: 'CCC', status: 'loading', prompt: '风景' } }] });
+    return { provider: 'general', model: `general/${model.id}`, nodeId: 'ccc-image', prompt: '风景', imageSize: '4K' };
+  }
+
+  it('保存真实任务 ID，并用同一分组 Key 查询全部结果后等待交付确认', async () => {
+    const params = configureCcc();
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ code: 200, data: [{ status: 'submitted', task_id: 'ccc-task' }] }))
+      .mockResolvedValueOnce(jsonResponse({ code: 200, data: { id: 'ccc-task', status: 'completed', progress: 100,
+        result: { images: [{ url: ['https://cdn.example/one.png', 'https://cdn.example/two.png'] }] } } }));
+    const result = await generateImagesBatch(params, 2);
+    expect(result.results.map((item) => item.url)).toEqual(['https://cdn.example/one.png', 'https://cdn.example/two.png']);
+    expect(result.taskReceipt).toMatchObject({ projectId: 'ccc-project', nodeId: 'ccc-image', taskId: 'ccc-task' });
+    expect(result.allTasksSettled).toBe(true);
+    const task = getPendingTasksForProject('ccc-project')[0];
+    expect(task).toMatchObject({ taskId: 'ccc-task', providerConfigId: 'cccapi-discount', submitted: true, mediaRecoveryState: 'delivery_pending' });
+    expect(JSON.stringify(task)).not.toContain('discount-fixture');
+    expect(transportMocks.corsSafeFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://cccapi.cn/v1/images/generations', 'https://cccapi.cn/v1/tasks/ccc-task',
+    ]);
+    expect(transportMocks.corsSafeFetch.mock.calls[1][1].headers).toMatchObject({ Authorization: 'Bearer discount-fixture' });
+  });
+
+  it('原任务只返回部分图片时不补交新生成，旧同步结果仍可接收', async () => {
+    const params = configureCcc();
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/legacy.png' }] }));
+    const result = await generateImagesBatch(params, 2);
+    expect(result.results).toHaveLength(1);
+    expect(result.failedCount).toBe(1);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    expect(getPendingTasksForProject('ccc-project')).toEqual([]);
+  });
+
+  it('查询被拒绝保留可恢复记录，且不会重发提交', async () => {
+    const params = configureCcc();
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'retained-task' }] }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Key 权限已变化' } }), { status: 401 }));
+    await expect(generateImagesBatch(params, 1)).rejects.toMatchObject({
+      name: 'MediaTaskPausedError', taskReceipt: { taskId: 'retained-task' },
+    });
+    expect(getPendingTasksForProject('ccc-project')[0]).toMatchObject({ taskId: 'retained-task', submitted: true });
+    expect(transportMocks.corsSafeFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it.each([404, 200])('CCC 本地参考图准备失败（HTTP %s）时不提交或保留空任务', async (status) => {
+    const params = configureCcc();
+    const referenceUrl = 'asset://localhost/reference.png';
+    const localFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status }));
+    await expect(generateImagesBatch({ ...params, image_urls: [referenceUrl] }, 1))
+      .rejects.toThrow(status === 404 ? '读取参考图 1 失败 (404)' : '参考图 1 内容为空');
+    expect(localFetch).toHaveBeenCalledWith(referenceUrl, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('ccc-project')).toEqual([]);
+  });
+
+  it('CCC 准备参考图期间取消时不提交或保留状态未知任务', async () => {
+    const params = configureCcc();
+    const controller = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async () => {
+      controller.abort();
+      throw new DOMException('请求已取消', 'AbortError');
+    });
+    await expect(generateImagesBatch({ ...params, image_urls: ['asset://localhost/reference.png'] }, 1, controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('ccc-project')).toEqual([]);
+  });
+
+  it('CCC 生成 POST 已发出后断网仍保留提交状态未知，不重发', async () => {
+    const params = configureCcc();
+    transportMocks.corsSafeFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(generateImagesBatch(params, 1)).rejects.toMatchObject({
+      name: 'MediaTaskPausedError', reason: 'submit_unknown', taskReceipt: { taskId: '' },
+    });
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith(
+      'https://cccapi.cn/v1/images/generations', expect.objectContaining({ method: 'POST' }),
+    );
+    expect(getPendingTasksForProject('ccc-project')).toEqual([expect.objectContaining({
+      taskId: '', submitted: false, mediaRecoveryState: 'submit_unknown',
+    })]);
+  });
+
+  it('自定义兼容接口不会仅因出现 task_id 就猜测 CCC 的查询路径', async () => {
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'unknown-provider-task' }] }));
+    await expect(generateImageStandard({ apiKey: 'fixture', baseUrl: 'https://custom.example/v1', modelName: 'gpt-image-2',
+      prompt: '风景', dimensions: { width: 1024, height: 1024 } })).rejects.toThrow('结果为空');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('ToAPIs 参考素材上传与图片提交', () => {

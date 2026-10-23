@@ -3,9 +3,11 @@ import { useAppStore } from '../../../src/store/useAppStore';
 import { registerMediaAgentTools } from '../../../src/services/chat/tools/mediaTools';
 import {
   clearAgentToolRegistryForTests,
+  getAgentTool,
   prepareAgentToolCall,
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
+import { savePendingTask } from '../../../src/services/pollManager';
 
 const context: Omit<AgentToolContext, 'signal'> = {
   taskId: 'task-media',
@@ -15,6 +17,7 @@ const context: Omit<AgentToolContext, 'signal'> = {
 };
 
 beforeEach(() => {
+  localStorage.removeItem('ai_canvas_pending_tasks');
   clearAgentToolRegistryForTests();
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
@@ -40,6 +43,64 @@ beforeEach(() => {
     }],
   });
   registerMediaAgentTools();
+});
+
+describe('media task recovery tools', () => {
+  it('lists original task identities without exposing their polling URLs', async () => {
+    savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'custom', taskType: 'custom-protocol', taskId: 'original-task', submitted: true,
+      mediaRecoveryState: 'query_paused', mediaContext: { projectId: 'project-1', messageId: 'message-1', conversationId: 'conversation-1', deliveryMode: 'message' } });
+    const definition = getAgentTool('media_pending_tasks')!;
+    const result = await definition.execute({ ...context, signal: new AbortController().signal }, {});
+    expect(result.status).toBe('success');
+    expect(JSON.parse(result.modelContent)).toEqual([expect.objectContaining({ taskId: 'original-task', nodeId: 'n1', canResume: true })]);
+    expect(result.modelContent).not.toContain('protocolPoll');
+    expect(result.modelContent).not.toContain('apiKey');
+    expect(result.modelContent).not.toContain('https://');
+  });
+
+  it('refuses to resume an unknown submission or a task from another project at authorization and execution', async () => {
+    savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
+      taskType: 'custom-protocol', taskId: 'uncertain-task', submitted: true, mediaRecoveryState: 'submit_unknown' });
+    const definition = getAgentTool('media_resume_task')!;
+    const input = { nodeId: 'n1', taskId: 'uncertain-task' };
+    expect(definition.authorize?.(context, input).allowed).toBe(false);
+    expect(await definition.execute({ ...context, signal: new AbortController().signal }, input))
+      .toMatchObject({ status: 'error', errorCode: 'MEDIA_RECOVERY_STALE' });
+
+    savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
+      taskType: 'custom-protocol', taskId: 'original-task', submitted: true, mediaRecoveryState: 'query_paused' });
+    const knownInput = { nodeId: 'n1', taskId: 'original-task' };
+    expect(definition.authorize?.(context, knownInput).allowed).toBe(true);
+    const otherContext = { ...context, projectId: 'other-project' };
+    expect(definition.authorize?.(otherContext, knownInput).allowed).toBe(false);
+    expect(await definition.execute({ ...otherContext, signal: new AbortController().signal }, knownInput))
+      .toMatchObject({ status: 'error', errorCode: 'MEDIA_RECOVERY_STALE' });
+    expect(definition.effect).toBe('canvas_write');
+  });
+
+  it('does not advertise or execute task types owned by dedicated recovery lifecycles', async () => {
+    const dedicatedTypes = ['runninghub', 'runninghub-workflow', 'runninghub-model', 'workflow-api'] as const;
+    dedicatedTypes.forEach((taskType) => savePendingTask({
+      projectId: 'project-1', nodeId: `node-${taskType}`, nodeType: 'ai-video', provider: taskType,
+      taskType, taskId: `task-${taskType}`, submitted: true,
+    }));
+    savePendingTask({ projectId: 'project-1', nodeId: 'node-cancelling', nodeType: 'ai-video', provider: 'comfyui',
+      taskType: 'comfyui', taskId: 'cancel-task', submitted: true, comfyRecoveryState: 'cancel_pending' });
+
+    const toolContext = { ...context, signal: new AbortController().signal };
+    const result = await getAgentTool('media_pending_tasks')!.execute(toolContext, {});
+    const listed = JSON.parse(result.modelContent) as Array<{ nodeId: string; taskId: string; canResume: boolean }>;
+    expect(listed).toHaveLength(dedicatedTypes.length + 1);
+    const definition = getAgentTool('media_resume_task')!;
+    for (const task of listed) {
+      expect(task.canResume).toBe(false);
+      const input = { nodeId: task.nodeId, taskId: task.taskId };
+      expect(definition.authorize?.(context, input).allowed).toBe(false);
+      expect(await definition.execute(toolContext, input))
+        .toMatchObject({ status: 'error', errorCode: 'MEDIA_RECOVERY_STALE' });
+    }
+  });
 });
 
 describe('media_generate display parameters', () => {

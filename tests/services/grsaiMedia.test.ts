@@ -1,18 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AIVideoGenParams, VideoGenerationReferenceInput } from '../../src/types/aiTypes';
 
-const mocks = vi.hoisted(() => ({
-  fetch: vi.fn(), savePendingTask: vi.fn(), removePendingTask: vi.fn(), cleanupNodePolling: vi.fn(() => true),
-  captureVideoTaskGeneration: vi.fn(),
-  pauseVideoNodeTaskOnTimeout: vi.fn((nodeId: string | undefined, error: unknown, taskId?: string) => {
-    if (!nodeId || !taskId || !(error instanceof Error) || error.name !== 'ModelProtocolHttpError') return undefined;
-    return Object.assign(new Error('视频查询已暂停'), { name: 'VideoPollingPausedError' });
+const mocks = vi.hoisted(() => {
+  const receipts = new Map<string, { projectId: string; nodeId: string; taskId: string; attemptId: string }>();
+  return {
+  receipts, fetch: vi.fn(),
+  savePendingTask: vi.fn((task: { nodeId: string; projectId: string; taskId: string }) => {
+    const receipt = { projectId: task.projectId, nodeId: task.nodeId, taskId: task.taskId, attemptId: 'attempt' };
+    receipts.set(task.nodeId, receipt); return receipt;
   }),
+  updatePendingTask: vi.fn((nodeId: string, patch: { taskId?: string }) => {
+    const current = receipts.get(nodeId); if (!current) return undefined;
+    const receipt = { ...current, ...(patch.taskId === undefined ? {} : { taskId: patch.taskId }) };
+    receipts.set(nodeId, receipt); return receipt;
+  }),
+  getMediaTaskReceipt: vi.fn((nodeId: string) => receipts.get(nodeId)),
+  removePendingTask: vi.fn((nodeId: string) => { receipts.delete(nodeId); }), cleanupNodePolling: vi.fn(() => true),
+  captureVideoTaskGeneration: vi.fn(),
+  pauseMediaTask: vi.fn((receipt: { taskId: string }, _error?: unknown, reason?: string) => Object.assign(new Error('任务查询已暂停'),
+    { name: 'MediaTaskPausedError', taskReceipt: receipt, reason: reason ?? 'query_interrupted' })),
   registerNodePolling: vi.fn(() => new AbortController().signal),
   images: vi.fn(async (urls: string[]) => urls.map((url) => url.replace('asset://', 'https://uploads.example/'))),
   media: vi.fn(async (url: string) => url.replace('asset://', 'https://uploads.example/')),
   state: { config: { providers: { grsai: { name: 'GRSAI', apiKey: 'fixture-key', baseUrl: '' } } }, currentProjectId: 'project' },
-}));
+}; });
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.state } }));
 vi.mock('../../src/services/pollManager', () => mocks);
 vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mocks.fetch }));
@@ -29,7 +40,7 @@ function generate(overrides: Partial<AIVideoGenParams> = {}, input: Partial<Vide
     resolveReferenceInput: async () => ({ prompt: '短片', operation: 'text-to-video', imageUrls: [], videoUrls: [], audioUrls: [], ...input }),
   });
 }
-beforeEach(() => { vi.clearAllMocks(); mocks.fetch.mockReset(); mocks.state.config.providers.grsai.apiKey = 'fixture-key'; mocks.state.config.providers.grsai.baseUrl = ''; });
+beforeEach(() => { vi.clearAllMocks(); mocks.receipts.clear(); mocks.fetch.mockReset(); mocks.state.config.providers.grsai.apiKey = 'fixture-key'; mocks.state.config.providers.grsai.baseUrl = ''; });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('GRSAI H3 独立视频合同', () => {
@@ -48,10 +59,10 @@ describe('GRSAI H3 独立视频合同', () => {
   it('keeps the H3 query descriptor after a gateway timeout without resubmitting', async () => {
     vi.useFakeTimers();
     mocks.fetch.mockResolvedValueOnce(json({ id: 'slow-h3', status: 'running' })).mockResolvedValue(json({}, 504));
-    const rejected = expect(generate()).rejects.toMatchObject({ name: 'VideoPollingPausedError' });
+    const rejected = expect(generate()).rejects.toMatchObject({ name: 'MediaTaskPausedError' });
     await vi.runAllTimersAsync();
     await rejected;
-    expect(mocks.savePendingTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'slow-h3', submitted: true }));
+    expect(mocks.updatePendingTask).toHaveBeenCalledWith('node', expect.objectContaining({ taskId: 'slow-h3', submitted: true }), '', 'attempt');
     expect(mocks.removePendingTask).not.toHaveBeenCalled();
     expect(mocks.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
@@ -65,13 +76,15 @@ describe('GRSAI H3 独立视频合同', () => {
   it.each([['480p', '16:9', 15, 'landscape'], ['768p', '9:16', 15, 'portrait'], ['1080p', '16:9', 10, 'landscape']] as const)('submits %s as async and persists a credential-free recovery descriptor', async (resolution, ratio, duration, wireRatio) => {
     mocks.fetch.mockResolvedValueOnce(json({ id: 'h3-task', status: 'running' }))
       .mockResolvedValueOnce(json({ status: 'succeeded', results: [{ url: 'https://cdn.example/video.mp4' }] }));
-    await expect(generate({ seedanceResolution: resolution, seedanceRatio: ratio, seedanceDuration: duration })).resolves.toEqual({ url: 'https://cdn.example/video.mp4' });
+    await expect(generate({ seedanceResolution: resolution, seedanceRatio: ratio, seedanceDuration: duration })).resolves.toMatchObject({ url: 'https://cdn.example/video.mp4', taskReceipt: { taskId: 'h3-task' } });
     expect(mocks.fetch.mock.calls[0][0]).toBe('https://grsai.dakka.com.cn/v1/api/generate');
     expect(JSON.parse(mocks.fetch.mock.calls[0][1].body)).toMatchObject({ model: 'minimax-h3', resolution, duration, aspectRatio: wireRatio, replyType: 'async' });
     expect(mocks.fetch.mock.calls[1][0]).toBe('https://grsai.dakka.com.cn/v1/api/result?id=h3-task');
     const saved = mocks.savePendingTask.mock.calls[0][0];
-    expect(saved).toMatchObject({ taskType: 'custom-protocol', taskId: 'h3-task', providerConfigId: 'grsai' });
-    expect(JSON.stringify(saved)).not.toContain('fixture-key');
+    const submitted = mocks.updatePendingTask.mock.calls.find(([, patch]) => patch.taskId === 'h3-task')?.[1];
+    expect(saved).toMatchObject({ taskType: 'custom-protocol', providerConfigId: 'grsai' });
+    expect(submitted).toMatchObject({ taskId: 'h3-task', submitted: true });
+    expect(JSON.stringify([saved, submitted])).not.toContain('fixture-key');
     expect(mocks.removePendingTask).not.toHaveBeenCalled();
   });
 
@@ -114,12 +127,12 @@ describe('GRSAI H3 独立视频合同', () => {
     mocks.fetch.mockResolvedValueOnce(json({ id: 'rejected-task', status, error: '提交被拒绝' }));
     await expect(generate()).rejects.toThrow('提交被拒绝');
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
-    expect(mocks.savePendingTask).not.toHaveBeenCalled();
+    expect(mocks.removePendingTask).toHaveBeenCalledWith('node', '', 'attempt');
   });
 
   it('does not resubmit after HTTP 504', async () => {
     mocks.fetch.mockResolvedValueOnce(json({ error: 'gateway timeout' }, 504));
-    await expect(generate()).rejects.toThrow('504');
+    await expect(generate()).rejects.toMatchObject({ name: 'MediaTaskPausedError', reason: 'submit_unknown' });
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -127,7 +140,7 @@ describe('GRSAI H3 独立视频合同', () => {
     mocks.fetch.mockResolvedValueOnce(json({ id: 'recover-task', status: 'running' }))
       .mockResolvedValueOnce(json({ status: 'succeeded', results: [{ url: 'https://cdn.example/video.mp4' }] }));
     await generate();
-    const saved = JSON.parse(JSON.stringify(mocks.savePendingTask.mock.calls[0][0]));
+    const saved = JSON.parse(JSON.stringify(mocks.updatePendingTask.mock.calls.find(([, patch]) => patch.taskId === 'recover-task')?.[1]));
     mocks.fetch.mockReset();
     mocks.fetch.mockResolvedValueOnce(json({ status: 'succeeded', results: [{ url: 'https://cdn.example/recovered.mp4' }] }));
     await expect(pollResolvedModelProtocol(saved.protocolPoll, 'rotated-key', undefined, 'https://grsai.dakka.com.cn/v1'))

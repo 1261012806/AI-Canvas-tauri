@@ -3,7 +3,7 @@
  *
  * 渲染用户 / 助手 / 系统消息，含头像、状态指示器、生成图片 / 视频。
  */
-import { memo, useState } from 'react';
+import { memo, useState, useSyncExternalStore } from 'react';
 import { Icon } from '@iconify/react';
 import type { ChatMessage } from '../../types/chat';
 import type { AgentTask } from '../../types/agent';
@@ -19,6 +19,9 @@ import ViewportImage from '../shared/ViewportImage';
 import ViewportVideo from '../shared/ViewportVideo';
 import ChatImageAttachments from './ChatImageAttachments';
 import { parseChatImageReferences, stripChatImageReferences } from '../../services/chat/chatImageReferenceService';
+import { getRecoverableMessageTask } from '../../services/ai/generationRuntime';
+import { subscribeMediaTasks } from '../../services/pollManager';
+import { useAppStore } from '../../store/useAppStore';
 
 interface MessageBubbleProps extends ChatReferenceHandlers {
   message: ChatMessage;
@@ -58,6 +61,11 @@ function MessageBubble({
   const [savingMedia, setSavingMedia] = useState(false);
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
+  const projectId = useAppStore((state) => state.currentProjectId);
+  const recoveryIdentity = useSyncExternalStore(subscribeMediaTasks, () => {
+    const task = getRecoverableMessageTask(message.id, projectId);
+    return task ? `${task.attemptId ?? ''}:${task.taskId}:${task.mediaRecoveryState ?? ''}:${task.mediaSubmissionUncertain ?? false}:${task.submitted}` : '';
+  }, () => '');
 
   if (isSystem) {
     return (
@@ -74,7 +82,14 @@ function MessageBubble({
   const hasImage = showMediaInChat && mediaResult?.kind === 'image';
   const hasVideo = showMediaInChat && mediaResult?.kind === 'video';
   const hasAudio = showMediaInChat && mediaResult?.kind === 'audio';
-  const isGenerating = message.mediaStatus === 'queued' || message.mediaStatus === 'generating';
+  const recoveryTask = getRecoverableMessageTask(message.id, projectId);
+  const isGenerating = (message.mediaStatus === 'queued' || message.mediaStatus === 'generating')
+    && !recoveryTask?.mediaRecoveryState;
+  const taskUnknown = message.mediaStatus === 'submit_unknown'
+    || !!recoveryTask && (!recoveryTask.taskId || !recoveryTask.submitted || !!recoveryTask.mediaSubmissionUncertain || recoveryTask.mediaRecoveryState === 'submit_unknown')
+    || !!onRetryMediaSave && message.mediaStatus === 'paused' && !recoveryTask && !mediaResult;
+  const mediaRecoverable = !isGenerating && (!!recoveryIdentity || !onRetryMediaSave && message.mediaStatus === 'paused'
+    || taskUnknown || !!mediaResult?.taskReceipt && mediaResult.persistence === 'failed');
   // 生成成功 ≠ 已保存到项目：落盘失败时 url 只是临时地址，重启后会失效
   const mediaUnsaved = !isGenerating && mediaResult?.persistence === 'failed';
   const showTimeline = !!agentTask
@@ -233,7 +248,18 @@ function MessageBubble({
             )}
           </div>
         )}
-        {mediaUnsaved && (
+        {mediaRecoverable && (
+          <div className="ui-card mt-2 flex flex-wrap items-center gap-2 p-2 text-xs" role="status">
+            <span className="min-w-0 flex-1 text-canvas-text-secondary">
+              {taskUnknown ? t('提交状态未知，请到对应平台核对，避免重复生成。') : t('任务已保留，可继续查询或保存原结果。')}
+            </span>
+            {onRetryMediaSave && !taskUnknown ? (
+              <button type="button" className="ui-btn ui-btn--sm" disabled={savingMedia}
+                onClick={() => void retryMediaSave()}>{savingMedia ? t('处理中') : t('继续查询 / 保存')}</button>
+            ) : !onRetryMediaSave && <span className="text-canvas-text-muted">{t('请回主窗口继续处理此任务')}</span>}
+          </div>
+        )}
+        {mediaUnsaved && !mediaRecoverable && (
           <div className="chat-message-media-unsaved mt-2 flex flex-wrap items-start gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[11px] text-amber-300">
             <Icon icon="mdi:content-save-alert-outline" width="13" height="13" className="mt-0.5 shrink-0" />
             <span className="min-w-0 flex-1">
@@ -257,7 +283,7 @@ function MessageBubble({
             )}
           </div>
         )}
-        {message.mediaStatus === 'failed' && (
+        {message.mediaStatus === 'failed' && !mediaRecoverable && (
           <div className="chat-message-media-error flex items-start gap-1 mt-2 text-[11px] text-red-400">
             <Icon icon="mdi:alert-circle-outline" width="13" height="13" className="mt-0.5 shrink-0" />
             <span>{t('媒体生成失败：{error}', { error: message.mediaError || t('未知错误') })}</span>
@@ -275,7 +301,7 @@ function MessageBubble({
             {t('已添加到画布')}
           </div>
         )}
-        {message.canvasStatus === 'failed' && (
+        {message.canvasStatus === 'failed' && !mediaRecoverable && (
           <div className="mt-2 flex items-start gap-1 text-[11px] text-red-400">
             <Icon icon="mdi:vector-square-remove" width="13" className="mt-0.5 shrink-0" />
             <span>{t('节点创建失败：{error}', { error: message.canvasError || t('未知错误') })}</span>

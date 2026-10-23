@@ -991,7 +991,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               <span>{t('上传中...')}</span>
             </div>
           ) : data.status === 'loading' ? (
-            <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成视频中...')} />
+            <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成视频中...')} />
           ) : (
             isSource ? (
               <button
@@ -1020,13 +1020,13 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             )
           )}
           {(data.videoUrl || data.thumbnailUrl) && data.status === 'loading' && (
-            <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成视频中...')} overlay />
+            <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成视频中...')} overlay />
           )}
           {shouldMountPlayer && showInitialCover && (
             <img src={initialCoverUrl} alt="" className="video-node-initial-cover" draggable={false}
               onError={() => { if (suppliedCover) setFailedCover(suppliedCover); }} />
           )}
-          {data.videoTaskState === 'paused' && <VideoTaskStatus nodeId={id} overlay />}
+          {(data.mediaTaskState || data.videoTaskState === 'paused') && data.status !== 'loading' && <VideoTaskStatus nodeId={id} overlay />}
         </div>
         {data.error && <NodeError nodeId={id} message={data.error} />}
         <Handle type="source" position={Position.Left} id="left" className="node-handle handle-source handle-video" >

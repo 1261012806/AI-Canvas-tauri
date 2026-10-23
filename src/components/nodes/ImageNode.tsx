@@ -48,6 +48,7 @@ import { useImageNodeOnnxActions } from './shared/image/useImageNodeOnnxActions'
 import { useT } from '../../i18n';
 import { getImageLoadRetryDelay, isRetryableImageSource } from '../../utils/imageLoadRetry';
 import NodeGenerationProgress from './shared/NodeGenerationProgress';
+import MediaTaskStatus from './shared/MediaTaskStatus';
 
 const MattingEditor = lazy(() => import('./shared/image/MattingEditor'));
 const CustomGridEditor = lazy(() => import('./shared/image/CustomGridEditor'));
@@ -983,7 +984,7 @@ function AIImageNode({ id, data, selected }: { id: string; data: BaseNodeData; s
                   </>
                 )}
                 {data.status === 'loading' && (
-                  <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成图像中...')} overlay />
+                  <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成图像中...')} overlay />
                 )}
               </div>
             ) : isUploading ? (
@@ -992,7 +993,7 @@ function AIImageNode({ id, data, selected }: { id: string; data: BaseNodeData; s
                 <span>{t('上传中...')}</span>
               </div>
             ) : data.status === 'loading' ? (
-              <NodeGenerationProgress nodeId={id} fallbackLabel={t('生成图像中...')} />
+              <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成图像中...')} />
             ) : (
               isSource ? (
                 <button
@@ -1021,6 +1022,7 @@ function AIImageNode({ id, data, selected }: { id: string; data: BaseNodeData; s
                 </div>
               )
             )}
+            {data.mediaTaskState && data.status !== 'loading' && <MediaTaskStatus nodeId={id} overlay />}
           </div>
           {data.error && <NodeError nodeId={id} message={data.error} />}
           <Handle type="source" position={Position.Left} id="left" className="node-handle handle-source handle-image" >

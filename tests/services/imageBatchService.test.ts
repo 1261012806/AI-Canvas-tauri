@@ -16,6 +16,10 @@ let store: TestStore;
 let generatedId = 0;
 
 const persistMediaUrlToProjectData = vi.fn();
+const completeMediaNodeTask = vi.fn();
+const pauseMediaTask = vi.fn();
+vi.mock('../../src/services/pollManager', () => ({ completeMediaNodeTask, pauseMediaTask, completeComfyNodeTask: vi.fn() }));
+vi.mock('../../src/services/ai/providers/runninghubWorkflow', () => ({ getRunningHubPersistedOutput: () => undefined, completeRunningHubNodeTask: vi.fn() }));
 
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: {
@@ -69,6 +73,7 @@ function createStore(): TestStore {
 }
 
 beforeEach(() => {
+  completeMediaNodeTask.mockClear(); pauseMediaTask.mockClear();
   generatedId = 0;
   persistMediaUrlToProjectData.mockImplementation(async (url: string) => ({
     mediaUrl: url,
@@ -78,6 +83,62 @@ beforeEach(() => {
 });
 
 describe('imageBatchService', () => {
+  it('部分任务明确失败且其余任务均已终态时，成功产物交付后结束聚合记录', async () => {
+    const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
+    const receipt = { projectId: 'project-a', nodeId: 'source', taskId: 'original', attemptId: 'first' };
+    const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
+    const complete = await applyImageBatchResults({ nodeId: 'source', targetNodeIds: prepared.nodeIds,
+      batch: { requestedCount: 2, failedCount: 1, allTasksSettled: true,
+        results: [{ url: 'https://example.com/1.png', width: 1, height: 1, taskReceipt: receipt }] },
+      projectId: 'project-a', prompt: 'cat', imageSize: '1K', aspectRatio: '1:1' });
+    expect(complete).toBe(true);
+    expect(completeMediaNodeTask).toHaveBeenCalledWith(receipt);
+    expect(pauseMediaTask).not.toHaveBeenCalled();
+    expect(store.nodes[1].data.status).toBe('error');
+    expect(store.nodes[1].data.error).toContain('上游任务已结束');
+  });
+
+  it('部分任务查询仍不确定时，成功产物已保存也保留聚合记录', async () => {
+    const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
+    const receipt = { projectId: 'project-a', nodeId: 'source', taskId: 'original', attemptId: 'first' };
+    const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
+    const complete = await applyImageBatchResults({ nodeId: 'source', targetNodeIds: prepared.nodeIds,
+      batch: { requestedCount: 2, failedCount: 1, allTasksSettled: false,
+        results: [{ url: 'https://example.com/1.png', width: 1, height: 1, taskReceipt: receipt }] },
+      projectId: 'project-a', prompt: 'cat', imageSize: '1K', aspectRatio: '1:1' });
+    expect(complete).toBe(false);
+    expect(completeMediaNodeTask).not.toHaveBeenCalled();
+    expect(pauseMediaTask).toHaveBeenCalledWith(receipt, undefined, 'delivery_pending');
+  });
+
+  it('保存失败不重新排列后续产物，也不清理部分交付的聚合任务', async () => {
+    const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
+    const receipt = { projectId: 'project-a', nodeId: 'source', taskId: 'original', attemptId: 'first' };
+    const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
+    persistMediaUrlToProjectData.mockImplementation(async (url: string) => {
+      if (url.endsWith('/1.png')) throw new Error('disk full');
+      return { mediaUrl: url, sourceUrl: url };
+    });
+    await applyImageBatchResults({ nodeId: 'source', targetNodeIds: prepared.nodeIds,
+      batch: { requestedCount: 2, failedCount: 0, results: [
+        { url: 'https://example.com/1.png', width: 1, height: 1, taskReceipt: receipt },
+        { url: 'https://example.com/2.png', width: 1, height: 1, taskReceipt: receipt },
+      ] }, projectId: 'project-a', prompt: 'cat', imageSize: '1K', aspectRatio: '1:1' });
+    expect(store.nodes[0].data.status).toBe('error');
+    expect(store.nodes[1].data.imageUrl).toBe('https://example.com/2.png');
+    expect(completeMediaNodeTask).not.toHaveBeenCalled();
+    expect(pauseMediaTask).toHaveBeenCalledWith(receipt, undefined, 'delivery_pending');
+  });
+
+  it('整批保存和写回成功后才确认原任务', async () => {
+    const { applyImageBatchResults } = await import('../../src/services/imageBatchService');
+    const receipt = { projectId: 'project-a', nodeId: 'source', taskId: 'original', attemptId: 'first' };
+    await applyImageBatchResults({ nodeId: 'source', targetNodeIds: ['source'],
+      batch: { requestedCount: 1, failedCount: 0, results: [{ url: 'https://example.com/1.png', width: 1, height: 1, taskReceipt: receipt }] },
+      projectId: 'project-a', prompt: 'cat', imageSize: '1K', aspectRatio: '1:1' });
+    expect(completeMediaNodeTask).toHaveBeenCalledWith(receipt);
+    expect(store.updateNodeDataTransient.mock.invocationCallOrder[0]).toBeLessThan(completeMediaNodeTask.mock.invocationCallOrder[0]);
+  });
   it('数量 4 时保留原节点，并立即在右侧创建 3 个加载节点', async () => {
     const { prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
 

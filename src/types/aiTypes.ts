@@ -374,8 +374,29 @@ export interface ResolvedModelProtocolPoll {
 
 export const MAX_IMAGE_BATCH_COUNT = 8;
 
+/** 已提交任务的交付身份；不包含凭据、请求正文或素材路径。 */
+export interface MediaTaskReceipt {
+  projectId: string;
+  nodeId: string;
+  taskId: string;
+  attemptId?: string;
+}
+
+export interface MediaTaskContext {
+  projectId: string;
+  conversationId?: string;
+  messageId?: string;
+  deliveryMode?: 'node' | 'message' | 'node+message';
+  canvasNodeId?: string;
+  modelId?: string;
+}
+
+/** 保留既有数组调用约定，同时携带当次任务回执，禁止事后读取另一轮身份。 */
+export type MediaProtocolUrls = string[] & { taskReceipt?: MediaTaskReceipt };
+
 export interface ImageGenerationResult {
   url: string;
+  taskReceipt?: MediaTaskReceipt;
   /** 本地 ComfyUI 已完成但尚待画布交付的任务身份，仅完成同一任务时清理。 */
   comfyTaskId?: string;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];
@@ -386,6 +407,9 @@ export interface ImageGenerationResult {
 }
 
 export interface BatchImageResult {
+  taskReceipt?: MediaTaskReceipt;
+  /** 所有远端任务均已成功或明确失败；不包括提交未知或查询中断。 */
+  allTasksSettled?: boolean;
   requestedCount: number;
   results: ImageGenerationResult[];
   failedCount: number;
@@ -595,6 +619,7 @@ export type AudioOutputFormat = 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
 
 export interface AudioGenerationResult {
   url: string;
+  taskReceipt?: MediaTaskReceipt;
   /** 本地 ComfyUI 已完成但尚待画布交付的任务身份。 */
   comfyTaskId?: string;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];

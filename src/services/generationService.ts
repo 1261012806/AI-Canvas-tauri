@@ -4,7 +4,7 @@
  * 供 Toolbar 快捷指令直接调用，也供 AINodeDialog 复用。
  */
 import type { BaseNodeData, ImagePostProcess } from '../types';
-import { MAX_IMAGE_BATCH_COUNT } from '../types/aiTypes';
+import { MAX_IMAGE_BATCH_COUNT, type MediaTaskReceipt } from '../types/aiTypes';
 import { generateText, generateImage, generateImagesBatch, generateVideo, generateAudio, buildPanoramaPrompt } from './aiService';
 import { persistAudioGenerationResult } from './ai/generateAudio';
 import { persistMediaUrlToProjectData } from './fileService';
@@ -29,7 +29,7 @@ import { completeWorkflowApiNodeTask } from './workflowApi/workflowApiAdapter';
 import { completeRunningHubNodeTask } from './ai/providers/runninghubWorkflow';
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from './canvasDerivationGuard';
 import { videoInputFingerprint } from './videoBatchPlanning';
-import { beginComfyNodeDelivery, completeComfyNodeTask, completeVideoNodeTask, getPendingTasksForProject, pauseComfyNodeDelivery, pauseVideoNodeTask, prepareVideoNodeGeneration, VideoPollingPausedError } from './pollManager';
+import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, pauseComfyNodeDelivery, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, isMediaTaskPausedError } from './pollManager';
 import { resolveGenerationNodeData } from '../utils/nodeGeneration';
 import { expandShotlistRowMentions } from './shotlistPromptService';
 import { buildGenerationCameraPrompt } from '../components/nodes/shared/image/cameraStudio';
@@ -162,8 +162,9 @@ export async function executeGeneration(
   }
 
   const submittingProjectId = store.currentProjectId;
-  if (nodeType === 'ai-video') {
-    try { prepareVideoNodeGeneration(nodeId); }
+  const mediaSubmission = ['ai-image', 'ai-animation', 'ai-panorama', 'ai-video', 'ai-audio'].includes(nodeType);
+  if (mediaSubmission) {
+    try { prepareMediaNodeGeneration(nodeId); }
     catch (error) {
       const message = error instanceof Error ? error.message : '暂时无法保留旧任务，请稍后再生成';
       store.showToast(message, 'error');
@@ -173,7 +174,7 @@ export async function executeGeneration(
   const runningHubTask = cloudWorkflow || data.provider === 'runninghub';
   const localComfyTask = !!workflowId && !cloudWorkflow;
   let comfyTaskId: string | undefined;
-  const guardedSubmission = runningHubTask || localComfyTask || nodeType === 'ai-video';
+  const guardedSubmission = mediaSubmission || runningHubTask || localComfyTask;
   let cloudGuard = guardedSubmission ? registerCanvasDerivation(store, nodeId) : null;
   const videoNode = store.nodes.find((n) => n.id === nodeId);
   const videoFingerprint = nodeType === 'ai-video' && videoNode
@@ -197,10 +198,16 @@ export async function executeGeneration(
         && videoInputFingerprint({ ...currentVideo, data: { ...currentVideo.data, ...promptOverride } }, s) === videoFingerprint));
   };
 
-  store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined, videoTaskState: undefined });
+  const endOperation = mediaSubmission ? registerMediaNodeOperation(nodeId) : undefined;
+  store.updateNodeDataTransient(nodeId, { status: 'loading', error: undefined, videoTaskState: undefined, mediaTaskState: undefined });
   let batchNodeIds: string[] | undefined;
-  let videoResultReceived = false;
-  let videoTaskId: string | undefined;
+  let taskReceipt: MediaTaskReceipt | undefined;
+  let mediaDelivered = false;
+  const confirmMediaDelivery = () => {
+    if (taskReceipt) completeMediaNodeTask(taskReceipt);
+    else if (runningHubTask) completeRunningHubNodeTask(nodeId);
+    mediaDelivered = true;
+  };
 
   try {
     if (nodeType === 'ai-image') {
@@ -222,10 +229,11 @@ export async function executeGeneration(
           imageSize, aspectRatio, nodeId,
           workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
         }, batchCount);
+        taskReceipt = batch.results.find((result) => result.taskReceipt)?.taskReceipt;
         comfyTaskId = batch.results.find((result) => result.comfyTaskId)?.comfyTaskId;
         if (comfyTaskId) beginComfyNodeDelivery(nodeId, comfyTaskId);
         if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
-        await applyImageBatchResults({
+        mediaDelivered = await applyImageBatchResults({
           nodeId,
           targetNodeIds: batchNodeIds,
           isCurrent: guardedSubmission ? isStillCurrentSubmission : undefined,
@@ -235,17 +243,20 @@ export async function executeGeneration(
           imageSize,
           aspectRatio,
         });
-        return { success: true };
+        return mediaDelivered ? { success: true } : { success: false, message: taskReceipt
+          ? '部分图片仍待保存或取回，原任务已保留' : '部分图片未能保存或生成，请核对已返回结果' };
       }
       const result = await generateImage({
         prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
         imageSize, aspectRatio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
+      taskReceipt = result.taskReceipt;
       comfyTaskId = result.comfyTaskId;
       if (comfyTaskId) beginComfyNodeDelivery(nodeId, comfyTaskId);
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
 
+      if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
         ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-image', data.label)
         : { mediaUrl: result.url, sourceUrl: result.url });
@@ -256,7 +267,7 @@ export async function executeGeneration(
         thumbnailUrl: mediaUrl, output: persisted.sourceUrl, status: 'success',
         imageWidth: result.width, imageHeight: result.height,
       });
-      if (runningHubTask) completeRunningHubNodeTask(nodeId);
+      confirmMediaDelivery();
       if (result.workflowApiTaskId) completeWorkflowApiNodeTask(nodeId, result.workflowApiTaskId);
       if (result.comfyTaskId) completeComfyNodeTask(nodeId, result.comfyTaskId);
       store.syncDramaAssetImageFromNode?.(nodeId, mediaUrl);
@@ -297,9 +308,11 @@ export async function executeGeneration(
         imageSize, aspectRatio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
+      taskReceipt = result.taskReceipt;
       comfyTaskId = result.comfyTaskId;
       if (comfyTaskId) beginComfyNodeDelivery(nodeId, comfyTaskId);
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
+      if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = submittingProjectId
         ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-panorama', data.label)
         : { mediaUrl: result.url, sourceUrl: result.url };
@@ -310,6 +323,7 @@ export async function executeGeneration(
         thumbnailUrl: mediaUrl, output: persisted.sourceUrl, status: 'success',
         imageWidth: result.width, imageHeight: result.height,
       });
+      confirmMediaDelivery();
       if (result.comfyTaskId) completeComfyNodeTask(nodeId, result.comfyTaskId);
       store.recordOutputHistory(nodeId, {
         nodeId, nodeLabel: data.label, timestamp: Date.now(), prompt: effectivePrompt,
@@ -366,19 +380,19 @@ export async function executeGeneration(
       const result = lease || hasProtectedVideoInputs
         ? await generateVideo(videoOptions, lease?.signal, assertVideoSubmission)
         : await generateVideo(videoOptions);
-      videoResultReceived = true;
-      videoTaskId = submittingProjectId ? getPendingTasksForProject(submittingProjectId).find((task) => task.nodeId === nodeId)?.taskId : undefined;
+      taskReceipt = result.taskReceipt;
       if (lease) await assertLease();
       if (!isStillCurrentSubmission()) {
-        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId, undefined, 'canvas_changed');
+        if (taskReceipt) pauseMediaTask(taskReceipt, undefined, 'canvas_changed');
         return { success: false, message: '任务已取消' };
       }
+      if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
         ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-video', data.label)
         : { mediaUrl: result.url, sourceUrl: result.url });
       if (lease) await assertLease();
       if (!isStillCurrentSubmission()) {
-        if (videoTaskId) pauseVideoNodeTask(nodeId, videoTaskId, undefined, 'canvas_changed');
+        if (taskReceipt) pauseMediaTask(taskReceipt, undefined, 'canvas_changed');
         return { success: false, message: lease ? '任务已取消' : '画布已变化，任务已保留' };
       }
       if (lease) await assertLease();
@@ -387,9 +401,7 @@ export async function executeGeneration(
         videoUrl: persisted.mediaUrl, sourceUrl: persisted.sourceUrl, filePath: persisted.filePath,
         thumbnailUrl: persisted.mediaUrl, output: persisted.sourceUrl, status: 'success', videoBatchFingerprint: videoFingerprint, videoTaskState: undefined,
       });
-      completeVideoNodeTask(nodeId, videoTaskId);
-      if (result.workflowApiTaskId) completeWorkflowApiNodeTask(nodeId, result.workflowApiTaskId);
-      if (runningHubTask) completeRunningHubNodeTask(nodeId);
+      confirmMediaDelivery();
       if (result.workflowApiTaskId) completeWorkflowApiNodeTask(nodeId, result.workflowApiTaskId);
       await store.recordOutputHistory(nodeId, {
         nodeId, nodeLabel: data.label, timestamp: Date.now(), prompt: effectivePrompt,
@@ -416,15 +428,17 @@ export async function executeGeneration(
         workflowId,
         workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
+      taskReceipt = result.taskReceipt;
       comfyTaskId = result.comfyTaskId;
       if (comfyTaskId) beginComfyNodeDelivery(nodeId, comfyTaskId);
       if (!isStillCurrentSubmission()) {
         if (result.url.startsWith('blob:')) URL.revokeObjectURL(result.url);
         return { success: false, message: '任务已取消' };
       }
+      if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = await persistAudioGenerationResult(result, submittingProjectId, data.label);
       if (guardedSubmission && !isStillCurrentSubmission()) return { success: false, message: '画布已变化，任务已保留' };
-      if (result.comfyTaskId && persisted.persistence === 'failed') throw new Error('ComfyUI 音频已生成，但保存失败；任务已保留，请继续查询取回原结果');
+      if (persisted.persistence === 'failed') throw new Error('音频已生成，但保存失败；请继续保存原结果');
       store.updateNodeData(nodeId, {
         audioUrl: persisted.mediaUrl, sourceUrl: persisted.sourceUrl, filePath: persisted.filePath,
         thumbnailUrl: persisted.mediaUrl, output: persisted.outputUrl,
@@ -433,7 +447,7 @@ export async function executeGeneration(
         ...(result.lyrics ? { musicLyrics: result.lyrics } : {}),
         status: 'success',
       });
-      if (runningHubTask) completeRunningHubNodeTask(nodeId);
+      confirmMediaDelivery();
       if (result.workflowApiTaskId) completeWorkflowApiNodeTask(nodeId, result.workflowApiTaskId);
       if (result.comfyTaskId) completeComfyNodeTask(nodeId, result.comfyTaskId);
       store.recordOutputHistory(nodeId, {
@@ -480,12 +494,11 @@ export async function executeGeneration(
         }
       }
     }
-    if (runningHubTask && isStillCurrentSubmission()) completeRunningHubNodeTask(nodeId);
     return { success: true };
   } catch (err) {
-    if (err instanceof VideoPollingPausedError) return { success: false, message: err.message };
-    if (videoResultReceived && videoTaskId && pauseVideoNodeTask(nodeId, videoTaskId, err, 'delivery_pending')) {
-      return { success: false, message: '视频保存暂未完成，任务已保留，可重试下载' };
+    if (isMediaTaskPausedError(err)) return { success: false, message: err instanceof Error ? err.message : '任务已保留' };
+    if (!mediaDelivered && taskReceipt && pauseMediaTask(taskReceipt, err, 'delivery_pending')) {
+      return { success: false, message: '结果保存暂未完成，任务已保留，可继续保存原结果' };
     }
     if (lease) {
       try { await assertLease(); } catch { return { success: false, message: '任务已取消' }; }
@@ -503,6 +516,7 @@ export async function executeGeneration(
     store.showToast(msg, 'error');
     return { success: false, message: msg };
   } finally {
+    if (!mediaDelivered && taskReceipt) pauseMediaTask(taskReceipt, undefined, isStillCurrentSubmission() ? 'delivery_pending' : 'canvas_changed');
     if (comfyTaskId) pauseComfyNodeDelivery(nodeId, comfyTaskId, isStillCurrentSubmission);
     const current = useAppStore.getState();
     const currentVideo = hasProtectedVideoInputs ? current.nodes.find((node) => node.id === nodeId) : undefined;
@@ -514,5 +528,6 @@ export async function executeGeneration(
     }
     if (videoOwner && videoSubmissionOwners.get(submissionKey) === videoOwner) videoSubmissionOwners.delete(submissionKey);
     if (cloudGuard) completeCanvasDerivation(cloudGuard);
+    endOperation?.();
   }
 }
