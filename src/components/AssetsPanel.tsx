@@ -1610,7 +1610,7 @@ export default function AssetsPanel() {
                         {activeTab === 'permanent' ? folderLabel : '项目文件'}
                       </span>
                       <div className="flex shrink-0 items-center gap-1">
-                        <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS} size="sm" className="w-28"
+                        <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS} size="sm" className="w-[86px]"
                           aria-label="排序方式" onChange={(value) => changeFileSort(value, value === 'usedAt' ? 'desc' : sortOrder)} />
                         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
                           aria-label={sortOrder === 'asc' ? '切换为降序' : '切换为升序'}
