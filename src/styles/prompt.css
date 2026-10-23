@@ -517,6 +517,7 @@
 
 .asset-picker-grid {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   display: grid;
@@ -578,16 +579,21 @@
 /* 资产弹窗：标签筛选 + 增量哨兵 */
 .asset-picker-tags {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-start;
   gap: 6px;
   padding: 8px 12px 6px;
+  flex-shrink: 0;
+}
+.asset-picker-tags.expanded .assets-category-list {
+  flex-wrap: wrap;
   max-height: 84px;
   overflow-y: auto;
-  flex-shrink: 0;
 }
 .asset-picker-tag {
   display: inline-flex;
+  flex: 0 0 auto;
+  max-width: 100%;
   align-items: center;
   gap: 4px;
   padding: 3px 9px;
@@ -596,12 +602,15 @@
   background: var(--theme-card);
   border: 1px solid var(--theme-border);
   border-radius: 999px;
+  white-space: nowrap;
   cursor: var(--cursor-pointer, pointer);
   transition: background var(--transition-base), color var(--transition-base), border-color var(--transition-base);
 }
 .asset-picker-tag:hover { color: var(--theme-text); border-color: var(--border-secondary); }
 .asset-picker-tag.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.asset-picker-tag-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .asset-picker-tag-count {
+  flex-shrink: 0;
   font-size: 10px;
   opacity: 0.7;
   font-variant-numeric: tabular-nums;

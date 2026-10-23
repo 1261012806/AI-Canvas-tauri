@@ -235,6 +235,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [assetLoadRevision, setAssetLoadRevision] = useState(0);
   const [assetSearch, setAssetSearch] = useState('');
   const [activeAssetTag, setActiveAssetTag] = useState<string | null>(null);
+  const [assetTagsExpanded, setAssetTagsExpanded] = useState(false);
+  const [assetTagsOverflow, setAssetTagsOverflow] = useState(false);
+  const [visibleAssetTagCount, setVisibleAssetTagCount] = useState(Number.POSITIVE_INFINITY);
+  const assetTagRowRef = useRef<HTMLDivElement>(null);
+  const assetTagListRef = useRef<HTMLDivElement>(null);
+  const assetTagListId = useId();
   const [assetVisible, setAssetVisible] = useState(40);
   const assetSentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -1002,6 +1008,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     setShowMention(false);
     setShowAssetPicker(true);
     setAssetSearch('');
+    setAssetTagsExpanded(false);
   }, []);
 
   // Esc 关闭资产弹窗
@@ -1084,6 +1091,42 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
   }, [taggedAssets]);
 
+  // 沿用资产库的完整单排标签与“更多”折叠方式，缩放动画中用布局宽度测量。
+  useEffect(() => {
+    if (!showAssetPicker || disabled) return;
+    const row = assetTagRowRef.current;
+    const list = assetTagListRef.current;
+    if (!row || !list) return;
+    const measure = () => {
+      const rowStyle = window.getComputedStyle(row);
+      const availableWidth = row.clientWidth - (parseFloat(rowStyle.paddingLeft) || 0) - (parseFloat(rowStyle.paddingRight) || 0);
+      const rowGap = parseFloat(rowStyle.columnGap) || 0;
+      const listGap = parseFloat(window.getComputedStyle(list).columnGap) || 0;
+      const widths = Array.from(list.children, (item) => (item as HTMLElement).offsetWidth);
+      const contentWidth = widths.reduce((total, width) => total + width, 0) + Math.max(0, widths.length - 1) * listGap;
+      const overflow = contentWidth > availableWidth + 1;
+      setAssetTagsOverflow(overflow);
+      if (!overflow) {
+        setVisibleAssetTagCount(widths.length);
+        setAssetTagsExpanded(false);
+        return;
+      }
+      let usedWidth = 0;
+      let visibleCount = 0;
+      for (const width of widths) {
+        const nextWidth = usedWidth + (visibleCount > 0 ? listGap : 0) + width;
+        if (nextWidth > availableWidth - 28 - rowGap) break;
+        usedWidth = nextWidth;
+        visibleCount++;
+      }
+      setVisibleAssetTagCount(visibleCount);
+    };
+    const frame = window.requestAnimationFrame(measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => { window.cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [showAssetPicker, disabled, assetTagList, assetTagsExpanded]);
+
   const filteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
     return taggedAssets.filter((f) => {
@@ -1101,6 +1144,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   useEffect(() => { setAssetVisible(40); }, [assetSearch, activeAssetTag, showAssetPicker]);
   const visibleAssets = useMemo(() => filteredAssets.slice(0, assetVisible), [filteredAssets, assetVisible]);
   useEffect(() => {
+    // 搜索可先预读资产；弹窗真正显示列表后才有哨兵，开关和加载状态也需重新绑定。
+    if (!showAssetPicker || disabled || assetLoading) return;
     const el = assetSentinelRef.current;
     if (!el) return;
     const root = el.closest('.asset-picker-grid') as HTMLElement | null;
@@ -1111,7 +1156,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     }, { root, rootMargin: '200px' });
     io.observe(el);
     return () => io.disconnect();
-  }, [filteredAssets.length, visibleAssets.length]);
+  }, [showAssetPicker, disabled, assetLoading, filteredAssets.length, visibleAssets.length]);
 
   // ── Input handler: detect @ and / ──
   const handleInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
@@ -2239,20 +2284,32 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
                 {/* 标签筛选 */}
                 {assetTagList.length > 0 && (
-                  <div className="asset-picker-tags">
-                    <button
-                      type="button"
-                      className={`asset-picker-tag ${activeAssetTag === null ? 'active' : ''}`}
-                      onClick={() => setActiveAssetTag(null)}
-                    >全部</button>
-                    {assetTagList.map(([tag, count]) => (
+                  <div ref={assetTagRowRef} className={`asset-picker-tags${assetTagsExpanded ? ' expanded' : ''}`}>
+                    <div ref={assetTagListRef} id={assetTagListId} className="assets-category-list">
                       <button
-                        key={tag}
                         type="button"
-                        className={`asset-picker-tag ${activeAssetTag === tag ? 'active' : ''}`}
-                        onClick={() => setActiveAssetTag((t) => (t === tag ? null : tag))}
-                      >#{tag}<span className="asset-picker-tag-count">{count}</span></button>
-                    ))}
+                        className={`asset-picker-tag ${activeAssetTag === null ? 'active' : ''} ${assetTagsExpanded || visibleAssetTagCount > 0 ? '' : 'assets-filter-item-hidden'}`}
+                        aria-pressed={activeAssetTag === null}
+                        onClick={() => setActiveAssetTag(null)}
+                      >全部</button>
+                      {assetTagList.map(([tag, count], index) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className={`asset-picker-tag ${activeAssetTag === tag ? 'active' : ''} ${assetTagsExpanded || index + 1 < visibleAssetTagCount ? '' : 'assets-filter-item-hidden'}`}
+                          aria-pressed={activeAssetTag === tag}
+                          title={tag}
+                          onClick={() => setActiveAssetTag((t) => (t === tag ? null : tag))}
+                        ><span className="asset-picker-tag-label">#{tag}</span><span className="asset-picker-tag-count">{count}</span></button>
+                      ))}
+                    </div>
+                    {assetTagsOverflow && (
+                      <button type="button" className="assets-filter-more" aria-controls={assetTagListId}
+                        aria-expanded={assetTagsExpanded} aria-label={assetTagsExpanded ? '收起标签' : '展开更多标签'}
+                        title={assetTagsExpanded ? '收起标签' : '更多标签'} onClick={() => setAssetTagsExpanded((expanded) => !expanded)}>
+                        <Icon icon={assetTagsExpanded ? 'lucide:chevron-up' : 'lucide:ellipsis'} aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 )}
 
