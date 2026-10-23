@@ -103,6 +103,7 @@ const SEARCH_PAGE_SIZE = 60;
 // ── Props ──
 export interface MentionEditorProps {
   value: string;
+  disabled?: boolean;
   onChange: (value: string, previousValue?: string) => void;
   onSubmit?: () => void;
   placeholder?: string;
@@ -131,6 +132,7 @@ export interface MentionEditorHandle {
 
 const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(function MentionEditor({
   value: prompt = '',
+  disabled = false,
   onChange,
   onSubmit,
   placeholder = '输入提示词开始创作   (Enter 生成，Shift+Enter 换行)',
@@ -148,6 +150,18 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 }: MentionEditorProps, ref) {
   // ── @ Mention state ──
   const [showMention, setShowMention] = useState(false);
+  useEffect(() => {
+    if (!showMention || disabled) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setShowMention(false);
+      editorRef.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => document.removeEventListener('keydown', closeOnEscape, true);
+  }, [showMention, disabled]);
   const [mentionQuery, setMentionQuery] = useState('');
   // 弹窗搜索独立于提示词中的 @ 查询，不能把搜索内容写进正文。
   const [resourceSearchExpanded, setResourceSearchExpanded] = useState(false);
@@ -162,6 +176,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const mentionDropdownHeightRef = useRef<number | null>(null);
   const [mentionDropdownResizing, setMentionDropdownResizing] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+  const disabledRef = useRef(disabled);
   const historyRef = useRef(new MentionEditorHistory());
   const syncedPromptRef = useRef(prompt);
   const composingRef = useRef(false);
@@ -199,6 +214,19 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // ── 资产引用弹窗 ──
   const assetFolders = useAppStore((s) => s.config.assetFolders);
   const [showAssetPicker, setShowAssetPicker] = useState(false);
+  useLayoutEffect(() => {
+    disabledRef.current = disabled;
+    if (!disabled) return;
+    cancelChipDragRef.current?.();
+    cancelChipDragRef.current = null;
+    if (chipHoverTimer.current !== null) clearTimeout(chipHoverTimer.current);
+    chipHoverTimer.current = null;
+    if (lastHoverKeyRef.current) useAppStore.getState().setHoveredMentionNodeId(null);
+    lastHoverKeyRef.current = null;
+    editorRef.current?.blur();
+    refmodSessionRef.current = undefined;
+    savedMentionRangeRef.current = null;
+  }, [disabled]);
   const [assetList, setAssetList] = useState<AssetFileEntry[]>([]);
   const [assetTagMap, setAssetTagMap] = useState<Record<string, string[]>>({});
   const [assetLoading, setAssetLoading] = useState(false);
@@ -368,6 +396,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   // ── Emit prompt string to parent ──
   const emitDOM = useCallback((group: string | null = null) => {
+    if (disabledRef.current) return;
     const el = editorRef.current;
     if (!el) return;
     syncGlobalCharacterReferenceChips(el);
@@ -382,6 +411,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   }, [nodeMetaMap, onChange]);
 
   const applyHistory = useCallback((direction: 'undo' | 'redo') => {
+    if (disabledRef.current) return;
     const el = editorRef.current;
     if (!el || composingRef.current) return;
     cancelChipDragRef.current?.();
@@ -406,6 +436,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const el = editorRef.current;
     if (!el) return;
     const beforeInput = (event: InputEvent) => {
+      if (disabledRef.current) {
+        event.preventDefault();
+        return;
+      }
       if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
         if (composingRef.current || event.isComposing) return;
         event.preventDefault();
@@ -471,7 +505,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [comfySection, setComfySection] = useState<'inputs' | 'roles'>('inputs');
   const [workflowMediaFilter, setWorkflowMediaFilter] = useState<'all' | WorkflowIONodeType>('all');
   const localComfyWorkflow = selectedWorkflow && (!selectedWorkflow.adapterType || selectedWorkflow.adapterType === 'comfyui') ? selectedWorkflow : undefined;
-  const canMentionRefmod = isVideoNode && currentEditorNode?.data.role !== 'source' && currentEditorNode?.data.status !== 'loading' && !!localComfyWorkflow;
+  const canMentionRefmod = !disabled && isVideoNode && currentEditorNode?.data.role !== 'source' && currentEditorNode?.data.status !== 'loading' && !!localComfyWorkflow;
   const activeRefmodSession = refmodSession && canMentionRefmod && refmodSession.projectId === currentProjectId && refmodSession.nodeId === nodeId
     && refmodSession.workflow === selectedWorkflow ? refmodSession : undefined;
   const effectiveComfySection = canMentionRefmod ? comfySection : 'inputs';
@@ -606,6 +640,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const root = editorRef.current;
     if (!session || !root) throw new Error('角色设置已关闭，请重新选择');
     const assertCurrent = () => {
+      if (disabledRef.current) throw new Error('编辑器已禁用，请停止当前操作后重试');
       const state = useAppStore.getState();
       const node = state.nodes.find((item) => item.id === session.nodeId);
       if (refmodSessionRef.current !== session || state.currentProjectId !== session.projectId
@@ -700,6 +735,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // 暴露命令式插入：在当前光标处插入引用芯片；若编辑器内无有效光标则落到末尾
   useImperativeHandle(ref, () => ({
     insertMentionAtCursor: (id: string, label: string) => {
+      if (disabledRef.current) return;
       const el = editorRef.current;
       if (!el) return;
 
@@ -1079,6 +1115,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   // ── Input handler: detect @ and / ──
   const handleInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    if (disabledRef.current) return;
     const el = editorRef.current;
     if (!el) return;
     normalizeChipSlots(el); // 删字后行首化的芯片补回光标落点
@@ -1124,6 +1161,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   // ── KeyDown: mention navigation / submit / chip deletion ──
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (disabledRef.current) { e.preventDefault(); return; }
       // 输入法组合中：回车/方向键属于候选框，不该触发提交或 @ 选中
       if (composingRef.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       const refmodChip = (e.target as Element | null)?.closest?.<HTMLElement>('[data-refmod-raw]');
@@ -1304,6 +1342,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const handlePaste = useCallback(
     (e: React.ClipboardEvent<HTMLDivElement>) => {
       e.preventDefault();
+      if (disabledRef.current) return;
       const plain = e.clipboardData.getData('text/plain');
       const sel = window.getSelection();
       if (!sel || !sel.rangeCount) return;
@@ -1327,6 +1366,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     source: MentionPreviewSource; key: string; x: number; y: number; width: number;
     ownerNodeId?: string; ownerProjectId: typeof currentProjectId; assetUrl?: string; assetUnavailable?: boolean;
   } | null>(null);
+  if (disabled) {
+    if (showMention) setShowMention(false);
+    if (showAssetPicker) setShowAssetPicker(false);
+    if (refmodSession) setRefmodSession(undefined);
+    if (chipTip) setChipTip(null);
+  }
   const handleEditorMouseLeave = useCallback(() => {
     if (chipHoverTimer.current !== null) clearTimeout(chipHoverTimer.current);
     chipHoverTimer.current = null;
@@ -1378,6 +1423,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     }
   }, [currentProjectId, handleEditorMouseLeave, nodeId]);
   const handleChipPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (disabledRef.current) return;
     const root = editorRef.current;
     if (!root || event.button !== 0 || event.pointerType === 'touch') return;
     const source = findDraggableMentionChip(root, event.target);
@@ -1868,14 +1914,15 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   );
 
   return (
-    <div ref={mentionEditorWrapRef} className={`mention-editor-wrap relative ${className}`}>
+    <div ref={mentionEditorWrapRef} className={`mention-editor-wrap relative ${className}`} inert={disabled || undefined}>
       <div
         ref={editorRef}
-        contentEditable
+        contentEditable={!disabled}
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
         aria-label={ariaLabel}
+        aria-disabled={disabled || undefined}
         className={`ui-ai-input__editor prompt-editor${!prompt ? ' is-empty' : ''}`}
         data-placeholder={placeholder}
         data-reference-owner-node-id={nodeId}
@@ -1927,7 +1974,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       {/* 保留 chip-name-tip 的 Portal 标记，宿主点外关闭逻辑继续识别。 */}
       {createPortal(
         // 按下时直接卸载详情卡片，避免拖动期间仍残留退出动画。
-        chipHoverSuppressed ? null : <AnimatePresence>
+        disabled || chipHoverSuppressed ? null : <AnimatePresence>
           {chipTip && chipPreview && (
             <motion.div
               key={chipTip.key}
@@ -1974,9 +2021,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       )}
 
       {/* @ Mention Dropdown */}
-      {showMention && renderMentionDropdown(
+      {showMention && !disabled && renderMentionDropdown(
         <div
           ref={mentionDropdownRef}
+          data-mention-picker-open=""
           className={`mention-dropdown${mentionDropdownResizing ? ' is-resizing' : ''} ${portalDropdown ? 'fixed z-[10000]' : 'absolute z-50'} w-[336px] max-w-[calc(100vw-24px)] [&>.mention-picker]:max-h-[calc(100vh-24px)] [&>.mention-picker]:overflow-hidden [&_.mention-picker-grid]:min-h-0`}
           style={{ left: mentionDropdownPosition.left, top: mentionDropdownPosition.top }}
         >
@@ -2158,9 +2206,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       {/* 资产引用弹窗（Portal） */}
       {createPortal(
         <AnimatePresence>
-          {showAssetPicker && (
+          {showAssetPicker && !disabled && (
             <motion.div
               data-tauri-drag-region
+              data-mention-picker-open=""
               className="asset-picker-backdrop"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}

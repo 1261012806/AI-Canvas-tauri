@@ -250,6 +250,19 @@ describe('隔离上下文', () => {
 });
 
 describe('执行与产出', () => {
+  it('本次指定的文本模型传递到每轮执行，且不写入任务持久化数据', async () => {
+    executeAgentRoundMock.mockImplementation(async ({ totalToolResultChars }) => ({
+      outcome: 'continue', fullText: '润色结果', totalToolResultChars,
+    }));
+    const result = await runSubAgent('parent-1', profile(), '润色提示词', signal(), { modelId: 'general/polish-text' });
+    expect(executeAgentRoundMock).toHaveBeenCalledTimes(2);
+    for (const [round] of executeAgentRoundMock.mock.calls) {
+      expect(round.modelId).toBe('general/polish-text');
+    }
+    const child = useAppStore.getState().agentTasks.find((task) => task.id === result.childTaskId)!;
+    expect(child).not.toHaveProperty('modelId');
+  });
+
   it('成功后写入结果并标记完成', async () => {
     const result = await runSubAgent('parent-1', profile(), '分析', signal());
     expect(result.result).toBe('分析结论');

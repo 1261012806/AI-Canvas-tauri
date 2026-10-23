@@ -59,8 +59,35 @@ describe('节点提示词润色', () => {
   });
   it('采用助手模型与无工具流，不接管全局中止控制器', async () => {
     await createPromptPolishSession('n1').run(options());
-    expect(mocks.model).toHaveBeenCalledWith('p1');
-    expect(mocks.stream.mock.calls[0][0]).toMatchObject({ projectId: 'p1', tools: [], trackAbort: false });
+    expect(mocks.model).toHaveBeenCalledWith('p1', undefined);
+    expect(mocks.stream.mock.calls[0][0]).toMatchObject({ projectId: 'p1', modelId: 'text-model', tools: [], trackAbort: false });
+  });
+  it.each(['default', 'skill', 'package', 'profile'])('所选文本模型用于 %s 润色，不修改助手默认模型', async (kind) => {
+    const defaultModel = useAppStore.getState().config.assistantModelId;
+    mocks.model.mockReturnValue({ selectionId: 'general/polish-text' });
+    mocks.subAgent.mockResolvedValue({ result: '所选模型润色结果', childTaskId: 'child', truncated: false });
+    useAppStore.setState({ agentPackages: [agentPackage] });
+    await createPromptPolishSession('n1').run({
+      ...options(), modelId: 'general/polish-text',
+      ...(kind === 'skill' ? { skillId: skill.id } : {}),
+      ...(kind === 'package' ? { agentPackageId: agentPackage.id } : {}),
+      ...(kind === 'profile' ? { profileId: 'built-in:script-analyst' } : {}),
+    });
+    expect(mocks.model).toHaveBeenCalledWith('p1', 'general/polish-text');
+    if (kind === 'profile') {
+      expect(mocks.subAgent.mock.calls[0][4]).toEqual({ modelId: 'general/polish-text' });
+      expect(mocks.stream).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.stream.mock.calls[0][0].modelId).toBe('general/polish-text');
+    }
+    expect(useAppStore.getState().config.assistantModelId).toBe(defaultModel);
+  });
+  it('所选文本模型失效时不改用默认助手模型', async () => {
+    mocks.model.mockReturnValue(null);
+    await expect(createPromptPolishSession('n1').run({ ...options(), modelId: 'general/missing' }))
+      .rejects.toThrow('所选文本模型已不可用');
+    expect(mocks.stream).not.toHaveBeenCalled();
+    expect(mocks.subAgent).not.toHaveBeenCalled();
   });
   it('选择 Skill 时复用有界快照并标注不可信说明', async () => {
     await createPromptPolishSession('n1').run({ ...options(), skillId: 's1' });

@@ -944,6 +944,7 @@ html[data-performance-mode] body[data-tauri-window] {
 
 body[data-tauri-window] > :is(
   .fixed.inset-0,
+  .ai-dialog-expanded-backdrop,
   .assets-panel-backdrop,
   .matting-overlay,
   .point-edit-overlay,
@@ -978,9 +979,14 @@ body[data-tauri-window] .app-shell__content > :is(
 }
 
 /* 展开蒙层是 button，显式的 100% 尺寸会抵消右侧和底部 inset。 */
+body[data-tauri-window] > .ai-dialog-expanded-backdrop,
 body[data-tauri-window] .app-shell__content > .ai-dialog-expanded-backdrop {
   width: auto;
   height: auto;
+}
+/* 节点放大遮罩覆盖悬浮导航预留区，仅保留窗口玻璃外框。 */
+body[data-tauri-window][data-sidebar-floating] > .ai-dialog-expanded-backdrop {
+  left: var(--window-overlay-right);
 }
 
 /* PointEdit 通过 portal 挂载到 body，蒙层视觉与项目内置图片工具保持一致。 */

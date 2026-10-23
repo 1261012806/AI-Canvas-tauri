@@ -73,6 +73,8 @@ export interface AgentRoundCallbacks {
 
 export interface AgentRoundOptions {
   taskId: string;
+  /** 当前执行段指定的文本模型，不持久化到任务。 */
+  modelId?: string;
   signal: AbortSignal;
   messages: AssistantModelMessage[];
   fullText: string;
@@ -722,6 +724,7 @@ export function resolveApprovalSelection(
 
 export async function executeAgentRound({
   taskId,
+  modelId,
   signal,
   messages,
   fullText,
@@ -796,7 +799,7 @@ export async function executeAgentRound({
     return { outcome: 'paused', fullText, totalToolResultChars };
   }
 
-  const contextSpec = resolveAssistantContextSpec(task.projectId);
+  const contextSpec = resolveAssistantContextSpec(task.projectId, modelId);
   const tools = buildAssistantFunctionTools(roundContext);
   const toolGuidance = buildAssistantToolGuidance(tools.map((tool) => tool.function.name), roundContext.mode, contextSpec.inputBudget);
   let guidanceMessage = toolGuidanceMessages.get(messages);
@@ -844,6 +847,7 @@ export async function executeAgentRound({
       userMessage: '',
       messages,
       projectId: task.projectId,
+      modelId,
       tools,
       signal,
       onEvent: (event: AssistantStreamEvent) => {

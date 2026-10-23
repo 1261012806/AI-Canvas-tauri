@@ -51,7 +51,8 @@ interface ResolvedModelConfig {
  * 查找已配置的助手模型，返回 API 连接参数。
  * 返回 null 表示未配置助手模型，应回退到本地规则引擎。
  */
-export function resolveAssistantModel(projectId?: string | null): ResolvedModelConfig | null {
+export function resolveAssistantModel(projectId?: string | null, modelId?: string): ResolvedModelConfig | null {
+  if (modelId !== undefined) return resolveAssistantModelById(modelId);
   const state = useAppStore.getState();
   const project = state.projects.find((item) => item.id === (projectId ?? state.currentProjectId));
   const candidates = getAssistantTextModelCandidates(
@@ -151,6 +152,8 @@ export interface StreamingCallOptions {
   trackAbort?: boolean;
   /** 后台 Agent 必须显式传入，避免项目切换后把视觉缓存写到错误项目。 */
   projectId?: string;
+  /** 本次调用显式选择的文本模型；不可用时拒绝，不回退或修改默认配置。 */
+  modelId?: string;
 }
 
 export interface AssistantModelToolCall {
@@ -239,9 +242,11 @@ function buildAssistantTools(userMessage: string): AssistantToolDefinition[] {
  * @returns 完整响应文本
  */
 export async function streamAssistantReply(options: StreamingCallOptions): Promise<string> {
-  const modelConfig = resolveAssistantModel(options.projectId);
+  const modelConfig = resolveAssistantModel(options.projectId, options.modelId);
   if (!modelConfig) {
-    throw new Error('未配置助手模型，请在「设置 → API Key」中添加');
+    throw new Error(options.modelId !== undefined
+      ? '所选文本模型已不可用，请重新选择。'
+      : '未配置助手模型，请在「设置 → API Key」中添加');
   }
   if (!modelConfig.usesChatApiProtocol && modelConfig.protocol.streamFormat !== 'openai-sse') {
     throw new Error('当前助手模型协议未声明 OpenAI SSE 兼容能力，不能用于对话助手或 Agent 工具调用');
@@ -308,7 +313,7 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
           signal: controller.signal,
           variables: {
             model: modelConfig.modelName,
-            prompt: userMessage,
+            prompt: (requestMessages.findLast((message) => message.role === 'user')?.content ?? userMessage) as ProtocolJsonValue,
             messages: requestMessages as unknown as ProtocolJsonValue,
             stream: !nonStream,
             tools: tools.length > 0 ? tools as unknown as ProtocolJsonValue : undefined,

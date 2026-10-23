@@ -2,6 +2,7 @@
  * AINodeDialog AI 生成弹窗 — 点击节点后弹出的浮动面板，包含 Prompt 输入、模型选择、参数配置、生成按钮
  */
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 // 生成中的流光边框：仅在生成时按需加载
 const BorderBeam = lazy(() => import('../../vendor/generation-effects/border-beam/src').then((m) => ({ default: m.BorderBeam })));
@@ -200,7 +201,7 @@ function AINodeDialog() {
 
       const panelRect = panel.getBoundingClientRect();
       const visualViewport = window.visualViewport;
-      const appRect = panel.closest<HTMLElement>('.app-box')?.getBoundingClientRect();
+      const appRect = document.querySelector<HTMLElement>('.app-box')?.getBoundingClientRect();
       const viewportLeft = visualViewport?.offsetLeft ?? 0;
       const viewportTop = visualViewport?.offsetTop ?? 0;
       const viewportRight = viewportLeft + (visualViewport?.width ?? window.innerWidth);
@@ -237,7 +238,7 @@ function AINodeDialog() {
     };
     const observer = new ResizeObserver(scheduleUpdate);
     observer.observe(panel);
-    const appBox = panel.closest<HTMLElement>('.app-box');
+    const appBox = document.querySelector<HTMLElement>('.app-box');
     if (appBox) observer.observe(appBox);
     scheduleUpdate();
     settleTimer = window.setTimeout(scheduleUpdate, CANVAS_PAN_DURATION_MS);
@@ -302,6 +303,7 @@ function AINodeDialog() {
         }
         // 先让顶层 UI Kit 下拉处理 Escape，保留当前节点参数弹窗。
         if (document.querySelector('[data-ui-select-portal]')) return;
+        if (document.querySelector('[data-mention-picker-open]')) return;
         if (document.querySelector('[data-cloud-workflow-parameters]')) return;
         // 引用扇形和芯片预览先处理 Escape，再关闭节点对话框。
         if (document.querySelector('[data-reference-preview-open]')) return;
@@ -1059,7 +1061,8 @@ function AINodeDialog() {
     onPromptChange(newPrompt);
   };
 
-  return (
+  // 与导航栏脱离画布裁剪层，收放时保留同一编辑器子树。
+  return createPortal(
     <>
       {isExpanded && (
         <button
@@ -1108,15 +1111,6 @@ function AINodeDialog() {
             </Suspense>
           </LazyLoadBoundary>
         )}
-        {isExpanded && (
-          <div className="ai-dialog-preview-float is-expanded">
-            <ConnectedNodesPreview
-              nodeId={activeNodeId}
-              onInsertMention={handleInsertMention}
-              hoverEmphasis="expanded"
-            />
-          </div>
-        )}
         <button
           type="button"
           className="ai-dialog-expand-btn"
@@ -1139,130 +1133,141 @@ function AINodeDialog() {
             </svg>
           )}
         </button>
-        {['runninghubwf', 'runninghub'].includes(data.provider ?? '') && data.runninghubStage && <p role="status" className="px-3 py-1 text-xs text-canvas-text-secondary">RunningHub · {data.runninghubStage}</p>}
-        {data.provider === 'workflow-api' && data.workflowApiStage && <p role="status" className="px-3 py-1 text-xs text-canvas-text-secondary">AutoDL · {data.workflowApiStage}</p>}
-        {workflowApiTask && data.status !== 'loading' && <WorkflowApiTaskStatus key={`${activeNodeId}:${workflowApiTask.workflowApi?.attemptId}`} task={workflowApiTask} />}
-        {nodeType === 'ai-video' && data.videoTaskState === 'paused' && <div className="m-2"><VideoTaskStatus nodeId={activeNodeId} /></div>}
-        {cloudTask && data.status !== 'loading' && <div className="ui-card m-2 flex flex-col gap-2 p-3 text-xs">
-          <p>{cloudTask.taskId ? `任务 ${(cloudTask.taskIds?.length ? cloudTask.taskIds : [cloudTask.taskId]).join('、')} 已保留，可以继续查询。${cloudTask.runninghubSubmissionUncertain ? '另有提交状态未知，请到平台核对后再清除恢复记录。' : ''}` : '提交状态未知。请到 RunningHub 平台核对，补充任务 ID 后继续查询。'}</p>
-          {!cloudTask.taskId && <input aria-label="RunningHub 任务 ID" className="ui-input w-full" value={recoveryInput.nodeId === activeNodeId ? recoveryInput.taskId : ''} inputMode="numeric" onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: event.target.value, confirmed: false })} />}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="ui-btn ui-btn--sm" onClick={() => {
-              if (!cloudTask.taskId) {
-                if (recoveryInput.nodeId !== activeNodeId || !/^\d{1,30}$/.test(recoveryInput.taskId.trim())) { showToast('请填写正确的任务 ID', 'error'); return; }
-                updatePendingTask(activeNodeId, { taskId: recoveryInput.taskId.trim(), taskIds: [recoveryInput.taskId.trim()], submitted: true, runninghubRecoveryState: 'disconnected', runninghubSubmissionUncertain: false }, '');
-              }
-              void resumeRunningHubNodeTask(activeNodeId).catch((error: unknown) => showToast(error instanceof Error ? error.message : '恢复查询失败', 'error'));
-            }}>继续查询 / 保存</button>
-            {cloudTask.taskId && <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>请求远端取消</button>}
-          </div>
-          <details><summary className="cursor-pointer text-canvas-text-secondary">在平台确认任务结束后解除限制</summary>
-            <label className="my-2 flex gap-2"><input type="checkbox" checked={recoveryInput.nodeId === activeNodeId && recoveryInput.confirmed} onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: '', confirmed: event.target.checked })} />我已在平台确认任务未提交或已经结束</label>
-            <button type="button" className="ui-btn ui-btn--sm" disabled={recoveryInput.nodeId !== activeNodeId || !recoveryInput.confirmed} onClick={() => { removePendingTask(activeNodeId, cloudTask.taskId); updateNodeDataTransient(activeNodeId, { status: 'idle', error: undefined, runninghubStage: undefined }); setRecoveryInput({ nodeId: '', taskId: '', confirmed: false }); }}>清除本地恢复记录</button>
-          </details>
-        </div>}
-        {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">全部产物 · {cloudOutputs.length}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
-          <p className="mb-1 text-canvas-text-secondary">产物 {index + 1}{output.nodeId ? ` · 节点 ${output.nodeId}` : ''}</p>
-          {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={`产物 ${index + 1}`} /> : output.kind === 'video' ? <video className="max-h-48 w-full" src={output.url} controls preload="metadata" /> : <audio className="w-full" src={output.url} controls preload="metadata" />}
-        </div>)}</div></details>}
-        {recoverableComfyTask && (
-          <div className="ui-alert ui-alert--warning mx-3 mb-2 flex-wrap" role="status">
-            <span className="min-w-0 flex-1 text-xs">
-              {recoverableComfyTask.comfyRecoveryState === 'cancel_pending'
-                ? t('ComfyUI 取消尚未确认，任务已保留')
-                : recoverableComfyTask.comfyRecoveryState === 'save_pending'
-                  ? t('ComfyUI 已完成，结果尚未保存或回填，任务已保留')
-                  : t('ComfyUI 查询中断，任务已保留')}
-            </span>
+        <div className="ai-dialog-main">
+          {isExpanded && (
+            <div className="ai-dialog-preview-float is-expanded">
+              <ConnectedNodesPreview
+                nodeId={activeNodeId}
+                onInsertMention={handleInsertMention}
+                hoverEmphasis="expanded"
+              />
+            </div>
+          )}
+          {['runninghubwf', 'runninghub'].includes(data.provider ?? '') && data.runninghubStage && <p role="status" className="px-3 py-1 text-xs text-canvas-text-secondary">RunningHub · {data.runninghubStage}</p>}
+          {data.provider === 'workflow-api' && data.workflowApiStage && <p role="status" className="px-3 py-1 text-xs text-canvas-text-secondary">AutoDL · {data.workflowApiStage}</p>}
+          {workflowApiTask && data.status !== 'loading' && <WorkflowApiTaskStatus key={`${activeNodeId}:${workflowApiTask.workflowApi?.attemptId}`} task={workflowApiTask} />}
+          {nodeType === 'ai-video' && data.videoTaskState === 'paused' && <div className="m-2"><VideoTaskStatus nodeId={activeNodeId} /></div>}
+          {cloudTask && data.status !== 'loading' && <div className="ui-card m-2 flex flex-col gap-2 p-3 text-xs">
+            <p>{cloudTask.taskId ? `任务 ${(cloudTask.taskIds?.length ? cloudTask.taskIds : [cloudTask.taskId]).join('、')} 已保留，可以继续查询。${cloudTask.runninghubSubmissionUncertain ? '另有提交状态未知，请到平台核对后再清除恢复记录。' : ''}` : '提交状态未知。请到 RunningHub 平台核对，补充任务 ID 后继续查询。'}</p>
+            {!cloudTask.taskId && <input aria-label="RunningHub 任务 ID" className="ui-input w-full" value={recoveryInput.nodeId === activeNodeId ? recoveryInput.taskId : ''} inputMode="numeric" onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: event.target.value, confirmed: false })} />}
             <div className="flex flex-wrap gap-2">
               <button type="button" className="ui-btn ui-btn--sm" onClick={() => {
-                void resumeComfyUINodeTask(activeNodeId).catch(() => showToast(t('继续查询失败，任务仍保留'), 'error'));
-              }}>{recoverableComfyTask.comfyRecoveryState === 'save_pending' ? t('继续保存') : t('继续查询')}</button>
-              <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>{t('再次终止')}</button>
+                if (!cloudTask.taskId) {
+                  if (recoveryInput.nodeId !== activeNodeId || !/^\d{1,30}$/.test(recoveryInput.taskId.trim())) { showToast('请填写正确的任务 ID', 'error'); return; }
+                  updatePendingTask(activeNodeId, { taskId: recoveryInput.taskId.trim(), taskIds: [recoveryInput.taskId.trim()], submitted: true, runninghubRecoveryState: 'disconnected', runninghubSubmissionUncertain: false }, '');
+                }
+                void resumeRunningHubNodeTask(activeNodeId).catch((error: unknown) => showToast(error instanceof Error ? error.message : '恢复查询失败', 'error'));
+              }}>继续查询 / 保存</button>
+              {cloudTask.taskId && <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>请求远端取消</button>}
             </div>
-          </div>
-        )}
-        <PromptPanel
-          onPolish={isExpanded ? () => {
-            finishContinuousEdit();
-            if (polishOpen) closePolish();
-            else setPolishTarget({ nodeId: activeNodeId, projectId: currentProjectId });
-          } : undefined}
-          polishOpen={polishOpen}
-          editorRef={editorApiRef}
-          nodeType={isPrevis ? 'ai-text' : nodeType}
-          nodeId={activeNodeId}
-          prompt={data.prompt || (isPrevis ? data.directorPrevisPrompt : '') || ''}
-          placeholder={isPrevis ? t('按 @ 引用连线图片或完整分镜表，描述空间、人物走位和运镜；') : t('按 @ 引用素材；连线素材需 @ 后才会传给模型，仅连线不生效；\n描述想要生成的内容；\n/ 呼出指令；')}
-          selectedModel={data.model ?? (isPrevis ? data.directorPrevisModel : undefined)}
-          selectedProvider={data.provider || (isPrevis ? data.directorPrevisProvider : undefined)}
-          selectedWorkflowId={data.workflowId}
-          costEstimate={<VolcengineCostEstimate data={data} onOpenRecords={() => setBillingOpen(true)} />}
-          animationAction={data.animationAction ?? 'idle'}
-          onAnimationActionChange={onAnimationActionChange}
-          animationFrames={data.animationFrames ?? 8}
-          onAnimationFramesChange={onAnimationFramesChange}
-          canGenerate={(nodeType !== 'ai-director' || isPrevis) && data.status !== 'loading' && !recoverableComfyTask && !cloudTask && !workflowApiTask}
-          isGenerating={data.status === 'loading'}
-          onCancelGeneration={isPrevis || ['comfyui', 'runninghubwf', 'runninghub', 'workflow-api'].includes(data.provider ?? '') ? () => { void onCancelGeneration(); } : undefined}
-          onChange={onPromptChange}
-          onContinuousEditEnd={finishContinuousEdit}
-          onSubmit={onSubmit}
-          onModelSelect={onModelSelect}
-          onClearModel={onClearModel}
-          onWorkflowSelect={onWorkflowSelect}
-          runninghubModelParameters={data.runninghubModelParameters}
-          onRunninghubModelParametersChange={(runninghubModelParameters) => updateNodeData(activeNodeId, { runninghubModelParameters })}
-          workflowInputs={data.workflowInputs}
-          onWorkflowInputsChange={(workflowInputs) => updateContinuousNodeData({ workflowInputs })}
-          onPassThrough={supportsPassThrough ? onPassThrough : undefined}
-          imageSize={(data.imageSize as string) || '2K'}
-          aspectRatio={(data.aspectRatio as string) || (nodeType === 'ai-panorama' ? '2:1' : '1:1')}
-          onChangeImageSize={onChangeImageSize}
-          onChangeAspectRatio={onChangeAspectRatio}
-          batchCount={(data.batchCount as number) || 1}
-          onChangeBatchCount={onChangeBatchCount}
-          cameraSettings={data.cameraSettings}
-          onChangeCameraSettings={onChangeCameraSettings}
-          videoResolution={data.videoResolution as number | undefined}
-          videoFps={data.videoFps as number | undefined}
-          videoFrames={data.videoFrames as number | undefined}
-          onChangeVideoResolution={onChangeVideoResolution}
-          onChangeVideoFps={onChangeVideoFps}
-          seedanceResolution={data.seedanceResolution as string | undefined}
-          seedanceRatio={data.seedanceRatio as string | undefined}
-          seedanceDuration={data.seedanceDuration as number | undefined}
-          generateAudio={data.generateAudio as boolean | undefined}
-          videoReferences={data.videoReferences}
-          onChangeVideoReferences={onChangeVideoReferences}
-          onChangeSeedanceResolution={onChangeSeedanceResolution}
-          onChangeSeedanceRatio={onChangeSeedanceRatio}
-          onChangeSeedanceDuration={onChangeSeedanceDuration}
-          onChangeGenerateAudio={onChangeGenerateAudio}
-          audioPurpose={audioPurpose}
-          audioSpeechSettings={data.audioSpeechSettings}
-          onChangeAudioSpeechSettings={onChangeAudioSpeechSettings}
-          onRemoveAudioReference={onRemoveAudioReference}
-          audioVoice={data.audioVoice ?? 'alloy'}
-          audioFormat={data.audioFormat ?? 'wav'}
-          audioSpeed={data.audioSpeed ?? 1}
-          musicTitle={data.musicTitle ?? ''}
-          musicLyrics={data.musicLyrics ?? ''}
-          musicBpm={data.musicBpm}
-          musicDuration={data.musicDuration ?? 60}
-          autoGenerateLyrics={data.autoGenerateLyrics ?? false}
-          onChangeAudioVoice={onChangeAudioVoice}
-          onChangeAudioFormat={onChangeAudioFormat}
-          onChangeAudioSpeed={onChangeAudioSpeed}
-          onChangeMusicTitle={onChangeMusicTitle}
-          onChangeMusicLyrics={onChangeMusicLyrics}
-          onChangeMusicBpm={onChangeMusicBpm}
-          onChangeMusicDuration={onChangeMusicDuration}
-          onChangeAutoGenerateLyrics={onChangeAutoGenerateLyrics}
-          workflows={workflows}
-          selectedStyle={data.style as string | undefined}
-          onStyleChange={onStyleChange}
-        />
+            <details><summary className="cursor-pointer text-canvas-text-secondary">在平台确认任务结束后解除限制</summary>
+              <label className="my-2 flex gap-2"><input type="checkbox" checked={recoveryInput.nodeId === activeNodeId && recoveryInput.confirmed} onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: '', confirmed: event.target.checked })} />我已在平台确认任务未提交或已经结束</label>
+              <button type="button" className="ui-btn ui-btn--sm" disabled={recoveryInput.nodeId !== activeNodeId || !recoveryInput.confirmed} onClick={() => { removePendingTask(activeNodeId, cloudTask.taskId); updateNodeDataTransient(activeNodeId, { status: 'idle', error: undefined, runninghubStage: undefined }); setRecoveryInput({ nodeId: '', taskId: '', confirmed: false }); }}>清除本地恢复记录</button>
+            </details>
+          </div>}
+          {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">全部产物 · {cloudOutputs.length}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
+            <p className="mb-1 text-canvas-text-secondary">产物 {index + 1}{output.nodeId ? ` · 节点 ${output.nodeId}` : ''}</p>
+            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={`产物 ${index + 1}`} /> : output.kind === 'video' ? <video className="max-h-48 w-full" src={output.url} controls preload="metadata" /> : <audio className="w-full" src={output.url} controls preload="metadata" />}
+          </div>)}</div></details>}
+          {recoverableComfyTask && (
+            <div className="ui-alert ui-alert--warning mx-3 mb-2 flex-wrap" role="status">
+              <span className="min-w-0 flex-1 text-xs">
+                {recoverableComfyTask.comfyRecoveryState === 'cancel_pending'
+                  ? t('ComfyUI 取消尚未确认，任务已保留')
+                  : recoverableComfyTask.comfyRecoveryState === 'save_pending'
+                    ? t('ComfyUI 已完成，结果尚未保存或回填，任务已保留')
+                    : t('ComfyUI 查询中断，任务已保留')}
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="ui-btn ui-btn--sm" onClick={() => {
+                  void resumeComfyUINodeTask(activeNodeId).catch(() => showToast(t('继续查询失败，任务仍保留'), 'error'));
+                }}>{recoverableComfyTask.comfyRecoveryState === 'save_pending' ? t('继续保存') : t('继续查询')}</button>
+                <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>{t('再次终止')}</button>
+              </div>
+            </div>
+          )}
+          <PromptPanel
+            onPolish={isExpanded ? () => {
+              finishContinuousEdit();
+              if (polishOpen) closePolish();
+              else setPolishTarget({ nodeId: activeNodeId, projectId: currentProjectId });
+            } : undefined}
+            polishOpen={polishOpen}
+            editorRef={editorApiRef}
+            nodeType={isPrevis ? 'ai-text' : nodeType}
+            nodeId={activeNodeId}
+            prompt={data.prompt || (isPrevis ? data.directorPrevisPrompt : '') || ''}
+            placeholder={isPrevis ? t('按 @ 引用连线图片或完整分镜表，描述空间、人物走位和运镜；') : t('按 @ 引用素材；连线素材需 @ 后才会传给模型，仅连线不生效；\n描述想要生成的内容；\n/ 呼出指令；')}
+            selectedModel={data.model ?? (isPrevis ? data.directorPrevisModel : undefined)}
+            selectedProvider={data.provider || (isPrevis ? data.directorPrevisProvider : undefined)}
+            selectedWorkflowId={data.workflowId}
+            costEstimate={<VolcengineCostEstimate data={data} onOpenRecords={() => setBillingOpen(true)} />}
+            animationAction={data.animationAction ?? 'idle'}
+            onAnimationActionChange={onAnimationActionChange}
+            animationFrames={data.animationFrames ?? 8}
+            onAnimationFramesChange={onAnimationFramesChange}
+            canGenerate={(nodeType !== 'ai-director' || isPrevis) && data.status !== 'loading' && !recoverableComfyTask && !cloudTask && !workflowApiTask}
+            isGenerating={data.status === 'loading'}
+            onCancelGeneration={isPrevis || ['comfyui', 'runninghubwf', 'runninghub', 'workflow-api'].includes(data.provider ?? '') ? () => { void onCancelGeneration(); } : undefined}
+            onChange={onPromptChange}
+            onContinuousEditEnd={finishContinuousEdit}
+            onSubmit={onSubmit}
+            onModelSelect={onModelSelect}
+            onClearModel={onClearModel}
+            onWorkflowSelect={onWorkflowSelect}
+            runninghubModelParameters={data.runninghubModelParameters}
+            onRunninghubModelParametersChange={(runninghubModelParameters) => updateNodeData(activeNodeId, { runninghubModelParameters })}
+            workflowInputs={data.workflowInputs}
+            onWorkflowInputsChange={(workflowInputs) => updateContinuousNodeData({ workflowInputs })}
+            onPassThrough={supportsPassThrough ? onPassThrough : undefined}
+            imageSize={(data.imageSize as string) || '2K'}
+            aspectRatio={(data.aspectRatio as string) || (nodeType === 'ai-panorama' ? '2:1' : '1:1')}
+            onChangeImageSize={onChangeImageSize}
+            onChangeAspectRatio={onChangeAspectRatio}
+            batchCount={(data.batchCount as number) || 1}
+            onChangeBatchCount={onChangeBatchCount}
+            cameraSettings={data.cameraSettings}
+            onChangeCameraSettings={onChangeCameraSettings}
+            videoResolution={data.videoResolution as number | undefined}
+            videoFps={data.videoFps as number | undefined}
+            videoFrames={data.videoFrames as number | undefined}
+            onChangeVideoResolution={onChangeVideoResolution}
+            onChangeVideoFps={onChangeVideoFps}
+            seedanceResolution={data.seedanceResolution as string | undefined}
+            seedanceRatio={data.seedanceRatio as string | undefined}
+            seedanceDuration={data.seedanceDuration as number | undefined}
+            generateAudio={data.generateAudio as boolean | undefined}
+            videoReferences={data.videoReferences}
+            onChangeVideoReferences={onChangeVideoReferences}
+            onChangeSeedanceResolution={onChangeSeedanceResolution}
+            onChangeSeedanceRatio={onChangeSeedanceRatio}
+            onChangeSeedanceDuration={onChangeSeedanceDuration}
+            onChangeGenerateAudio={onChangeGenerateAudio}
+            audioPurpose={audioPurpose}
+            audioSpeechSettings={data.audioSpeechSettings}
+            onChangeAudioSpeechSettings={onChangeAudioSpeechSettings}
+            onRemoveAudioReference={onRemoveAudioReference}
+            audioVoice={data.audioVoice ?? 'alloy'}
+            audioFormat={data.audioFormat ?? 'wav'}
+            audioSpeed={data.audioSpeed ?? 1}
+            musicTitle={data.musicTitle ?? ''}
+            musicLyrics={data.musicLyrics ?? ''}
+            musicBpm={data.musicBpm}
+            musicDuration={data.musicDuration ?? 60}
+            autoGenerateLyrics={data.autoGenerateLyrics ?? false}
+            onChangeAudioVoice={onChangeAudioVoice}
+            onChangeAudioFormat={onChangeAudioFormat}
+            onChangeAudioSpeed={onChangeAudioSpeed}
+            onChangeMusicTitle={onChangeMusicTitle}
+            onChangeMusicLyrics={onChangeMusicLyrics}
+            onChangeMusicBpm={onChangeMusicBpm}
+            onChangeMusicDuration={onChangeMusicDuration}
+            onChangeAutoGenerateLyrics={onChangeAutoGenerateLyrics}
+            workflows={workflows}
+            selectedStyle={data.style as string | undefined}
+            onStyleChange={onStyleChange}
+          />
+        </div>
         {polishOpen && (
           <Suspense fallback={<aside className="prompt-polish-panel" role="status">{t('正在打开润色…')}</aside>}>
             <PromptPolishPanel key={`${currentProjectId}:${activeNodeId}`} nodeId={activeNodeId} onClose={closePolish} />
@@ -1290,7 +1295,8 @@ function AINodeDialog() {
         </div>
         {billingOpen && <Suspense fallback={<div className="p-5 text-sm text-canvas-text-secondary">正在加载用量记录…</div>}><VolcengineBillingSettings /></Suspense>}
       </ModalOverlay>
-    </>
+    </>,
+    document.body,
   );
 }
 

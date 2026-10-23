@@ -4,9 +4,12 @@ import { useAppStore } from '../../../store/useAppStore';
 import { createPromptPolishSession, enablePromptPolishPackage, isPromptPolishPackageSupported } from '../../../services/promptPolishService';
 import { isSkillUserInvocable } from '../../../services/skillPromptService';
 import { mergeSubAgentProfiles } from '../../../services/chat/subAgentProfileService';
+import { resolveAssistantModel } from '../../../services/ai/assistantStream';
 import { useT } from '../../../i18n';
 import Select from '../../shared/Select';
 import PopupCloseButton from '../../shared/PopupCloseButton';
+import MentionEditor from './MentionEditor';
+import ModelSelector from './ModelSelector';
 
 export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string; onClose: () => void }) {
   const t = useT();
@@ -19,6 +22,12 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
   const selectablePackages = agentPackages.filter(isPromptPolishPackageSupported);
   const skills = [...userSkills, ...packageSkills].filter(isSkillUserInvocable);
   const [instruction, setInstruction] = useState('');
+  const [modelId, setModelId] = useState(() => {
+    const selected = resolveAssistantModel()?.selectionId ?? '';
+    const generalModels = useAppStore.getState().config.generalModels ?? [];
+    return generalModels.some((model) => model.id === selected && model.category === 'text')
+      ? `general/${selected}` : selected;
+  });
   const [skillId, setSkillId] = useState('');
   const [agentChoice, setAgentChoice] = useState('');
   const [enablingPackageId, setEnablingPackageId] = useState<string | null>(null);
@@ -26,9 +35,9 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
   const [status, setStatus] = useState<'idle' | 'running' | 'ready' | 'applied'>('idle');
   const [error, setError] = useState('');
   const session = useRef<ReturnType<typeof createPromptPolishSession> | null>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    input.current?.focus();
+    input.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
     return () => { session.current?.cancel(); session.current = null; };
   }, []);
 
@@ -58,7 +67,7 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
     }
   };
   const start = async () => {
-    if (status === 'running' || enablingPackageId) return;
+    if (status === 'running' || enablingPackageId || !modelId) return;
     session.current?.cancel();
     setError('');
     setPreview('');
@@ -75,6 +84,7 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
     try {
       await request.run({
         instruction,
+        modelId,
         skillId: skillId || undefined,
         profileId: agentChoice.startsWith('profile:') ? agentChoice.slice('profile:'.length) : undefined,
         agentPackageId: agentChoice.startsWith('package:') ? agentChoice.slice('package:'.length) : undefined,
@@ -115,8 +125,20 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
         <PopupCloseButton ariaLabel={t('关闭润色')} onClick={onClose} />
       </header>
       <p className="text-xs leading-relaxed text-canvas-text-muted">{t('描述你想怎么改，预览满意后再应用。')}</p>
-      <label htmlFor={`${id}-instruction`} className="text-xs text-canvas-text-secondary">{t('润色要求')}</label>
-      <textarea ref={input} id={`${id}-instruction`} className="ui-input min-h-24 w-full resize-none text-sm" placeholder={t('例如：保留主体，补充镜头和光线，让表达更自然…')} value={instruction} disabled={running} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void start(); } }} />
+      <span id={`${id}-instruction-label`} className="text-xs text-canvas-text-secondary">{t('润色要求')}</span>
+      <div ref={input} className="ui-textarea prompt-polish-instruction shrink-0 focus-within:border-[var(--border-focus)] focus-within:ring-2 focus-within:ring-[var(--brand-alpha-12)]" role="group" aria-labelledby={`${id}-instruction-label`}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+            && !event.defaultPrevented && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+            event.preventDefault();
+            void start();
+          }
+        }}>
+        <MentionEditor nodeId={nodeId} value={instruction} onChange={setInstruction}
+          ariaLabel={t('润色要求')} placeholder={t('例如：保留主体，补充镜头和光线，让表达更自然…')}
+          portalDropdown disabled={running} canSubmit={!running && !enablingPackageId && !!modelId}
+          submitShortcut="ctrl-enter" onSubmit={() => { void start(); }} />
+      </div>
       <div className="grid shrink-0 grid-cols-2 gap-2">
         <label className="min-w-0 text-xs text-canvas-text-secondary"><span className="mb-1.5 block">Skill</span>
           <Select fixedMenu className="w-full" value={skillId} disabled={running} onChange={(value) => { setSkillId(value); if (value) setAgentChoice(''); }}>
@@ -136,9 +158,11 @@ export default function PromptPolishPanel({ nodeId, onClose }: { nodeId: string;
           </Select>
         </label>
       </div>
-      <div className="flex shrink-0 items-center justify-between gap-2">
-        <span className="text-[11px] text-canvas-text-muted" role={enablingPackageId ? 'status' : undefined}>{enablingPackageId ? t('启用智能体 {name}', { name: agentPackages.find((item) => item.id === enablingPackageId)?.manifest.name ?? '' }) : t('使用助手文本模型')}</span>
-        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!!enablingPackageId} onClick={running ? stop : () => { void start(); }}>{running ? t('停止') : preview ? t('重新润色') : t('开始润色')}</button>
+      {enablingPackageId && <p className="text-[11px] text-canvas-text-muted" role="status">{t('启用智能体 {name}', { name: agentPackages.find((item) => item.id === enablingPackageId)?.manifest.name ?? '' })}</p>}
+      <div className="prompt-polish-model-row flex min-w-0 shrink-0 items-center justify-between gap-2" role="group" aria-label={t('文本模型')}>
+        <ModelSelector nodeType="ai-text" appearance="pill" selectedModel={modelId}
+          disabled={running || !!enablingPackageId} persistPreference={false} onSelect={(model) => setModelId(model.value)} />
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary shrink-0" disabled={!!enablingPackageId || (!running && !modelId)} onClick={running ? stop : () => { void start(); }}>{running ? t('停止') : preview ? t('重新润色') : t('开始润色')}</button>
       </div>
       <div className="prompt-polish-result" aria-busy={running}>
         {preview ? <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{preview}</div> : <div className="flex h-full min-h-24 flex-col items-center justify-center gap-3 text-center text-xs text-canvas-text-muted">{running ? <LoaderCircle className="motion-safe:animate-spin" size={20} /> : <Sparkles size={22} strokeWidth={1.2} />}<span role="status">{running ? agentChoice ? t('智能体正在润色…') : t('正在润色…') : t('润色结果会显示在这里')}</span></div>}

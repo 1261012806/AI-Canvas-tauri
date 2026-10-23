@@ -62,6 +62,9 @@ function saveModelPref(nodeType: string, modelValue: string) {
 
 interface ModelSelectorProps {
   nodeType: NodeType;
+  disabled?: boolean;
+  /** 临时工具选择不覆盖节点的上次模型偏好。 */
+  persistPreference?: boolean;
   /** 节点提示词栏用紧凑透明入口展示当前模型。 */
   appearance?: 'default' | 'pill';
   /** 独立窗口使用自身已应用的主题；省略时沿用主窗口配置。 */
@@ -84,6 +87,8 @@ interface ModelSelectorProps {
 
 export default function ModelSelector({
   nodeType,
+  disabled = false,
+  persistPreference = true,
   appearance = 'default',
   theme,
   selectedModel,
@@ -100,6 +105,7 @@ export default function ModelSelector({
 }: ModelSelectorProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  if (disabled && open) setOpen(false);
   const [editorOpening, setEditorOpening] = useState(false);
   const editorOpeningRef = useRef(false);
   const [workflowsCollapsed, setWorkflowsCollapsed] = useState(true);
@@ -233,11 +239,11 @@ export default function ModelSelector({
         }
       }
     };
-    if (open) {
+    if (open && !disabled) {
       window.addEventListener('keydown', handler, true);
     }
     return () => window.removeEventListener('keydown', handler, true);
-  }, [open]);
+  }, [open, disabled]);
 
   // 筛选当前节点类型下可用的模型分组
   // 全景图和动画节点只复用生图模型，不复用图片节点的参数 UI
@@ -414,10 +420,11 @@ export default function ModelSelector({
     ...(!workflowsCollapsed ? [workflowGroupId] : []),
   ];
   const selectMenuItem = (value: string) => {
+    if (disabled) return;
     const group = filteredGroups.find((candidate) => candidate.models.some((model) => model.value === value));
     const model = group?.models.find((candidate) => candidate.value === value);
     if (group && model && isGroupAvailable(group.id)) {
-      saveModelPref(generationNodeType, model.value);
+      if (persistPreference) saveModelPref(generationNodeType, model.value);
       onSelect(model);
       onWorkflowSelect?.(undefined);
       setOpen(false);
@@ -437,7 +444,8 @@ export default function ModelSelector({
       <button
         type="button"
         className={`model-selector-trigger${appearance === 'pill' ? ' prompt-btn text-xs' : ''}${selectedWorkflowId ? ' has-workflow' : ''}${currentModel ? ' has-model' : ''}${canEditWorkflow ? ' has-workflow-editor' : ''}`}
-        aria-expanded={open}
+        aria-expanded={open && !disabled}
+        disabled={disabled}
         title={displayLabel}
         onClick={(e) => {
           e.stopPropagation();
@@ -476,6 +484,7 @@ export default function ModelSelector({
         <button
           type="button"
           className="prompt-btn model-selector-clear nodrag nopan"
+          disabled={disabled}
           aria-label={t('清除当前模型选择')}
           title={t('清除当前模型选择')}
           onClick={(event) => {
@@ -497,7 +506,7 @@ export default function ModelSelector({
           aria-label={t('在 ComfyUI 中编辑')}
           data-tooltip={t('在 ComfyUI 中编辑')}
           aria-busy={editorOpening}
-          disabled={editorOpening}
+          disabled={disabled || editorOpening}
           onClick={(event) => {
             event.stopPropagation();
             void editWorkflow();
@@ -511,7 +520,7 @@ export default function ModelSelector({
         </button>
       )}
 
-      {open && createPortal(
+      {open && !disabled && createPortal(
         <div
           ref={dropdownRef}
           className="ui-model-menu__surface nowheel nodrag nopan"

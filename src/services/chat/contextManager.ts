@@ -89,11 +89,11 @@ export interface AssistantContextSpec extends TextModelContextSpec {
 }
 
 /** 解析当前配置的助手文本模型的上下文规格；未配置时返回保守默认规格。 */
-export function resolveAssistantContextSpec(projectId?: string): AssistantContextSpec {
+export function resolveAssistantContextSpec(projectId?: string, modelId?: string): AssistantContextSpec {
   const state = useAppStore.getState();
   const config = state.config;
   const project = state.projects.find((item) => item.id === (projectId ?? state.currentProjectId));
-  const candidates = getAssistantTextModelCandidates(
+  const candidates = modelId !== undefined ? [modelId] : getAssistantTextModelCandidates(
     project?.settings,
     config.assistantModelId,
   );

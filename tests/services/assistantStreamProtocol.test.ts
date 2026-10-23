@@ -48,6 +48,51 @@ beforeEach(() => {
 });
 
 describe('assistant custom protocol boundary', () => {
+  it('uses the explicitly selected text model without changing the assistant default', async () => {
+    configureAssistant();
+    useAppStore.setState((state) => ({ config: { ...state.config, generalModels: [
+      ...(state.config.generalModels ?? []),
+      { id: 'polish-text', name: '润色模型', modelId: 'polish-model', category: 'text', providerConfigId: 'custom-assistant' },
+    ] } }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      choices: [{ message: { content: '润色完成' }, finish_reason: 'stop' }],
+    }), { headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamAssistantReply({ systemPrompt: '', userMessage: '润色', modelId: 'general/polish-text', nonStream: true, onEvent: vi.fn() });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe('polish-model');
+    expect(useAppStore.getState().config.assistantModelId).toBe('assistant-model');
+    fetchMock.mockClear();
+    await expect(streamAssistantReply({ systemPrompt: '', userMessage: '润色', modelId: 'general/missing', onEvent: vi.fn() }))
+      .rejects.toThrow('所选文本模型已不可用');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('expands explicit text, video and audio node references before sending a text-only request', async () => {
+    configureAssistant();
+    useAppStore.setState({ currentProjectId: 'project-1', nodes: [
+      { id: 'script', type: 'source-text', position: { x: 0, y: 0 }, data: { type: 'source-text', label: '剧本', output: '人物在窗前停步。' } },
+      { id: 'clip', type: 'source-video', position: { x: 0, y: 0 }, data: { type: 'source-video', label: '视频', videoUrl: 'https://media.example/clip.mp4' } },
+      { id: 'audio', type: 'source-audio', position: { x: 0, y: 0 }, data: { type: 'source-audio', label: '音频', audioUrl: 'https://media.example/audio.mp3' } },
+    ] });
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      choices: [{ message: { content: '润色完成' }, finish_reason: 'stop' }],
+    }), { headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamAssistantReply({
+      systemPrompt: '', projectId: 'project-1', nonStream: true, tools: [], onEvent: vi.fn(),
+      userMessage: '参考 @{script:剧本} @{clip:视频} @{audio:音频}；原文 ⟦REF_original_0⟧',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.messages).toEqual([{
+      role: 'user', content: '参考 人物在窗前停步。 https://media.example/clip.mp4 https://media.example/audio.mp3；原文 ⟦REF_original_0⟧',
+    }]);
+    expect(body.tools).toBeUndefined();
+  });
+
   it('builds a general prompt without borrowing the open canvas or requesting a project for ordinary chat', () => {
     useAppStore.setState({ currentProjectId: 'other-project', nodes: [{ id: 'private-node', type: 'ai-text',
       position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '另一个项目的私有内容', status: 'idle' } }] });
@@ -364,6 +409,53 @@ describe('assistant custom protocol boundary', () => {
       ],
       stream: false,
     });
+  });
+
+  it.each([
+    { provided: false, image: false }, { provided: true, image: false },
+    { provided: false, image: true }, { provided: true, image: true },
+  ])('reuses the last prepared user content for custom prompt and messages (provided $provided, image $image)', async ({ provided, image }) => {
+    configureAssistant({
+      preset: 'custom',
+      protocol: {
+        version: 1, mode: 'sync', streamFormat: 'openai-sse',
+        submit: { method: 'POST', path: '/chat/', body: { prompt: '{{prompt}}', messages: '{{messages}}' } },
+        resultTextPath: 'choices.0.message.content',
+      },
+    });
+    useAppStore.setState((state) => ({
+      currentProjectId: 'project-1',
+      nodes: [
+        { id: 'script', type: 'source-text', position: { x: 0, y: 0 }, data: { type: 'source-text', label: '剧本', output: '人物停步。@{nested:保留嵌套标记}' } },
+        { id: 'nested', type: 'source-text', position: { x: 0, y: 0 }, data: { type: 'source-text', label: '嵌套', output: '不应重复展开' } },
+        { id: 'image', type: 'ai-image', position: { x: 0, y: 0 }, data: { type: 'ai-image', label: '参考图', imageUrl: 'data:image/png;base64,QUJDRA==' } },
+      ],
+      config: { ...state.config, generalModels: state.config.generalModels?.map((model) => ({ ...model, inputModalities: ['text', 'image'] as Array<'text' | 'image'> })) },
+    }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      choices: [{ message: { content: '完成' }, finish_reason: 'stop' }],
+    }), { headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const current = image ? '参考 @{image:参考图}' : '参考 @{script:剧本}；原文 ⟦REF_original_0⟧';
+
+    await streamAssistantReply({
+      systemPrompt: '系统', userMessage: provided ? '未使用的入口字段' : current,
+      messages: provided ? [
+        { role: 'system', content: '系统' }, { role: 'user', content: '上一轮要求' },
+        { role: 'assistant', content: '上一轮回复' }, { role: 'user', content: current },
+      ] : undefined,
+      projectId: 'project-1', nonStream: true, tools: [], onEvent: vi.fn(),
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const expected = image ? [
+      { type: 'text', text: '参考 图片1' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJDRA==' } },
+    ] : '参考 人物停步。@{nested:保留嵌套标记}；原文 ⟦REF_original_0⟧';
+    expect(body.prompt).toEqual(expected);
+    expect(body.messages.at(-1)).toEqual({ role: 'user', content: expected });
+    expect(JSON.stringify(body)).not.toContain('不应重复展开');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('uses the current provider credential after key rotation', () => {

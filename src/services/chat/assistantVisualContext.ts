@@ -47,7 +47,7 @@ export async function prepareAssistantVisualMessages(params: {
     }
     const resolved = await resolvePromptToChatContent(message.content, { projectId: params.projectId, signal: params.signal });
     if (typeof resolved.content === 'string') {
-      prepared.push(message);
+      prepared.push({ ...message, content: resolved.content });
       continue;
     }
     const dataContent = await resolveChatContentImageDataUrls(resolved.content, params.signal);

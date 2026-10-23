@@ -140,6 +140,7 @@ export async function runSubAgent(
   profile: SubAgentProfile,
   assignment: string,
   signal: AbortSignal,
+  options: { modelId?: string } = {},
 ): Promise<SubAgentRunResult> {
   const store = useAppStore.getState();
   const parent = store.agentTasks.find((task) => task.id === parentTaskId);
@@ -200,6 +201,7 @@ export async function runSubAgent(
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
       const outcome: AgentRoundResult = await executeAgentRound({
         taskId: child.id,
+        modelId: options.modelId,
         signal,
         messages,
         fullText,

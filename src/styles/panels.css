@@ -9,6 +9,14 @@
   animation: floatIn var(--dur-normal) var(--ease-out-expo);
   transition: left 0.28s var(--ease-spring), top 0.28s var(--ease-spring);
 }
+.ai-dialog-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ai-dialog-main > :not(.prompt-panel) { flex-shrink: 0; }
 
 /* 画布平移、缩放或节点拖动时暂时隐藏浮动对话框；交互结束并同步到节点新位置后再显示。 */
 .canvas-interacting .ai-dialog-float:not(.is-expanded),
@@ -106,11 +114,17 @@
   animation: floatIn var(--dur-normal) var(--ease-out-expo);
 }
 .ai-dialog-float .ai-dialog-preview-float.is-expanded {
-  position: absolute;
+  position: relative;
   z-index: 2;
-  top: 10px;
-  left: 10px;
+  min-width: 0;
+  padding: var(--ui-pad) var(--ui-pad) 0;
   animation: none;
+}
+.ai-dialog-float .ai-dialog-preview-float.is-expanded:empty { display: none; }
+.ai-dialog-float .ai-dialog-preview-float.is-expanded .connected-nodes-float {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
 }
 .ai-dialog-float .prompt-panel {
   border-top: none;
@@ -122,14 +136,15 @@
 }
 .ai-dialog-float.is-expanded .prompt-panel {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  height: 100%;
+  min-height: 0;
 }
 .ai-dialog-float.is-expanded .prompt-input-wrap {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 60px 20px 12px;
+  padding: var(--ui-pad);
 }
 .ai-dialog-float.is-expanded .mention-editor-wrap {
   display: flex;
@@ -147,6 +162,10 @@
   flex: 0 0 auto;
   padding: 12px 16px 14px;
   border-top: 1px solid var(--theme-border);
+}
+.ai-dialog-float.is-expanded .prompt-footer,
+.ai-dialog-float.is-expanded .prompt-footer-tools {
+  flex-wrap: wrap;
 }
 @media (max-width: 640px), (max-height: 520px) {
   .ai-dialog-float.is-expanded {
@@ -193,7 +212,6 @@
   width: min(1260px, calc(100vw - 64px));
   padding-right: 360px;
 }
-.ai-dialog-float.is-polishing > .prompt-panel { min-width: 0; }
 .prompt-polish-panel {
   position: absolute;
   top: 0;
@@ -220,6 +238,22 @@
   padding: 14px;
   background: var(--theme-bg);
 }
+.ai-dialog-float.is-expanded .prompt-polish-panel .mention-editor-wrap {
+  display: block;
+  flex: none;
+}
+.ai-dialog-float.is-expanded .prompt-polish-panel .prompt-editor {
+  min-height: 96px;
+  max-height: 160px;
+  font-size: var(--ui-font-lg);
+  line-height: 1.5;
+}
+.prompt-polish-panel .prompt-polish-instruction.ui-textarea:focus-within {
+  border-color: var(--border-focus);
+}
+.prompt-polish-model-row > .model-selector--pill { flex: 1 1 auto; }
+.prompt-polish-model-row .model-selector-trigger.prompt-btn { width: 100%; }
+.prompt-polish-model-row .ui-model-pill__label { flex: 1; }
 [data-theme='light'] .prompt-polish-entry .metal-fx-canvas { filter: saturate(0.2); }
 @keyframes promptPolishEnter {
   from { opacity: 0; transform: translateX(8px); }
