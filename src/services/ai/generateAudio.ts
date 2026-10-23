@@ -27,6 +27,8 @@ import {
   warnIfTooManyReferences,
 } from './connectedReferenceMedia';
 import { collectPromptNodeMediaUrls, resolvePromptWithMediaRefs } from './promptResolver';
+import { compileVideoReferencePrompt } from './referencePrompt';
+import { getRunningHubModel } from './providers/runninghubModelManifest';
 import { executeGeneralAsyncTask } from './apimartGen';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
@@ -145,13 +147,25 @@ export async function generateAudio(
     if (invalid) throw new Error(`参考语音已失效：${invalid.label}，请重新选择`);
   }
 
-  // 解析 @{nodeId:label} 引用为对应节点的实际输出内容
-  const prompt = resolveNodeReferences(stripAudioSpeechReferences(rawPrompt, state.nodes));
+  const isRunningHub = params.workflowId ? isRunningHubWorkflow(selectedWorkflow) : provider === 'runninghub';
+  const runninghubMedia = isRunningHub ? await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true }) : undefined;
   // 参考音频通过独立媒体通道传递，不混入朗读正文。
-  const mentionedMedia = collectPromptNodeMediaUrls(rawPrompt);
+  const mentionedMedia = runninghubMedia ?? collectPromptNodeMediaUrls(rawPrompt);
   const connectedMedia = collectConnectedReferenceMedia(params.nodeId);
-  const references = mergeMediaReferences(mentionedMedia.references, connectedMedia.references);
-  const referenceAudioUrls = getMediaReferenceUrls(references, 'audio');
+  const connectedReferences = runninghubMedia ? connectedMedia.references.map((reference) => {
+    const local = runninghubMedia.references.find((candidate) => candidate.kind === 'image' && reference.kind === 'image'
+      && candidate.sourceNodeId === reference.sourceNodeId && candidate.sourceNodeId
+      && state.nodes.find((node) => node.id === candidate.sourceNodeId)?.data.imageUrl === reference.url);
+    return local ? { ...reference, url: local.url } : reference;
+  }) : connectedMedia.references;
+  const references = mergeMediaReferences(mentionedMedia.references, connectedReferences);
+  // 只有明确的音乐合同使用素材编号；语音及未声明用途的工作流不能朗读素材标记或角色说明。
+  const runninghubMusic = !params.workflowId && provider === 'runninghub' && getRunningHubModel(model)?.audioPurpose === 'music';
+  const prompt = runninghubMedia ? runninghubMusic
+    ? compileVideoReferencePrompt(runninghubMedia, references, { target: 'local' })
+    : stripAudioSpeechReferences(runninghubMedia.segments?.filter((segment): segment is string => typeof segment === 'string').join('') ?? '', state.nodes)
+    : resolveNodeReferences(stripAudioSpeechReferences(rawPrompt, state.nodes));
+  const referenceAudioUrls = getMediaReferenceUrls(references, 'audio', runninghubMedia ? 'local' : 'remote');
   warnIfTooManyReferences({ audio: referenceAudioUrls.length });
 
   // ComfyUI 工作流执行路径：连线音频兜底填充工作流的 audio IO 节点

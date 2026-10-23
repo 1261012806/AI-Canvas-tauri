@@ -7,10 +7,12 @@ import { cancelRunningHubNodeTask, completeRunningHubNodeTask } from '../../src/
 import { cancelNodePolling, getPendingTasksForProject, resumeRunningHubNodeTask, resumePendingTasks } from '../../src/services/pollManager';
 import type { RunningHubMediaKind } from '../../src/types/runninghub';
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn(), persist: vi.fn() }));
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), persist: vi.fn(), upload: vi.fn() }));
 vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mocks.fetch }));
 vi.mock('../../src/services/fileService', async (original) => ({ ...await original<typeof import('../../src/services/fileService')>(), persistMediaUrlToProjectData: mocks.persist, isTauriEnv: () => true }));
+vi.mock('../../src/services/ai/providers/runninghubClient', async (original) => ({ ...await original<typeof import('../../src/services/ai/providers/runninghubClient')>(), uploadRunningHubMedia: mocks.upload }));
 const connection = { apiKey: 'fake-secret', baseUrl: 'https://www.runninghub.cn' };
+const uploadedUrl = (source: string, mediaKind: RunningHubMediaKind = 'image', baseUrl = connection.baseUrl) => `https://rh-upload.test/${new URL(baseUrl).hostname}/${mediaKind}/${encodeURIComponent(source)}`;
 const taskId = '1904152026220003329';
 const ids = { image: 'seedream-v5-pro/text-to-image', video: 'minimax/h3-max-turbo/image-to-video', audio: 'rhart-audio/text-to-audio/speech-2.8-hd' };
 const pending = () => getPendingTasksForProject('p1');
@@ -28,10 +30,10 @@ function setup(next: RunningHubMediaKind = 'image') {
 const generate = (count = 1) => executeRunningHubModel({ provider: 'runninghub', model: ids[kind], prompt: '测试模型生成内容', nodeId: 'n1' }, kind, '测试模型生成内容', kind === 'video' ? { image: ['https://input.test/first.png'], imageRoles: ['first_frame'] } : {}, count);
 beforeEach(() => {
   vi.useFakeTimers(); localStorage.clear(); useAppStore.setState(useAppStore.getInitialState(), true); setup(); state = 'SUCCESS'; serial = 0;
+  mocks.upload.mockReset().mockImplementation(async (target, source, mediaKind) => ({ filename: 'rh/reference', url: uploadedUrl(source, mediaKind, target.baseUrl) }));
   mocks.persist.mockReset().mockImplementation(async (url: string) => ({ filePath: `project/${url.split('/').pop()}`, mediaUrl: `asset://localhost/${url.split('/').pop()}`, sourceUrl: url }));
   mocks.fetch.mockReset().mockImplementation(async (url: string, init: RequestInit) => {
     if (url.endsWith('/query')) return json({ taskId, status: state, results: [{ url: `https://cdn.test/${JSON.parse(String(init.body)).taskId}.${{ image: 'png', video: 'mp4', audio: 'wav' }[kind]}` }] });
-    if (url.endsWith('/upload/binary')) return json({ code: 200, data: { filename: 'rh/ref.png', download_url: 'https://cdn.test/upload.png' } });
     return new Response(`{"taskId":${BigInt(taskId) + BigInt(serial++)},"status":"QUEUED"}`);
   });
 });
@@ -56,7 +58,8 @@ describe('RunningHub 标准媒体执行', () => {
     expect(submitted()).toHaveLength(1);
     expect(submitted()[0][0]).toBe(`${connection.baseUrl}/openapi/v2/bytedance/seedance-2.0-global/multimodal-video`);
     const body = JSON.parse(submitted()[0][1].body as string);
-    expect(body).toMatchObject({ imageUrls: images.map((image) => image.data.imageUrl), duration: '8', ratio: '9:16', resolution: '1080p', generateAudio: false, seed: 0 });
+    expect(body).toMatchObject({ imageUrls: images.map((image) => uploadedUrl(image.data.imageUrl)), duration: '8', ratio: '9:16', resolution: '1080p', generateAudio: false, seed: 0 });
+    expect(mocks.upload).toHaveBeenCalledTimes(count);
     expect(body).not.toHaveProperty('firstFrameUrl');
     expect(body).not.toHaveProperty('lastFrameUrl');
     expect(useAppStore.getState().nodes[0].data.model).toBe(model);
@@ -69,7 +72,7 @@ describe('RunningHub 标准媒体执行', () => {
       image: ['https://input.test/one.png', 'https://input.test/two.png'],
     });
     expect(submitted()[0][0]).toBe(`${connection.baseUrl}/openapi/v2/${family}/multimodal-video`);
-    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ imageUrls: ['https://input.test/one.png', 'https://input.test/two.png'] });
+    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ imageUrls: ['https://input.test/one.png', 'https://input.test/two.png'].map((url) => uploadedUrl(url)) });
     expect(parameters).toEqual({ firstFrameUrl: '', lastFrameUrl: ' ', duration: '5' });
   });
   it('参数框明确指定首帧时保留首帧接口，同一张连线图片不重复作为参考图', async () => {
@@ -78,7 +81,7 @@ describe('RunningHub 标准媒体执行', () => {
     const firstFrameUrl = 'https://input.test/first.png';
     await executeRunningHubModel({ provider: 'runninghub', model, prompt: '首帧生成视频', runninghubModelParameters: { firstFrameUrl } }, 'video', '首帧生成视频', { image: [firstFrameUrl] });
     expect(submitted()[0][0]).toBe(`${connection.baseUrl}/openapi/v2/${model}`);
-    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ firstFrameUrl });
+    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ firstFrameUrl: uploadedUrl(firstFrameUrl) });
     expect(JSON.parse(submitted()[0][1].body as string)).not.toHaveProperty('imageUrls');
   });
   it('明确指定首尾帧角色时保留顺序语义，仅尾帧仍在提交前拦截', async () => {
@@ -95,7 +98,7 @@ describe('RunningHub 标准媒体执行', () => {
       image: ['https://input.test/last.png', 'https://input.test/first.png'], imageRoles: ['last_frame', 'first_frame'],
     });
     expect(submitted()[0][0]).toBe(`${connection.baseUrl}/openapi/v2/${model}`);
-    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ firstFrameUrl: 'https://input.test/first.png', lastFrameUrl: 'https://input.test/last.png' });
+    expect(JSON.parse(submitted()[0][1].body as string)).toMatchObject({ firstFrameUrl: uploadedUrl('https://input.test/first.png'), lastFrameUrl: uploadedUrl('https://input.test/last.png') });
   });
   it('无素材也未设置首尾帧时使用同系列文生视频接口', async () => {
     setup('video');
@@ -115,6 +118,7 @@ describe('RunningHub 标准媒体执行', () => {
     await expect(executeRunningHubModel({ provider: 'runninghub', model, prompt: '参考图片生成视频' }, 'video', '参考图片生成视频', { image: Array.from({ length: 10 }, (_, index) => `blob:ref-${index}`) })).rejects.toThrow('数量');
     await expect(executeRunningHubModel({ provider: 'runninghub', model, prompt: '参考图片生成视频', runninghubModelParameters: { unknown: 'value' } }, 'video', '参考图片生成视频', { image: ['blob:reference'] })).rejects.toThrow('参数已变化');
     expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.upload).not.toHaveBeenCalled();
     expect(pending()).toEqual([]);
   });
   it('参考模式网络中断后按原节点恢复，只查询已有任务', async () => {
@@ -138,10 +142,10 @@ describe('RunningHub 标准媒体执行', () => {
     const body = await buildRunningHubModelRequest(connection, model, 'test', {}, {
       image: [last, first], imageRoles: ['last_frame', 'first_frame'],
     });
-    expect(body).toMatchObject({ firstFrameUrl: first, lastFrameUrl: last });
+    expect(body).toMatchObject({ firstFrameUrl: uploadedUrl(first), lastFrameUrl: uploadedUrl(last) });
     await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
       image: [first], imageRoles: ['first_frame'],
-    })).resolves.toMatchObject({ firstFrameUrl: first });
+    })).resolves.toMatchObject({ firstFrameUrl: uploadedUrl(first) });
     await expect(buildRunningHubModelRequest(connection, model, 'test', {}, {
       image: [last], imageRoles: ['last_frame'],
     })).rejects.toThrow('首帧');
@@ -154,12 +158,12 @@ describe('RunningHub 标准媒体执行', () => {
     expect(submitted()[0][1].headers.Authorization).toBe(`Bearer ${connection.apiKey}`);
     const body = JSON.parse(submitted()[0][1].body as string);
     expect(body.apiKey).toBeUndefined();
-    if (value === 'video') expect(body).toMatchObject({ firstFrameUrl: 'https://input.test/first.png', duration: '5', resolution: '768p' });
+    if (value === 'video') expect(body).toMatchObject({ firstFrameUrl: uploadedUrl('https://input.test/first.png'), duration: '5', resolution: '768p' });
     expect(pending()[0]).toMatchObject({ taskId, taskType: 'runninghub-model', runninghubModelId: ids[value], runninghubRecoveryState: 'save_pending' });
     expect(JSON.stringify(pending())).not.toContain(connection.apiKey);
     completeRunningHubNodeTask('n1'); expect(pending()).toEqual([]);
   });
-  it('全部目录操作通过本地类型转换，不发送付费请求', async () => {
+  it('全部目录操作通过类型转换与 RH 上传边界，不发送任务请求', async () => {
     for (const model of RUNNINGHUB_MODEL_MANIFEST) {
       const values: Record<string, string> = {};
       for (const field of model.parameters) {
@@ -185,13 +189,43 @@ describe('RunningHub 标准媒体执行', () => {
       imageRoles: ['first_frame', 'last_frame', 'reference'],
     })).rejects.toThrow('全部');
     expect(mocks.fetch).not.toHaveBeenCalled();
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('image', { headers: { 'Content-Type': 'image/png' } })));
+    expect(mocks.upload).not.toHaveBeenCalled();
     const body = await buildRunningHubModelRequest(connection, model, 'test', { duration: '15', firstFrameUrl: 'blob:override' }, {
       image: ['blob:first', 'blob:override'],
       imageRoles: ['first_frame', 'last_frame'],
     });
-    expect(body).toMatchObject({ firstFrameUrl: 'https://cdn.test/upload.png', lastFrameUrl: 'https://cdn.test/upload.png', duration: '15' });
-    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(body).toMatchObject({ firstFrameUrl: uploadedUrl('blob:override'), lastFrameUrl: uploadedUrl('blob:override'), duration: '15' });
+    expect(mocks.upload).toHaveBeenCalledExactlyOnceWith(connection, 'blob:override', 'image', undefined);
+  });
+  it('三类外链素材均先上传 RH，同次重复引用复用上传结果并保留顺序', async () => {
+    const model = getRunningHubModel('bytedance/seedance-2.0-global/multimodal-video')!;
+    const sources = { image: 'https://input.test/person.png', video: 'https://input.test/action.mp4', audio: 'https://input.test/voice.wav' };
+    const body = await buildRunningHubModelRequest(connection, model, '使用参考素材生成视频', {}, {
+      image: [sources.image, sources.image], video: [sources.video], audio: [sources.audio],
+    });
+    expect(body).toMatchObject({ imageUrls: [uploadedUrl(sources.image), uploadedUrl(sources.image)], videoUrls: [uploadedUrl(sources.video, 'video')], audioUrls: [uploadedUrl(sources.audio, 'audio')] });
+    expect(mocks.upload).toHaveBeenCalledTimes(3);
+    for (const mediaKind of ['image', 'video', 'audio'] as const) {
+      expect(mocks.upload).toHaveBeenCalledWith(connection, sources[mediaKind], mediaKind, undefined);
+    }
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+  it('相同素材在国内和国际连接分别上传，单次请求缓存不跨站共享', async () => {
+    const model = getRunningHubModel('vidu/image-to-video-q2-pro')!;
+    const source = 'https://input.test/person.png';
+    const international = { baseUrl: 'https://www.runninghub.ai', apiKey: 'ai-fixture' };
+    for (const target of [connection, international]) {
+      await expect(buildRunningHubModelRequest(target, model, '使用参考图片生成视频', {}, { image: [source] }))
+        .resolves.toMatchObject({ imageUrl: uploadedUrl(source, 'image', target.baseUrl) });
+      expect(mocks.upload).toHaveBeenCalledWith(target, source, 'image', undefined);
+    }
+    expect(mocks.upload).toHaveBeenCalledTimes(2);
+  });
+  it('RH 上传失败停止构造请求，不回退直传外链或提交任务', async () => {
+    mocks.upload.mockRejectedValueOnce(new Error('上传失败'));
+    await expect(buildRunningHubModelRequest(connection, getRunningHubModel('vidu/image-to-video-q2-pro')!, '使用参考图片生成视频', {}, { image: ['https://input.test/person.png'] })).rejects.toThrow('上传失败');
+    expect(mocks.upload).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
   it('RunningHub 首尾帧字段只接受显式角色，普通参考图不会按顺序代填', async () => {
     const model = getRunningHubModel(ids.video)!;
@@ -203,7 +237,7 @@ describe('RunningHub 标准媒体执行', () => {
     await expect(buildRunningHubModelRequest(connection, referenceModel, 'test', {}, {
       image: ['https://input.test/reference.png'],
       imageRoles: ['reference'],
-    })).resolves.toMatchObject({ imageUrl: 'https://input.test/reference.png' });
+    })).resolves.toMatchObject({ imageUrl: uploadedUrl('https://input.test/reference.png') });
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
   it('拒绝未知字段、非法 URL、流式和不支持的 Base64 结果模式', async () => {

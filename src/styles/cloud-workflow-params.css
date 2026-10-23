@@ -1,0 +1,21 @@
+/* 云工作流沿用视频参数浮层的表面和控件，Portal 避免节点容器裁切。 */
+.cloud-workflow-params {
+  position: fixed;
+  bottom: auto;
+  right: auto;
+  margin: 0;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: hidden;
+  transform-origin: bottom right;
+}
+.cloud-workflow-params[data-placement='below'] {
+  transform-origin: top right;
+}
+.cloud-workflow-params:focus {
+  outline: none;
+}
+.cloud-workflow-params .cloud-workflow-param-label {
+  margin-bottom: 0;
+}

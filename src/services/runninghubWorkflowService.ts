@@ -7,6 +7,21 @@ const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const MAX_IMPORT = 1_500_000;
 export const runningHubParameterKey = (field: Pick<RunningHubParameter, 'nodeId' | 'fieldName'>): string =>
   `${encodeURIComponent(field.nodeId)}::${encodeURIComponent(field.fieldName)}`;
+
+/** 旧导入器把主提示词保存成固定值；仅修正唯一且明确的主提示词，保留手工映射。 */
+export function resolveRunningHubParameters(parameters: readonly RunningHubParameter[]): RunningHubParameter[] {
+  if (parameters.some((field) => field.source === 'prompt')) return [...parameters];
+  const primaryNames = new Set(['prompt', 'positiveprompt', '提示词', '主提示词', '正面提示词', '正向提示词']);
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const candidates = parameters.filter((field) => {
+    if (field.source !== 'value' || field.sourceExplicit || field.type !== 'string' || field.options?.length) return false;
+    if (/negative|(?:^|[\s_-])neg(?:[\s_-]|prompt)|uncond|system|style|optimiz|enhanc|负面|负向|反向|系统|风格|优化|增强|扩写/i.test(`${field.fieldName} ${field.label}`)) return false;
+    return primaryNames.has(normalize(field.fieldName))
+      || field.label.split(/[·|]/).some((part) => primaryNames.has(normalize(part)));
+  });
+  if (candidates.length !== 1) return [...parameters];
+  return parameters.map((field) => field === candidates[0] ? { ...field, source: 'prompt' } : field);
+}
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -64,14 +79,20 @@ export function importRunningHubDefinition(
       let options: RunningHubValue[] | undefined;
       let fieldData: unknown = item.fieldData;
       if (typeof fieldData === 'string' && fieldData) fieldData = parseRunningHubJson(fieldData);
+      // 部分字段保留 ComfyUI INPUT_TYPES tuple；未知对象不作为参数约束读取。
+      const tuple = Array.isArray(fieldData) && fieldData.length === 2
+        && typeof fieldData[0] === 'string' && ['INT', 'FLOAT', 'STRING'].includes(fieldData[0]) && isRecord(fieldData[1])
+        ? { type: fieldData[0].toLowerCase(), metadata: fieldData[1] } : undefined;
+      const fieldType = String(item.fieldType || tuple?.type || '').toLowerCase();
+      const tupleMatches = tuple && (fieldType === tuple.type
+        || (fieldType === 'number' && ['int', 'float'].includes(tuple.type)));
       if (Array.isArray(fieldData)) {
         options = fieldData.flatMap((entry) => isRecord(entry) && primitive(entry.index) ? [entry.index] : []);
         const defaults = fieldData.find((entry) => isRecord(entry) && primitive(entry.default));
-        if (item.fieldValue === undefined && isRecord(defaults)) value = defaults.default;
+        if (item.fieldValue === undefined && isRecord(defaults) && (!tuple || tupleMatches)) value = defaults.default;
       }
       if (!primitive(value)) throw new Error('暂不支持此字段的复合值，请选择标量参数');
       const field = parameter(item.nodeId, item.fieldName, value, String(item.description || item.fieldName));
-      const fieldType = String(item.fieldType || '').toLowerCase();
       if (fieldType === 'int' || fieldType === 'float' || fieldType === 'number') {
         field.type = 'number'; field.defaultValue = Number(value);
       } else if (fieldType === 'boolean') {
@@ -81,6 +102,17 @@ export function importRunningHubDefinition(
         field.source = fieldType as 'image' | 'video' | 'audio';
         field.referenceIndex = fields.filter((entry) => entry.source === field.source).length;
         field.mediaFormat = 'filename';
+      }
+      if (tuple && tupleMatches && field.source === 'value') {
+        if (field.type === 'number' && ['int', 'float'].includes(tuple.type)) {
+          for (const key of ['min', 'max', 'step'] as const) {
+            const declared = tuple.metadata[key];
+            if (typeof declared === 'number' && Number.isFinite(declared) && (key !== 'step' || declared > 0)) field[key] = declared;
+          }
+          if (tuple.type === 'int' && tuple.metadata.step === undefined) field.step = 1;
+        } else if (field.type === 'string' && tuple.type === 'string' && typeof tuple.metadata.multiline === 'boolean') {
+          field.multiline = tuple.metadata.multiline;
+        }
       }
       if (options?.length) field.options = options;
       fields.push(field);
@@ -107,14 +139,14 @@ export function importRunningHubDefinition(
       }
     }
   }
-  const manifest: RunningHubWorkflowManifest = { version: 1, ...options, remoteId, parameters: fields };
+  const manifest: RunningHubWorkflowManifest = { version: 1, ...options, remoteId, parameters: resolveRunningHubParameters(fields) };
   validateRunningHubManifest(manifest);
   return manifest;
 }
 
 export function validateRunningHubManifest(value: RunningHubWorkflowManifest): void {
   const allowed = new Set(['version', 'kind', 'remoteId', 'connectionId', 'parameters', 'outputNodeIds', 'instanceType', 'usePersonalQueue']);
-  const fieldKeys = new Set(['nodeId', 'fieldName', 'label', 'type', 'defaultValue', 'required', 'options', 'source', 'referenceIndex', 'mediaFormat']);
+  const fieldKeys = new Set(['nodeId', 'fieldName', 'label', 'type', 'defaultValue', 'required', 'options', 'min', 'max', 'step', 'multiline', 'source', 'sourceExplicit', 'referenceIndex', 'mediaFormat']);
   if (!isRecord(value) || Object.keys(value).some((key) => !allowed.has(key))) throw new Error('RunningHub 工作流包含不支持的配置字段');
   if (!value || value.version !== 1 || !['workflow', 'app'].includes(value.kind) || !ID.test(value.remoteId)
     || !['runninghub', 'runninghub-model'].includes(value.connectionId) || !Array.isArray(value.parameters)
@@ -123,6 +155,7 @@ export function validateRunningHubManifest(value: RunningHubWorkflowManifest): v
   for (const field of value.parameters) {
     if (!isRecord(field) || Object.keys(field).some((key) => !fieldKeys.has(key))
       || (field.required !== undefined && typeof field.required !== 'boolean')
+      || (field.sourceExplicit !== undefined && typeof field.sourceExplicit !== 'boolean')
       || (typeof field.defaultValue === 'string' && /^(?:[a-z]:[\\/]|\\\\|file:)/i.test(field.defaultValue))) throw new Error('RunningHub 参数不能包含额外配置或本地文件路径');
     if (!field || typeof field.nodeId !== 'string' || !/^[\w:-]{1,120}$/.test(field.nodeId)
       || typeof field.fieldName !== 'string' || !field.fieldName || field.fieldName.length > 160 || UNSAFE_KEYS.has(field.fieldName) || SENSITIVE.test(field.fieldName)
@@ -135,6 +168,16 @@ export function validateRunningHubManifest(value: RunningHubWorkflowManifest): v
       || (field.mediaFormat !== undefined && !['filename', 'url'].includes(field.mediaFormat))
       || (field.options !== undefined && (!Array.isArray(field.options) || field.options.length > 200 || field.options.some((option) => !primitive(option) || typeof option !== field.type)))) {
       throw new Error('RunningHub 参数定义无效，请检查类型与素材映射');
+    }
+    const hasNumericMetadata = field.min !== undefined || field.max !== undefined || field.step !== undefined;
+    if ((hasNumericMetadata && field.type !== 'number')
+      || (field.min !== undefined && (typeof field.min !== 'number' || !Number.isFinite(field.min)))
+      || (field.max !== undefined && (typeof field.max !== 'number' || !Number.isFinite(field.max)))
+      || (field.step !== undefined && (typeof field.step !== 'number' || !Number.isFinite(field.step) || field.step <= 0))
+      || (field.min !== undefined && field.max !== undefined && field.min > field.max)
+      || (typeof field.defaultValue === 'number' && ((field.min !== undefined && field.defaultValue < field.min) || (field.max !== undefined && field.defaultValue > field.max)))
+      || (field.multiline !== undefined && (typeof field.multiline !== 'boolean' || field.type !== 'string'))) {
+      throw new Error('RunningHub 参数范围或展示定义无效');
     }
     const key = runningHubParameterKey(field);
     if (keys.has(key)) throw new Error('RunningHub 参数包含重复的节点/字段');
@@ -155,6 +198,7 @@ export function runningHubFieldValue(field: RunningHubParameter, input?: string)
     value = input === 'true';
   }
   if (field.required && value === '') throw new Error(`请填写${field.label}`);
+  if (typeof value === 'number' && ((field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max))) throw new Error(`${field.label} 超出允许范围`);
   if (field.options?.length && !field.options.includes(value)) throw new Error(`${field.label} 不在允许的选项中`);
   return value;
 }

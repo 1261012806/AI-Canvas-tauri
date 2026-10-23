@@ -22,7 +22,7 @@ import { executeRunningHubWorkflow } from './providers/runninghubWorkflow';
 import { executeWorkflowApiMedia } from '../workflowApi/workflowApiAdapter';
 import { parseWorkflowApiFields } from '../workflowApi/workflowApiConfig';
 import { collectConnectedReferenceMedia, getMediaReferenceUrls, mergeMediaReferences } from './connectedReferenceMedia';
-import type { AIImageGenParams, BatchImageResult, ImageGenerationResult } from '../../types/aiTypes';
+import type { AIImageGenParams, BatchImageResult, ImageGenerationResult, MediaReference } from '../../types/aiTypes';
 import { MAX_IMAGE_BATCH_COUNT } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
 import { collectPromptNodeMediaUrls, resolvePromptWithImageRefs, resolvePromptWithMediaRefs } from './promptResolver';
@@ -38,6 +38,7 @@ import { getProviderDefinition } from './providerCatalogService';
 import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from './imageRequestContracts';
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
 import { assertToapisImageInput, toapisImageReferences } from './providers/toapisModelManifest';
+import { compileVideoReferencePrompt } from './referencePrompt';
 
 function hasReferenceImageFile(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
@@ -182,12 +183,24 @@ export async function generateImagesBatch(
 
   const selectedWorkflow = params.workflowId ? useAppStore.getState().workflows.find((item) => item.id === params.workflowId) : undefined;
   const isComfyWorkflow = Boolean(params.workflowId && (!selectedWorkflow?.adapterType || selectedWorkflow.adapterType === 'comfyui'));
+  const isRunningHub = params.workflowId ? isRunningHubWorkflow(selectedWorkflow) : provider === 'runninghub';
   const comfyMedia = isComfyWorkflow ? await resolvePromptWithMediaRefs(rawPrompt) : undefined;
-  const { prompt: resolvedPrompt, imageUrls } = comfyMedia
-    ? { prompt: comfyMedia.prompt, imageUrls: getMediaReferenceUrls(comfyMedia.references, 'image', 'local') }
+  const runninghubMedia = isRunningHub ? await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true }) : undefined;
+  const localMedia = runninghubMedia ?? comfyMedia;
+  const { prompt: resolvedPrompt, imageUrls } = localMedia
+    ? { prompt: localMedia.prompt, imageUrls: getMediaReferenceUrls(localMedia.references, 'image', 'local') }
     : await resolvePromptWithImageRefs(rawPrompt, { preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls || providerDefinition?.id === 'toapis' });
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
 
+  // 仅归一同一节点的来源别名；裸 URL 或其他节点仍可能明确需要未标注的原图。
+  const canonicalImageReference = (reference: MediaReference): MediaReference => {
+    if (reference.kind !== 'image' || !reference.sourceNodeId) return reference;
+    const local = runninghubMedia?.references.find((candidate) => candidate.kind === 'image'
+      && candidate.sourceNodeId === reference.sourceNodeId
+      && (candidate.sourceUrl === reference.url
+        || useAppStore.getState().nodes.find((node) => node.id === candidate.sourceNodeId)?.data.imageUrl === reference.url));
+    return local ? { ...reference, url: local.url } : reference;
+  };
   // 合并调用方传入的 image_urls 与从 prompt 中解析出的 imageUrls
   let contentImageUrls = isComfyWorkflow
     ? mergeImageUrls(imageUrls, params.image_urls ?? [])
@@ -203,8 +216,13 @@ export async function generateImagesBatch(
     styleAsFirst = true;
   }
 
+  const referenceMedia = runninghubMedia ? mergeMediaReferences(
+    allImageUrls.map((url): MediaReference => ({ kind: 'image', url, origin: 'connection', role: 'reference' })),
+    mergeMediaReferences(runninghubMedia.references, collectConnectedReferenceMedia(params.nodeId).references.map(canonicalImageReference)),
+  ) : undefined;
+  if (referenceMedia) allImageUrls = getMediaReferenceUrls(referenceMedia, 'image', 'local');
   const prompt = enrichPromptWithReferenceHints(
-    resolvedPrompt,
+    runninghubMedia && referenceMedia ? compileVideoReferencePrompt(runninghubMedia, referenceMedia, { target: 'local' }) : resolvedPrompt,
     allImageUrls.length,
     styleAsFirst,
     aspectRatio,
@@ -234,9 +252,9 @@ export async function generateImagesBatch(
       return singleResult({ ...result, ...mapImageDimensions(imageSize, aspectRatio) });
     }
     if (isRunningHubWorkflow(workflow)) {
-      const refs = mergeMediaReferences(collectPromptNodeMediaUrls(rawPrompt).references, collectConnectedReferenceMedia(params.nodeId).references);
+      const refs = referenceMedia ?? [];
       const outputs = await executeRunningHubWorkflow({ ...params, workflowId: params.workflowId, prompt, kind: 'image', references: {
-        image: mergeImageUrls(allImageUrls, getMediaReferenceUrls(refs, 'image', 'local')),
+        image: allImageUrls,
         video: getMediaReferenceUrls(refs, 'video', 'local'), audio: getMediaReferenceUrls(refs, 'audio', 'local'),
       } }, signal);
       return singleResult({ url: outputs[0].url, runninghubOutputs: outputs, ...mapImageDimensions(imageSize, aspectRatio) });
@@ -261,8 +279,6 @@ export async function generateImagesBatch(
 
 
   // 参考图传输格式由模型显式配置或已确认的厂商目录决定。
-  const referenceMedia = provider === 'runninghub' ? mergeMediaReferences(collectPromptNodeMediaUrls(rawPrompt).references, collectConnectedReferenceMedia(params.nodeId).references) : undefined;
-  if (referenceMedia) allImageUrls = mergeImageUrls(allImageUrls, getMediaReferenceUrls(referenceMedia, 'image', 'local'));
   if (configuredCapability) assertConfiguredImageReferences(configuredCapability, allImageUrls.length);
   if (providerDefinition?.id === 'toapis') assertToapisImageInput(modelName, allImageUrls.length, requestedCount);
   // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。

@@ -19,7 +19,15 @@ export interface RunningHubParameter {
   defaultValue: RunningHubValue;
   required?: boolean;
   options?: RunningHubValue[];
+  /** 定义中实际声明的数值范围；步进也可采用 ComfyUI INT 控件的默认值 1。 */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** 字符串字段实际声明的多行展示方式。 */
+  multiline?: boolean;
   source: 'value' | 'prompt' | RunningHubMediaKind;
+  /** 用户在导入编辑器显式选择的来源；固定值不再参与旧定义的提示词兼容识别。 */
+  sourceExplicit?: boolean;
   /** 同类型参考素材的索引，从 0 开始。 */
   referenceIndex?: number;
   mediaFormat?: 'filename' | 'url';

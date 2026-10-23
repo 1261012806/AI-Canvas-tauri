@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { generateId, useAppStore } from '../../store/useAppStore';
 import type { WorkflowCategory, WorkflowDefinition } from '../../types';
 import type { RunningHubConnectionId, RunningHubParameter, RunningHubWorkflowManifest } from '../../types/runninghub';
-import { fetchRunningHubDefinition, importRunningHubDefinition, runningHubFieldValue, runningHubParameterKey, validateRunningHubManifest } from '../../services/runninghubWorkflowService';
+import { fetchRunningHubDefinition, importRunningHubDefinition, resolveRunningHubParameters, runningHubFieldValue, runningHubParameterKey, validateRunningHubManifest } from '../../services/runninghubWorkflowService';
 import { runningHubConnection } from '../../services/workflowExecutionService';
 import RunningHubParameterFields from '../nodes/shared/RunningHubParameterFields';
 import { RUNNINGHUB_MODEL_BASE_URL } from '../../constants/api';
@@ -20,13 +20,17 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
   try { apiSite = new URL(configuredBaseUrl || RUNNINGHUB_MODEL_BASE_URL).origin; }
   catch { apiSite = '地址无效'; }
   const [definition, setDefinition] = useState('');
-  const [manifest, setManifest] = useState<RunningHubWorkflowManifest | undefined>(editing?.runninghub);
+  const [manifest, setManifest] = useState<RunningHubWorkflowManifest | undefined>(() => editing?.runninghub
+    ? { ...editing.runninghub, parameters: resolveRunningHubParameters(editing.runninghub.parameters) } : undefined);
   const [defaultInputs, setDefaultInputs] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
-  const setField = (index: number, patch: Partial<RunningHubParameter>) => setManifest((current) => current && ({ ...current, parameters: current.parameters.map((field, i) => i === index ? { ...field, ...patch } : field) }));
+  const setField = (index: number, patch: Partial<RunningHubParameter>) => setManifest((current) => current && ({
+    ...current, parameters: current.parameters.map((field, i) => i === index
+      ? { ...field, ...patch, ...(patch.source !== undefined ? { sourceExplicit: true } : {}) } : field),
+  }));
   async function readDefinition(remote: boolean) {
     request.current?.abort();
     const controller = new AbortController(); request.current = controller;
@@ -85,7 +89,7 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
         </div>
       </details>
       {manifest && <>
-        <div className="flex items-center justify-between gap-2 text-xs"><span>参数映射 · {manifest.parameters.length} 项</span><button type="button" className="ui-btn ui-btn--sm" onClick={() => setManifest({ ...manifest, parameters: [...manifest.parameters, { nodeId: '', fieldName: '', label: '新参数', type: 'string', defaultValue: '', source: 'value' }] })}>添加参数</button></div>
+        <div className="flex items-center justify-between gap-2 text-xs"><span>参数映射 · {manifest.parameters.length} 项</span><button type="button" className="ui-btn ui-btn--sm" onClick={() => setManifest({ ...manifest, parameters: [...manifest.parameters, { nodeId: '', fieldName: '', label: '新参数', type: 'string', defaultValue: '', source: 'value', sourceExplicit: true }] })}>添加参数</button></div>
         <p className="text-xs text-canvas-text-secondary">保留固定值，或映射到本次提示词和参考素材。参考序号按各媒体类型分别计数。</p>
         <div className="flex max-h-96 flex-col gap-2 overflow-y-auto">
           {manifest.parameters.map((field, index) => <details key={index} className="ui-card shrink-0 p-3">

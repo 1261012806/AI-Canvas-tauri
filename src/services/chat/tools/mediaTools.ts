@@ -7,7 +7,7 @@ import { isRunningHubWorkflow, isCloudWorkflow, mediaProviderConfigId, workflowE
 import { AUTODL_H3_WORKFLOW, validateWorkflowApiManifest, resolveWorkflowApiInputValues } from '../../workflowApi/autodlWorkflowManifest';
 import { completeWorkflowApiNodeTask, workflowApiConnection } from '../../workflowApi/workflowApiAdapter';
 import { getRunningHubModel, parseRunningHubModelParameter } from '../../ai/providers/runninghubModelManifest';
-import { runningHubParameterKey } from '../../runninghubWorkflowService';
+import { resolveRunningHubParameters, runningHubParameterKey } from '../../runninghubWorkflowService';
 import { completeRunningHubNodeTask } from '../../ai/providers/runninghubWorkflow';
 import type {
   AudioGenerationPurpose,
@@ -217,7 +217,10 @@ export function registerMediaAgentTools(): Array<() => void> {
           }) };
         }
         if (!isRunningHubWorkflow(workflow) || !workflow?.runninghub) return { status: 'error', summary: '未找到已保存的云工作流', modelContent: '请先在工作流管理中导入 RunningHub 工作流或 AI 应用', errorCode: 'RUNNINGHUB_WORKFLOW_NOT_FOUND' };
-        return { status: 'success', summary: `已读取 ${workflow.name} 的参数`, modelContent: JSON.stringify({ workflowId: workflow.id, outputType: workflow.category, parameters: workflow.runninghub.parameters.map((field) => ({ ...field, defaultValue: typeof field.defaultValue === 'string' ? field.defaultValue.slice(0, 1200) : field.defaultValue })) }) };
+        return { status: 'success', summary: `已读取 ${workflow.name} 的参数`, modelContent: JSON.stringify({ workflowId: workflow.id, outputType: workflow.category,
+          parameters: resolveRunningHubParameters(workflow.runninghub.parameters).map((field) => ({ ...field, defaultValue: typeof field.defaultValue === 'string' ? field.defaultValue.slice(0, 1200) : field.defaultValue })),
+          usage: 'workflowInputs 仅设置 source=value 的参数。主提示词使用本次 prompt，图片、视频和音频在 prompt 中显式引用，按各类型顺序绑定；不要传导入示例中的提示词或文件名。',
+        }) };
       },
     }),
     registerAgentTool<GenerateMediaInput>({

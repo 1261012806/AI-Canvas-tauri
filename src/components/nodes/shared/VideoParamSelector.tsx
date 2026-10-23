@@ -4,7 +4,7 @@
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
 import Select from '../../shared/Select';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import AnimatedButton from '../../shared/AnimatedButton';
 import type { BaseNodeData, GeneralModelConfig } from '../../../types';
@@ -55,6 +55,9 @@ interface VideoParamSelectorProps {
   showSeedanceRatio?: boolean;
   showGenerateAudio?: boolean;
   onContinuousEditEnd?: () => void;
+  /** 旧版云工作流的种子等额外字段，与视频参数共用浮层。 */
+  extraParameters?: ReactNode;
+  disabled?: boolean;
 }
 
 const SEEDANCE_RESOLUTIONS = [
@@ -281,7 +284,7 @@ export default function VideoParamSelector({
   seedanceDuration, generateAudio,
   onChangeSeedanceResolution, onChangeSeedanceRatio,
   onChangeSeedanceDuration, onChangeGenerateAudio,
-  showSeedanceRatio = true, showGenerateAudio = true, onContinuousEditEnd,
+  showSeedanceRatio = true, showGenerateAudio = true, onContinuousEditEnd, extraParameters, disabled,
 }: VideoParamSelectorProps) {
   const [open, setOpen] = useState(false);
   // 正在展开的来源选择器：frame = 加参考帧，character = 加参考角色
@@ -363,10 +366,11 @@ export default function VideoParamSelector({
 
 
   // 关弹窗时一并收起来源选择器，下次打开从干净状态开始
-  const closePopup = () => {
+  const closePopup = useCallback(() => {
     setOpen(false);
     setPickerFor(null);
-  };
+    onContinuousEditEnd?.();
+  }, [onContinuousEditEnd, setOpen, setPickerFor]);
 
   const removeReference = (itemId: string) => {
     onChangeVideoReferences?.(references.filter((item) => item.id !== itemId && item.id !== `${itemId}:voice`));
@@ -678,7 +682,7 @@ export default function VideoParamSelector({
     };
     if (open) document.addEventListener('mousedown', handler, true);
     return () => document.removeEventListener('mousedown', handler, true);
-  }, [open]);
+  }, [open, closePopup]);
 
   // Close popup on Escape
   useEffect(() => {
@@ -687,7 +691,7 @@ export default function VideoParamSelector({
     };
     if (open) window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open]);
+  }, [open, closePopup]);
 
   // ── 触发按钮文案 ──
   const durationLabelParts = [
@@ -744,7 +748,10 @@ export default function VideoParamSelector({
         </AnimatedButton>
 
         {open && !needsParameterSettings && (
-          <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup" style={{ display: 'block' }}>
+          <div className="img-ratio-popup ui-schema-popup ui-schema-video-params-popup" style={{ display: 'block' }}
+            data-cloud-workflow-parameters={extraParameters ? '' : undefined}>
+            <fieldset className="m-0 min-w-0 border-0 p-0" disabled={disabled}
+              onClickCapture={disabled ? (event) => { event.preventDefault(); event.stopPropagation(); } : undefined}>
             {onChangeVideoReferences && provider !== 'workflow-api' && (
               <div className="img-rp-quality-area mb-2">
                 <div className="img-rp-section-label rh-video-ref-head">
@@ -1062,7 +1069,7 @@ export default function VideoParamSelector({
                           : '开启后由当前原生视频模型同时生成音频。'}>!</span>
                       </div>
                       {generalModel ? (
-                        <Select fixedMenu
+                        <Select fixedMenu disabled={disabled}
                           className="min-w-0" size="sm"
                           aria-label="视频音频策略"
                           value={generateAudio === undefined ? 'default' : generateAudio ? 'on' : 'off'}
@@ -1229,6 +1236,8 @@ export default function VideoParamSelector({
                 </div>
               </>
             )}
+            {extraParameters}
+            </fieldset>
           </div>
         )}
       </div>

@@ -26,7 +26,8 @@ import type {
   VideoModelCapability,
 } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
-import { resolvePromptWithMediaRefs, type PromptCharacterBinding, type PromptMediaReferences } from './promptResolver';
+import { resolvePromptWithMediaRefs } from './promptResolver';
+import { compileVideoReferencePrompt } from './referencePrompt';
 import {
   collectConnectedReferenceMedia,
   getMediaReferenceUrl,
@@ -74,6 +75,8 @@ import { readAppSecret } from '../providerSecretService';
 import { quoteVolcengineVideo } from '../billing/volcenginePricing';
 import { createBillingRun, updateBillingRun } from '../billing/volcengineBillingService';
 import { assertToapisVideoInput, toapisVideoVariables } from './providers/toapisModelManifest';
+
+export { compileVideoReferencePrompt } from './referencePrompt';
 
 async function mapSequentially<T, R>(
   items: readonly T[],
@@ -187,69 +190,6 @@ function annotateVolcengineCharacterBindings(
   return notes.length > 0 ? `${prompt}\n\n（角色绑定：${[...new Set(notes)].join('；')}。）` : prompt;
 }
 
-const CHARACTER_REFERENCE_USAGE: Record<PromptCharacterBinding['usage'], string> = {
-  appearance: '外观参考', action: '动作参考', timbre: '音色参考',
-  line: '台词参考', emotion: '情绪参考', other: '声音参考',
-};
-
-/** 只编译 @ 产生的位置；角色归属独立于媒体去重，以最终传参顺序为准。 */
-export function compileVideoReferencePrompt(
-  input: PromptMediaReferences,
-  references: readonly MediaReference[],
-  options: { target?: 'remote' | 'local'; imageLayout?: 'frames-first' | 'frame-fields' } = {},
-): string {
-  if (!input.segments) return input.prompt;
-  const urlOf = (reference: MediaReference) => options.target === 'local'
-    ? reference.url.trim() : getMediaReferenceUrl(reference).trim();
-  const frame = (reference: MediaReference) => reference.kind === 'image'
-    && (reference.role === 'first_frame' || reference.role === 'last_frame');
-  const ordered = options.imageLayout === 'frames-first'
-    ? [...references.filter(frame), ...references.filter((reference) => !frame(reference))]
-    : options.imageLayout === 'frame-fields' ? references.filter((reference) => !frame(reference)) : references;
-  const urls = (kind: MediaReference['kind']) => [...new Set(ordered.filter((reference) => reference.kind === kind).map(urlOf))];
-  const indexes = { image: urls('image'), video: urls('video'), audio: urls('audio') };
-  const characters = new Map<string, { alias: string; name: string; usages: Map<string, Set<string>> }>();
-  const prompt = input.segments.map((segment) => {
-    if (typeof segment === 'string') return segment;
-    const source = segment.reference;
-    // 先用本地媒体身份找到去重后的条目，再使用该条目最终选定的远端或本地 URL。
-    const reference = references.find((candidate) => candidate.kind === source.kind && candidate.url.trim() === source.url.trim())
-      ?? references.find((candidate) => candidate.kind === source.kind && urlOf(candidate) === urlOf(source));
-    if (!reference) throw new Error('引用素材未进入视频请求，请重新选择素材');
-    const index = indexes[reference.kind].indexOf(urlOf(reference));
-    const label = options.imageLayout === 'frame-fields' && frame(reference)
-      ? reference.role === 'first_frame' ? '首帧图片' : '尾帧图片'
-      : index >= 0 ? `${reference.kind === 'image' ? '图片' : reference.kind === 'video' ? '视频' : '音频'}${index + 1}` : undefined;
-    if (!label) throw new Error('引用素材编号与视频参数不一致');
-    if (!segment.character) return label;
-    const binding = segment.character;
-    let character = characters.get(binding.id);
-    if (!character) {
-      character = {
-        alias: `角色${characters.size + 1}`,
-        name: binding.name.replace(/[\r\n\t]+/g, ' ').trim() || '未命名角色',
-        usages: new Map(),
-      };
-      characters.set(binding.id, character);
-    }
-    const usage = CHARACTER_REFERENCE_USAGE[binding.usage];
-    const labels = character.usages.get(usage) ?? new Set<string>();
-    labels.add(label);
-    character.usages.set(usage, labels);
-    return `${character.name}〔${character.alias}，${label}〕`;
-  }).join('').trim();
-  if (characters.size === 0) return prompt;
-  const notes = [...characters.values()].map((character) => {
-    const usages = [...character.usages].map(([usage, labels]) => `${usage}：${[...labels].join('、')}`);
-    return `- ${character.alias}「${character.name}」：${usages.join('；')}。`;
-  });
-  const hasVoice = [...characters.values()].some((character) =>
-    [...character.usages.keys()].some((usage) => ['音色参考', '台词参考', '情绪参考', '声音参考'].includes(usage)),
-  );
-  return `${prompt}\n\n角色参考对应：\n${notes.join('\n')}\n各角色的外观、动作和声音按以上对应关系使用，避免互换。`
-    + (hasVoice ? '\n音色和情绪样本中的台词不自动作为本次对白；对白内容以正文的明确要求为准。' : '');
-}
-
 function assignVideoReferenceRoles(references: readonly MediaReference[]): MediaReference[] {
   // 只有用户明确挑选的参考帧才保留首/尾帧语义，并按 首帧 → 参考图 → 尾帧 重排。
   if (hasManualFrameRoles(references)) {
@@ -307,10 +247,19 @@ async function resolveVideoReferenceInput(
   const promptInput = await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true });
   const connected = collectConnectedReferenceMedia(nodeId);
   const nodeItems = resolveVideoNodeReferences(nodeId);
+  // RH 先按来源节点归一本地副本，再去重，避免共享原图的其他节点提前被删掉。
+  const canonicalReference = (reference: MediaReference): MediaReference => {
+    if (options.provider !== 'runninghub' || reference.kind !== 'image' || !reference.sourceNodeId) return reference;
+    const local = promptInput.references.find((candidate) => candidate.kind === 'image'
+      && candidate.sourceNodeId === reference.sourceNodeId
+      && (candidate.sourceUrl === reference.url
+        || useAppStore.getState().nodes.find((node) => node.id === candidate.sourceNodeId)?.data.imageUrl === reference.url));
+    return local ? { ...reference, url: local.url } : reference;
+  };
   const regularReferences = mergeMediaReferences(
     // 节点上手动挑的参考帧/参考角色排在连线与提示词引用之前，重复的图按它们的角色去重
-    mergeMediaReferences(explicitReferences, toMediaReferences(nodeItems, options.provider)),
-    mergeMediaReferences(promptInput.references, connected.references),
+    mergeMediaReferences(explicitReferences.map(canonicalReference), toMediaReferences(nodeItems, options.provider).map(canonicalReference)),
+    mergeMediaReferences(promptInput.references, connected.references.map(canonicalReference)),
   );
   const collectedReferences = options.promptFirst
     ? mergeMediaReferences(promptInput.references, regularReferences) : regularReferences;
@@ -634,11 +583,12 @@ export async function generateVideo(
   // ComfyUI 工作流执行路径：连线音频兜底填充工作流的 audio IO 节点（唇形同步等）
   if (params.workflowId) {
     const workflow = useAppStore.getState().workflows.find((item) => item.id === params.workflowId);
+    const runninghubWorkflow = isRunningHubWorkflow(workflow);
     const referenceInput = await resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], {
       promptFirst: !workflow?.adapterType || workflow.adapterType === 'comfyui',
-      preserveDeclaredRoles: provider === 'workflow-api', target: 'local',
-      provider,
-      legacyPrompt: workflow?.adapterType === 'workflow-api' ? undefined : prompt,
+      preserveDeclaredRoles: provider === 'workflow-api' || runninghubWorkflow, target: 'local',
+      provider: runninghubWorkflow ? 'runninghub' : provider,
+      legacyPrompt: workflow?.adapterType === 'workflow-api' || runninghubWorkflow ? undefined : prompt,
     });
     const references = referenceInput.references ?? [];
     const videoUrls = getMediaReferenceUrls(references, 'video', 'local');
@@ -688,6 +638,7 @@ export async function generateVideo(
       resolveReferenceInput: async () => {
         return resolveVideoReferenceInput(rawPrompt, params.nodeId, params.referenceMedia ?? [], {
           target: provider === 'runninghub' ? 'local' : 'remote',
+          preserveDeclaredRoles: provider === 'runninghub',
           provider,
           apimartModel: provider === 'apimart' ? extractModelName(model, provider) : undefined,
         });

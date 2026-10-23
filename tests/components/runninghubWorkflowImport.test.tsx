@@ -37,4 +37,17 @@ describe('云工作流参数界面', () => {
     expect(app).toContain('API 定义');
     expect(app).not.toContain('添加云工作流');
   });
+  it('节点参数浮层只保留可调参数，主提示词和素材统一使用节点输入', () => {
+    const parameters = workflow.runninghub!.parameters.map((field) => field.source === 'prompt'
+      ? { ...field, fieldName: 'prompt', source: 'value' as const, defaultValue: '过期示例正文' } : field);
+    const html = renderToStaticMarkup(<RunningHubParameterFields appearance="popover" parameters={parameters} onChange={vi.fn()} />);
+    expect(html).toContain('数量');
+    expect(html).toContain('启用');
+    expect(html).not.toContain('过期示例正文');
+    expect(html).not.toContain('提示词与参考素材');
+    expect(html).not.toContain('参考音频');
+    const editor = renderToStaticMarkup(<RunningHubWorkflowImport kind="app" editing={{ ...workflow, runninghub: { ...workflow.runninghub!, parameters } }} onSaved={vi.fn()} />);
+    expect(editor).toContain('正面提示词 · 提示词');
+    expect(editor).toContain('输入来源');
+  });
 });

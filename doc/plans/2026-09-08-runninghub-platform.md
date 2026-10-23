@@ -24,6 +24,34 @@
 
 ## 源码与兼容边界
 
+### 本轮节点输入与官方上传
+
+已实现，待用户桌面验收；2026-10-23 本轮未运行测试、类型检查、构建或真实上传/生成，提交阶段按仓库规则由钩子执行定向 ESLint。
+
+- 主提示词使用本轮节点正文。新导入与旧定义共用唯一明确的主提示词识别，排除负面、系统、风格、优化类辅助字段、枚举和多候选；导入页显式选择来源后记录 `sourceExplicit`，保留手动固定字段。普通标量覆盖键及 `0/false` 语义不变。
+- 提示词和参考素材不再在节点参数浮层重复展示；图片、视频、音频按本轮已选择引用分类型编号与绑定，不使用导入样例或旧 `workflowInputs` 的媒体 URL。可选未选槽传空串以清除远端示例，必填缺少素材在上传前拒绝。Agent/MCP 读取的参数来源使用同一解析规则，`workflowInputs` 仅覆盖普通 `source=value` 参数，正文和媒体用本次提示词及显式引用。
+- RH 图片、视频入口使用本地媒体引用及最终数组编号，同节点的图片已保存副本与旧来源地址去重，不合并不同节点的原图与标注图；视频不把媒体 URL 拼入正文。音频独立收集引用并保留语音正文剥离，避免朗读参考标签。共享编号逻辑位于 `referencePrompt.ts`，原视频导出继续兼容，其他厂商与本地 ComfyUI 的入口保留原语义。
+- 工作流和标准模型的本地/公网媒体均先上传当前连接站点；URL 字段也不再直传外站地址。按字段传返回的原始文件名或 `download_url`，同次请求按媒体类型与来源复用一次上传，失败不降级图床、不跨站重试。保留应用 100 MiB 上限和已有大小/类型校验；MOV、AVI、MKV、M4A 等按真实 MIME 使用后缀，未知二进制不伪装成 PNG/MP4/WAV。
+
+官方依据（2026-10-23 核对）：
+
+| 能力 | 国内站 | 国际站 | 合同与当前策略 |
+|---|---|---|---|
+| 新版素材上传 | [国内说明](https://www.runninghub.cn/runninghub-api-doc-cn/api-425749007) | [国际说明](https://www.runninghub.ai/runninghub-api-doc-en/api-425761098) | 各站 `POST /openapi/v2/media/upload/binary`，Bearer、multipart `file`；兼容业务码 `0/200` 及 `fileName/filename`，标准模型用 `download_url`，工作流文件槽用返回文件名 |
+| 工作流输出 | [国内说明](https://www.runninghub.cn/runninghub-api-doc-cn/api-425749004) | [国际说明](https://www.runninghub.ai/runninghub-api-doc-en/api-425761034) | 各站 `/task/openapi/outputs` 返回 `fileUrl/fileType/nodeId`，继续用于已有工作流筛选与恢复 |
+| v2 结果查询 | [国内说明](https://www.runninghub.cn/runninghub-api-doc-cn/api-425767306) | [国际说明](https://www.runninghub.ai/runninghub-api-doc-en/api-425767807) | `/openapi/v2/query` 返回顶层 `status/results`，标准模型已使用；不把缺少旧 `nodeId` 合同的新响应直接替换到工作流恢复链，国际页仍标开发中 |
+
+新版文档未给出统一最大文件大小；应用 100 MiB 是本地限制，不套用旧上传接口的 30 MB 限制。站点不通用 Key 或文件名；链接站点不覆盖用户已选择连接。
+
+桌面验收（前置：两站分别保存有效 Key，准备含示例提示词/多媒体槽的工作流及可用本地和公网素材）：
+
+1. 在已有节点输入新正文并引用两张图，打开参数浮层，应不再出现旧示例正文及媒体列表；提交后在 RH 任务中核对新正文、按序图像和空槽。删除/更换引用再提交新任务，不得带回旧图；已提交任务继续查询旧结果。
+2. 用负面提示词、多个不明确主字段、枚举与手动固定提示词的定义核对导入映射；显式来源保存并重开后保持。缺少必填素材应在上传/提交前报错，普通数值 `0` 和布尔 `false` 正常传递。
+3. 在国内/国际各跑图片、视频、音频工作流或对应标准模型，包含公网素材；核对上传 host 为当前站点，生成字段使用其返回文件名/地址，同类型同来源只上传一次。另一站未配置或上传失败应直接报错，不能使用其他站 Key 或通用图床；MOV/MKV/M4A 不应被重命名成错误媒体后缀。
+4. 中途停止、断网、保存失败后续查，不应重复提交；限定输出节点及多产物保存仍有效。回归其他厂商、声明式工作流 API、本地 ComfyUI 的提示词和媒体入口，核对深浅主题与参数浮层滑块间距。
+
+回归源码：`runninghubWorkflowService.test.ts`、`runninghubWorkflow.test.ts`、`runninghubWorkflowImport.test.tsx`、`runninghubMediaRouting.test.ts`、`runninghubClient.test.ts`、`runninghubMedia.test.ts`，均未执行。回滚可独立撤销本轮输入解析、浮层过滤与上传直传分支调整，无数据库迁移或原生权限变化；已保存的 `sourceExplicit` 等可选元数据继续保留读取兼容，不恢复旧严格白名单。
+
 ### API 站点与语言前缀兼容
 
 已实现，待用户桌面验收；本轮未运行功能测试、类型检查、构建或真实账户调用。提交时按仓库钩子执行改动文件的定向 ESLint。

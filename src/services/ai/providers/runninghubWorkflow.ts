@@ -1,7 +1,6 @@
-import { isRemoteMediaUrl } from '../../../utils/mediaUrl';
 import { useAppStore } from '../../../store/useAppStore';
 import type { RunningHubConnection, RunningHubMediaKind, RunningHubOutput, RunningHubWorkflowManifest } from '../../../types/runninghub';
-import { runningHubFieldValue, runningHubParameterKey, validateRunningHubManifest, isRecord } from '../../runninghubWorkflowService';
+import { resolveRunningHubParameters, runningHubFieldValue, runningHubParameterKey, validateRunningHubManifest, isRecord } from '../../runninghubWorkflowService';
 import { runningHubConnection, isRunningHubWorkflow, saveCloudWorkflowOutputs, getCloudWorkflowPersistedOutput } from '../../workflowExecutionService';
 import { runningHubSiteId } from '../../runninghubSiteCredentials';
 import { runningHubRequest, uploadRunningHubMedia, RunningHubRequestError } from './runninghubClient';
@@ -30,28 +29,30 @@ export async function buildRunningHubInputs(
   signal?: AbortSignal,
 ) {
   validateRunningHubManifest(manifest);
-  const mapped = new Set(manifest.parameters.map(runningHubParameterKey));
+  const parameters = resolveRunningHubParameters(manifest.parameters);
+  const mapped = new Set(parameters.map(runningHubParameterKey));
   if (Object.keys(inputs).some((key) => !mapped.has(key))) throw new Error('工作流参数已变化，请重新选择工作流并检查参数');
-  // 所有纯参数先校验，避免在可发现的字段错误之前上传素材。
-  const values = manifest.parameters.map((field) => ({ field, value: field.source === 'value'
-    ? runningHubFieldValue(field, inputs[runningHubParameterKey(field)]) : field.defaultValue }));
+  // 提交前检查本轮输入；导入示例只用于普通参数，不代替提示词或未选择的素材。
+  const values = parameters.map((field) => {
+    if (field.source === 'value') return { field, value: runningHubFieldValue(field, inputs[runningHubParameterKey(field)]), mediaSource: undefined };
+    if (field.source === 'prompt') {
+      if (field.required && !prompt.trim()) throw new Error(`请填写${field.label}`);
+      return { field, value: prompt, mediaSource: undefined };
+    }
+    const mediaSource = references[field.source]?.[field.referenceIndex ?? 0];
+    if (field.required && !mediaSource) throw new Error(`请提供${field.label}对应的参考素材`);
+    return { field, value: '', mediaSource };
+  });
   const uploaded = new Map<string, Awaited<ReturnType<typeof uploadRunningHubMedia>>>();
   const result = [];
-  for (const { field, value } of values) {
+  for (const { field, value, mediaSource } of values) {
     signal?.throwIfAborted();
     let fieldValue = value;
-    if (field.source === 'prompt') fieldValue = prompt;
-    else if (field.source !== 'value') {
-      const source = inputs[runningHubParameterKey(field)] || references[field.source]?.[field.referenceIndex ?? 0];
-      if (source) {
-        if (field.mediaFormat === 'url' && isRemoteMediaUrl(source)) fieldValue = source;
-        else {
-          const cacheKey = `${field.source}:${source}`;
-          let upload = uploaded.get(cacheKey);
-          if (!upload) { upload = await uploadRunningHubMedia(connection, source, field.source, signal); uploaded.set(cacheKey, upload); }
-          fieldValue = field.mediaFormat === 'url' ? upload.url : upload.filename;
-        }
-      } else if (!value || field.required) throw new Error(`请提供${field.label}对应的参考素材`);
+    if (field.source !== 'value' && field.source !== 'prompt' && mediaSource) {
+      const cacheKey = `${field.source}:${mediaSource}`;
+      let upload = uploaded.get(cacheKey);
+      if (!upload) { upload = await uploadRunningHubMedia(connection, mediaSource, field.source, signal); uploaded.set(cacheKey, upload); }
+      fieldValue = field.mediaFormat === 'url' ? upload.url : upload.filename;
     }
     if (field.required && fieldValue === '') throw new Error(`请填写${field.label}`);
     result.push({ nodeId: field.nodeId, fieldName: field.fieldName, fieldValue });

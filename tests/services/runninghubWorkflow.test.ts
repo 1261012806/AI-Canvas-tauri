@@ -199,6 +199,40 @@ describe('RunningHub 云任务生命周期', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('png', { headers: { 'Content-Type': 'image/png' } })));
     await expect(uploadRunningHubMedia(connection, 'blob:reference', 'image')).resolves.toEqual({ filename: 'openapi/reference.png', url: 'https://cdn.test/upload.png' });
   });
+  it('旧主提示词始终使用本轮节点正文，忽略旧参数覆盖，保留手工固定字段', async () => {
+    const legacy: RunningHubWorkflowManifest = { ...manifest, parameters: [
+      { nodeId: '1', fieldName: 'prompt', type: 'string', defaultValue: '导入示例', source: 'value', label: '提示词' },
+      { nodeId: '2', fieldName: 'negative_prompt', type: 'string', defaultValue: '负面', source: 'value', label: '负面提示词' },
+    ] };
+    const fields = await buildRunningHubInputs(connection, legacy, '本轮节点正文', { '1::prompt': '过期节点覆盖' });
+    expect(fields.map((field) => field.fieldValue)).toEqual(['本轮节点正文', '负面']);
+    const fixed = { ...legacy, parameters: [{ ...legacy.parameters[0], sourceExplicit: true }] };
+    expect((await buildRunningHubInputs(connection, fixed, '节点正文'))[0].fieldValue).toBe('导入示例');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+  it('未选择的可选媒体清空示例，必填缺失在任何上传之前拒绝', async () => {
+    const mediaManifest: RunningHubWorkflowManifest = { ...manifest, parameters: [
+      { nodeId: '1', fieldName: 'image', type: 'string', defaultValue: 'sample.png', source: 'image', label: '图片' },
+      { nodeId: '2', fieldName: 'image', type: 'string', defaultValue: 'sample-2.png', source: 'image', label: '图片2', referenceIndex: 1 },
+    ] };
+    const fields = await buildRunningHubInputs(connection, mediaManifest, '', { '1::image': 'https://input.test/stale.png' });
+    expect(fields.map((field) => field.fieldValue)).toEqual(['', '']);
+    const required = { ...mediaManifest, parameters: [mediaManifest.parameters[0], { ...mediaManifest.parameters[1], required: true }] };
+    await expect(buildRunningHubInputs(connection, required, '', {}, { image: ['blob:one'] })).rejects.toThrow('图片2');
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+  it('URL 输入也先上传当前 RH 站点，使用本轮引用而非旧覆盖且同次上传复用', async () => {
+    const mediaManifest: RunningHubWorkflowManifest = { ...manifest, parameters: [
+      { nodeId: '1', fieldName: 'image', type: 'string', defaultValue: 'sample.png', source: 'image', label: '图片', mediaFormat: 'filename' },
+      { nodeId: '2', fieldName: 'image', type: 'string', defaultValue: '', source: 'image', label: '图片URL', mediaFormat: 'url' },
+    ] };
+    const fields = await buildRunningHubInputs(connection, mediaManifest, '', { '1::image': 'blob:stale', '2::image': 'blob:stale' }, { image: ['https://input.test/selected.png'] });
+    expect(fields.map((field) => field.fieldValue)).toEqual(['rh/reference.png', 'https://cdn.test/upload.png']);
+    const uploads = mocks.fetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/binary'));
+    expect(uploads).toHaveLength(1);
+    expect(new URL(uploads[0][0]).origin).toBe('https://www.runninghub.cn');
+    expect(mocks.fetch.mock.calls.some(([url]) => String(url).includes('blob:stale'))).toBe(false);
+  });
   it.each(['video', 'audio'] as const)('%s 素材使用相应 MIME 上传，错误类型拒绝', async (kind) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response('media', { headers: { 'Content-Type': `${kind}/${kind === 'video' ? 'mp4' : 'wav'}` } })).mockResolvedValueOnce(new Response('image', { headers: { 'Content-Type': 'image/png' } })));
     await expect(uploadRunningHubMedia(connection, 'blob:reference', kind)).resolves.toHaveProperty('filename');

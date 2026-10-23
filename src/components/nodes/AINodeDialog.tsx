@@ -302,6 +302,7 @@ function AINodeDialog() {
         }
         // 先让顶层 UI Kit 下拉处理 Escape，保留当前节点参数弹窗。
         if (document.querySelector('[data-ui-select-portal]')) return;
+        if (document.querySelector('[data-cloud-workflow-parameters]')) return;
         // 引用扇形和芯片预览先处理 Escape，再关闭节点对话框。
         if (document.querySelector('[data-reference-preview-open]')) return;
         e.stopPropagation();
@@ -1213,7 +1214,7 @@ function AINodeDialog() {
           runninghubModelParameters={data.runninghubModelParameters}
           onRunninghubModelParametersChange={(runninghubModelParameters) => updateNodeData(activeNodeId, { runninghubModelParameters })}
           workflowInputs={data.workflowInputs}
-          onWorkflowInputsChange={(workflowInputs) => updateNodeData(activeNodeId, { workflowInputs })}
+          onWorkflowInputsChange={(workflowInputs) => updateContinuousNodeData({ workflowInputs })}
           onPassThrough={supportsPassThrough ? onPassThrough : undefined}
           imageSize={(data.imageSize as string) || '2K'}
           aspectRatio={(data.aspectRatio as string) || (nodeType === 'ai-panorama' ? '2:1' : '1:1')}

@@ -1,7 +1,8 @@
 import type { RunningHubParameter } from '../../../types/runninghub';
-import { runningHubParameterKey } from '../../../services/runninghubWorkflowService';
+import { resolveRunningHubParameters, runningHubParameterKey } from '../../../services/runninghubWorkflowService';
 import { runningHubFrameRole, type RunningHubModelDefinition } from '../../../services/ai/providers/runninghubModelManifest';
 import Select from '../../shared/Select';
+import CloudWorkflowParameterField from './CloudWorkflowParameterField';
 
 function frameBindingLabel(field: RunningHubModelDefinition['parameters'][number]): string | undefined {
   const role = runningHubFrameRole(field);
@@ -56,12 +57,25 @@ export function RunningHubModelParameterFields({ model, values = {}, onChange, d
   </div>;
 }
 
-export default function RunningHubParameterFields({ parameters, values = {}, onChange, disabled = false }: {
+export default function RunningHubParameterFields({ parameters, values = {}, onChange, disabled = false, appearance = 'form' }: {
   parameters: RunningHubParameter[];
   values?: Record<string, string>;
   onChange: (values: Record<string, string>) => void;
   disabled?: boolean;
+  appearance?: 'form' | 'popover';
 }) {
+  if (appearance === 'popover') return <div className="flex min-w-0 flex-col gap-3">
+    {resolveRunningHubParameters(parameters).filter((field) => field.source === 'value').map((field) => {
+      const key = runningHubParameterKey(field);
+      return <CloudWorkflowParameterField key={key} name={field.fieldName} label={field.label} type={field.type}
+        value={values[key] ?? String(field.defaultValue)} defaultValue={field.defaultValue} options={field.options}
+        min={field.min} max={field.max} step={field.step} multiline={field.multiline}
+        required={field.required} disabled={disabled} onChange={(next) => onChange({ ...values, [key]: next })}
+        onReset={values[key] === undefined ? undefined : () => {
+          const next = { ...values }; delete next[key]; onChange(next);
+        }} />;
+    })}
+  </div>;
   return <div className="flex min-w-0 flex-col gap-2">
     {parameters.map((field) => {
       const key = runningHubParameterKey(field);

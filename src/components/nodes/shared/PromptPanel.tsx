@@ -32,7 +32,7 @@ import { resolveAppearanceMode } from '../../../services/appearance/appearanceRu
 import type { PresetOverride } from './SlashCommandMenu';
 import { useAppStore } from '../../../store/useAppStore';
 import ModelSelector from './ModelSelector';
-import RunningHubParameterFields, { RunningHubModelParameterFields } from './RunningHubParameterFields';
+import { RunningHubModelParameterFields } from './RunningHubParameterFields';
 import { getRunningHubModel } from '../../../services/ai/providers/runninghubModelManifest';
 import QualityRatioSelector from './QualityRatioSelector';
 import VideoParamSelector from './VideoParamSelector';
@@ -51,7 +51,7 @@ import { MAX_IMAGE_BATCH_COUNT } from '../../../types/aiTypes';
 import type { AudioOutputFormat, AudioSpeechSettings, AudioSpeechReference, AudioTtsVoice, VideoReferenceItem } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import { useT } from '../../../i18n';
-import WorkflowApiParameterFields from './WorkflowApiParameterFields';
+import CloudWorkflowParamSelector from './CloudWorkflowParamSelector';
 import { DREAMINA_IMAGE_RATIOS, getDreaminaImageModel } from '../../../services/ai/dreaminaModels';
 import { resolveImageParameterCapability } from '../../../services/ai/mediaModelCapabilities';
 import { getProviderDefinition } from '../../../services/ai/providerCatalogService';
@@ -872,6 +872,7 @@ export default function PromptPanel({
   const runninghubModel = selectedProvider === 'runninghub' ? getRunningHubModel(selectedModel, true) : undefined;
   const runninghubWorkflow = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'runninghub');
   const workflowApi = workflows?.find((workflow) => workflow.id === selectedWorkflowId && workflow.adapterType === 'workflow-api');
+  const cloudWorkflow = runninghubWorkflow ?? (workflowApi?.workflowApi?.version === 2 ? workflowApi : undefined);
   const generatingFallback = <span className="ui-spinner" role="img" aria-label={t('生成中')} />;
   const submitButton = (
     <button
@@ -933,21 +934,6 @@ export default function PromptPanel({
       {runninghubModel && onRunninghubModelParametersChange && <details className="ui-card m-2 p-2">
         <summary className="cursor-pointer text-xs">模型参数 · {runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length} 项需填写</summary>
         <div className="mt-2 max-h-80 overflow-y-auto"><RunningHubModelParameterFields model={runninghubModel} values={runninghubModelParameters} onChange={onRunninghubModelParametersChange} disabled={isGenerating} /></div>
-      </details>}
-      {runninghubWorkflow && onWorkflowInputsChange && <details className="m-2 rounded border border-canvas-border p-2">
-        <summary className="cursor-pointer text-xs text-canvas-text-secondary">云工作流参数</summary>
-        <div className="mt-2 max-h-72 overflow-y-auto"><RunningHubParameterFields parameters={runninghubWorkflow.runninghub?.parameters ?? []} values={workflowInputs} onChange={onWorkflowInputsChange} disabled={isGenerating} /></div>
-      </details>}
-      {workflowApi?.workflowApi?.version === 2 && onWorkflowInputsChange && <details className="ui-card m-2 p-2 text-xs">
-        <summary className="cursor-pointer text-canvas-text-secondary">{t('工作流输入')}</summary>
-        <div className="mt-2 max-h-80 overflow-y-auto"><WorkflowApiParameterFields manifest={workflowApi.workflowApi} values={workflowInputs} onChange={onWorkflowInputsChange} disabled={isGenerating} /></div>
-      </details>}
-      {workflowApi?.workflowApi?.version === 1 && onWorkflowInputsChange && <details className="ui-card m-2 p-2 text-xs">
-        <summary className="cursor-pointer text-canvas-text-secondary">{t('工作流输入')}</summary>
-        <p className="my-2 text-canvas-text-secondary">{t('引用 1–9 张图片与最多 3 段音频；按引用顺序发送。')}</p>
-        <label className="flex flex-wrap items-center gap-2">{t('随机种子（可选）')}<input className="ui-input min-w-0 flex-1" type="number" step={1} disabled={isGenerating}
-          value={workflowInputs?.seed ?? ''} placeholder={workflowApi.workflowApi?.defaults?.seed?.toString() ?? t('留空随机')}
-          onChange={(e) => { const values = { ...workflowInputs }; if (e.target.value === '') delete values.seed; else values.seed = e.target.value; onWorkflowInputsChange(values); }} /></label>
       </details>}
       <div className="ui-ai-input__footer prompt-footer">
         <ModelSelector
@@ -1023,6 +1009,12 @@ export default function PromptPanel({
             <CameraSettingsSelector value={cameraSettings} onChange={onChangeCameraSettings} />
           )}
 
+          {cloudWorkflow && onWorkflowInputsChange && (
+            <CloudWorkflowParamSelector key={`${nodeId}:${selectedWorkflowId}`}
+              workflow={cloudWorkflow} values={workflowInputs}
+              onChange={onWorkflowInputsChange} disabled={isGenerating} onContinuousEditEnd={onContinuousEditEnd} />
+          )}
+
           {nodeType === 'ai-image' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
             imageNeedsParameterSettings && imageSettingsModel ? (
               <AnimatedButton type="button" className="img-pill-btn" disabled={isGenerating}
@@ -1086,6 +1078,21 @@ export default function PromptPanel({
               onChangeSeedanceDuration={onChangeSeedanceDuration}
               onChangeGenerateAudio={onChangeGenerateAudio}
               onContinuousEditEnd={onContinuousEditEnd}
+              disabled={Boolean(workflowApi && isGenerating)}
+              extraParameters={workflowApi?.workflowApi?.version === 1 && onWorkflowInputsChange ? (
+                <div className="mt-3 space-y-2 border-t border-canvas-border pt-2 text-xs text-canvas-text-secondary">
+                  <p>{t('引用 1–9 张图片与最多 3 段音频；按引用顺序发送。')}</p>
+                  <label className="flex flex-col gap-1">{t('随机种子（可选）')}
+                    <input className="ui-input w-full" type="number" step={1} disabled={isGenerating}
+                      value={workflowInputs?.seed ?? ''} placeholder={workflowApi.workflowApi.defaults?.seed?.toString() ?? t('留空随机')}
+                      onChange={(event) => {
+                        const values = { ...workflowInputs };
+                        if (event.target.value === '') delete values.seed; else values.seed = event.target.value;
+                        onWorkflowInputsChange(values);
+                      }} onBlur={onContinuousEditEnd} />
+                  </label>
+                </div>
+              ) : undefined}
             />
           )}
 

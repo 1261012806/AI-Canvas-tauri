@@ -84,10 +84,20 @@ export async function uploadRunningHubMedia(
   const sourceBlob = await response.blob();
   assertMediaDataUrlSize(sourceBlob.size, kind, 'RunningHub 参考素材');
   if (!sourceBlob.size || sourceBlob.size > MAX_UPLOAD_BYTES) throw new Error('参考素材为空或超过 100 MB 限制');
-  if (sourceBlob.type && !sourceBlob.type.startsWith(`${kind}/`) && sourceBlob.type !== 'application/octet-stream') throw new Error('参考素材类型与参数不匹配');
+  const sourceType = sourceBlob.type.split(';')[0].trim();
+  if (sourceType && !sourceType.startsWith(`${kind}/`) && sourceType !== 'application/octet-stream') throw new Error('参考素材类型与参数不匹配');
   const blob = kind === 'image' ? await prepareReferenceImageUpload(sourceBlob, activeSignal) : sourceBlob;
-  const subtype = blob.type.split('/')[1]?.split(';')[0];
-  const extension = ({ jpeg: 'jpg', png: 'png', webp: 'webp', gif: 'gif', mp4: 'mp4', webm: 'webm', mpeg: 'mp3', wav: 'wav', 'x-wav': 'wav', ogg: 'ogg', flac: 'flac' } as Record<string, string>)[subtype] || ({ image: 'png', video: 'mp4', audio: 'wav' } as const)[kind];
+  const mimeType = blob.type.split(';')[0].trim();
+  const mimeExtensions: Record<string, string> = {
+    'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif',
+    'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-msvideo': 'avi', 'video/x-matroska': 'mkv', 'video/mpeg': 'mpeg',
+    'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac',
+    'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/webm': 'webm',
+  };
+  const pathExtension = source.pathname.split('.').pop()?.toLowerCase();
+  const sourceExtensions = { image: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'], video: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'mpeg'], audio: ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'webm'] };
+  // 无 MIME 时保留原文件的已知后缀；未知字节不能仅改名为 PNG、MP4 或 WAV。
+  const extension = mimeExtensions[mimeType] || ((!mimeType || mimeType === 'application/octet-stream') && pathExtension && sourceExtensions[kind].includes(pathExtension) ? pathExtension : 'bin');
   const form = new FormData();
   form.append('file', blob, `reference.${extension}`);
   const uploaded = await parseResponse(await request(`${connection.baseUrl}/openapi/v2/media/upload/binary`, {
