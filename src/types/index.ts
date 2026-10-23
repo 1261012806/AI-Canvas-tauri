@@ -674,6 +674,13 @@ export interface AppearanceCanvasConfig {
   imageFit: 'cover' | 'contain' | 'fill';
   imagePosition: string;
   imageOpacity: number;
+  /** 只作用于画布背景图片，不影响网格、节点或面板。 */
+  imageBlur: number;
+  imageBrightness: number;
+  imageContrast: number;
+  imageSaturation: number;
+  imageOverlayColor: string;
+  imageOverlayOpacity: number;
   gridVisible: boolean;
   gridColor: string;
   gridSize: number;

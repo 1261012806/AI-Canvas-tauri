@@ -3,6 +3,15 @@ import { isEmbeddedThemeImage, isThemeImageReference } from '../fs/themeAssets';
 
 export const APPEARANCE_CANVAS_PANEL_IDS = ['projectBar', 'sidebar', 'drawingToolbar', 'viewportToolbar'] as const;
 
+const CANVAS_IMAGE_DEFAULTS = {
+  imageBlur: 0,
+  imageBrightness: 1,
+  imageContrast: 1,
+  imageSaturation: 1,
+  imageOverlayColor: '#000000',
+  imageOverlayOpacity: 0,
+} as const;
+
 const BUTTON_UI = {
   radius: 7,
   borderWidth: 1,
@@ -118,18 +127,22 @@ function completeTheme(
 export function createBuiltinAppearanceThemes(): AppearanceTheme[] {
   return [
     completeTheme('standard-dark', '深色', 'dark', DARK_UI, {
+      ...CANVAS_IMAGE_DEFAULTS,
       kind: 'color', color: '#0a0a0f', imageFit: 'cover', imagePosition: 'center',
       imageOpacity: 1, gridVisible: true, gridColor: '#585868', gridSize: 8,
     }),
     completeTheme('standard-light', '浅色', 'light', LIGHT_UI, {
+      ...CANVAS_IMAGE_DEFAULTS,
       kind: 'color', color: '#F4F6FB', imageFit: 'cover', imagePosition: 'center',
       imageOpacity: 1, gridVisible: true, gridColor: '#B1B1B7', gridSize: 8,
     }),
     completeTheme('solar-system', '太阳系', 'dark', DARK_UI, {
+      ...CANVAS_IMAGE_DEFAULTS,
       kind: 'solar-system', color: '#000000', imageFit: 'cover', imagePosition: 'center',
       imageOpacity: 1, gridVisible: true, gridColor: '#3a3a50', gridSize: 8,
     }),
     completeTheme('frosted-warm-light', '磨砂暖光', 'light', LIGHT_UI, {
+      ...CANVAS_IMAGE_DEFAULTS,
       kind: 'frosted-glass', color: '#d9dad9', imageFit: 'cover', imagePosition: 'center',
       imageOpacity: 1, gridVisible: true, gridColor: '#a9aaa8', gridSize: 8,
     }),
@@ -218,6 +231,12 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
   const motion = isRecord(source.motion) ? source.motion : {};
   const canvasImage = Object.hasOwn(canvas, 'imageDataUrl') ? canvas.imageDataUrl : base.canvas.imageDataUrl;
   const handleImage = Object.hasOwn(handle, 'imageDataUrl') ? handle.imageDataUrl : base.handle.imageDataUrl;
+  const canvasNumber = (key: 'imageOpacity' | 'imageBlur' | 'imageBrightness' | 'imageContrast' | 'imageSaturation' | 'imageOverlayOpacity', max: number) => {
+    const value = canvas[key];
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(max, value)) : base.canvas[key];
+  };
+  const overlayColor = typeof canvas.imageOverlayColor === 'string' ? canvas.imageOverlayColor.trim() : '';
   return {
     ...base,
     ...source,
@@ -244,7 +263,20 @@ export function normalizeAppearanceTheme(input: unknown): AppearanceTheme {
         primary: normalizeButtonColors(button.primary),
       },
     },
-    canvas: { ...base.canvas, ...canvas, imageDataUrl: isEmbeddedThemeImage(canvasImage) || isThemeImageReference(canvasImage) ? canvasImage : undefined },
+    canvas: {
+      ...base.canvas,
+      ...canvas,
+      imageDataUrl: isEmbeddedThemeImage(canvasImage) || isThemeImageReference(canvasImage) ? canvasImage : undefined,
+      imageOpacity: canvasNumber('imageOpacity', 1),
+      imageBlur: canvasNumber('imageBlur', 40),
+      imageBrightness: canvasNumber('imageBrightness', 2),
+      imageContrast: canvasNumber('imageContrast', 2),
+      imageSaturation: canvasNumber('imageSaturation', 2),
+      // 与共用颜色输入框一致，允许逐字编辑；拒绝 URL 和其他 CSS 片段。
+      imageOverlayColor: /^(?:#|#?[\da-f]{1,8}|transparent|(?:rgb|hsl)a?\([\d\s.,%/+-]+\))$/i.test(overlayColor)
+        ? overlayColor : base.canvas.imageOverlayColor,
+      imageOverlayOpacity: canvasNumber('imageOverlayOpacity', 1),
+    },
     node: { ...base.node, ...node, backgroundImage: normalizeAppearanceBackgroundImage(node.backgroundImage) },
     edge: { ...base.edge, ...edge },
     handle: {

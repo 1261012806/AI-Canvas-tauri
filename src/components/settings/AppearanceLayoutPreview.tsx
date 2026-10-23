@@ -2,7 +2,7 @@ import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } fr
 import { Icon } from '@iconify/react';
 import type { AppearanceCanvasPanelId, AppearanceTheme } from '../../types';
 import { installSystemAppearanceListener, resolveAppearanceMode, resolveAppearanceTheme } from '../../services/appearance/appearanceRuntime';
-import { resolveThemeImageSource } from '../../services/fs/themeAssets';
+import CanvasImageBackground from '../backgrounds/CanvasImageBackground';
 import { useT } from '../../i18n';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
@@ -42,9 +42,8 @@ export default function AppearanceLayoutPreview({ theme, disabled, renderControl
   const [selection, setSelection] = useState<{ target: AppearanceLayoutTarget; label: string } | null>(null);
   const resolved = resolveAppearanceTheme(theme);
   const { canvas } = resolved;
-  const imageSource = canvas.kind === 'image' ? resolveThemeImageSource(canvas.imageDataUrl) : undefined;
   const previewStyle = {
-    '--layout-canvas-color': canvas.kind === 'image' ? resolved.ui.background : canvas.color,
+    '--layout-canvas-color': canvas.color,
     '--layout-grid-color': canvas.gridColor,
     '--layout-grid-size': `${Math.max(8, canvas.gridSize / 2)}px`,
   } as CSSProperties;
@@ -59,12 +58,7 @@ export default function AppearanceLayoutPreview({ theme, disabled, renderControl
       </div>
       <div className="appearance-layout" style={previewStyle} data-background={canvas.kind}>
         <PreviewRegion label={t('画布背景')} className="appearance-layout__canvas" onClick={() => select('canvas', t('画布背景'))}>
-          {imageSource && <span className="appearance-layout__image" style={{
-            backgroundImage: `url("${imageSource}")`,
-            backgroundSize: canvas.imageFit === 'fill' ? '100% 100%' : canvas.imageFit,
-            backgroundPosition: canvas.imagePosition,
-            opacity: canvas.imageOpacity,
-          }} />}
+          {canvas.kind === 'image' && <CanvasImageBackground canvas={canvas} baseColor={canvas.color} />}
           {canvas.kind === 'solar-system' && <span className="solar-stars absolute inset-0" />}
           {canvas.kind === 'frosted-glass' && <span className="canvas-bg-frosted-preview absolute inset-0" />}
           {canvas.gridVisible && <span className="appearance-layout__grid" />}

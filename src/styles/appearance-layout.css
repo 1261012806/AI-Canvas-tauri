@@ -35,7 +35,6 @@
 }
 
 .appearance-layout__canvas { inset: 0; border-radius: inherit; background: var(--layout-canvas-color); }
-.appearance-layout__image { position: absolute; inset: 0; background-repeat: no-repeat; }
 .appearance-layout__canvas > .canvas-bg-frosted-preview { position: absolute; }
 .appearance-layout__grid {
   position: absolute;

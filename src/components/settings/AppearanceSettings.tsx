@@ -14,6 +14,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import ModalOverlay from '../shared/ModalOverlay';
 import Select from '../shared/Select';
 import NumberStepper from '../shared/NumberStepper';
+import CanvasImageBackground from '../backgrounds/CanvasImageBackground';
 import AppearanceLayoutPreview, { type AppearanceLayoutTarget } from './AppearanceLayoutPreview';
 import { useT } from '../../i18n';
 import mercuryImg from '../../assets/images/bg/1_mercury.png';
@@ -474,10 +475,11 @@ function imagePreviewStyle(imageDataUrl: string | undefined, size: CSSProperties
     : undefined;
 }
 
-function BackgroundImageControls({ label, image, onChange }: {
+function BackgroundImageControls({ label, image, onChange, preview }: {
   label: string;
   image: AppearanceBackgroundImage;
   onChange: (image: AppearanceBackgroundImage) => void;
+  preview?: ReactNode;
 }) {
   const t = useT();
   const showToast = useAppStore((state) => state.showToast);
@@ -505,9 +507,9 @@ function BackgroundImageControls({ label, image, onChange }: {
 
   return (
     <div className="ui-stack">
-      <div className="ui-card h-20 bg-no-repeat" role="img" aria-label={`${label}图片预览`} style={imagePreviewStyle(image.imageDataUrl, image.imageFit)}>
+      {preview ?? <div className="ui-card h-20 bg-no-repeat" role="img" aria-label={`${label}图片预览`} style={imagePreviewStyle(image.imageDataUrl, image.imageFit)}>
         {!image.imageDataUrl && <span className="flex h-full items-center justify-center ui-hint">{t('未选图片')}</span>}
-      </div>
+      </div>}
       <div className="ui-row ui-row--tight">
         <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={loading} onClick={() => inputRef.current?.click()}>
           {loading ? t('读取中…') : image.imageDataUrl ? t('替换图片') : t('上传图片')}
@@ -528,6 +530,69 @@ function BackgroundImageControls({ label, image, onChange }: {
         <option value="fill">{t('拉伸填满')}</option>
       </Select>
       <p className="ui-hint">{t('PNG / JPG / WebP / SVG，最大 5MB；透明或未铺满的区域沿用底色。')}</p>
+    </div>
+  );
+}
+
+function ImageAdjustmentSlider({ label, value, max = 100, unit = '%', onChange }: {
+  label: string;
+  value: number;
+  max?: number;
+  unit?: string;
+  onChange: (value: number) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="ui-field">
+      <div className="ui-row ui-row--between">
+        <label className="ui-label" htmlFor={id}>{label}</label>
+        <NumberStepper value={value} min={0} max={max} step={1} unit={unit} size="sm" aria-label={label} onChange={onChange} />
+      </div>
+      <input id={id} type="range" className="ui-slider" min={0} max={max} step={1} value={value}
+        onChange={(event) => onChange(Number(event.target.value))} />
+    </div>
+  );
+}
+
+function CanvasImageAdjustments({ canvas, mode, onChange }: {
+  canvas: AppearanceTheme['canvas'];
+  mode: AppearanceTheme['mode'];
+  onChange: (patch: Partial<AppearanceTheme['canvas']>) => void;
+}) {
+  const t = useT();
+  const defaults = getBuiltinAppearanceTheme(`standard-${resolveAppearanceMode(mode)}`).canvas;
+  return (
+    <div className="ui-stack border-t border-canvas-border pt-3">
+      <div className="ui-row ui-row--between">
+        <span className="ui-label">{t('图片调整')}</span>
+        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => onChange({
+          color: defaults.color, imageOpacity: defaults.imageOpacity, imagePosition: defaults.imagePosition,
+          imageBlur: defaults.imageBlur, imageBrightness: defaults.imageBrightness,
+          imageContrast: defaults.imageContrast, imageSaturation: defaults.imageSaturation,
+          imageOverlayColor: defaults.imageOverlayColor, imageOverlayOpacity: defaults.imageOverlayOpacity,
+        })}>{t('恢复图片调整')}</button>
+      </div>
+      <div className="ui-field">
+        <span className="ui-label">{t('图片位置')}</span>
+        <Select aria-label={t('图片位置')} value={canvas.imagePosition} onChange={(imagePosition) => onChange({ imagePosition })}>
+          <option value="left top">{t('左上')}</option><option value="center top">{t('顶部居中')}</option><option value="right top">{t('右上')}</option>
+          <option value="left center">{t('左侧居中')}</option><option value="center">{t('居中')}</option><option value="right center">{t('右侧居中')}</option>
+          <option value="left bottom">{t('左下')}</option><option value="center bottom">{t('底部居中')}</option><option value="right bottom">{t('右下')}</option>
+        </Select>
+      </div>
+      <ImageAdjustmentSlider label={t('图片透明度')} value={Math.round((1 - canvas.imageOpacity) * 100)} onChange={(value) => onChange({ imageOpacity: (100 - value) / 100 })} />
+      <ImageAdjustmentSlider label={t('图片模糊度')} value={canvas.imageBlur} max={40} unit="px" onChange={(imageBlur) => onChange({ imageBlur })} />
+      <ImageAdjustmentSlider label={t('亮度')} value={Math.round(canvas.imageBrightness * 100)} max={200} onChange={(value) => onChange({ imageBrightness: value / 100 })} />
+      <ImageAdjustmentSlider label={t('对比度')} value={Math.round(canvas.imageContrast * 100)} max={200} onChange={(value) => onChange({ imageContrast: value / 100 })} />
+      <ImageAdjustmentSlider label={t('饱和度')} value={Math.round(canvas.imageSaturation * 100)} max={200} onChange={(value) => onChange({ imageSaturation: value / 100 })} />
+      <ColorCardInput label={t('图片底色')} value={canvas.color} fallbackColor={defaults.color} onChange={(color) => onChange({ color })} />
+      <div className="ui-stack border-t border-canvas-border pt-3">
+        <span className="ui-label">{t('蒙版')}</span>
+        <ColorCardInput label={t('蒙版颜色')} value={canvas.imageOverlayColor} allowNone={false} fallbackColor={defaults.imageOverlayColor}
+          onChange={(imageOverlayColor) => onChange({ imageOverlayColor })} />
+        <ImageAdjustmentSlider label={t('蒙版强度')} value={Math.round(canvas.imageOverlayOpacity * 100)} onChange={(value) => onChange({ imageOverlayOpacity: value / 100 })} />
+        <p className="ui-hint">{t('图片透明度 100% 时隐藏图片；蒙版强度 0% 时关闭蒙版。')}</p>
+      </div>
     </div>
   );
 }
@@ -1092,15 +1157,21 @@ export default function AppearanceSettings() {
         )}
 
         {active.canvas.kind === 'image' && (
-          <div className="p-3 settings-sub-card rounded-lg">
+          <div className="p-3 settings-sub-card rounded-lg ui-stack">
             <BackgroundImageControls
               key={`${active.id}:canvas-background`}
               label={t('画布背景')}
+              preview={<div className="ui-card relative h-28 overflow-hidden" role="img" aria-label={t('画布背景图片预览')}>
+                <CanvasImageBackground canvas={active.canvas} baseColor={active.canvas.color} />
+                {!active.canvas.imageDataUrl && <span className="relative flex h-full items-center justify-center ui-hint">{t('未选图片')}</span>}
+              </div>}
               image={{ kind: 'image', imageDataUrl: active.canvas.imageDataUrl, imageFit: active.canvas.imageFit }}
               onChange={({ kind, imageDataUrl, imageFit }) => updateImage((theme) => ({
                 ...theme, canvas: { ...theme.canvas, kind, imageDataUrl, imageFit },
               }))}
             />
+            <CanvasImageAdjustments canvas={active.canvas} mode={active.mode}
+              onChange={(patch) => update((theme) => ({ ...theme, canvas: { ...theme.canvas, ...patch } }))} />
           </div>
         )}
 

@@ -16,6 +16,44 @@ const SVG_BACKGROUND_IMAGE = {
 };
 
 describe('appearance themes', () => {
+  it('restores neutral canvas image adjustments for older snapshots', () => {
+    const theme = normalizeAppearanceTheme({ canvas: { kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageOpacity: 0.4 } });
+    expect(theme.canvas).toMatchObject({
+      imageOpacity: 0.4,
+      imageBlur: 0,
+      imageBrightness: 1,
+      imageContrast: 1,
+      imageSaturation: 1,
+      imageOverlayColor: '#000000',
+      imageOverlayOpacity: 0,
+    });
+  });
+
+  it('bounds canvas image adjustments and rejects malformed imported values', () => {
+    const theme = normalizeAppearanceTheme({ canvas: {
+      imageOpacity: 3, imageBlur: 99, imageBrightness: -1, imageContrast: 4,
+      imageSaturation: 0, imageOverlayColor: 'url(https://example.com/image.png)', imageOverlayOpacity: -2,
+    } });
+    expect(theme.canvas).toMatchObject({
+      imageOpacity: 1, imageBlur: 40, imageBrightness: 0, imageContrast: 2,
+      imageSaturation: 0, imageOverlayColor: '#000000', imageOverlayOpacity: 0,
+    });
+    const malformed = normalizeAppearanceTheme({ canvas: {
+      imageOpacity: NaN, imageBlur: Infinity, imageBrightness: '0.8', imageContrast: null,
+      imageSaturation: {}, imageOverlayColor: null, imageOverlayOpacity: NaN,
+    } });
+    expect(malformed.canvas).toEqual(createBuiltinAppearanceThemes()[0].canvas);
+  });
+
+  it('preserves canvas image adjustments through snapshot serialization', () => {
+    const theme = normalizeAppearanceTheme({ canvas: {
+      kind: 'image', imageDataUrl: BACKGROUND_IMAGE.imageDataUrl, imageFit: 'contain', imagePosition: 'right bottom',
+      imageOpacity: 0.65, imageBlur: 16, imageBrightness: 0.8, imageContrast: 1.2,
+      imageSaturation: 0.7, imageOverlayColor: '#123456', imageOverlayOpacity: 0.35,
+    } });
+    expect(normalizeAppearanceTheme(JSON.parse(JSON.stringify(theme))).canvas).toEqual(theme.canvas);
+  });
+
   it.each(APPEARANCE_CANVAS_PANEL_IDS)('links the four panel backgrounds and isolates %s until relinked', (id) => {
     const base = normalizeAppearanceTheme({ ui: { surfaceImage: BACKGROUND_IMAGE } });
     expect(base.ui.canvasPanels.overrides).toEqual({});

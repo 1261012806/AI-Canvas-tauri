@@ -25,6 +25,11 @@ const blob = new Blob([svg], { type: 'image/svg+xml' });
 const themeFile = (content: unknown) => new File([JSON.stringify(content)], '外观.aicanvas-theme', { type: 'application/json' });
 const makeTheme = (source: string) => normalizeAppearanceTheme({
   id: 'my-theme', mode: 'light', name: '机甲浅色', builtin: false,
+  canvas: {
+    kind: 'image', imageDataUrl: source, imagePosition: 'right bottom', imageOpacity: 0.65,
+    imageBlur: 16, imageBrightness: 0.8, imageContrast: 1.2, imageSaturation: 0.7,
+    imageOverlayColor: '#123456', imageOverlayOpacity: 0.35,
+  },
   node: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'fill' } },
   ui: {
     button: { radius: 9, primary: { backgroundImage: { kind: 'image', imageDataUrl: source, imageFit: 'contain' } } },
@@ -74,6 +79,7 @@ describe('appearance theme image persistence and transfer', () => {
     expect(Object.keys(document.images)).toEqual([reference]);
     expect(driver.read).toHaveBeenCalledTimes(1);
     const imported = await importAppearanceTheme(new File([exported], '外观.aicanvas-theme'));
+    expect(imported.canvas).toEqual(original.canvas);
     expect(imported.node.backgroundImage).toEqual(original.node.backgroundImage);
     expect(imported.ui.button).toEqual(original.ui.button);
     expect(imported.ui.canvasPanels).toEqual(original.ui.canvasPanels);
