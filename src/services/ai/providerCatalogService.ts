@@ -1,7 +1,7 @@
 /**
  * Provider model catalog — built-in provider metadata and model-list adapters.
- * Local manifests are supplied by the caller so this service stays independent
- * from component-owned model presentation data.
+ * Local manifests use shared provider data where available; callers can supply
+ * presentation fallbacks for legacy catalogs without coupling this service to UI.
  */
 import {
   APIMART_BASE_URL,
@@ -31,6 +31,7 @@ import { APIMART_OMNI_MODELS, APIMART_UPDATED_VIDEO_MODELS, isLegacyApimartOmni 
 import { getChatApiHeaders, normalizeGeminiModelId, resolveChatApiProtocol } from './chatApiProtocol';
 import { XAI_BASE_URL, XAI_MODEL_MANIFEST } from './providers/xaiModelManifest';
 import { GRSAI_ADDED_MODELS } from './grsaiModels';
+import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from './dreaminaModels';
 import { matchToapisCatalog, resolveToapisImageModelContract, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
 import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { validateModelExecutionProtocol } from './modelProtocolValidation';
@@ -391,6 +392,16 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     badgeText: 'JM',
     authType: 'oauth',
     catalogAdapter: 'local-manifest',
+    models: [
+      ...DREAMINA_IMAGE_MODELS.map((model) => ({
+        id: model.version, name: model.label, description: model.description,
+        provider: 'dreamina', category: 'image' as const,
+      })),
+      ...DREAMINA_VIDEO_MODELS.map((model) => ({
+        id: model.version, name: model.label, description: model.description,
+        provider: 'dreamina', category: 'video' as const,
+      })),
+    ],
     credentials: [],
   },
   {
@@ -865,6 +876,10 @@ export async function fetchProviderModelCatalog(
     return { models: [...models.values()], source: 'local-manifest' };
   }
   if (definition.catalogAdapter === 'local-manifest') {
+    // 即梦目录由 CLI 合同维护；缺少或过期的界面 fallback 不能隐藏新型号。
+    if (definition.id === 'dreamina') {
+      return { models: normalizeModels([...(definition.models ?? [])], providerId), source: 'local-manifest' };
+    }
     return { models: definition.id === 'grsai'
       ? mergeRemoteCatalogMetadata(normalizedFallback, [...GRSAI_ADDED_MODELS])
       : normalizedFallback, source: 'local-manifest' };

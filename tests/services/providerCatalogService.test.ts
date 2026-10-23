@@ -6,11 +6,11 @@ import {
   resolveProviderImageModelForValidation,
 } from '../../src/services/ai/providerCatalogService';
 import { SORA2U_MODEL_MANIFEST } from '../../src/services/ai/providers/sora2uModelManifest';
-import { defaultModelGroups } from '../../src/components/nodes/shared/defaultModels';
+import { defaultModelGroups, getConfiguredModelGroups, getMediaModelOptions } from '../../src/components/nodes/shared/defaultModels';
 import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
 import { parseConnectionShare, serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
-import type { ProviderModelSelection } from '../../src/types';
+import type { ApiProviderConfig, AppConfig, ProviderModelSelection } from '../../src/types';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
 
 function jsonResponse(body: unknown): Response {
@@ -19,6 +19,78 @@ function jsonResponse(body: unknown): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+describe('即梦登录后的模型目录与选择', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { fallbackModels: undefined },
+    { fallbackModels: [
+      { id: '3.0', name: '即梦 3.0', category: 'image' as const, provider: 'dreamina' },
+      { id: 'seedance2.0', name: 'Seedance 2.0', category: 'video' as const, provider: 'dreamina' },
+    ] },
+  ])('缺少或使用旧回退目录时仍提供普通 2.5 与 2.0 Mini', async ({ fallbackModels }) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchProviderModelCatalog({
+      providerId: 'dreamina', config: { name: '即梦', apiKey: '', catalogId: 'dreamina' }, fallbackModels,
+    });
+    expect(result.source).toBe('local-manifest');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.models).toHaveLength(15);
+    expect(new Set(result.models.map((model) => model.id)).size).toBe(15);
+    expect(result.models.filter((model) => model.category === 'video').map((model) => model.id))
+      .toEqual(expect.arrayContaining(['seedance2.5', 'seedance2.0mini']));
+    for (const id of ['seedance2.5', 'seedance2.0mini']) {
+      expect(getProviderDefinition('dreamina')?.models?.find((model) => model.id === id))
+        .toMatchObject({ category: 'video', provider: 'dreamina' });
+    }
+    expect(result.models.some((model) => /draft|preview|样片/i.test(`${model.id} ${model.name}`))).toBe(false);
+  });
+
+  it('旧登录态和保存的模型勾选均可在视频菜单选择两个型号', async () => {
+    const config: AppConfig = { theme: 'dark', providers: {}, dreaminaAuth: { loggedIn: true } };
+    const catalog = await fetchProviderModelCatalog({
+      providerId: 'dreamina', config: { name: '即梦', apiKey: '', catalogId: 'dreamina' },
+    });
+    const selectedModels = catalog.models.filter((model) => ['seedance2.5', 'seedance2.0mini'].includes(model.id));
+    const savedConfig: AppConfig = { ...config, providers: {
+      dreamina: { name: '即梦', apiKey: '', catalogId: 'dreamina', selectedModels },
+    } };
+    for (const state of [config, savedConfig]) {
+      const models = getConfiguredModelGroups(state, 'ai-video').flatMap((group) => group.models);
+      for (const id of ['seedance2.5', 'seedance2.0mini']) {
+        expect(models.find((model) => model.value === `dreamina/${id}`))
+          .toMatchObject({ provider: 'dreamina', nodeTypes: ['ai-video'] });
+        expect(getMediaModelOptions([], state).find((model) => model.value === `dreamina/${id}`))
+          .toMatchObject({ mediaKind: 'video', groupId: 'dreamina' });
+      }
+    }
+    expect(getConfiguredModelGroups(savedConfig, 'ai-video')[0].models).toHaveLength(2);
+    expect(getConfiguredModelGroups(savedConfig, 'ai-image')).toEqual([]);
+  });
+
+  it('刷新目录不重新启用未勾选的型号或隐藏的视频分类', async () => {
+    const provider: ApiProviderConfig = { name: '即梦', apiKey: '', catalogId: 'dreamina', selectedModels: [
+      { id: 'seedance2.0mini', name: 'Seedance 2.0 Mini', category: 'video', provider: 'dreamina' },
+    ] };
+    const config: AppConfig = { theme: 'dark', providers: { dreamina: provider }, dreaminaAuth: { loggedIn: true } };
+    await fetchProviderModelCatalog({ providerId: 'dreamina', config: provider });
+    expect(provider.selectedModels?.map((model) => model.id)).toEqual(['seedance2.0mini']);
+    expect(getConfiguredModelGroups(config, 'ai-video')[0].models.map((model) => model.value))
+      .toEqual(['dreamina/seedance2.0mini']);
+    const hiddenProviders: ApiProviderConfig[] = [
+      { ...provider, selectedModels: [] }, { ...provider, visibleModelCategories: ['image'] },
+    ];
+    for (const hiddenProvider of hiddenProviders) {
+      const hiddenConfig = { ...config, providers: { dreamina: hiddenProvider } };
+      expect(getConfiguredModelGroups(hiddenConfig, 'ai-video')).toEqual([]);
+      expect(getMediaModelOptions([], hiddenConfig).filter((model) => model.mediaKind === 'video')).toEqual([]);
+    }
+  });
+});
 
 describe('providerCatalogService 模型分类推断', () => {
   it.each(['https://toapis.cn/v1', 'https://toapis.com/v1'])('ToAPIs 只请求所选站点 %s，绑定渠道协议并筛选文本型号', async (baseUrl) => {
