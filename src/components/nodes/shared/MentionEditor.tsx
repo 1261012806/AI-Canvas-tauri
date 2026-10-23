@@ -8,7 +8,7 @@ import { resolvePromptEnterAction } from '../../../utils/promptSubmitShortcut';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../../store/useAppStore';
 import { Icon } from '@iconify/react';
-import { getAssetUrlFromPath, getFileCategory, listGlobalFolderContents, listExternalFolderContents, type AssetFileEntry } from '../../../services/fileService';
+import { getAssetUrlFromPath, getFileCategory, listGlobalFolderContents, listExternalFolderContents, selectAssetFolderFiles, type AssetFileEntry, type AssetFolderEntry, type AssetFolderSelection } from '../../../services/fileService';
 import { getAllAssetMeta } from '../../../services/indexedDbService';
 import { springSmooth, fadeFast } from '../../../utils/motion';
 import { calcAnchoredPosition, calcFixedPosition } from '../../../utils/popupPosition';
@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import PopupCloseButton from '../../shared/PopupCloseButton';
 import MentionPicker, { type MentionPickerChip, type MentionPickerItem } from '../../shared/MentionPicker';
 import ViewportImage from '../../shared/ViewportImage';
+import { useDialogFocus } from '../../../hooks/useDialogFocus';
 import { findDraggableMentionChip, startMentionChipDrag } from './mentionEditorChipDrag';
 import {
   captureMentionEditorSelection,
@@ -31,7 +32,7 @@ import {
   buildDramaActionMentionId,
   buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
-import type { CharacterReferenceImage } from '../../../types/dramaAssets';
+import type { CharacterReferenceImage, DramaAssetKind } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../../utils/referencePreviewEvents';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
@@ -61,6 +62,7 @@ import {
   matchesMentionQuery,
   resolveCanvasMentionNodes,
   resolveDramaMentionItems,
+  resolveGlobalAssetPickerItems,
   resolveWorkflowMentionNodes,
   filterWorkflowMentions,
   workflowMentionFilterChips,
@@ -73,6 +75,7 @@ import type { ComfyRefmodAsset, ComfyRefmodSelection } from '../../../types/comf
 import type { WorkflowDefinition } from '../../../types';
 
 const ComfyRefmodMentionSettings = lazy(() => import('./ComfyRefmodMentionSettings'));
+const AssetFolderNavigation = lazy(() => import('../../assets/AssetFolderNavigation'));
 const EMPTY_REFMODS: ComfyRefmodSelection[] = [];
 interface RefmodEditSession {
   asset: ComfyRefmodAsset;
@@ -189,7 +192,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [refmodSession, setRefmodSession] = useState<RefmodEditSession>();
   const refmodSessionRef = useRef<RefmodEditSession | undefined>(undefined);
   const [refmodUiError, setRefmodUiError] = useState('');
-  const { nodes, edges, workflows, dramaAssets, globalCharacters, globalScenes, globalProps, globalDramaAssetsLoading, currentProjectId } = useAppStore(
+  const { nodes, edges, workflows, dramaAssets, globalCharacters, globalScenes, globalProps, globalDramaAssetsLoading, globalDramaAssetsError, currentProjectId } = useAppStore(
     useShallow((state) => ({
       nodes: state.nodes,
       edges: state.edges,
@@ -199,12 +202,18 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       globalScenes: state.globalScenes,
       globalProps: state.globalProps,
       globalDramaAssetsLoading: state.globalDramaAssetsLoading,
+      globalDramaAssetsError: state.globalDramaAssetsError,
       currentProjectId: state.currentProjectId,
     })),
   );
   const globalAssets = useMemo(() => listGlobalDramaAssets({ globalCharacters, globalScenes, globalProps }),
     [globalCharacters, globalScenes, globalProps]);
   const editorOwnerRef = useRef({ projectId: currentProjectId, nodeId });
+  const isCurrentEditorOwner = useCallback(() => (
+    useAppStore.getState().currentProjectId === currentProjectId
+    && editorOwnerRef.current.projectId === currentProjectId
+    && editorOwnerRef.current.nodeId === nodeId
+  ), [currentProjectId, nodeId]);
   useEffect(() => {
     const history = historyRef.current;
     return () => history.clear();
@@ -232,6 +241,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     savedMentionRangeRef.current = null;
   }, [disabled]);
   const [assetList, setAssetList] = useState<AssetFileEntry[]>([]);
+  const [assetFolderEntries, setAssetFolderEntries] = useState<AssetFolderEntry[]>([]);
+  const [assetGlobalRootPath, setAssetGlobalRootPath] = useState<string | null>(null);
+  const [assetFolderSelection, setAssetFolderSelection] = useState<AssetFolderSelection>({ kind: 'all' });
+  const [assetCreativeKind, setAssetCreativeKind] = useState<DramaAssetKind | null>(null);
+  const assetPickerDialogRef = useRef<HTMLDivElement>(null);
   const [assetTagMap, setAssetTagMap] = useState<Record<string, string[]>>({});
   const [assetLoading, setAssetLoading] = useState(false);
   const [assetLoadError, setAssetLoadError] = useState(false);
@@ -283,6 +297,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setShowAssetPicker(false);
       setMentionQuery('');
       setAssetList([]);
+      setAssetFolderEntries([]);
+      setAssetGlobalRootPath(null);
+      setAssetFolderSelection({ kind: 'all' });
+      setAssetCreativeKind(null);
       setAssetTagMap({});
       editorOwnerRef.current = { projectId: currentProjectId, nodeId };
       historyRef.current.clear();
@@ -497,7 +515,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   );
   const hasGlobalAssetReference = prompt.includes('@drama{global/');
   useEffect(() => {
-    const searching = showMention && resourceSearchExpanded;
+    const searching = (showMention && resourceSearchExpanded) || showAssetPicker;
     if (!searching && (!hasGlobalAssetReference || globalAssetsRequestedRef.current)) return;
     const state = useAppStore.getState();
     // 全局创作资产按需加载，不依赖用户先打开资产库。
@@ -506,7 +524,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       globalAssetsRequestedRef.current = false;
       useAppStore.getState().showToast('全局创作资产加载失败，请重试', 'error');
     });
-  }, [showMention, resourceSearchExpanded, hasGlobalAssetReference]);
+  }, [showMention, resourceSearchExpanded, showAssetPicker, hasGlobalAssetReference]);
 
   // 角色参考图 / 动作列表 / 单个动作的素材选择。
   const [dramaRefPickerId, setDramaRefPickerId] = useState<string | null>(null);
@@ -938,7 +956,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       pick: string,
       thumb?: string,
     ) => {
-      if (useAppStore.getState().currentProjectId !== currentProjectId) return;
+      if (!isCurrentEditorOwner()) return;
       restoreMentionCursor();
       deleteAtChar();
       insertDramaChipAtCursor(
@@ -951,12 +969,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setMentionQuery('');
       setDramaRefPickerId(null);
     },
-    [currentProjectId, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
+    [isCurrentEditorOwner, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
   );
 
   const handleSelectDramaMention = useCallback(
     (item: ReturnType<typeof resolveDramaMentionItems>[number]) => {
-      if (useAppStore.getState().currentProjectId !== currentProjectId) return;
+      if (!isCurrentEditorOwner()) return;
       // 仅当绑图节点上已有真实图片时，才 @ 图像节点；否则始终 @drama 芯片（解析时展开单条简介）
       if (item.imageNodeId && !item.id.startsWith('global/')) {
         const imgNode = nodes.find((n) => n.id === item.imageNodeId);
@@ -983,7 +1001,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setShowMention(false);
       setMentionQuery('');
     },
-    [currentProjectId, nodes, handleSelectCanvasMention, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
+    [isCurrentEditorOwner, nodes, handleSelectCanvasMention, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
   );
 
   // ── Insert an asset reference chip ──
@@ -1012,31 +1030,36 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   // ── 打开资产弹窗（保持 @ 处的光标范围，关闭 @ 菜单）──
   const openAssetPicker = useCallback(() => {
+    focusMentionCursor();
     setShowMention(false);
     setShowAssetPicker(true);
     setAssetSearch('');
+    setAssetFolderSelection({ kind: 'all' });
+    setAssetCreativeKind(null);
+    setActiveAssetTag(null);
     setAssetTagsExpanded(false);
-  }, []);
+  }, [focusMentionCursor]);
 
-  // Esc 关闭资产弹窗
-  useEffect(() => {
-    if (!showAssetPicker) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setShowAssetPicker(false); } };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [showAssetPicker]);
+  const closeAssetPicker = useCallback(() => {
+    setShowAssetPicker(false);
+    focusMentionCursor();
+  }, [focusMentionCursor]);
+  useDialogFocus(showAssetPicker && !disabled, assetPickerDialogRef, closeAssetPicker, { zIndex: 10050 });
 
   // 只在搜索/资产弹窗打开时读取目录；键入关键词只过滤本轮缓存。
   const shouldLoadAssets = showAssetPicker || (showMention && resourceSearchExpanded);
   useEffect(() => {
     if (!shouldLoadAssets) return;
     let alive = true;
+    const controller = new AbortController();
     setAssetList([]);
+    setAssetFolderEntries([]);
+    setAssetGlobalRootPath(null);
     setAssetTagMap({});
     setAssetLoading(true);
     setAssetLoadError(false);
     setAssetScanTruncated(false);
-    void Promise.allSettled([listGlobalFolderContents(), listExternalFolderContents(assetFolders ?? [], { maxFilesPerFolder: 3000 }), getAllAssetMeta()])
+    void Promise.allSettled([listGlobalFolderContents({ signal: controller.signal }), listExternalFolderContents(assetFolders ?? [], { maxFilesPerFolder: 3000, signal: controller.signal }), getAllAssetMeta()])
       .then(([globalResult, folderResult, metaResult]) => {
         if (!alive || useAppStore.getState().currentProjectId !== currentProjectId) return;
         const globalFiles = globalResult.status === 'fulfilled' ? globalResult.value.files : [];
@@ -1052,6 +1075,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         const tagMap: Record<string, string[]> = {};
         for (const m of metas) if (m.tags?.length) tagMap[m.assetId] = m.tags;
         setAssetList(merged);
+        const folders = [...(globalResult.status === 'fulfilled' ? globalResult.value.folders : []),
+          ...(folderResult.status === 'fulfilled' ? folderResult.value.folders : [])];
+        const uniqueFolders = Array.from(new Map(folders.map((folder) => [JSON.stringify([folder.rootPath, folder.relativePath]), folder])).values());
+        setAssetFolderEntries(uniqueFolders);
+        setAssetFolderSelection((selection) => selection.kind === 'folder'
+          && !uniqueFolders.some((folder) => folder.rootPath === selection.rootPath && folder.relativePath === selection.relativePath)
+          ? { kind: 'all' } : selection);
+        setAssetGlobalRootPath(globalResult.status === 'fulfilled' ? globalResult.value.rootPath : null);
         setAssetTagMap(tagMap);
         setAssetLoadError(globalResult.status === 'rejected' || folderResult.status === 'rejected'
           || (globalResult.status === 'fulfilled' && globalResult.value.folders.some((folder) => folder.availability === 'offline'))
@@ -1061,12 +1092,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       })
       .catch(() => { if (alive && useAppStore.getState().currentProjectId === currentProjectId) setAssetLoadError(true); })
       .finally(() => { if (alive && useAppStore.getState().currentProjectId === currentProjectId) setAssetLoading(false); });
-    return () => { alive = false; };
+    return () => { alive = false; controller.abort(); };
   }, [shouldLoadAssets, assetFolders, assetLoadRevision, currentProjectId, nodeId]);
 
   const handleSelectAsset = useCallback(
     (file: AssetFileEntry) => {
-      if (useAppStore.getState().currentProjectId !== currentProjectId) return;
+      if (!isCurrentEditorOwner()) return;
       const el = editorRef.current;
       if (el) el.focus();
       const saved = savedMentionRangeRef.current;
@@ -1081,7 +1112,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setShowMention(false);
       setMentionQuery('');
     },
-    [currentProjectId, deleteAtChar, insertAssetChipAtCursor],
+    [isCurrentEditorOwner, deleteAtChar, insertAssetChipAtCursor],
   );
 
   // 标签合并 + 派生标签 chip
@@ -1092,15 +1123,25 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     }),
     [assetList, assetTagMap],
   );
+  const folderAssets = useMemo(() => selectAssetFolderFiles(taggedAssets, assetFolderSelection), [taggedAssets, assetFolderSelection]);
+  const globalPickerItems = useMemo(() => showAssetPicker ? resolveGlobalAssetPickerItems(globalAssets, null, '', currentNodeType) : [],
+    [showAssetPicker, globalAssets, currentNodeType]);
+  const creativePickerItems = useMemo(() => showAssetPicker && assetCreativeKind ? resolveGlobalAssetPickerItems(globalAssets, assetCreativeKind, assetSearch, currentNodeType) : [],
+    [showAssetPicker, globalAssets, assetCreativeKind, assetSearch, currentNodeType]);
+  const creativePickerCounts = useMemo(() => ({
+    character: globalPickerItems.filter((item) => item.kind === 'character').length,
+    scene: globalPickerItems.filter((item) => item.kind === 'scene').length,
+    prop: globalPickerItems.filter((item) => item.kind === 'prop').length,
+  }), [globalPickerItems]);
   const assetTagList = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const f of taggedAssets) for (const t of f.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    for (const f of folderAssets) for (const t of f.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
-  }, [taggedAssets]);
+  }, [folderAssets]);
 
   // 沿用资产库的完整单排标签与“更多”折叠方式，缩放动画中用布局宽度测量。
   useEffect(() => {
-    if (!showAssetPicker || disabled) return;
+    if (!showAssetPicker || disabled || assetCreativeKind) return;
     const row = assetTagRowRef.current;
     const list = assetTagListRef.current;
     if (!row || !list) return;
@@ -1132,11 +1173,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const observer = new ResizeObserver(measure);
     observer.observe(row);
     return () => { window.cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [showAssetPicker, disabled, assetTagList, assetTagsExpanded]);
+  }, [showAssetPicker, disabled, assetCreativeKind, assetTagList, assetTagsExpanded]);
 
   const filteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
-    return taggedAssets.filter((f) => {
+    return folderAssets.filter((f) => {
       if (activeAssetTag && !(f.tags ?? []).includes(activeAssetTag)) return false;
       if (q) {
         const inName = f.name.toLowerCase().includes(q);
@@ -1145,25 +1186,27 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       }
       return true;
     });
-  }, [taggedAssets, assetSearch, activeAssetTag]);
+  }, [folderAssets, assetSearch, activeAssetTag]);
 
   // 增量渲染：过滤变化时重置
-  useEffect(() => { setAssetVisible(40); }, [assetSearch, activeAssetTag, showAssetPicker]);
+  useEffect(() => { setAssetVisible(40); }, [assetSearch, activeAssetTag, showAssetPicker, assetFolderSelection, assetCreativeKind]);
   const visibleAssets = useMemo(() => filteredAssets.slice(0, assetVisible), [filteredAssets, assetVisible]);
+  const visibleCreativePickerItems = useMemo(() => creativePickerItems.slice(0, assetVisible), [creativePickerItems, assetVisible]);
+  const assetPickerResultCount = assetCreativeKind ? creativePickerItems.length : filteredAssets.length;
   useEffect(() => {
     // 搜索可先预读资产；弹窗真正显示列表后才有哨兵，开关和加载状态也需重新绑定。
-    if (!showAssetPicker || disabled || assetLoading) return;
+    if (!showAssetPicker || disabled || (assetCreativeKind ? globalDramaAssetsLoading : assetLoading)) return;
     const el = assetSentinelRef.current;
     if (!el) return;
     const root = el.closest('.asset-picker-grid') as HTMLElement | null;
     const io = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) {
-        setAssetVisible((c) => (c < filteredAssets.length ? c + 40 : c));
+        setAssetVisible((c) => (c < assetPickerResultCount ? c + 40 : c));
       }
     }, { root, rootMargin: '200px' });
     io.observe(el);
     return () => io.disconnect();
-  }, [showAssetPicker, disabled, assetLoading, filteredAssets.length, visibleAssets.length]);
+  }, [showAssetPicker, disabled, assetLoading, globalDramaAssetsLoading, assetCreativeKind, assetFolderSelection, assetPickerResultCount, assetVisible]);
 
   // ── Input handler: detect @ and / ──
   const handleInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
@@ -1695,7 +1738,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       icon: isAudioNode ? MEDIA_ICONS.audio : item.kind === 'scene' ? 'lucide:mountain' : item.kind === 'prop' ? 'lucide:box' : 'mdi:account-box-outline',
       badge: isAudioNode ? '音频' : multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
       onSelect: () => {
-        if (emptyCharacter || useAppStore.getState().currentProjectId !== currentProjectId) return;
+        if (emptyCharacter || !isCurrentEditorOwner()) return;
         if (isAudioNode) {
           if (!item.voice) return;
           restoreMentionCursor();
@@ -2265,10 +2308,15 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               className="asset-picker-backdrop"
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}
-              onMouseDown={() => setShowAssetPicker(false)}
+              onMouseDown={closeAssetPicker}
             >
               <motion.div
+                ref={assetPickerDialogRef}
                 className="asset-picker"
+                role="dialog"
+                aria-modal="true"
+                aria-label="选择全局资产"
+                tabIndex={-1}
                 initial={{ opacity: 0, scale: 0.96, y: 12 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 12, transition: fadeFast }}
@@ -2281,16 +2329,38 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                       <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                     </svg>
                     <input
-                      type="text" placeholder="搜索名称或标签…" autoFocus
+                      type="text" placeholder={assetCreativeKind ? '搜索名称、简介…' : '搜索名称或标签…'} aria-label="搜索全局资产"
                       value={assetSearch} onChange={(e) => setAssetSearch(e.target.value)}
                     />
                   </div>
-                  <PopupCloseButton onClick={() => setShowAssetPicker(false)} />
+                  <PopupCloseButton onClick={closeAssetPicker} />
                 </div>
 
 
+                <div className="asset-picker-body">
+                  <div className="asset-picker-sidebar">
+                    <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">正在打开分类…</p>}>
+                    <AssetFolderNavigation
+                      readOnly compact={false} folders={assetFolderEntries} selection={assetFolderSelection}
+                      totalCount={assetList.length} globalCount={selectAssetFolderFiles(assetList, { kind: 'global' }).length}
+                      globalRootPath={assetGlobalRootPath} loading={assetLoading}
+                      creativeKind={assetCreativeKind} creativeCounts={creativePickerCounts}
+                      onSelect={(selection) => {
+                        setAssetCreativeKind(null); setAssetFolderSelection(selection); setActiveAssetTag(null); setAssetTagsExpanded(false);
+                      }}
+                      onSelectCreative={(kind) => {
+                        setAssetCreativeKind(kind); setActiveAssetTag(null); setAssetTagsExpanded(false);
+                      }}
+                    />
+                    </Suspense>
+                  </div>
+                  <div className="asset-picker-content">
+                {!assetCreativeKind && (assetLoadError || assetScanTruncated) && <div role="status" className="flex flex-wrap items-center gap-2 p-2 text-xs text-canvas-text-secondary">
+                  <span>{assetLoadError ? '部分目录读取失败' : '目录文件较多，当前仅显示已扫描的文件'}</span>
+                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={assetLoading} onClick={() => setAssetLoadRevision((revision) => revision + 1)}>重新读取</button>
+                </div>}
                 {/* 标签筛选 */}
-                {assetTagList.length > 0 && (
+                {!assetCreativeKind && assetTagList.length > 0 && (
                   <div ref={assetTagRowRef} className={`asset-picker-tags${assetTagsExpanded ? ' expanded' : ''}`}>
                     <div ref={assetTagListRef} id={assetTagListId} className="assets-category-list">
                       <button
@@ -2320,8 +2390,31 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                   </div>
                 )}
 
-                <div className="asset-picker-grid">
-                  {assetLoading ? (
+                <div key={assetCreativeKind ?? JSON.stringify(assetFolderSelection)} className="asset-picker-grid">
+                  {assetCreativeKind ? (
+                    globalDramaAssetsLoading ? <div role="status" className="asset-picker-empty">正在加载创作资产…</div>
+                      : globalDramaAssetsError ? <div role="alert" className="asset-picker-empty">
+                        <p>创作资产加载失败，请重试</p>
+                        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => {
+                          void useAppStore.getState().loadGlobalDramaAssets().catch(() => {});
+                        }}>重试加载</button>
+                      </div>
+                        : creativePickerItems.length === 0 ? <div className="asset-picker-empty">{assetSearch ? '没有匹配的创作资产' : '暂无可引用的创作资产'}</div>
+                          : visibleCreativePickerItems.map((item) => {
+                            const candidate = buildDramaPickerItem(item);
+                            return <button key={candidate.key} type="button" className="asset-picker-card" disabled={candidate.disabled}
+                              data-tooltip={candidate.title ?? candidate.label} onClick={() => {
+                                if (!isCurrentEditorOwner()) return;
+                                setShowAssetPicker(false);
+                                setShowMention(true);
+                                candidate.onSelect();
+                              }}>
+                              {candidate.thumbnailUrl ? <ViewportImage src={candidate.thumbnailUrl} alt="" />
+                                : <span className="asset-picker-card-icon"><Icon icon={candidate.icon ?? 'lucide:image'} aria-hidden="true" /></span>}
+                              <span className="asset-picker-card-name">{candidate.label}{candidate.badge ? ` · ${candidate.badge}` : ''}</span>
+                            </button>;
+                          })
+                  ) : assetLoading ? (
                     <div className="asset-picker-empty">加载中…</div>
                   ) : filteredAssets.length === 0 ? (
                     <div className="asset-picker-empty">{assetSearch || activeAssetTag ? '没有匹配的文件' : '暂无文件'}</div>
@@ -2345,11 +2438,13 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                           <span className="asset-picker-card-name">{file.name}</span>
                         </button>
                       ))}
-                      {assetVisible < filteredAssets.length && (
-                        <div ref={assetSentinelRef} className="asset-picker-sentinel">加载更多…</div>
-                      )}
                     </>
                   )}
+                  {assetVisible < assetPickerResultCount && (
+                    <div ref={assetSentinelRef} className="asset-picker-sentinel">加载更多…</div>
+                  )}
+                </div>
+                  </div>
                 </div>
               </motion.div>
             </motion.div>

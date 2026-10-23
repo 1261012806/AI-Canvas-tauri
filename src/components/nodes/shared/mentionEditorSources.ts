@@ -7,7 +7,8 @@ import type { AppState } from '../../../store/useAppStore';
 import type { BaseNodeData, NodeType, StoryboardCellOverride, WorkflowIONodeType } from '../../../types';
 import { bestNodeThumb } from './mentionEditorDom';
 import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
-import type { DramaAsset } from '../../../types/dramaAssets';
+import type { DramaAsset, DramaAssetKind } from '../../../types/dramaAssets';
+import { emptyDramaAssetLibrary } from '../../../types/dramaAssets';
 import { buildShotlistRowMentionId } from '../../../types/shotlist';
 
 export interface CanvasMentionItem {
@@ -210,4 +211,23 @@ export function resolveDramaMentionItems(
   // 分类数量和筛选共用完整候选，不能提前截断而丢失排在后面的场景或道具。
   if (!query) return candidates;
   return candidates.filter((asset) => matchesMentionQuery(query, [asset.name, asset.id, ...(asset.aliases ?? [])]));
+}
+
+/** 全局弹框独立于 @ 菜单开关，只从原始全局资产生成带作用域的候选。 */
+export function resolveGlobalAssetPickerItems(
+  globalAssets: readonly DramaAsset[],
+  kind: DramaAssetKind | null,
+  query: string,
+  nodeType?: NodeType,
+) {
+  const filtered = globalAssets.filter((asset) => {
+    if (kind !== null && asset.kind !== kind) return false;
+    const details = asset.kind === 'character'
+      ? [...(asset.aliases ?? []), asset.identity, asset.ageBand, asset.gender, asset.personality, asset.wardrobeDefault, asset.voiceNotes]
+      : asset.kind === 'scene'
+        ? [asset.placeType, asset.timeOfDay, asset.atmosphere, asset.spatialNotes]
+        : [asset.ownerName, asset.category, asset.significance];
+    return matchesMentionQuery(query, [asset.name, asset.id, asset.key, asset.summary, asset.visualNotes, asset.storyRole, ...details]);
+  });
+  return resolveDramaMentionItems(emptyDramaAssetLibrary(), '', nodeType, filtered);
 }

@@ -9,7 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/useAppStore';
 import type { DramaAsset, DramaAssetKind } from '../types/dramaAssets';
 import { DRAMA_ASSET_KIND_LABEL } from '../types/dramaAssets';
-import { formatDramaAssetTextBrief } from '../services/dramaAssetPrompt';
+import { findDramaAssetByKind, formatDramaAssetTextBrief } from '../services/dramaAssetPrompt';
 import { confirmAction } from '../services/confirmDialog';
 import ViewportImage from './shared/ViewportImage';
 import Select from './shared/Select';
@@ -348,7 +348,6 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
     updateDramaAssetFields,
     clearDramaAssetsByKind,
     bindDramaAssetImage,
-    unbindDramaAssetImage,
     setCharacterLibraryOpen,
     showToast,
   } = useAppStore(
@@ -359,7 +358,6 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
       updateDramaAssetFields: s.updateDramaAssetFields,
       clearDramaAssetsByKind: s.clearDramaAssetsByKind,
       bindDramaAssetImage: s.bindDramaAssetImage,
-      unbindDramaAssetImage: s.unbindDramaAssetImage,
       setCharacterLibraryOpen: s.setCharacterLibraryOpen,
       showToast: s.showToast,
     })),
@@ -371,6 +369,34 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
   const [uploadKind, setUploadKind] = useState<DramaAssetKind>('character');
   const [uploading, setUploading] = useState(false);
   const uploadPending = useRef(false);
+  const unbindPending = useRef(false);
+
+  const handleUnbindImage = async (asset: DramaAsset) => {
+    if (unbindPending.current) return;
+    const initial = useAppStore.getState();
+    const target = findDramaAssetByKind(initial.dramaAssets, asset.kind, asset.id);
+    if (!target) return;
+    unbindPending.current = true;
+    try {
+      const message = asset.kind === 'character'
+        ? `确定解绑「${target.name}」的全部参考图并清除头像设置？声音、动作、画布节点和原图片文件会保留。`
+        : `确定解绑「${target.name}」的图片？画布节点和原图片文件会保留。`;
+      if (!await confirmAction(message, { title: '解绑图片', okLabel: '确认解绑', cancelLabel: '取消' })) return;
+      const latest = useAppStore.getState();
+      if (latest.currentProjectId !== initial.currentProjectId
+        || !latest.assetsPanelOpen || !latest.dramaAssetsPanelOpen
+        || findDramaAssetByKind(latest.dramaAssets, asset.kind, asset.id) !== target) {
+        showToast('项目、资产或页面已变化，请重新确认解绑', 'info');
+        return;
+      }
+      latest.unbindDramaAssetImage(asset.kind, asset.id);
+      showToast('已解绑');
+    } catch {
+      showToast('解绑失败，请重试', 'error');
+    } finally {
+      unbindPending.current = false;
+    }
+  };
 
   const handleUpload = async (kind: DramaAssetKind, assetId?: string) => {
     if (uploadPending.current) return;
@@ -544,7 +570,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                 <button
                   type="button"
                   className="ml-auto shrink-0 rounded-lg border border-canvas-border px-2.5 py-1.5 text-[11px] text-canvas-text-secondary transition-colors hover:bg-canvas-hover hover:text-canvas-text"
-                  onClick={() => setCharacterLibraryOpen(true)}
+                  onClick={() => setCharacterLibraryOpen(true, { scope: 'project', origin: 'assets' })}
                 >
                   打开角色库
                 </button>
@@ -633,6 +659,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                     thumb={resolveThumb(asset, nodes as Array<{ id: string; data: Record<string, unknown> }>)}
                     imageNodes={imageNodes}
                     editing={editingId === asset.id}
+                    onOpen={asset.kind === 'character' ? () => setCharacterLibraryOpen(true, { scope: 'project', characterId: asset.id, origin: 'assets' }) : undefined}
                     onToggleEdit={() =>
                       setEditingId((cur) => (cur === asset.id ? null : asset.id))
                     }
@@ -655,10 +682,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                       bindDramaAssetImage(asset.kind, asset.id, nodeId);
                       showToast(`已绑定图像节点`);
                     }}
-                    onUnbindImage={() => {
-                      unbindDramaAssetImage(asset.kind, asset.id);
-                      showToast('已解绑');
-                    }}
+                    onUnbindImage={() => void handleUnbindImage(asset)}
                     onCopyBrief={() => void copyBrief(asset)}
                     onCopyToScope={() => {
                       const initial = useAppStore.getState();

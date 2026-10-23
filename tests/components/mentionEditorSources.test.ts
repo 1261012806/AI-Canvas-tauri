@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
 import type { BaseNodeData } from '../../src/types';
-import type { DramaAssetBase, DramaAssetLibrary, DramaCharacter } from '../../src/types/dramaAssets';
+import type { DramaAsset, DramaAssetBase, DramaAssetLibrary, DramaCharacter } from '../../src/types/dramaAssets';
 import {
   matchesMentionQuery,
   resolveCanvasMentionNodes,
   resolveDramaMentionItems,
+  resolveGlobalAssetPickerItems,
   resolveWorkflowMentionNodes,
   filterWorkflowMentions,
   workflowMentionFilterChips,
@@ -27,6 +28,60 @@ function node(
 }
 
 describe('mentionEditorSources', () => {
+  const globalPickerAssets = (): DramaAsset[] => {
+    const base: DramaAssetBase = {
+      id: 'hero', key: '同名', name: '同名', summary: '可复用创作素材', visualNotes: '银色纹理',
+      importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1,
+    };
+    return [
+      { ...base, kind: 'character', identity: '侦探', aliases: ['夜行者'], imageNodeId: 'project-node' },
+      { ...base, id: 'scene', kind: 'scene', placeType: '车站', atmosphere: '雨夜' },
+      { ...base, id: 'prop', kind: 'prop', ownerName: '守卫', significance: '开门钥匙' },
+    ];
+  };
+
+  it('全局弹框三类筛选与空搜索保留顺序，同名项目资产不混入且只添加一层作用域', () => {
+    const assets = globalPickerAssets();
+    const project: DramaAssetLibrary = {
+      version: 2, characters: [{ ...(assets[0] as DramaCharacter), name: '同名项目人物' }], scenes: [], props: [],
+    };
+    expect(resolveDramaMentionItems(project, '', 'ai-image', assets).map((item) => item.id))
+      .toEqual(['hero', 'global/hero', 'global/scene', 'global/prop']);
+    expect(resolveGlobalAssetPickerItems(assets, null, '   ').map((item) => item.id))
+      .toEqual(['global/hero', 'global/scene', 'global/prop']);
+    for (const [kind, id] of [['character', 'hero'], ['scene', 'scene'], ['prop', 'prop']] as const) {
+      expect(resolveGlobalAssetPickerItems(assets, kind, '')).toMatchObject([{ id: `global/${id}`, kind }]);
+      expect(resolveGlobalAssetPickerItems(assets, kind, '')).toHaveLength(1);
+    }
+    expect(resolveGlobalAssetPickerItems(assets, 'character', '')[0].imageNodeId).toBeUndefined();
+    expect(assets[0].id).toBe('hero');
+    expect(assets[0].imageNodeId).toBe('project-node');
+  });
+
+  it('全局弹框在原始资产上按简介、外观、别名及领域字段组合搜索', () => {
+    const assets = globalPickerAssets();
+    expect(resolveGlobalAssetPickerItems(assets, null, '创作素材 银色纹理')).toHaveLength(3);
+    expect(resolveGlobalAssetPickerItems(assets, 'character', '夜行者 侦探')[0].id).toBe('global/hero');
+    expect(resolveGlobalAssetPickerItems(assets, 'scene', '车站 雨夜')[0].id).toBe('global/scene');
+    expect(resolveGlobalAssetPickerItems(assets, 'prop', '守卫 开门钥匙')[0].id).toBe('global/prop');
+    expect(resolveGlobalAssetPickerItems(assets, null, 'ＨＥＲＯ')[0].id).toBe('global/hero');
+    expect(resolveGlobalAssetPickerItems(assets, 'scene', '夜行者')).toEqual([]);
+  });
+
+  it('全局弹框沿用音频引用限制，只返回有可用声音的人物', () => {
+    const assets = globalPickerAssets();
+    const character = assets[0] as DramaCharacter;
+    const voiced: DramaCharacter = { ...character, id: 'voiced', voiceClips: [{
+      id: 'voice-1', kind: 'timbre', audioUrl: 'asset://voice.wav', transcript: '', createdAt: 1, updatedAt: 1,
+    }] };
+    const candidates = [...assets, voiced];
+    expect(resolveGlobalAssetPickerItems(candidates, null, '', 'ai-audio'))
+      .toMatchObject([{ id: 'global/voiced', voice: { id: 'voice-1' } }]);
+    expect(resolveGlobalAssetPickerItems(candidates, null, '', 'ai-audio')).toHaveLength(1);
+    expect(resolveGlobalAssetPickerItems(candidates, 'scene', '', 'ai-audio')).toEqual([]);
+    expect(resolveGlobalAssetPickerItems(candidates, 'prop', '', 'ai-audio')).toEqual([]);
+  });
+
   it('ComfyUI 输入按图片、视频、音乐和文本筛选，全部保留原有顺序', () => {
     const items = resolveWorkflowMentionNodes('workflow', [
       { nodeId: 'text', title: '角色提示词', type: 'prompt' },
