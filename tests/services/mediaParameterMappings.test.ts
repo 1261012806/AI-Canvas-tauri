@@ -4,6 +4,21 @@ import { buildStandardImageRequestBody, mapImageParameters } from '../../src/ser
 import { mapVideoParameters } from '../../src/services/ai/videoParameterMappings';
 
 describe('media parameter mappings', () => {
+  it('requests PNG for transparent output and otherwise keeps background and format absent', () => {
+    const input = { modelName: 'gpt-image-2.5-sunburst', prompt: 'sticker', count: 1, size: '2048x1152' };
+    expect(buildStandardImageRequestBody({ ...input, imageBackground: 'transparent' })).toMatchObject({
+      size: '2048x1152', background: 'transparent', output_format: 'png',
+    });
+    for (const imageBackground of [undefined, '']) {
+      const body = buildStandardImageRequestBody({ ...input, imageBackground });
+      expect(body).not.toHaveProperty('background');
+      expect(body).not.toHaveProperty('output_format');
+    }
+    expect(buildStandardImageRequestBody({ ...input, imageBackground: 'opaque' }))
+      .not.toHaveProperty('output_format');
+    expect(mapImageParameters('apimart', input.modelName, { imageBackground: 'transparent' }))
+      .toEqual({ background: 'transparent' });
+  });
   it('keeps image quality separate from resolution and omits undeclared quality', () => {
     const input = { modelName: 'gpt-image-2.5-sunburst', prompt: 'cat', count: 1, size: '2048x1152' };
     expect(buildStandardImageRequestBody({ ...input, imageQuality: 'max' })).toMatchObject({

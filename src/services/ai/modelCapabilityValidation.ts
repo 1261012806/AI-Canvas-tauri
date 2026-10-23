@@ -80,6 +80,7 @@ export function assertModelProtocolResultMapping(
 export function assertImageModelCapability(capability: ImageModelCapability): void {
   for (const [field, defaultField] of [
     ['resolutions', 'defaultResolution'], ['ratios', 'defaultRatio'], ['qualities', 'defaultQuality'],
+    ['backgrounds', 'defaultBackground'],
   ] as const) {
     const values = capability[field];
     if (values && (values.length === 0 || values.some((value) => !value.trim())
@@ -138,10 +139,25 @@ export function resolveConfiguredImageQuality(
   return match;
 }
 
+/** 空字符串表示用户显式选择接口默认；undefined 才采用已声明的默认背景。 */
+export function resolveConfiguredImageBackground(
+  capability: ImageModelCapability | undefined,
+  imageBackground?: string,
+): string | undefined {
+  if (!capability?.backgrounds?.length) return undefined;
+  assertImageModelCapability({ backgrounds: capability.backgrounds, defaultBackground: capability.defaultBackground });
+  if (imageBackground === '') return undefined;
+  const selected = imageBackground ?? capability.defaultBackground;
+  if (selected === undefined) return undefined;
+  const match = capability.backgrounds.find((value) => value.toLowerCase() === selected.toLowerCase());
+  if (!match) throw new Error(`图片模型不支持背景 ${selected}，可选：${capability.backgrounds.join('、')}`);
+  return match;
+}
+
 export function resolveConfiguredImageParameters(
   capability: ImageModelCapability,
-  params: { imageSize?: string; aspectRatio?: string; imageQuality?: string; count: number },
-): { imageSize: string; aspectRatio: string; imageQuality?: string } {
+  params: { imageSize?: string; aspectRatio?: string; imageQuality?: string; imageBackground?: string; count: number },
+): { imageSize: string; aspectRatio: string; imageQuality?: string; imageBackground?: string } {
   assertImageModelCapability(capability);
   const select = (value: string | undefined, allowed: string[] | undefined, fallback: string | undefined, label: string, legacy: string) => {
     const normalized = value === '自适应' ? 'auto' : value;
@@ -157,10 +173,12 @@ export function resolveConfiguredImageParameters(
     throw new Error(`图片模型单次最多生成 ${maximum} 张图片`);
   }
   const imageQuality = resolveConfiguredImageQuality(capability, params.imageQuality);
+  const imageBackground = resolveConfiguredImageBackground(capability, params.imageBackground);
   return {
     imageSize: select(params.imageSize, capability.resolutions, capability.defaultResolution, '分辨率', '2K'),
     aspectRatio: select(params.aspectRatio, capability.ratios, capability.defaultRatio, '比例', '1:1'),
     ...(imageQuality !== undefined ? { imageQuality } : {}),
+    ...(imageBackground !== undefined ? { imageBackground } : {}),
   };
 }
 
@@ -190,6 +208,21 @@ export function assertModelCapabilityProtocol(model: ProviderModelSelection): vo
   if (model.category === 'image' && (model.imageCapability?.qualities?.length ?? 0) > 1
     && !modelProtocolUsesVariable(JSON.stringify(protocol.submit), 'imageQuality')) {
     throw new Error(`模型“${model.name}”声明可调质量，但提交协议没有映射 {{imageQuality}}`);
+  }
+  if (model.category === 'image') {
+    const backgrounds = model.imageCapability?.backgrounds;
+    const body = protocol.submit.body;
+    const fields = body && typeof body === 'object' && !Array.isArray(body) ? body : undefined;
+    const fixedBackground = typeof fields?.background === 'string' && !fields.background.includes('{{')
+      ? fields.background : undefined;
+    if (backgrounds?.length && !modelProtocolUsesVariable(JSON.stringify(protocol.submit), 'imageBackground')
+      && !(backgrounds.length === 1 && backgrounds[0].toLowerCase() === fixedBackground?.toLowerCase())) {
+      throw new Error(`模型“${model.name}”声明可调背景，但提交协议没有映射 {{imageBackground}}`);
+    }
+    if (typeof fields?.output_format === 'string' && fields.output_format.toLowerCase() === 'jpeg'
+      && (backgrounds?.some((value) => value.toLowerCase() === 'transparent') || fixedBackground?.toLowerCase() === 'transparent')) {
+      throw new Error(`模型“${model.name}”的透明背景不能与固定 output_format: jpeg 同时使用，请按渠道文档修改输出格式或背景能力`);
+    }
   }
   // 厂商预设的请求映射由各预设维护；这里不把它当成用户声明的自定义参数。
   if (model.executionProfile?.preset !== 'custom') return;

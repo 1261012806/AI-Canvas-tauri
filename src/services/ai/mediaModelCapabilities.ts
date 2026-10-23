@@ -12,7 +12,7 @@ import { getRunningHubModel } from './providers/runninghubModelManifest';
 import { getGrsaiImageCapability } from './grsaiModels';
 import { getProviderDefinition } from './providerCatalogService';
 import { resolveToapisImageModelContract } from './providers/toapisModelManifest';
-import { resolveConfiguredImageQuality } from './modelCapabilityValidation';
+import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
 
 /* ── 生图能力表 ── */
 
@@ -21,6 +21,8 @@ export interface ImageCapabilityRequestParams {
   resolution?: string;
   /** 生成质量，与分辨率独立；仅按该渠道的精确型号声明发送。 */
   imageQuality?: string;
+  /** 图片背景模式；空字符串显式沿用接口默认。 */
+  imageBackground?: string;
   /** 宽高比，如 '1:1' | '16:9' | 'auto'。 */
   ratio?: string;
   /** 批量生成数量。 */
@@ -45,6 +47,8 @@ export type ImageResolutionStyle = 'K' | 'MP' | 'none';
 const COMMON_RATIOS = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3'] as const;
 
 export interface ImageCapability extends ImageModelCapability {
+  /** 仅运行期：由实际协议的固定背景字面量派生，不从模型声明读取。 */
+  backgroundIsFixed?: boolean;
   /** 模型 ID（文档中的实际 model 值）。 */
   modelId: string;
   /** 分辨率取值风格：K（1K/2K/4K）、MP（1MP/2MP...）、none（无 resolution 字段）。 */
@@ -450,6 +454,7 @@ const APIMART_IMAGE_CAPABILITIES: Record<string, ImageCapability> = {
   ...Object.fromEntries(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'].map((modelId) => [modelId, {
     ...GPT_IMAGE_25_CAPABILITY, modelId,
     qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+    backgrounds: ['auto', 'opaque', 'transparent'],
   }])),
   ...Object.fromEntries(['gemini-3.1-flash-lite-image', 'gemini-3.1-flash-lite-image-ext'].map((modelId) => [modelId, {
     ...IMAGE_CAPABILITIES['gemini-3.1-flash-image-preview'], modelId,
@@ -532,7 +537,7 @@ export function getImageCapability(model?: string): ImageCapability | undefined 
     const key = model.replace(/^apimart\//, '').toLowerCase();
     const override = APIMART_IMAGE_CAPABILITIES[key];
     if (override) return model.startsWith('apimart/') ? override
-      : { ...override, qualities: undefined, defaultQuality: undefined };
+      : { ...override, qualities: undefined, defaultQuality: undefined, backgrounds: undefined, defaultBackground: undefined };
   }
   if (model && /^runninghub(?:-model)?\//.test(model)) {
     const definition = getRunningHubModel(model, true);
@@ -580,47 +585,63 @@ export function resolveImageParameterCapability(
     return getImageCapability(modelId.startsWith('grsai/') ? modelId : `grsai/${modelId}`);
   }
   if (definition?.id === 'toapis') {
-    const effective = resolveToapisImageModelContract(modelId, profile, declared).imageCapability;
-    if (effective) return { modelId, resolutionStyle: 'none', ...effective,
-      resolutions: effective.resolutions ?? [], ratios: effective.ratios ?? [] };
+    const contract = resolveToapisImageModelContract(modelId, profile, declared);
+    if (contract.imageCapability) {
+      const effective = imageCapabilityForProtocol({ modelId, resolutionStyle: 'none', ...contract.imageCapability }, contract.executionProfile);
+      return { ...effective, resolutions: effective.resolutions ?? [], ratios: effective.ratios ?? [] };
+    }
   }
   if (generalModel) {
     // 自定义网关的同名模型不能继承其他厂商能力。
     if (definition?.id === 'custom-openai') {
-      const effective = imageCapabilityForProtocol(declared, profile);
-      return { modelId, resolutionStyle: 'none', ...effective,
-        resolutions: effective?.resolutions ?? [], ratios: effective?.ratios ?? [] };
+      const effective = imageCapabilityForProtocol({ modelId, resolutionStyle: 'none', ...declared }, profile);
+      return { ...effective, resolutions: effective.resolutions ?? [], ratios: effective.ratios ?? [] };
     }
   }
   const fallback = definition ? getImageCapability(`${definition.id}/${modelId}`) : getImageCapability(model);
   const catalog = catalogModel?.imageCapability;
-  const qualityDeclaration = catalogStandard ? catalog : declared;
+  const parameterDeclaration = catalogStandard ? catalog : declared;
   const standard = !profile || profile.preset === 'openai-image' || profile.preset === 'openai-gpt-image';
-  const capability = imageCapabilityForProtocol({ ...fallback, ...catalog, ...declared,
+  const capability = imageCapabilityForProtocol({ modelId, resolutionStyle: fallback?.resolutionStyle ?? 'none',
+    ...fallback, ...catalog, ...declared,
     ...(standard && definition?.id !== 'custom-openai' ? {
-      qualities: qualityDeclaration?.qualities ?? catalog?.qualities ?? fallback?.qualities,
-      defaultQuality: qualityDeclaration?.qualities ? qualityDeclaration.defaultQuality
-        : qualityDeclaration?.defaultQuality ?? catalog?.defaultQuality ?? fallback?.defaultQuality,
+      qualities: parameterDeclaration?.qualities ?? catalog?.qualities ?? fallback?.qualities,
+      defaultQuality: parameterDeclaration?.qualities ? parameterDeclaration.defaultQuality
+        : parameterDeclaration?.defaultQuality ?? catalog?.defaultQuality ?? fallback?.defaultQuality,
+      backgrounds: parameterDeclaration?.backgrounds ?? catalog?.backgrounds ?? fallback?.backgrounds,
+      defaultBackground: parameterDeclaration?.backgrounds ? parameterDeclaration.defaultBackground
+        : parameterDeclaration?.defaultBackground ?? catalog?.defaultBackground ?? fallback?.defaultBackground,
     } : {
       qualities: declared?.qualities, defaultQuality: declared?.defaultQuality,
+      backgrounds: declared?.backgrounds, defaultBackground: declared?.defaultBackground,
     }),
   }, profile);
   if (!fallback && !catalog && !declared) return undefined;
-  return { modelId, resolutionStyle: fallback?.resolutionStyle ?? 'none', ...capability,
-    ...(generalModel ? { resolutions: capability?.resolutions ?? [], ratios: capability?.ratios ?? [] } : {}) };
+  return { ...capability,
+    ...(generalModel ? { resolutions: capability.resolutions ?? [], ratios: capability.ratios ?? [] } : {}) };
 }
 
-/** 旧自定义协议的固定质量保持固定；未映射质量时不能展示一个不会进入请求的可调控件。 */
+/** 旧自定义协议的固定参数保持固定；未映射时不能展示一个不会进入请求的可调控件。 */
 function imageCapabilityForProtocol(
-  capability: ImageModelCapability | undefined,
+  capability: ImageCapability,
   profile: ModelExecutionProfile | undefined,
-): ImageModelCapability | undefined {
-  if (profile?.preset !== 'custom'
-    || /{{\s*imageQuality\s*}}/.test(JSON.stringify(profile.protocol?.submit) ?? '')) return capability;
+): ImageCapability {
+  let effective: ImageCapability = { ...capability, backgroundIsFixed: undefined };
+  if (profile?.preset !== 'custom') return effective;
+  const source = JSON.stringify(profile.protocol?.submit) ?? '';
   const body = profile.protocol?.submit.body;
-  const quality = body && typeof body === 'object' && !Array.isArray(body) ? body.quality : undefined;
-  const fixed = typeof quality === 'string' && quality && !quality.includes('{{') ? quality : undefined;
-  return { ...capability, qualities: fixed ? [fixed] : undefined, defaultQuality: fixed };
+  for (const [variable, field, options, fallback] of [
+    ['imageQuality', 'quality', 'qualities', 'defaultQuality'],
+    ['imageBackground', 'background', 'backgrounds', 'defaultBackground'],
+  ] as const) {
+    if (new RegExp(`{{\\s*${variable}\\s*}}`).test(source)) continue;
+    const value = body && typeof body === 'object' && !Array.isArray(body) ? body[field] : undefined;
+    const fixed = typeof value === 'string' && value && !value.includes('{{') ? value : undefined;
+    effective = { ...effective, [options]: fixed ? [fixed] : undefined, [fallback]: fixed,
+      ...(field === 'background' ? { backgroundIsFixed: fixed !== undefined } : {}),
+    };
+  }
+  return effective;
 }
 
 /** 将分辨率档位换算为像素短边，用于结果回填的尺寸。 */
@@ -691,6 +712,9 @@ export function buildImageCapabilityRequest(
   };
   const imageQuality = resolveConfiguredImageQuality(capability, params.imageQuality);
   if (imageQuality !== undefined) body.quality = imageQuality;
+  const imageBackground = resolveConfiguredImageBackground(capability, params.imageBackground);
+  if (imageBackground !== undefined) body.background = imageBackground;
+  if (imageBackground === 'transparent') body.output_format = 'png';
   // 仅当能力表声明了分辨率字段风格才写 resolution（K / MP）；none 表示模型无此字段。
   if (capability.resolutionStyle !== 'none' && resolution) {
     body.resolution = resolution;

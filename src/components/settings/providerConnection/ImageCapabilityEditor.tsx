@@ -14,19 +14,25 @@ interface Props {
   onClose: () => void;
 }
 
+const BACKGROUND_LABELS: Record<string, string> = {
+  auto: 'auto（自动）', opaque: 'opaque（不透明）', transparent: 'transparent（透明）',
+};
+
 export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate, onClose }: Props) {
   const t = useT();
   const capability = model.imageCapability ?? {};
   const [customResolution, setCustomResolution] = useState('');
   const [customRatio, setCustomRatio] = useState('');
   const [customQuality, setCustomQuality] = useState('');
+  const [customBackground, setCustomBackground] = useState('');
   const [gptTemplate, setGptTemplate] = useState('gpt-2:openai');
   const [bananaTemplate, setBananaTemplate] = useState('banana-pro:google');
   let error = '';
   try { assertModelCapabilityProtocol(model); } catch (reason) {
     error = reason instanceof Error ? reason.message : '图片参数声明无效';
   }
-  const choose = (field: 'resolutions' | 'ratios' | 'qualities', fallback: 'defaultResolution' | 'defaultRatio' | 'defaultQuality', value: string) => {
+  const choose = (field: 'resolutions' | 'ratios' | 'qualities' | 'backgrounds',
+    fallback: 'defaultResolution' | 'defaultRatio' | 'defaultQuality' | 'defaultBackground', value: string) => {
     const current = capability[field] ?? [];
     const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
     onChange({ ...capability, [field]: next.length ? next : undefined,
@@ -69,6 +75,7 @@ export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate
         ['resolutions', 'defaultResolution', '分辨率', ['720p', '1K', '2K', '4K'], customResolution, setCustomResolution],
         ['ratios', 'defaultRatio', '比例', ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', 'auto'], customRatio, setCustomRatio],
         ['qualities', 'defaultQuality', '质量', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], customQuality, setCustomQuality],
+        ['backgrounds', 'defaultBackground', '背景', ['auto', 'opaque', 'transparent'], customBackground, setCustomBackground],
       ] as const).map(([field, fallback, label, presets, custom, setCustom]) => (
         <div key={field} className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -76,7 +83,8 @@ export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate
             <label className="flex items-center gap-2 text-xs text-canvas-text-secondary">默认
               <Select fixedMenu size="sm" aria-label={`默认${label}`} value={capability[fallback] ?? ''}
                 onChange={(value) => onChange({ ...capability, [fallback]: value || undefined })}>
-                <option value="">{field === 'qualities' ? '接口默认（省略 quality）' : '模型默认（未声明）'}</option>
+                <option value="">{field === 'backgrounds' ? '接口默认（省略 background）'
+                  : field === 'qualities' ? '接口默认（省略 quality）' : '模型默认（未声明）'}</option>
                 {capability[field]?.map((value) => <option key={value} value={value}>{value}</option>)}
               </Select>
             </label>
@@ -85,7 +93,9 @@ export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate
             {[...new Set([...presets, ...(capability[field] ?? [])])].map((value) => (
               <button key={value} type="button" aria-pressed={capability[field]?.includes(value) ?? false}
                 className={`ui-btn ui-btn--sm ${capability[field]?.includes(value) ? 'is-active' : ''}`}
-                onClick={() => choose(field, fallback, value)}>{value === 'auto' ? field === 'qualities' ? 'auto（自动）' : '自适应' : value}</button>
+                onClick={() => choose(field, fallback, value)}>{field === 'backgrounds'
+                  ? BACKGROUND_LABELS[value] ?? value
+                  : value === 'auto' ? field === 'qualities' ? 'auto（自动）' : '自适应' : value}</button>
             ))}
             <input className="ui-input w-24" aria-label={`自定义${label}`} placeholder="自定义" value={custom}
               onChange={(event) => setCustom(event.target.value)} />
@@ -95,6 +105,7 @@ export default function ImageCapabilityEditor({ model, onChange, onApplyTemplate
               setCustom('');
             }}>+</button>
           </div>
+          {field === 'backgrounds' && <p className="text-xs text-canvas-text-muted">接口默认省略背景参数；auto 是单独的参数值。仅按当前渠道文档声明，透明背景须使用支持透明通道的输出格式。</p>}
         </div>
       ))}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

@@ -331,6 +331,13 @@ const nodes = {
   // ── QualityRatioSelector ──
   '画质': 'Quality',
   '生成质量': 'Generation quality',
+  '生成背景': 'Image background',
+  '接口默认': 'API default',
+  '透明': 'Transparent',
+  '不透明': 'Opaque',
+  '自动背景': 'Auto background',
+  '透明背景': 'Transparent background',
+  '不透明背景': 'Opaque background',
   '比例': 'Ratio',
   '自适应': 'Adaptive',
 

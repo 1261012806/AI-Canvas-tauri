@@ -11,6 +11,7 @@ export type ImageParameterKey =
   | 'prompt'
   | 'imageSize'
   | 'imageQuality'
+  | 'imageBackground'
   | 'aspectRatio'
   | 'batchCount'
   | 'referenceImageUrls';
@@ -28,6 +29,7 @@ export interface StandardImageRequestInput {
   count: number;
   size: string;
   imageQuality?: string;
+  imageBackground?: string;
   imageUrls?: string[];
   imageReferenceRequestMode?: ImageReferenceRequestMode;
 }
@@ -39,6 +41,7 @@ const DEFAULT_IMAGE_MAPPING: ImageParameterMapping = {
     prompt: 'prompt',
     imageSize: 'size',
     imageQuality: 'quality',
+    imageBackground: 'background',
     batchCount: 'n',
     referenceImageUrls: 'image_urls',
   },
@@ -52,7 +55,7 @@ const DEFAULT_IMAGE_MAPPING: ImageParameterMapping = {
 export const IMAGE_PARAMETER_MAPPINGS: readonly ImageParameterMapping[] = [
   {
     providerId: 'apimart',
-    fields: { model: 'model', prompt: 'prompt', imageSize: 'resolution', imageQuality: 'quality', aspectRatio: 'size', batchCount: 'n', referenceImageUrls: 'image_urls' },
+    fields: { model: 'model', prompt: 'prompt', imageSize: 'resolution', imageQuality: 'quality', imageBackground: 'background', aspectRatio: 'size', batchCount: 'n', referenceImageUrls: 'image_urls' },
   },
   {
     providerId: 'volcengine',
@@ -98,9 +101,12 @@ export function buildStandardImageRequestBody(input: StandardImageRequestInput):
     prompt: input.prompt,
     imageSize: input.size,
     imageQuality: input.imageQuality,
+    imageBackground: input.imageBackground,
     batchCount: input.count,
     referenceImageUrls: input.imageUrls,
   });
+  // 透明输出必须保留 Alpha；标准合同使用默认支持的 PNG。
+  if (input.imageBackground === 'transparent') body.output_format = 'png';
   if (input.imageUrls?.length) {
     delete body.image_urls;
     body[referenceField] = input.imageUrls;

@@ -266,15 +266,121 @@ describe('图片生成质量按渠道隔离', () => {
     const current = TOAPIS_MODEL_MANIFEST.find((model) => model.id === 'gpt-image-2.5-sunburst-vip')!;
     const previous = structuredClone(current.executionProfile!);
     (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    delete (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).background;
     const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
       providers: { savedToapis: { name: 'ToAPIs', apiKey: '', catalogId: 'toapis' } },
       generalModels: [{ id: 'saved', name: current.name, modelId: current.id, category: 'image',
         providerConfigId: 'savedToapis', executionProfile: previous,
-        imageCapability: { ...current.imageCapability, qualities: undefined, defaultQuality: undefined },
+        imageCapability: { ...current.imageCapability, qualities: undefined, defaultQuality: undefined,
+          backgrounds: undefined, defaultBackground: undefined },
       }],
     };
     expect(resolveImageParameterCapability('general/saved', 'general', config))
       .toMatchObject({ qualities: current.imageCapability!.qualities, defaultQuality: 'high' });
     expect((previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality).toBe('high');
+  });
+});
+
+describe('GPT Image 2.5 背景能力与请求', () => {
+  it.each([
+    ['apimart/gpt-image-2.5-flare', ['auto', 'opaque', 'transparent']],
+    ['apimart/gpt-image-2.5-sunburst', ['auto', 'opaque', 'transparent']],
+    ['grsai/gpt-image-2.5-flare', ['transparent']],
+    ['grsai/gpt-image-2.5-sunburst', ['transparent']],
+  ] as const)('%s 按精确渠道声明背景并保持接口缺省值', (model, backgrounds) => {
+    expect(getImageCapability(model)?.backgrounds).toEqual(backgrounds);
+    expect(getImageCapability(model)?.defaultBackground).toBeUndefined();
+  });
+
+  it.each(['gpt-image-2.5-flare', 'custom/gpt-image-2.5-flare', 'apimart/gpt-image-2.5-ext',
+    'apimart/gpt-image-2.5-flare-unknown', 'apimart/gpt-image-2-official', 'grsai/gpt-image-2.5'])(
+    '不向裸型号、未知别名或未确认型号 %s 泄漏背景能力', (model) => {
+      expect(getImageCapability(model)?.backgrounds).toBeUndefined();
+      expect(getImageCapability(model)?.defaultBackground).toBeUndefined();
+    },
+  );
+
+  it('APIMart 透明请求使用 PNG，默认、auto 和 opaque 不被改成透明', () => {
+    const request = (imageBackground?: string) => buildImageCapabilityRequest('apimart/gpt-image-2.5-sunburst', 'portrait', {
+      imageBackground, imageQuality: 'high', resolution: '2K', ratio: '9:16',
+    })!.body;
+    expect(request('TRANSPARENT')).toMatchObject({ background: 'transparent', output_format: 'png',
+      quality: 'high', resolution: '2k', size: '9:16' });
+    for (const value of [undefined, '']) {
+      expect(request(value)).not.toHaveProperty('background');
+      expect(request(value)).not.toHaveProperty('output_format');
+    }
+    for (const value of ['auto', 'opaque']) {
+      expect(request(value)).toMatchObject({ background: value });
+      expect(request(value)).not.toHaveProperty('output_format');
+    }
+    expect(() => request('solid')).toThrow('背景');
+    const unknown = buildImageCapabilityRequest('apimart/gpt-image-2', 'portrait', { imageBackground: 'transparent' })!.body;
+    expect(unknown).not.toHaveProperty('background');
+    expect(unknown).not.toHaveProperty('output_format');
+  });
+
+  it('内置 CCC 的旧固定背景协议不覆盖当前标准合同，未声明默认仍省略', () => {
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { ccc: { name: 'CCC', apiKey: '', catalogId: 'cccapi' } },
+      generalModels: [{ id: 'saved', name: 'Sunburst', category: 'image', modelId: 'gpt-image-2.5-sunburst', providerConfigId: 'ccc',
+        imageCapability: { backgrounds: ['opaque'], defaultBackground: 'opaque' },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/old/images', body: { background: 'opaque' } },
+          response: { type: 'json', result: { urlPath: 'url' } },
+        } },
+      }],
+    };
+    const capability = resolveImageParameterCapability('general/saved', 'general', config);
+    expect(capability?.backgrounds).toEqual(['auto', 'opaque', 'transparent']);
+    expect(capability?.defaultBackground).toBeUndefined();
+  });
+
+  it('自定义协议动态背景仅保留显式能力，固定背景只读单值，无映射时不展示', () => {
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { custom: { name: 'Custom', apiKey: '', catalogId: 'custom-openai' } },
+      generalModels: [{ id: 'saved', name: 'Custom GPT', category: 'image', modelId: 'gpt-image-2.5-flare', providerConfigId: 'custom',
+        imageCapability: { backgrounds: ['opaque', 'transparent'], defaultBackground: 'transparent' },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/images', body: { background: '{{imageBackground}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } },
+        } },
+      }],
+    };
+    const resolve = () => resolveImageParameterCapability('general/saved', 'general', config);
+    expect(resolve()).toMatchObject({ backgrounds: ['opaque', 'transparent'], defaultBackground: 'transparent' });
+    config.generalModels![0].executionProfile!.protocol!.submit.body = { background: 'opaque' };
+    expect(resolve()).toMatchObject({ backgrounds: ['opaque'], defaultBackground: 'opaque' });
+    config.generalModels![0].executionProfile!.protocol!.submit.body = { prompt: '{{prompt}}' };
+    expect(resolve()?.backgrounds).toBeUndefined();
+    expect(resolve()?.defaultBackground).toBeUndefined();
+    config.generalModels![0].providerConfigId = 'apimart';
+    config.providers.apimart = { name: 'APIMart', apiKey: '' };
+    expect(resolve()?.backgrounds).toBeUndefined();
+  });
+
+  it.each(['custom-openai', 'toapis'])('%s 动态单选默认背景仍可省略，固定标记仅由实际协议派生', (catalogId) => {
+    const declaration = { backgrounds: ['transparent'], defaultBackground: 'transparent', backgroundIsFixed: true };
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { saved: { name: 'Saved', apiKey: '', catalogId } },
+      generalModels: [{ id: 'image', name: 'GPT', category: 'image', modelId: 'gpt-image-2.5-sunburst-vip', providerConfigId: 'saved',
+        imageCapability: declaration,
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/custom/images', body: { background: '{{imageBackground}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } },
+        } },
+      }],
+    };
+    const resolve = () => resolveImageParameterCapability('general/image', 'general', config);
+    expect(resolve()).toMatchObject({ backgrounds: ['transparent'], defaultBackground: 'transparent' });
+    expect(resolve()?.backgroundIsFixed).not.toBe(true);
+    config.generalModels![0].executionProfile!.protocol!.submit.body = { background: 'transparent' };
+    expect(resolve()).toMatchObject({ backgrounds: ['transparent'], defaultBackground: 'transparent', backgroundIsFixed: true });
+    config.generalModels![0].executionProfile!.protocol!.submit.body = { prompt: '{{prompt}}' };
+    expect(resolve()?.backgroundIsFixed).not.toBe(true);
+    expect(resolve()?.backgrounds).toBeUndefined();
+    config.generalModels![0].executionProfile = { preset: 'openai-gpt-image' };
+    expect(resolve()?.backgroundIsFixed).not.toBe(true);
+    expect(declaration.backgroundIsFixed).toBe(true);
   });
 });

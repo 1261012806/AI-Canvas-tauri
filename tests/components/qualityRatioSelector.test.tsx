@@ -26,6 +26,10 @@ function summary(tree: ElementLike[]) {
 function qualityOptions(tree: ElementLike[]) {
   return tree.find((element) => element.props['data-ui-schema-field'] === 'imageQuality');
 }
+function backgroundOptions(tree: ElementLike[]) {
+  return elements(tree.find((element) => element.props['data-ui-schema-field'] === 'imageBackground'))
+    .filter((element) => 'data-ui-schema-value' in element.props);
+}
 beforeEach(() => { driver.open = false; });
 
 describe('image resolution and quality selector', () => {
@@ -85,5 +89,67 @@ describe('image resolution and quality selector', () => {
     expect(summary(tree)['aria-label']).toBe('16:9 · 2K · high');
     const options = elements(qualityOptions(tree)).filter((element) => 'data-ui-schema-value' in element.props);
     expect(options.filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['high']);
+  });
+
+  it('hides undeclared backgrounds and defaults declared backgrounds to an omitted API field', () => {
+    driver.open = true;
+    expect(backgroundOptions(render({ imageBackground: 'transparent' }))).toEqual([]);
+    const tree = render({ imageBackgrounds: ['auto', 'opaque', 'transparent'] });
+    const options = backgroundOptions(tree);
+    expect(options.map((element) => element.props['data-ui-schema-value'])).toEqual(['', 'auto', 'opaque', 'transparent']);
+    expect(options.map((element) => element.props.children)).toEqual(['接口默认', '自动', '不透明', '透明']);
+    expect(options.filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['接口默认']);
+    expect(summary(tree)['aria-label']).toBe('16:9 · 2K');
+  });
+
+  it('only offers declared transparent support and changes background independently', () => {
+    driver.open = true;
+    const onChangeImageBackground = vi.fn();
+    const onChangeImageQuality = vi.fn();
+    const onChangeAspectRatio = vi.fn();
+    const tree = render({ imageBackgrounds: ['transparent'], imageQuality: 'high', imageQualities: ['high'],
+      onChangeImageBackground, onChangeImageQuality, onChangeAspectRatio });
+    const options = backgroundOptions(tree);
+    expect(options.map((element) => element.props['data-ui-schema-value'])).toEqual(['', 'transparent']);
+    (options[1].props.onClick as () => void)();
+    expect(onChangeImageBackground).toHaveBeenCalledWith('transparent');
+    expect(onChangeImageQuality).not.toHaveBeenCalled();
+    expect(onChangeAspectRatio).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit API default instead of displaying a configurable background default', () => {
+    driver.open = true;
+    const onChangeImageBackground = vi.fn();
+    const props = { imageBackgrounds: ['auto', 'transparent'], defaultImageBackground: 'transparent', onChangeImageBackground };
+    const inherited = render(props);
+    expect(backgroundOptions(inherited).filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['透明']);
+    (backgroundOptions(inherited)[0].props.onClick as () => void)();
+    expect(onChangeImageBackground).toHaveBeenCalledWith('');
+    const omitted = render({ ...props, imageBackground: '' });
+    expect(backgroundOptions(omitted).filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['接口默认']);
+    expect(summary(omitted)['aria-label']).toBe('16:9 · 2K');
+  });
+
+  it('does not offer cancellation for a fixed background contract and displays canonical values', () => {
+    driver.open = true;
+    const fixed = render({ imageBackgrounds: ['transparent'], defaultImageBackground: 'transparent', imageBackgroundIsFixed: true, imageBackground: '' });
+    expect(backgroundOptions(fixed).map((element) => element.props['data-ui-schema-value'])).toEqual(['transparent']);
+    expect(backgroundOptions(fixed)[0].props['aria-pressed']).toBe(true);
+    const saved = render({ imageBackgrounds: ['auto', 'transparent'], imageBackground: 'TRANSPARENT' });
+    expect(summary(saved).title).toBe('16:9 · 2K · 透明背景');
+    expect(backgroundOptions(saved).filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['透明']);
+  });
+
+  it('still offers API default for a dynamic single-choice background with a configured default', () => {
+    driver.open = true;
+    const onChangeImageBackground = vi.fn();
+    const props = { imageBackgrounds: ['transparent'], defaultImageBackground: 'transparent', onChangeImageBackground };
+    const inherited = render(props);
+    expect(backgroundOptions(inherited).map((element) => element.props['data-ui-schema-value'])).toEqual(['', 'transparent']);
+    (backgroundOptions(inherited)[0].props.onClick as () => void)();
+    expect(onChangeImageBackground).toHaveBeenCalledWith('');
+    const omitted = render({ ...props, imageBackground: '' });
+    expect(backgroundOptions(omitted).filter((element) => element.props['aria-pressed']).map((element) => element.props.children)).toEqual(['接口默认']);
+    expect(summary(omitted)['aria-label']).toBe('16:9 · 2K');
   });
 });

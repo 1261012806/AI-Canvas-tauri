@@ -208,7 +208,8 @@ const CCCAPI_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     provider: 'cccapi',
     description: '速度优先的轻量图片模型，支持文生图与图片编辑',
     imageReferenceRequestMode: 'edits-multipart',
-    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
+    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+      backgrounds: ['auto', 'opaque', 'transparent'] },
   },
   {
     id: 'gpt-image-2.5-sunburst',
@@ -217,7 +218,8 @@ const CCCAPI_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     provider: 'cccapi',
     description: '质量优先的高画质图片模型，支持文生图与图片编辑',
     imageReferenceRequestMode: 'edits-multipart',
-    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
+    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+      backgrounds: ['auto', 'opaque', 'transparent'] },
   },
   {
     id: 'gpt-image-2',
@@ -637,6 +639,9 @@ function parseImageCapability(record: Record<string, unknown>, category: General
     qualities: readStringArray(declared.qualities),
     defaultQuality: typeof (declared.defaultQuality ?? declared.default_quality) === 'string'
       ? String(declared.defaultQuality ?? declared.default_quality) : undefined,
+    backgrounds: readStringArray(declared.backgrounds),
+    defaultBackground: typeof (declared.defaultBackground ?? declared.default_background) === 'string'
+      ? String(declared.defaultBackground ?? declared.default_background) : undefined,
     ratios: readStringArray(declared.ratios ?? declared.aspect_ratios ?? declared.aspectRatios),
     defaultRatio: typeof (declared.defaultRatio ?? declared.default_aspect_ratio) === 'string'
       ? String(declared.defaultRatio ?? declared.default_aspect_ratio) : undefined,

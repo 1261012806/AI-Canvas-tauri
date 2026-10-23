@@ -29,6 +29,11 @@ describe('protocol variable table', () => {
     expect(resolveProtocolFieldTemplate('quality', 'high', 'video')).toBeUndefined();
     expect(getCategoryProtocolVariables('image')).toContain('imageQuality');
     expect(getCategoryProtocolVariables('video')).not.toContain('imageQuality');
+    expect(resolveProtocolFieldTemplate('background', 'transparent', 'image')).toBe('{{imageBackground}}');
+    expect(resolveProtocolFieldTemplate('imagebackground', 'auto', 'image')).toBe('{{imageBackground}}');
+    expect(resolveProtocolFieldTemplate('background', 'transparent', 'video')).toBeUndefined();
+    expect(getCategoryProtocolVariables('image')).toContain('imageBackground');
+    expect(getCategoryProtocolVariables('video')).not.toContain('imageBackground');
     expect(resolveProtocolFieldTemplate('resolution', '720p', 'video')).toBe('{{seedanceResolution}}');
     // 类别限定优先于取值限定
     expect(resolveProtocolFieldTemplate('firstframeimage', 'https://a/1.png', 'video')).toBe('{{firstImage}}');

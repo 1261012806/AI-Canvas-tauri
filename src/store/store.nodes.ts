@@ -340,7 +340,7 @@ function insertNodeInGroup(state: Pick<AppState, 'nodes' | 'groups'>, node: Node
 
 const MEDIA_PARAMETER_PREF_KEY = 'canvas-media-parameter-prefs';
 const MEDIA_PARAMETER_TYPES = {
-  'ai-image': { imageSize: 'string', imageQuality: 'string', aspectRatio: 'string' },
+  'ai-image': { imageSize: 'string', imageQuality: 'string', imageBackground: 'string', aspectRatio: 'string' },
   'ai-video': {
     videoResolution: 'number', videoFps: 'number', videoFrames: 'number',
     seedanceResolution: 'string', seedanceRatio: 'string', seedanceDuration: 'number',

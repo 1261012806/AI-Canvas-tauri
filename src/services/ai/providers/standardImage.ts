@@ -29,6 +29,7 @@ export interface StandardImageParams {
   prompt: string;
   dimensions: { width: number; height: number };
   imageQuality?: string;
+  imageBackground?: string;
   imageUrls?: string[];
   imageReferenceRequestMode?: ImageReferenceRequestMode;
   /** 仅已确认的 CCC 连接允许按其 Tasks API 解释异步响应。 */
@@ -80,7 +81,7 @@ async function loadReferenceImage(
 }
 
 async function buildImageEditsBody(
-  params: Pick<StandardImageParams, 'modelName' | 'prompt' | 'imageUrls' | 'imageQuality'>,
+  params: Pick<StandardImageParams, 'modelName' | 'prompt' | 'imageUrls' | 'imageQuality' | 'imageBackground'>,
   count: number,
   size: string,
   signal?: AbortSignal,
@@ -92,6 +93,8 @@ async function buildImageEditsBody(
   formData.append('n', String(count));
   formData.append('size', size);
   if (params.imageQuality) formData.append('quality', params.imageQuality);
+  if (params.imageBackground) formData.append('background', params.imageBackground);
+  if (params.imageBackground === 'transparent') formData.append('output_format', 'png');
   // 大参考图逐张解码，避免多张 4K PNG 同时占用解码与画布内存。
   for (const [index, url] of imageUrls.entries()) {
     signal?.throwIfAborted();
@@ -154,6 +157,7 @@ async function requestStandardImages(
     count,
     size: sizeStr,
     imageQuality: params.imageQuality,
+    imageBackground: params.imageBackground,
     imageUrls,
     imageReferenceRequestMode: params.imageReferenceRequestMode,
   });

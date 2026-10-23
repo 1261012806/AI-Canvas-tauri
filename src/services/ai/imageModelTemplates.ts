@@ -82,6 +82,8 @@ function gptCapability(variant: ImageVariant, transport: ImageTransport): ImageM
     maxImageReferences: transport === 'images-json' ? 8 : 16,
     supportsDataUrlReference: !(apimart && variant === 'gpt-2.5'),
     ...(qualities ? { qualities, defaultQuality: 'auto' } : {}),
+    ...(variant === 'gpt-2.5' && (transport === 'openai' || apimart)
+      ? { backgrounds: ['auto', 'opaque', 'transparent'] } : {}),
     ...(!apimart ? { dimensionPresets: structuredClone(GPT_DIMENSIONS) } : {}),
   };
 }
@@ -151,7 +153,8 @@ export function createImageQuickAdaptTemplate(templateId: string): Pick<Provider
   } else if (option.transport === 'apimart') {
     const protocol = structuredClone(APIMART_PROTOCOL);
     if (option.family === 'gpt' && option.variant === 'gpt-2.5') {
-      protocol.submit.body = { ...(protocol.submit.body as Record<string, ProtocolJsonValue>), quality: '{{imageQuality}}' };
+      protocol.submit.body = { ...(protocol.submit.body as Record<string, ProtocolJsonValue>),
+        quality: '{{imageQuality}}', background: '{{imageBackground}}' };
     }
     executionProfile = { preset: 'custom', protocol };
     imageReferenceRequestMode = 'generation-json-image-urls';

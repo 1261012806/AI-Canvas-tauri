@@ -10,6 +10,24 @@ function contractFor(model: string, size = '2K', ratio = '16:9') {
 }
 
 describe('built-in image request contracts', () => {
+  it.each(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'])(
+    'maps only documented transparent background for GRSAI %s', (model) => {
+      const definition = getProviderDefinition('grsai');
+      const transparent = resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', 'high', 'transparent');
+      expect(transparent?.kind === 'protocol' && transparent.protocol.submit.body).toMatchObject({
+        background: 'transparent', quality: 'high', aspectRatio: '2048x1152',
+      });
+      expect(transparent?.kind === 'protocol' && transparent.protocol.submit.body).not.toHaveProperty('output_format');
+      expect(contractFor(model).protocol.submit.body).not.toHaveProperty('background');
+      expect(() => resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', 'high', 'opaque'))
+        .toThrow('不支持背景');
+    },
+  );
+  it('does not infer background support from a GRSAI GPT 2.5 family name', () => {
+    const contract = resolveBuiltInImageRequestContract(getProviderDefinition('grsai'), 'gpt-image-2.5',
+      '1K', '16:9', undefined, 'transparent');
+    expect(contract?.kind === 'protocol' && contract.protocol.submit.body).not.toHaveProperty('background');
+  });
   it.each([
     ['gpt-image-2.5-flare', 'high'], ['gpt-image-2.5-sunburst', 'max'],
   ])('uses the selected GRSAI quality without changing pixels (%s)', (model, quality) => {

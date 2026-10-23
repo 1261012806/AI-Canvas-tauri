@@ -1492,6 +1492,38 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
   color: var(--node-panorama-light);
 }
 
+/* 品牌色填充分段：图片分辨率、生成质量和背景共用；选项多时自动换行。 */
+.ui-segmented--brand {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 3px;
+  background: var(--theme-bg);
+  border: 1px solid var(--theme-card);
+}
+.ui-segmented--brand > .ui-segmented__item {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 12px;
+  font-size: var(--ui-font);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  transition: var(--transition-colors), transform var(--transition-base), box-shadow var(--transition-base);
+}
+.ui-segmented--brand > .ui-segmented__item.is-active {
+  color: var(--brand-contrast);
+  background: var(--brand);
+  box-shadow: 0 2px 8px var(--brand-alpha-30);
+}
+.ui-segmented--brand > .ui-segmented__item:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.ui-segmented--brand > .ui-segmented__item:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 /* 弹窗面板：配合 glass-panel 的独立背景层，设置与业务弹窗共用同一底色。 */
 .ui-dialog-surface {
   --canvas-panel-bg: var(--dialog-surface-bg);
@@ -2386,6 +2418,7 @@ select:not(.ui-select__control):not(.ui-select__native):disabled {
   .ui-close-btn:hover:not(:disabled),
   .ui-close-btn:active:not(:disabled) { transform: none; }
   .ui-card--interactive:hover { transform: none; }
+  .ui-segmented--brand > .ui-segmented__item:active:not(:disabled) { transform: none; }
   .ui-expandable-search__field { clip-path: none; transform: none; }
   .ui-slider::-webkit-slider-thumb:hover { transform: none; }
   .ui-skeleton,

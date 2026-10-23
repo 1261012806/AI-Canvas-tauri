@@ -47,7 +47,7 @@ import {
   resolveAnimationSheetAspectRatio,
 } from '../../services/ai/animationPrompt';
 import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
-import { resolveConfiguredImageQuality } from '../../services/ai/modelCapabilityValidation';
+import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from '../../services/ai/modelCapabilityValidation';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
 import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, getPendingTasksForProject, isComfyNodeDeliveryActive, isMediaTaskPausedError, pauseComfyNodeDelivery, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, resumeComfyUINodeTask, resumeRunningHubNodeTask, subscribeComfyDeliveries, updatePendingTask, removePendingTask } from '../../services/pollManager';
@@ -443,9 +443,10 @@ function AINodeDialog() {
       mediaDelivered = true;
     };
     try {
-      const imageQuality = nodeType === 'ai-image' && !latestData.workflowId
-        ? resolveConfiguredImageQuality(resolveImageParameterCapability(nodeModel, nodeProvider, store.config), latestData.imageQuality)
-        : undefined;
+      const imageCapability = nodeType === 'ai-image' && !latestData.workflowId
+        ? resolveImageParameterCapability(nodeModel, nodeProvider, store.config) : undefined;
+      const imageQuality = resolveConfiguredImageQuality(imageCapability, latestData.imageQuality);
+      const imageBackground = resolveConfiguredImageBackground(imageCapability, latestData.imageBackground);
       const batchCount = cloudWorkflow ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(Number(latestData.batchCount) || 1)));
       if (nodeType === 'ai-image' && batchCount > 1) {
         if (postProcess) throw new Error(t('批量生成暂不支持图片后处理，请将数量设为 1'));
@@ -465,6 +466,7 @@ function AINodeDialog() {
           provider: nodeProvider,
           imageSize,
           imageQuality,
+          imageBackground: latestData.imageBackground === '' ? '' : imageBackground,
           aspectRatio,
           workflowId: latestData.workflowId,
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
@@ -483,6 +485,7 @@ function AINodeDialog() {
           prompt: effectivePrompt,
           imageSize,
           imageQuality,
+          imageBackground,
           aspectRatio,
         });
         return;
@@ -505,6 +508,7 @@ function AINodeDialog() {
           provider: nodeProvider,
           imageSize,
           imageQuality,
+          imageBackground: latestData.imageBackground === '' ? '' : imageBackground,
           aspectRatio,
           workflowId: latestData.workflowId,
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
@@ -550,7 +554,7 @@ function AINodeDialog() {
           filePath: persisted.filePath,
           params: isAnimation
             ? { imageSize, aspectRatio, animationAction, animationFrames, grid: ANIMATION_FRAME_GRIDS[animationFrames], animationProcessing: spriteProcessing, animationPromptVersion: 1 }
-            : { imageSize, imageQuality, aspectRatio, cameraSettings: latestData.cameraSettings },
+            : { imageSize, imageQuality, imageBackground, aspectRatio, cameraSettings: latestData.cameraSettings },
         });
         if (postProcess === 'character-8-direction-grid') {
           if (!persisted.filePath) {
@@ -871,6 +875,7 @@ function AINodeDialog() {
         ...(nodeType === 'ai-image' && modelChanged ? {
           imageSize: imageCapability?.defaultResolution || '2K',
           imageQuality: imageCapability?.defaultQuality,
+          imageBackground: imageCapability?.defaultBackground,
         } : {}),
         ...(nodeType === 'ai-video' && modelChanged ? {
           videoResolution: undefined,
@@ -897,7 +902,7 @@ function AINodeDialog() {
         ...(previousWorkflowId !== workflowId ? { comfyRefmods: undefined } : {}),
         workflowInputs: undefined, runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined,
         workflowApiOutputs: undefined, workflowApiStage: undefined,
-        ...(nodeType === 'ai-image' ? { imageQuality: undefined } : {}),
+        ...(nodeType === 'ai-image' ? { imageQuality: undefined, imageBackground: undefined } : {}),
         ...(workflow ? { ...workflowExecution(workflow, previousWorkflowId), batchCount: 1, audioPurpose: undefined } : {}),
       });
     },
@@ -918,7 +923,7 @@ function AINodeDialog() {
       runninghubStage: undefined,
       workflowApiOutputs: undefined,
       workflowApiStage: undefined,
-      ...(nodeType === 'ai-image' ? { imageQuality: undefined } : {}),
+      ...(nodeType === 'ai-image' ? { imageQuality: undefined, imageBackground: undefined } : {}),
       ...(nodeType === 'ai-director' ? { directorPrevisModel: '', directorPrevisProvider: undefined } : {}),
     });
   }, [activeNodeId, nodeType, updateNodeData]);
@@ -930,6 +935,11 @@ function AINodeDialog() {
 
   const onChangeImageQuality = useCallback(
     (value: string | undefined) => updateNodeData(activeNodeId!, { imageQuality: value }),
+    [activeNodeId, updateNodeData]
+  );
+
+  const onChangeImageBackground = useCallback(
+    (value: string | undefined) => updateNodeData(activeNodeId!, { imageBackground: value }),
     [activeNodeId, updateNodeData]
   );
 
@@ -1257,9 +1267,11 @@ function AINodeDialog() {
             onPassThrough={supportsPassThrough ? onPassThrough : undefined}
             imageSize={(data.imageSize as string) || '2K'}
             imageQuality={data.imageQuality}
+            imageBackground={data.imageBackground}
             aspectRatio={(data.aspectRatio as string) || (nodeType === 'ai-panorama' ? '2:1' : '1:1')}
             onChangeImageSize={onChangeImageSize}
             onChangeImageQuality={onChangeImageQuality}
+            onChangeImageBackground={onChangeImageBackground}
             onChangeAspectRatio={onChangeAspectRatio}
             batchCount={(data.batchCount as number) || 1}
             onChangeBatchCount={onChangeBatchCount}

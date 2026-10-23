@@ -95,15 +95,15 @@ const IMAGE_MODELS: ProviderModelSelection[] = [
   }, { resolution: '{{imageSize}}', quality: '{{imageQuality}}' }),
   // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5/generation
   ...images(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'], {
-    ...K_RESOLUTIONS, ratios: BANANA_RATIOS, qualities: ['high'], defaultQuality: 'high',
-  }, { resolution: '{{imageSize}}', quality: 'high', reference_images: '{{imageUrls}}', image_urls: undefined }),
+    ...K_RESOLUTIONS, ratios: BANANA_RATIOS, qualities: ['high'], defaultQuality: 'high', backgrounds: ['transparent'],
+  }, { resolution: '{{imageSize}}', quality: 'high', background: '{{imageBackground}}', reference_images: '{{imageUrls}}', image_urls: undefined }),
   // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-vip/generation
   // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-official/generation
   ...images(['gpt-image-2.5-flare-vip', 'gpt-image-2.5-sunburst-vip',
     'gpt-image-2.5-flare-official', 'gpt-image-2.5-sunburst-official'], {
     ...K_RESOLUTIONS, ratios: BANANA_RATIOS, dimensionPresets: GPT_PIXEL_SIZES,
-    qualities: GPT_25_QUALITIES, defaultQuality: 'high',
-  }, { size: '{{size}}', quality: '{{imageQuality}}' }),
+    qualities: GPT_25_QUALITIES, defaultQuality: 'high', backgrounds: ['transparent'],
+  }, { size: '{{size}}', quality: '{{imageQuality}}', background: '{{imageBackground}}' }),
   ...images(['gemini-nano-banana-2.1', 'gemini-nano-banana-2.1-vip', 'gemini-nano-banana-2.1-official'], {
     ...K_RESOLUTIONS, ratios: BANANA_WIDE_RATIOS, maxImageReferences: 14,
   }, METADATA_RESOLUTION),
@@ -371,34 +371,48 @@ export function resolveToapisImageModelContract(
   let knownContract = executionProfile === undefined;
   if (executionProfile?.preset === 'custom' && profile?.protocol) {
     const saved = comparableProtocol(executionProfile.protocol);
-    knownContract = saved !== undefined && saved === comparableProtocol(profile.protocol);
-    if (!knownContract && current.imageCapability?.qualities) {
+    const candidates = [profile.protocol];
+    // 上版质量动态合同和更早的固定质量合同都没有 background；只接受完整匹配。
+    if (current.imageCapability?.backgrounds) {
       const previous = structuredClone(profile.protocol);
+      delete (previous.submit.body as Body).background;
+      candidates.push(previous);
+    }
+    if (current.imageCapability?.qualities) {
+      const previous = structuredClone(candidates[candidates.length - 1]);
       const body = previous.submit.body as Body;
       // 此版本之前只有 GPT 2.5 固定 high，GPT 2 VIP / official 没有质量字段。
       if (modelId.startsWith('gpt-image-2.5-')) body.quality = 'high';
       else delete body.quality;
-      knownContract = saved !== undefined && saved === comparableProtocol(previous);
+      candidates.push(previous);
     }
+    knownContract = saved !== undefined && candidates.some((candidate) => saved === comparableProtocol(candidate));
   }
   if (knownContract) {
     return {
       executionProfile: structuredClone(profile),
       imageCapability: { ...current.imageCapability, ...imageCapability,
         qualities: current.imageCapability?.qualities ? [...current.imageCapability.qualities] : undefined,
-        defaultQuality: current.imageCapability?.defaultQuality },
+        defaultQuality: current.imageCapability?.defaultQuality,
+        backgrounds: current.imageCapability?.backgrounds ? [...current.imageCapability.backgrounds] : undefined,
+        defaultBackground: current.imageCapability?.defaultBackground },
     };
   }
-  // 自定义动态质量必须由用户显式声明能力；固定质量只能显示该固定值。
+  // 自定义动态参数必须由用户显式声明能力；固定值只能显示该固定值。
   if (executionProfile?.preset === 'custom') {
     const body = executionProfile.protocol?.submit.body;
-    const source = JSON.stringify(executionProfile.protocol?.submit);
-    if (!/{{\s*imageQuality\s*}}/.test(source ?? '')) {
-      const fixed = body && typeof body === 'object' && !Array.isArray(body) ? body.quality : undefined;
-      return { executionProfile, imageCapability: { ...imageCapability,
-        qualities: typeof fixed === 'string' && fixed && !fixed.includes('{{') ? [fixed] : undefined,
-        defaultQuality: typeof fixed === 'string' && fixed && !fixed.includes('{{') ? fixed : undefined } };
+    const source = JSON.stringify(executionProfile.protocol?.submit) ?? '';
+    let effective = imageCapability;
+    for (const [variable, field, options, fallback] of [
+      ['imageQuality', 'quality', 'qualities', 'defaultQuality'],
+      ['imageBackground', 'background', 'backgrounds', 'defaultBackground'],
+    ] as const) {
+      if (new RegExp(`{{\\s*${variable}\\s*}}`).test(source)) continue;
+      const value = body && typeof body === 'object' && !Array.isArray(body) ? body[field] : undefined;
+      const fixed = typeof value === 'string' && value && !value.includes('{{') ? value : undefined;
+      if (effective || fixed) effective = { ...effective, [options]: fixed ? [fixed] : undefined, [fallback]: fixed };
     }
+    return { executionProfile, imageCapability: effective };
   }
   return { executionProfile, imageCapability };
 }

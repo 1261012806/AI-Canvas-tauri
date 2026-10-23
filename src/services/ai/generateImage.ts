@@ -33,7 +33,7 @@ import { generateVolcengineImagesBatch } from './providers/volcengineImage';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
 import { executeModelProtocol, modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
-import { assertConfiguredImageReferences, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageQuality } from './modelCapabilityValidation';
+import { assertConfiguredImageReferences, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
 import { getProviderDefinition } from './providerCatalogService';
 import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from './imageRequestContracts';
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
@@ -152,23 +152,26 @@ export async function generateImagesBatch(
     ? resolveToapisImageModelContract(modelName, generalModel?.executionProfile, generalModel?.imageCapability)
     : undefined;
   const effectiveProfile = toapisContract?.executionProfile ?? generalModel?.executionProfile;
-  const imageQuality = params.workflowId ? undefined
-    : resolveConfiguredImageQuality(resolveImageParameterCapability(model, provider, config), params.imageQuality);
+  const parameterCapability = params.workflowId ? undefined : resolveImageParameterCapability(model, provider, config);
+  const imageQuality = resolveConfiguredImageQuality(parameterCapability, params.imageQuality);
+  const imageBackground = resolveConfiguredImageBackground(parameterCapability, params.imageBackground);
   if (!params.workflowId && provider === 'dreamina' && params.aspectRatio !== undefined
     && !DREAMINA_IMAGE_RATIOS.some((ratio) => ratio === params.aspectRatio)) {
     throw new Error(`即梦图片模型不支持比例 ${params.aspectRatio}，可选：${DREAMINA_IMAGE_RATIOS.join('、')}`);
   }
   // 已确认的内置合同优先，未知模型、自定义连接与工作流保持自己的协议。
   const builtInContract = params.workflowId ? undefined
-    : resolveBuiltInImageRequestContract(providerDefinition, modelName, imageSize, aspectRatio, imageQuality);
+    : resolveBuiltInImageRequestContract(providerDefinition, modelName, imageSize, aspectRatio, imageQuality, imageBackground);
   const configuredCapability = !params.workflowId && !builtInContract
     ? toapisContract?.imageCapability ?? generalModel?.imageCapability : undefined;
-  if (configuredCapability && generalModel) {
+  if (!builtInContract && generalModel) {
     assertModelCapabilityProtocol({ id: generalModel.modelId, name: generalModel.name, category: 'image',
       provider: connectionId, executionProfile: effectiveProfile,
       imageReferenceRequestMode: generalModel.imageReferenceRequestMode, imageCapability: configuredCapability });
+  }
+  if (configuredCapability && generalModel) {
     ({ imageSize, aspectRatio } = resolveConfiguredImageParameters(configuredCapability,
-      { imageSize: params.imageSize, aspectRatio: params.aspectRatio, imageQuality, count: requestedCount }));
+      { imageSize: params.imageSize, aspectRatio: params.aspectRatio, imageQuality, imageBackground, count: requestedCount }));
   }
   const executionProfile = builtInContract ? undefined : effectiveProfile;
   const usesStandardImageRequest = !executionProfile
@@ -313,7 +316,7 @@ export async function generateImagesBatch(
       try {
         const result = await executeModelProtocol({
           apiKey, baseUrl, protocol: builtInContract.protocol,
-          variables: { model: modelName, prompt, imageQuality, imageUrls: allImageUrls },
+          variables: { model: modelName, prompt, imageQuality, imageBackground, imageUrls: allImageUrls },
           validateResponse: validateBuiltInImageResponse,
           signal,
         });
@@ -332,7 +335,7 @@ export async function generateImagesBatch(
   const registeredAdapter = mediaProviderRegistry.getImageAdapter(provider);
   if (registeredAdapter) {
     return registeredAdapter.generateImage({
-      params: { ...params, imageSize, aspectRatio, imageQuality },
+      params: { ...params, imageSize, aspectRatio, imageQuality, imageBackground },
       prompt,
       imageUrls: allImageUrls,
       referenceMedia,
@@ -366,6 +369,7 @@ export async function generateImagesBatch(
             prompt,
             imageSize,
             imageQuality,
+            imageBackground,
             aspectRatio,
             size: `${dimensions.width}x${dimensions.height}`,
             width: dimensions.width,
@@ -394,6 +398,7 @@ export async function generateImagesBatch(
         prompt,
         dimensions,
         imageQuality,
+        imageBackground,
         imageUrls: allImageUrls,
         imageReferenceRequestMode,
         ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,
@@ -440,6 +445,7 @@ export async function generateImagesBatch(
         prompt,
         dimensions,
         imageQuality,
+        imageBackground,
         imageUrls: allImageUrls,
         imageReferenceRequestMode,
         ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,

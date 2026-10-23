@@ -254,6 +254,7 @@ export const apimartMediaProviderAdapter: MediaProviderAdapter = {
       params.nodeId,
       signal,
       params.imageQuality,
+      params.imageBackground,
     );
   },
 

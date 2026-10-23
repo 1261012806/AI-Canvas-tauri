@@ -233,7 +233,8 @@ describe('APIMart image polling', () => {
       vi.stubGlobal('fetch', fetchMock);
 
       const batch = await apimartMediaProviderAdapter.generateImage?.({
-        params: { model: option.value, provider: option.provider, prompt: '保留商品并替换背景', imageSize: '4K', aspectRatio: '16:9' },
+        params: { model: option.value, provider: option.provider, prompt: '保留商品并替换背景',
+          imageSize: '4K', aspectRatio: '16:9', imageBackground: 'transparent' },
         prompt: '保留商品并替换背景', imageUrls, requestedCount: 4,
       });
 
@@ -241,6 +242,7 @@ describe('APIMart image polling', () => {
       expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.com/images/generations');
       expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
         model, prompt: '保留商品并替换背景', resolution: '4k', size: '16:9', n: 4, image_urls: imageUrls,
+        quality: 'auto', background: 'transparent', output_format: 'png',
       });
       expect(fetchMock.mock.calls[1][0]).toBe('https://api.example.com/tasks/gpt-25-task?language=zh');
       expect(batch).toEqual({

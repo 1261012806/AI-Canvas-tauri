@@ -1256,7 +1256,7 @@ describe('critical canvas node interactions', () => {
       vi.doMock('../../src/services/ai/mediaModelCapabilities', async () => ({
         ...await vi.importActual<typeof import('../../src/services/ai/mediaModelCapabilities')>('../../src/services/ai/mediaModelCapabilities'),
         resolveImageParameterCapability: () => ({ resolutions: ['1K'], defaultResolution: '1K', ratios: ['3:4', '9:16', '1:1'], defaultRatio: '3:4',
-          qualities: ['low', 'high'], defaultQuality: 'high' }),
+          qualities: ['low', 'high'], defaultQuality: 'high', backgrounds: ['auto', 'opaque', 'transparent'] }),
       }));
       vi.doMock('../../src/services/projectSettingsService', async () => ({
         ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
@@ -1283,6 +1283,7 @@ describe('critical canvas node interactions', () => {
         imageUrl: 'asset://original.png', filePath: 'original.png', assetId: 'original-asset', dramaAssetId: 'character-1',
       });
       (panel.props.onChangeImageQuality as (quality: string) => void)('low');
+      (panel.props.onChangeImageBackground as (background: string) => void)('transparent');
       if (entry === 'dialog') await (panel.props.onSubmit as () => Promise<void>)();
       else {
         const { executeGeneration } = await import('../../src/services/generationService');
@@ -1293,14 +1294,14 @@ describe('critical canvas node interactions', () => {
       }));
       expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
         nodeId: 'imported-image', model: 'general/image-model', provider: 'general',
-        prompt: 'ai-image:@{reference:参考图} 重绘', imageSize: '1K', aspectRatio: aspectRatio ?? '1:1', imageQuality: 'low',
+        prompt: 'ai-image:@{reference:参考图} 重绘', imageSize: '1K', aspectRatio: aspectRatio ?? '1:1', imageQuality: 'low', imageBackground: 'transparent',
       }));
       expect(generateText).not.toHaveBeenCalled();
       expect(store.nodes[0]).toMatchObject({ id: 'imported-image', type, position: { x: 12, y: 34 },
         data: { type, role: 'source', assetId: 'original-asset', dramaAssetId: 'character-1',
           status: 'success', imageUrl: 'https://example.com/result.png' } });
       expect(store.recordOutputHistory).toHaveBeenCalledWith('imported-image', expect.objectContaining({
-        nodeType: 'ai-image', params: expect.objectContaining({ imageQuality: 'low' }),
+        nodeType: 'ai-image', params: expect.objectContaining({ imageQuality: 'low', imageBackground: 'transparent' }),
       }));
     });
   });
@@ -1317,7 +1318,7 @@ describe('critical canvas node interactions', () => {
       const store = createStore([{
         id: 'quality-image', type: 'ai-image', position: { x: 0, y: 0 },
         data: { type: 'ai-image', label: '图片', status: 'idle', prompt: 'cat',
-          model: 'general/model-a', provider: 'general', imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max', batchCount,
+          model: 'general/model-a', provider: 'general', imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max', imageBackground: 'transparent', batchCount,
           nodeWidth: 280, nodeHeight: 158 },
       }], () => 1);
       store.activeNodeId = 'quality-image';
@@ -1338,9 +1339,10 @@ describe('critical canvas node interactions', () => {
         persistMediaUrlToProjectData: vi.fn(async (url: string) => ({ mediaUrl: url, sourceUrl: url, filePath: 'result.png' })),
       }));
       vi.doMock('../../src/services/ai/mediaModelCapabilities', () => ({
-        resolveImageParameterCapability: (model: string) => model === 'general/model-b'
+        resolveImageParameterCapability: (model: string) => ['general/model-b', 'general/model-c'].includes(model)
           ? { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
-            qualities: ['low', 'medium', 'high'], defaultQuality: 'medium' }
+            qualities: ['low', 'medium', 'high'], defaultQuality: 'medium', backgrounds: ['auto', 'opaque', 'transparent'],
+            defaultBackground: model === 'general/model-c' ? 'opaque' : undefined }
           : undefined,
       }));
       vi.doMock('../../src/services/projectSettingsService', async () => ({
@@ -1366,8 +1368,11 @@ describe('critical canvas node interactions', () => {
       const select = (value: string) => (panel().props.onModelSelect as (model: Record<string, unknown>) => void)({ value, provider: 'general' });
       select('general/model-a');
       expect(store.nodes[0].data.imageQuality).toBe('max');
+      expect(store.nodes[0].data.imageBackground).toBe('transparent');
       select('general/model-b');
       expect(store.nodes[0].data.imageQuality).toBe('medium');
+      expect(store.nodes[0].data.imageBackground).toBeUndefined();
+      (panel().props.onChangeImageBackground as (background: string) => void)('transparent');
       expect(store.nodes[0].data).toMatchObject({ aspectRatio: '16:9', nodeWidth: 280, nodeHeight: 158 });
       (panel().props.onChangeAspectRatio as (ratio: string) => void)('9:16');
       expect(store.nodes[0].data).toMatchObject({ aspectRatio: '9:16', nodeWidth: 280, nodeHeight: 280 });
@@ -1375,14 +1380,19 @@ describe('critical canvas node interactions', () => {
       expect(store.nodes[0].data.imageQuality).toBe('high');
       select('general/model-a');
       expect(store.nodes[0].data.imageQuality).toBeUndefined();
+      expect(store.nodes[0].data.imageBackground).toBeUndefined();
       expect(store.nodes[0].data.aspectRatio).toBe('9:16');
       select('general/model-b');
+      (panel().props.onChangeImageBackground as (background: string) => void)('transparent');
       (panel().props.onWorkflowSelect as (id: string | undefined) => void)('workflow-1');
       expect(store.nodes[0].data.imageQuality).toBeUndefined();
+      expect(store.nodes[0].data.imageBackground).toBeUndefined();
       select('general/model-b');
       expect(store.nodes[0].data.imageQuality).toBe('medium');
+      (panel().props.onChangeImageBackground as (background: string) => void)('transparent');
       (panel().props.onClearModel as () => void)();
       expect(store.nodes[0].data.imageQuality).toBeUndefined();
+      expect(store.nodes[0].data.imageBackground).toBeUndefined();
     });
 
     it.each([
@@ -1408,10 +1418,45 @@ describe('critical canvas node interactions', () => {
     it('omits stale quality when the selected model has no quality capability', async () => {
       const { store, panel, generateImage } = await setupImageQualityDialog();
       await (panel().props.onSubmit as () => Promise<void>)();
-      expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: undefined }));
+      expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: undefined, imageBackground: undefined }));
       expect(store.recordOutputHistory).toHaveBeenCalledWith('quality-image', expect.objectContaining({
-        params: expect.objectContaining({ imageQuality: undefined }),
+        params: expect.objectContaining({ imageQuality: undefined, imageBackground: undefined }),
       }));
+    });
+
+    it.each([1, 2].flatMap((count) => (count === 1 ? ['dialog', 'toolbar', 'selection'] : ['dialog', 'toolbar']).flatMap((entry) => (
+      [undefined, 'transparent', ''].map((background) => ({ count, entry, background }))
+    ))))('passes background $background through $entry with batch count $count while history keeps the effective value', async ({ count, entry, background }) => {
+      const { store, panel, generateImage, generateImagesBatch, applyImageBatchResults } = await setupImageQualityDialog(count);
+      const currentPanel = panel();
+      (currentPanel.props.onModelSelect as (model: Record<string, unknown>) => void)({ value: 'general/model-c', provider: 'general' });
+      expect(store.nodes[0].data.imageBackground).toBe('opaque');
+      (currentPanel.props.onChangeImageBackground as (value: string | undefined) => void)(background);
+      const effective = background === '' ? undefined : background ?? 'opaque';
+      const requested = background === '' ? '' : effective;
+      if (entry === 'dialog') await (currentPanel.props.onSubmit as () => Promise<void>)();
+      else if (entry === 'toolbar') {
+        vi.doUnmock('../../src/services/generationService');
+        const { executeGeneration } = await import('../../src/services/generationService');
+        expect(await executeGeneration('quality-image')).toEqual({ success: true });
+      } else {
+        vi.doUnmock('../../src/utils/batchExecute');
+        const { batchExecuteNodes } = await import('../../src/utils/batchExecute');
+        expect(await batchExecuteNodes(['quality-image'], store.nodes as unknown as Parameters<typeof batchExecuteNodes>[1], [], {
+          commitToHistory: store.commitToHistory, updateNodeDataTransient: store.updateNodeDataTransient,
+          recordOutputHistory: store.recordOutputHistory, currentProjectId: store.currentProjectId,
+        })).toEqual({ ok: 1, fail: 0 });
+      }
+      if (count === 1) {
+        expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageBackground: requested, aspectRatio: '16:9' }));
+        expect(store.recordOutputHistory).toHaveBeenCalledWith('quality-image', expect.objectContaining({
+          params: expect.objectContaining({ imageBackground: effective }),
+        }));
+      } else {
+        expect(generateImagesBatch).toHaveBeenCalledWith(expect.objectContaining({ imageBackground: requested, aspectRatio: '16:9' }), 2);
+        expect(applyImageBatchResults).toHaveBeenCalledWith(expect.objectContaining({ imageBackground: effective }));
+      }
+      expect(store.nodes[0].data).toMatchObject({ aspectRatio: '16:9', nodeWidth: 280, nodeHeight: 158 });
     });
   });
 

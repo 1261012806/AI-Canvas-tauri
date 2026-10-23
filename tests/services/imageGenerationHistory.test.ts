@@ -33,12 +33,12 @@ function historyRecord(
 }
 
 describe('getNodeHistoryEntries', () => {
-  it('persists image quality independently of resolution', async () => {
+  it('persists image quality and transparent background independently of resolution', async () => {
     const service = await import('../../src/services/indexedDbService');
     await service.putHistoryEntry({ ...historyRecord('quality', 'node-a', 100),
-      params: { imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max' } });
+      params: { imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max', imageBackground: 'transparent' } });
     const [record] = await service.getNodeHistoryEntries('project-a', 'node-a');
-    expect(record.params).toEqual({ imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max' });
+    expect(record.params).toEqual({ imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max', imageBackground: 'transparent' });
   });
   it('returns only the requested node history in reverse chronological order', async () => {
     const service = await import('../../src/services/indexedDbService');

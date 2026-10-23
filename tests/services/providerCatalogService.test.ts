@@ -75,22 +75,26 @@ describe('providerCatalogService 模型分类推断', () => {
     for (const id of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']) {
       expect(models.find((model) => model.id === id)?.imageCapability).toEqual({
         qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+        backgrounds: ['auto', 'opaque', 'transparent'],
       });
     }
     expect(models.find((model) => model.id === 'gpt-image-2.5')?.imageCapability?.qualities).toBeUndefined();
     expect(models.find((model) => model.id === 'gpt-image-2')?.imageCapability?.qualities).toBeUndefined();
   });
 
-  it.each(['imageCapability', 'image_capability'])('保留远端 %s 的质量声明和默认值并可序列化', async (field) => {
+  it.each(['imageCapability', 'image_capability'])('保留远端 %s 的质量、背景声明和默认值并可序列化', async (field) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{
-      id: 'gpt-image-2.5-sunburst', [field]: { resolutions: ['1K'], qualities: ['auto', 'high'], default_quality: 'auto' },
+      id: 'gpt-image-2.5-sunburst', [field]: { resolutions: ['1K'], qualities: ['auto', 'high'], default_quality: 'auto',
+        backgrounds: ['opaque', 'transparent'], default_background: 'transparent' },
     }] })));
     const result = await fetchProviderModelCatalog({ providerId: 'custom-quality',
       config: { name: '自定义接口', apiKey: 'fixture', catalogId: 'custom-openai', baseUrl: 'https://api.example/v1' },
     });
-    expect(result.models[0]?.imageCapability).toMatchObject({ resolutions: ['1K'], qualities: ['auto', 'high'], defaultQuality: 'auto' });
+    expect(result.models[0]?.imageCapability).toMatchObject({ resolutions: ['1K'], qualities: ['auto', 'high'], defaultQuality: 'auto',
+      backgrounds: ['opaque', 'transparent'], defaultBackground: 'transparent' });
     expect(JSON.parse(JSON.stringify(result.models[0])).imageCapability)
-      .toMatchObject({ qualities: ['auto', 'high'], defaultQuality: 'auto' });
+      .toMatchObject({ qualities: ['auto', 'high'], defaultQuality: 'auto',
+        backgrounds: ['opaque', 'transparent'], defaultBackground: 'transparent' });
   });
 
   it('fails a CCC group catalog explicitly instead of offering models from other groups', async () => {
@@ -583,7 +587,8 @@ describe('厂商图片有效合同校验与连接导入', () => {
   function legacyCccModel(): ProviderModelSelection {
     return {
       id: 'gpt-image-2.5-sunburst', name: 'Sunburst', category: 'image', provider: 'saved-ccc',
-      imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
+      imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+        backgrounds: ['auto', 'opaque', 'transparent'] },
       imageReferenceRequestMode: 'edits-multipart',
       executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
         submit: { method: 'POST', path: '/old/images', body: { prompt: '{{prompt}}', quality: 'high' } },
@@ -595,6 +600,7 @@ describe('厂商图片有效合同校验与连接导入', () => {
   function legacyToapisModel(): ProviderModelSelection {
     const model = structuredClone(TOAPIS_MODEL_MANIFEST.find((item) => item.id === 'gpt-image-2.5-sunburst-vip')!);
     (model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    delete (model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>).background;
     return model;
   }
 
@@ -609,6 +615,9 @@ describe('厂商图片有效合同校验与连接导入', () => {
     expect(() => resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), {
       ...model, imageCapability: { qualities: ['high'], defaultQuality: 'max' },
     })).toThrow('defaultQuality');
+    expect(() => resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), {
+      ...model, imageCapability: { backgrounds: ['opaque'], defaultBackground: 'transparent' },
+    })).toThrow('defaultBackground');
   });
 
   it('已知 ToAPIs 完整旧合同使用有效副本校验，用户原始 fixed high 仍可完整分享', () => {

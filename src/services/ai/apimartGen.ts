@@ -14,6 +14,7 @@ import { buildImageCapabilityRequest, getImageCapability } from './mediaModelCap
 import { corsSafeFetch } from './httpTransport';
 import { mapImageParameters } from './imageParameterMappings';
 import { runBatchTasks } from './batchUtils';
+import { resolveConfiguredImageBackground } from './modelCapabilityValidation';
 
 /* ── APIMart 任务轮询共享类型 ── */
 export interface ApimartTaskResult<TResult = Record<string, unknown>> {
@@ -188,15 +189,18 @@ export async function generateApimartImagesBatch(
   nodeId?: string,
   externalSignal?: AbortSignal,
   imageQuality?: string,
+  imageBackground?: string,
 ): Promise<BatchImageResult> {
   // 能力表驱动：命中 APIMart 生图能力表时，按模型约束分辨率 / 批量数量 / 参考图，
   // 并复用能力表换算出的结果回填尺寸；未命中则回退通用提交逻辑（兼容旧模型）。
   const requestedBatchCount = Math.max(1, Math.floor(count));
   const capabilityModel = model.startsWith('apimart/') ? model : `apimart/${model}`;
   const capability = getImageCapability(capabilityModel);
+  imageBackground = resolveConfiguredImageBackground(capability, imageBackground);
   const capabilityRequest = buildImageCapabilityRequest(capabilityModel, prompt, {
     resolution: imageSize,
     imageQuality,
+    imageBackground,
     ratio: aspectRatio,
     count: requestedBatchCount,
     imageUrls,
@@ -242,6 +246,7 @@ export async function generateApimartImagesBatch(
         prompt,
         imageSize,
         imageQuality,
+        imageBackground,
         aspectRatio,
         batchCount: requestedCount,
         referenceImageUrls: imageUrls,

@@ -6,7 +6,7 @@ import type { NormalizedModelExecutionProtocol } from '../../types/aiTypes';
 import type { ProviderDefinition } from './providerCatalogService';
 import { mapImageDimensions } from '../aiDimensions';
 import { getGrsaiImageCapability } from './grsaiModels';
-import { resolveConfiguredImageQuality } from './modelCapabilityValidation';
+import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
 
 export type BuiltInImageRequestContract = {
   kind: 'standard';
@@ -66,6 +66,7 @@ export function resolveBuiltInImageRequestContract(
   imageSize: string,
   aspectRatio: string,
   imageQuality?: string,
+  imageBackground?: string,
 ): BuiltInImageRequestContract | undefined {
   if (definition?.id === 'cccapi') {
     const model = definition.models?.find((item) => item.id === modelId);
@@ -80,6 +81,7 @@ export function resolveBuiltInImageRequestContract(
   const requestedSize = imageSize === '720p' ? '1K' : imageSize;
   if (!['1K', '2K', '4K'].includes(requestedSize)) throw new Error(`GRSAI 不支持图片档位 ${imageSize}`);
   const capability = getGrsaiImageCapability(modelId);
+  const background = resolveConfiguredImageBackground(capability, imageBackground);
   const normalizedSize = capability && !capability.resolutions?.includes(requestedSize)
     ? capability.defaultResolution! : requestedSize;
   const sizeIndex = ['1K', '2K', '4K'].indexOf(normalizedSize);
@@ -112,7 +114,7 @@ export function resolveBuiltInImageRequestContract(
       submit: {
         method: 'POST', path: '/api/generate', bodyEncoding: 'json',
         body: { model: '{{model}}', prompt: '{{prompt}}', images: '{{imageUrls}}',
-          ...sizeFields, replyType: 'json' },
+          ...sizeFields, ...(background ? { background } : {}), replyType: 'json' },
       },
       response: { type: 'json', result: { urlPath: 'results.*.url' }, errorPath: 'error' },
     },

@@ -383,9 +383,11 @@ interface PromptPanelProps {
   onPassThrough?: () => void;
   imageSize?: string;
   imageQuality?: string;
+  imageBackground?: string;
   aspectRatio?: string;
   onChangeImageSize?: (size: string) => void;
   onChangeImageQuality?: (quality: string | undefined) => void;
+  onChangeImageBackground?: (background: string | undefined) => void;
   onChangeAspectRatio?: (ratio: string) => void;
   batchCount?: number;
   onChangeBatchCount?: (count: number) => void;
@@ -465,9 +467,11 @@ export default function PromptPanel({
   onPassThrough,
   imageSize,
   imageQuality,
+  imageBackground,
   aspectRatio,
   onChangeImageSize,
   onChangeImageQuality,
+  onChangeImageBackground,
   onChangeAspectRatio,
   batchCount = 1,
   onChangeBatchCount,
@@ -617,15 +621,26 @@ export default function PromptPanel({
     if (imageQuality !== selectedQuality) {
       onChangeImageQuality?.(selectedQuality);
     }
+    const backgrounds = selectedWorkflowId ? undefined : imageCapability?.backgrounds;
+    const backgroundDefault = backgrounds?.find((background) => background.toLowerCase() === imageCapability?.defaultBackground?.toLowerCase());
+    const fixedBackground = imageCapability?.backgroundIsFixed === true && backgroundDefault !== undefined;
+    // 保留显式“接口默认”，避免能力目录刷新后重新套用配置默认值。
+    const selectedBackground = selectedWorkflowId ? undefined : fixedBackground ? backgroundDefault
+      : imageBackground === '' ? '' : backgrounds?.find((background) => background.toLowerCase() === imageBackground?.toLowerCase()) ?? backgroundDefault;
+    if (imageBackground !== selectedBackground) {
+      onChangeImageBackground?.(selectedBackground);
+    }
   }, [
     nodeType,
     imageCapability,
     imageResolutions,
     imageSize,
     imageQuality,
+    imageBackground,
     selectedWorkflowId,
     onChangeImageSize,
     onChangeImageQuality,
+    onChangeImageBackground,
   ]);
 
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
@@ -1034,9 +1049,14 @@ export default function PromptPanel({
                 imageQuality={imageQuality}
                 imageQualities={selectedWorkflowId ? undefined : imageCapability?.qualities}
                 defaultImageQuality={selectedWorkflowId ? undefined : imageCapability?.defaultQuality}
+                imageBackground={imageBackground}
+                imageBackgrounds={selectedWorkflowId ? undefined : imageCapability?.backgrounds}
+                defaultImageBackground={selectedWorkflowId ? undefined : imageCapability?.defaultBackground}
+                imageBackgroundIsFixed={selectedWorkflowId ? false : imageCapability?.backgroundIsFixed}
                 aspectRatio={imageRatioValues?.length === 0 && !imageSupportsAdaptive ? t('比例待确认') : aspectRatio}
                 onChangeImageSize={onChangeImageSize || (() => {})}
                 onChangeImageQuality={onChangeImageQuality}
+                onChangeImageBackground={onChangeImageBackground}
                 onChangeAspectRatio={onChangeAspectRatio || (() => {})}
                 showImageSize={imageResolutions === undefined || imageResolutions.length > 0}
                 imageSizes={imageResolutions}

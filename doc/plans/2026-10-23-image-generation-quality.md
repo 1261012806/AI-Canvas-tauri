@@ -1,4 +1,4 @@
-# GPT Image 生成质量
+# GPT Image 生成质量与透明背景
 
 日期：2026-10-23。范围已获用户确认；源码和回归用例已补，待用户验收。提交按仓库钩子执行本批暂存文件的定向 ESLint；未运行测试、类型检查、构建、桌面验收或付费调用。
 
@@ -50,6 +50,38 @@ CCC 旧 `gpt-image-2.5` 别名、APIMart 无后缀 `gpt-image-1/1.5`、普通 `g
 7. 图片节点先手动设置 9:16，再依次选择 CCC Flare／Sunburst、APIMart 及其他图片模型，预期比例始终保留 9:16，节点不会因选择模型缩放。新模型不支持当前比例时仍保留原选择，提交前报出可选比例且不发生成请求；切回支持的模型即可按 9:16 提交。未设置比例的源图片切模型不自动填比例或改变尺寸，界面和请求沿用相同基础默认值；手动调整比例仍正常更新节点布局。
 
 回归源码覆盖渠道隔离、非法档位、默认省略、旧模板识别、JSON/multipart 传输、质量与尺寸独立、历史、模型切换及弹层选项。本次仅静态核对，没有执行通过结论。
+
+## 透明背景补充范围（2026-10-23）
+
+用户另行确认背景功能的 45 个文件范围；复用质量管道和 UI Kit，不新增依赖、权限或数据库迁移。背景默认值与请求参数独立于分辨率、质量和用户比例。本批补回归源码并完成静态核对，提交按仓库钩子执行定向 ESLint；未运行测试、类型检查、构建、桌面验收或付费请求。
+
+- 节点／请求字段 `imageBackground`；能力 `backgrounds/defaultBackground`；声明式变量 `{{imageBackground}}` 仅用于图片。无能力不显示、不发请求字段，默认不取第一个候选。内置型号不声明背景默认值，缺省不改变原请求。
+- 背景区提供「接口默认」和已声明值；明确选择接口默认以 `''` 保存，覆盖自定义 defaultBackground，执行时省略背景字段。固定同值协议按固定值回显，不伪装可切换；自定义可调背景缺映射、透明与显式 JPEG 冲突会拦截。
+- 单图、批量、重新生成和快捷入口传递背景，历史记录有效值；最近参数保存用户选择。切模型保留比例／节点尺寸，工作流和未声明模型不带上一个模型的背景值。
+- CCC 标准 JSON／multipart、APIMart 原生合同在透明时请求 PNG；官方 2.5 快速模板使用文档的 PNG 缺省。GRSAI、ToAPIs 不传未公布的 output_format。用户自定义协议的 PNG／WebP 选择由原合同保留，不擅自覆盖。
+- ToAPIs 整份规范化协议匹配兼容两代旧内置模板：已有动态质量但没有背景变量，以及更早的固定 high／无质量模板且没有背景变量；自定义路径、请求或轮询修改保持原样，不改持久化配置。
+- 原图保存链直接保存 URL 下载或 data URL 解码的字节，不转换 JPEG；本批不改文件保存、图片抠图或预览背景。RunningHub 既有背景参数仍由原生 schema 控制。
+- 用户补充要求质量／背景的选中态跟分辨率一致：三组共同使用 UI Kit `ui-segmented--brand` 的品牌色填充、圆角和阴影，在「选择控件」补交互样例；选项可换行并支持减少动效，比例方块和视频共用旧类不调整。
+
+| 渠道与精确型号 | 已确认 background | 输出边界 |
+|---|---|---|
+| CCC `gpt-image-2.5-flare/sunburst` | auto / opaque / transparent | png 默认，透明仅 PNG/WebP；本批透明时请求 PNG |
+| APIMart `gpt-image-2.5-flare/sunburst` | auto / opaque / transparent | png 默认，透明仅 PNG/WebP；本批透明时请求 PNG |
+| GRSAI `gpt-image-2.5-flare/sunburst` | transparent | 没有公布格式参数，不额外发送 |
+| ToAPIs `gpt-image-2.5-flare/sunburst`、对应 `-vip/-official` | transparent | 没有公布格式参数；official 明确缺省 PNG |
+| 显式选择官方 GPT Image 2.5 快速模板 | auto / opaque / transparent | 使用官方 PNG 缺省，不从型号名推测未知中转支持 |
+
+依据：[OpenAI](https://developers.openai.com/api/docs/guides/image-generation)、[CCC](https://cccapi.cn/legal/api-docs#img-gpt-image-2-5)、[APIMart](https://docs.apimart.ai/cn/api-reference/images/gpt-image-2.5/generation)、[GRSAI 原生合同](https://qmy27nhsd9.apifox.cn/452409160e0.md)及[兼容编辑合同](https://qmy27nhsd9.apifox.cn/512807352e0)、[ToAPIs 普通](https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5/generation)、[VIP](https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-vip/generation)、[official](https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-official/generation)。这只是文档核实，不是付费调用验证。未确认的旧别名、APIMart Ext、GRSAI 基础 2.5 不启用背景能力。
+
+### 透明背景桌面验收
+
+前置：包含本批源码的 Tauri 桌面版，启用文档支持的精确型号。前三项不需要生成调用。
+
+1. 在图片节点手动设置 9:16，再选择 CCC／APIMart 2.5，打开图片参数：背景提供接口默认／自动／透明／不透明。默认接口默认；透明时摘要可识别，质量仍单独可选，比例及节点尺寸不因选模型或背景改变。深浅主题、窄窗滚动、键盘选择均应可用。
+2. 切到 GRSAI Flare／Sunburst、ToAPIs 2.5 普通／VIP／official，背景仅接口默认／透明；基础 GRSAI 2.5、APIMart Ext 或未知自定义型号不显示推测选项。重选同模型保留背景，换模型／工作流清理不适用值，同模型新节点继承最近选择。RunningHub 原背景控件不重复。
+3. 自定义模型声明 transparent／opaque，协议映射 `background: "{{imageBackground}}"`；本地预览检查值。无默认时省略，有 defaultBackground 时采用该值；节点明确切接口默认后仍省略。缺动态映射或显式 JPEG 配透明能力时提示修改。用户自定义 WebP、路径和轮询不能被改写；旧 ToAPIs 内置模板可以保存和导入，不静默覆盖用户协议。
+4. 若用户自行选择实际调用（可能计费），以透明模式生成文生图和参考图编辑，再检查原图 Alpha，不能只有棋盘格图案或白底。CCC／APIMart 请求中应有 transparent + PNG；GRSAI／ToAPIs 只有已公布的背景字段。接口默认不额外发送 background/output_format。单图、批量、快捷和重新生成使用相同有效参数，历史可保留该参数；取消和恢复仍查询原任务，不重提生成。
+5. 保存并重启：节点及最近参数仍保留；原图下载到本地后 Alpha 不丢失。若结果保存失败，原任务继续可恢复，背景参数不触发补交。
 
 ## 回滚
 

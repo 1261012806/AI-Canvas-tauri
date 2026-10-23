@@ -20,6 +20,11 @@ describe('image capability editor', () => {
     expect(html).toContain('接口默认（省略 quality）');
     expect(html).toContain('auto（自动）');
     expect(html).toContain('自定义质量');
+    expect(html).toContain('背景（可多选）');
+    expect(html).toContain('接口默认（省略 background）');
+    expect(html).toContain('transparent（透明）');
+    expect(html).toContain('opaque（不透明）');
+    expect(html).toContain('自定义背景');
     expect(html.match(/>应用模板<\/button>/g)).toHaveLength(2);
   });
 
@@ -32,5 +37,17 @@ describe('image capability editor', () => {
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
     expect(html).toContain('>medium</button>');
     expect(html).not.toContain('声明可调质量');
+  });
+
+  it('keeps an undeclared default when the channel only supports explicit transparent background', () => {
+    const html = renderToStaticMarkup(createElement(ImageCapabilityEditor, {
+      model: { id: 'custom-image', name: 'Custom Image', category: 'image', provider: 'custom',
+        imageCapability: { backgrounds: ['transparent'] } },
+      onChange: () => undefined, onApplyTemplate: () => undefined, onClose: () => undefined,
+    }));
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(html).toContain('transparent（透明）</button>');
+    expect(html).toContain('接口默认（省略 background）');
+    expect(html).not.toContain('defaultBackground 必须属于');
   });
 });

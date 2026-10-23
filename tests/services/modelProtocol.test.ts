@@ -25,6 +25,7 @@ import { buildGeneralVideoProtocolVariables } from '../../src/services/ai/genera
 import { getPendingTasksForProject, MediaTaskPausedError, VideoPollingPausedError } from '../../src/services/pollManager';
 import {
   assertImageModelCapability, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageQuality,
+  resolveConfiguredImageBackground,
 } from '../../src/services/ai/modelCapabilityValidation';
 
 const jsonResponse = (
@@ -41,6 +42,63 @@ beforeEach(() => {
 });
 
 describe('declarative model execution protocol', () => {
+  it('keeps interface-default background distinct from an explicit auto parameter', () => {
+    const capability = { backgrounds: ['auto', 'opaque', 'transparent'] };
+    expect(resolveConfiguredImageBackground(undefined, 'transparent')).toBeUndefined();
+    expect(resolveConfiguredImageBackground({}, 'transparent')).toBeUndefined();
+    expect(resolveConfiguredImageBackground(capability)).toBeUndefined();
+    expect(resolveConfiguredImageBackground({ ...capability, defaultBackground: 'opaque' })).toBe('opaque');
+    expect(resolveConfiguredImageBackground({ ...capability, defaultBackground: 'opaque' }, '')).toBeUndefined();
+    expect(resolveConfiguredImageBackground(capability, 'AUTO')).toBe('auto');
+    expect(resolveConfiguredImageParameters(capability, { count: 1, imageBackground: 'TRANSPARENT' }))
+      .toMatchObject({ imageBackground: 'transparent' });
+    expect(resolveConfiguredImageParameters(capability, { count: 1, imageBackground: '' })).not.toHaveProperty('imageBackground');
+    expect(() => resolveConfiguredImageBackground(capability, 'white')).toThrow('不支持背景');
+    expect(() => assertImageModelCapability({ backgrounds: ['auto', 'AUTO'] })).toThrow('backgrounds');
+    expect(() => assertImageModelCapability({ backgrounds: ['transparent'], defaultBackground: 'auto' })).toThrow('defaultBackground');
+    // 质量/背景单独解析时不能触发既有 auto 比例像素表的完整校验。
+    expect(resolveConfiguredImageBackground({ ...capability, ratios: ['auto'], resolutions: ['1K'], dimensionPresets: { '1K': {} } }, 'transparent'))
+      .toBe('transparent');
+  });
+
+  it('requires a single adjustable transparent option to map background and preserves same-value fixed contracts', () => {
+    const protocol = getModelProtocolPreset('openai-gpt-image');
+    const model = { id: 'custom-image', name: 'Custom Image', provider: 'custom', category: 'image' as const,
+      imageCapability: { backgrounds: ['transparent'] }, executionProfile: { preset: 'custom' as const, protocol } };
+    expect(() => assertModelCapabilityProtocol(model)).not.toThrow();
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}' };
+    expect(() => assertModelCapabilityProtocol(model)).toThrow('{{imageBackground}}');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', background: '{{imageQuality}}' };
+    expect(() => assertModelCapabilityProtocol(model)).toThrow('{{imageBackground}}');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', background: 'transparent' };
+    expect(() => assertModelCapabilityProtocol(model)).not.toThrow();
+    expect(() => assertModelCapabilityProtocol({ ...model, imageCapability: { backgrounds: ['opaque', 'transparent'] } }))
+      .toThrow('{{imageBackground}}');
+  });
+
+  it('rejects a declared or fixed transparent background with explicit JPEG without rewriting the protocol', () => {
+    const protocol = getModelProtocolPreset('openai-gpt-image');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', background: '{{imageBackground}}', output_format: 'jpeg' };
+    const model = { id: 'custom-image', name: 'Custom Image', provider: 'custom', category: 'image' as const,
+      imageCapability: { backgrounds: ['transparent'] }, executionProfile: { preset: 'custom' as const, protocol } };
+    expect(() => assertModelCapabilityProtocol(model)).toThrow('透明背景不能与固定 output_format: jpeg');
+    expect(protocol.submit.body).toHaveProperty('output_format', 'jpeg');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', background: 'transparent', output_format: 'jpeg' };
+    expect(() => assertModelCapabilityProtocol({ ...model, imageCapability: undefined })).toThrow('透明背景不能与固定 output_format: jpeg');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', background: '{{imageBackground}}', output_format: 'png' };
+    expect(() => assertModelCapabilityProtocol(model)).not.toThrow();
+  });
+
+  it.each(['openai-image', 'openai-gpt-image', 'gpt-image-gateway-json'] as const)('maps optional %s background independently', (preset) => {
+    const protocol = getModelProtocolPreset(preset);
+    const variables = { model: 'image-model', prompt: 'draft', size: '2048x2048', imageQuality: 'high', imageBackground: 'transparent' };
+    const request = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: 'https://gateway.example/v1', protocol, variables });
+    expect(JSON.parse(String(request.init.body))).toMatchObject({ quality: 'high', background: 'transparent' });
+    const omitted = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: 'https://gateway.example/v1', protocol,
+      variables: { ...variables, imageBackground: undefined } });
+    expect(JSON.parse(String(omitted.init.body))).not.toHaveProperty('background');
+  });
+
   it('resolves declared image quality without inventing a channel default', () => {
     const capability = { qualities: ['low', 'medium', 'high'] };
     expect(resolveConfiguredImageQuality(undefined, 'max')).toBeUndefined();

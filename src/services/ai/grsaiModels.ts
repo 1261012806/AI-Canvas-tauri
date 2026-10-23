@@ -32,6 +32,7 @@ export function getGrsaiImageCapability(model: string): ImageModelCapability | u
     resolutions, defaultResolution: resolutions[0],
     ...(GPT_QUALITIES[id] ? { qualities: [...GPT_QUALITIES[id]],
       defaultQuality: id === 'gpt-image-2' || id === 'gpt-image-2.5' ? 'auto' : 'medium' } : {}),
+    ...(id === 'gpt-image-2.5-flare' || id === 'gpt-image-2.5-sunburst' ? { backgrounds: ['transparent'] } : {}),
     ratios: GPT_RESOLUTIONS[id] ? GRSAI_GPT_RATIOS
       : id.startsWith('nano-banana-2') && id !== 'nano-banana-2-lite'
         ? [...GRSAI_NANO_RATIOS, '1:4', '4:1', '1:8', '8:1'] : GRSAI_NANO_RATIOS,

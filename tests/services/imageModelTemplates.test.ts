@@ -106,6 +106,27 @@ describe('explicit image quick templates', () => {
     }
   });
 
+  it('declares 2.5 backgrounds only for confirmed official and APIMart templates with interface-default omission', () => {
+    for (const transport of ['openai', 'apimart']) {
+      const template = createImageQuickAdaptTemplate(`gpt-2.5:${transport}`);
+      expect(template.imageCapability?.backgrounds).toEqual(['auto', 'opaque', 'transparent']);
+      expect(template.imageCapability?.defaultBackground).toBeUndefined();
+      const protocol = resolveModelExecutionProfile(template.executionProfile)!;
+      const variables = { model: 'actual-id', prompt: 'sticker', imageSize: '1k', aspectRatio: '1:1', size: '1024x1024', n: 1 };
+      const omitted = buildModelProtocolRequest({ baseUrl: 'https://images.example/v1', apiKey: 'fixture', protocol, variables });
+      expect(JSON.parse(String(omitted.init.body))).not.toHaveProperty('background');
+      const transparent = buildModelProtocolRequest({ baseUrl: 'https://images.example/v1', apiKey: 'fixture', protocol,
+        variables: { ...variables, imageBackground: 'transparent' } });
+      expect(JSON.parse(String(transparent.init.body))).toHaveProperty('background', 'transparent');
+    }
+    for (const id of ['gpt-2:openai', 'gpt-2:apimart', 'gpt-2:images-json', 'gpt-2.5:images-json', 'banana-pro:apimart', 'banana-pro:google']) {
+      expect(createImageQuickAdaptTemplate(id).imageCapability?.backgrounds).toBeUndefined();
+      expect(createImageQuickAdaptTemplate(id).imageCapability?.defaultBackground).toBeUndefined();
+    }
+    const bananaProtocol = resolveModelExecutionProfile(createImageQuickAdaptTemplate('banana-pro:apimart').executionProfile)!;
+    expect(JSON.stringify(bananaProtocol.submit)).not.toContain('imageBackground');
+  });
+
   it('sends APIMart 2.5 quality independently and keeps unconfirmed templates free of the field', () => {
     const variables = { model: 'actual-id', prompt: 'draft', imageSize: '2k', aspectRatio: '16:9', imageQuality: 'xhigh', n: 1 };
     for (const id of ['gpt-2.5:apimart', 'gpt-2:apimart', 'banana-pro:apimart']) {

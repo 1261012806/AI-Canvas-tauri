@@ -126,6 +126,7 @@ describe('ToAPIs 已核对的渠道合同', () => {
     const current = model('gpt-image-2.5-sunburst-vip');
     const previous = structuredClone(current.executionProfile!);
     (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    delete (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).background;
     const saved = JSON.stringify(previous);
     const resolved = resolveToapisImageModelContract(current.id, previous, { resolutions: ['2K'] });
     expect(resolved.executionProfile).toEqual(current.executionProfile);
@@ -156,6 +157,52 @@ describe('ToAPIs 已核对的渠道合同', () => {
     expect(resolveToapisImageModelContract('gpt-image-2.5-sunburst-vip', profile, capability))
       .toEqual({ executionProfile: profile, imageCapability: capability });
     expect(resolveToapisImageModelContract('gpt-image-2.5-sunburst-vip', profile).imageCapability).toBeUndefined();
+  });
+
+  it.each(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare-vip', 'gpt-image-2.5-sunburst-vip',
+    'gpt-image-2.5-flare-official', 'gpt-image-2.5-sunburst-official'])('%s 只声明透明背景且不默认发送背景或未公布的输出格式', (id) => {
+    const current = model(id);
+    expect(current.imageCapability?.backgrounds).toEqual(['transparent']);
+    expect(current.imageCapability?.defaultBackground).toBeUndefined();
+    const variables = { model: id, prompt: 'portrait', size: '2048x1152', imageSize: '2K', aspectRatio: '16:9', n: 1 };
+    const request = (imageBackground?: string) => buildModelProtocolRequest({ protocol: current.executionProfile!.protocol!,
+      baseUrl: 'https://toapis.cn/v1', apiKey: 'fixture', variables: { ...variables, imageBackground } }).renderedBody;
+    expect(request()).not.toHaveProperty('background');
+    expect(request()).not.toHaveProperty('output_format');
+    expect(request('transparent')).toMatchObject({ background: 'transparent' });
+    expect(request('transparent')).not.toHaveProperty('output_format');
+  });
+
+  it.each(['dynamic-quality', 'fixed-quality'])('完整兼容 %s 无背景旧合同，且不修改已保存对象', (version) => {
+    const current = model('gpt-image-2.5-sunburst-vip');
+    const previous = structuredClone(current.executionProfile!);
+    const body = previous.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+    delete body.background;
+    if (version === 'fixed-quality') body.quality = 'high';
+    const saved = JSON.stringify(previous);
+    const effective = resolveToapisImageModelContract(current.id, previous, { backgrounds: undefined });
+    expect(effective.executionProfile).toEqual(current.executionProfile);
+    expect(effective.imageCapability?.backgrounds).toEqual(['transparent']);
+    expect(effective.imageCapability?.defaultBackground).toBeUndefined();
+    expect(JSON.stringify(previous)).toBe(saved);
+  });
+
+  it('自定义背景按动态、固定和未映射三态处理，不把固定值变成可调', () => {
+    const current = model('gpt-image-2.5-sunburst-vip');
+    const profile = structuredClone(current.executionProfile!);
+    profile.protocol!.submit.path = '/custom/images';
+    const capability = { backgrounds: ['opaque', 'transparent'], defaultBackground: 'transparent' };
+    expect(resolveToapisImageModelContract(current.id, profile, capability).imageCapability)
+      .toMatchObject(capability);
+    (profile.protocol!.submit.body as Record<string, ProtocolJsonValue>).background = 'opaque';
+    const fixed = resolveToapisImageModelContract(current.id, profile, capability);
+    expect(fixed.executionProfile).toBe(profile);
+    expect(fixed.imageCapability).toMatchObject({ backgrounds: ['opaque'], defaultBackground: 'opaque' });
+    delete (profile.protocol!.submit.body as Record<string, ProtocolJsonValue>).background;
+    const unmapped = resolveToapisImageModelContract(current.id, profile, capability);
+    expect(unmapped.executionProfile).toBe(profile);
+    expect(unmapped.imageCapability?.backgrounds).toBeUndefined();
+    expect(unmapped.imageCapability?.defaultBackground).toBeUndefined();
   });
 
   it('在付费提交前拒绝总数量与渠道组合错误，并明确修正项', () => {

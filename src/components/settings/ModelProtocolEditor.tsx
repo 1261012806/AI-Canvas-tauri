@@ -59,7 +59,7 @@ import { corsSafeFetch } from '../../services/ai/httpTransport';
 import { parseResponseError } from '../../services/ai/httpUtils';
 import { createSeedanceQuickAdaptTemplate } from '../../services/ai/seedanceModelCapabilities';
 import { createH3QuickAdaptTemplate } from '../../services/ai/h3ModelCapabilities';
-import { assertModelProtocolResult, assertModelProtocolResultMapping } from '../../services/ai/modelCapabilityValidation';
+import { assertModelProtocolResult, assertModelProtocolResultMapping, resolveConfiguredImageBackground } from '../../services/ai/modelCapabilityValidation';
 import {
   discardProtocolTestSession, getProtocolTestSession, pauseProtocolTestSession,
   resumeProtocolTestSession, startProtocolTestSession, subscribeProtocolTestSession,
@@ -194,11 +194,14 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
     const imageUrls: string[] = [];
     // 未完成的编辑草稿不能让整个设置窗口加载失败；真实发送仍严格校验尺寸。
     let dimensions = { width: 1024, height: 1024 };
+    let imageBackground: string | undefined;
     try { dimensions = resolveImageTemplateDimensions(model.imageCapability, imageSize, aspectRatio); } catch { /* 保留预览占位 */ }
+    try { imageBackground = resolveConfiguredImageBackground(model.imageCapability); } catch { /* 无效能力留待保存时报告 */ }
     return {
       ...common,
       imageSize,
       imageQuality: model.imageCapability?.qualities?.length ? model.imageCapability.defaultQuality : undefined,
+      imageBackground,
       aspectRatio,
       size: `${dimensions.width}x${dimensions.height}`,
       ...dimensions,

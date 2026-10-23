@@ -110,6 +110,7 @@ export const PROTOCOL_VARIABLES: readonly ProtocolVariableSpec[] = [
     ],
   },
   { name: 'imageQuality', supplied: IMAGE, fields: ['quality', 'imagequality'] },
+  { name: 'imageBackground', supplied: IMAGE, fields: ['background', 'imagebackground'] },
   // 非图片模型的 resolution 走视频档位（'720p' 这类），图片模型由上面的规则先接走
   {
     name: 'seedanceResolution', supplied: VIDEO,
@@ -271,6 +272,7 @@ const PROTOCOL_VARIABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   aspectRatio: '输出宽高比，如 16:9',
   imageSize: '图片分辨率档位，如 2K',
   imageQuality: '已声明的图片生成质量，如 auto、medium；未选择且未声明默认值时省略',
+  imageBackground: '已声明的图片背景模式，如 transparent；接口默认时省略，与图片格式支持一同按渠道文档配置',
   seedanceResolution: '视频分辨率档位，如 720p',
   width: '输出宽度（像素）',
   height: '输出高度（像素）',

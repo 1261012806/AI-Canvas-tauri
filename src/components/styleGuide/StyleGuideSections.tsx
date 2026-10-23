@@ -954,6 +954,9 @@ function SelectionSection() {
   const [slider, setSlider] = useState(65);
   const [segment, setSegment] = useState('grid');
   const [nodeSegment, setNodeSegment] = useState('text');
+  const [imageResolution, setImageResolution] = useState('1K');
+  const [imageQuality, setImageQuality] = useState('auto');
+  const [imageBackground, setImageBackground] = useState('接口默认');
 
   return (
     <Section
@@ -1052,6 +1055,28 @@ function SelectionSection() {
               {item.label}
             </button>
           ))}
+        </div>
+      </Demo>
+
+      <Demo label="品牌色填充分段 · 图片参数" code=".ui-segmented.ui-segmented--brand > .ui-segmented__item（.is-active 表示选中）">
+        <div className="ui-stack w-full max-w-sm">
+          {[
+            { label: '分辨率', values: ['1K', '2K', '4K'], value: imageResolution, onChange: setImageResolution },
+            { label: '生成质量', values: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], value: imageQuality, onChange: setImageQuality },
+            { label: '生成背景', values: ['接口默认', '自动', '不透明', '透明'], value: imageBackground, onChange: setImageBackground },
+          ].map((group) => (
+            <div key={group.label} className="ui-field">
+              <span className="ui-label">{group.label}</span>
+              <div className="ui-segmented ui-segmented--brand" role="group" aria-label={`${group.label}示例`}>
+                {group.values.map((value) => (
+                  <button key={value} type="button" aria-pressed={group.value === value}
+                    className={`ui-segmented__item${group.value === value ? ' is-active' : ''}`}
+                    onClick={() => group.onChange(value)}>{value}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <p className="ui-hint">三组共用品牌色填充、圆角和阴影；选项自动换行，跟随外观与明暗主题。</p>
         </div>
       </Demo>
 
@@ -1773,7 +1798,7 @@ export const STYLE_GUIDE_GROUPS = [
       { id: 'sg-inputs', title: '文本输入', keywords: ['ui-input', 'ui-textarea', 'ui-field', 'ui-hint', 'ui-error', '输入框', '校验', '禁用'], component: InputsSection },
       { id: 'sg-number-inputs', title: '数字输入', keywords: ['NumberStepper', 'ui-stepper', '步进', '微调', '拖动', '单位', '精度'], component: NumberInputsSection },
       { id: 'sg-selects', title: '下拉选择', keywords: ['Select', 'ui-select', '分组', '选项', '字段'], component: SelectsSection },
-      { id: 'sg-selection', title: '选择控件', keywords: ['ui-switch', 'ui-checkbox', 'ui-radio', 'ui-slider', 'ui-segmented', '开关', '复选', '单选', '滑块', '分段'], component: SelectionSection },
+      { id: 'sg-selection', title: '选择控件', keywords: ['ui-switch', 'ui-checkbox', 'ui-radio', 'ui-slider', 'ui-segmented', 'ui-segmented--brand', '开关', '复选', '单选', '滑块', '分段', '品牌色', '分辨率', '生成质量', '生成背景'], component: SelectionSection },
       { id: 'sg-dropzones', title: '文件上传', keywords: ['FileUploadButton', 'ui-file-upload', 'ui-dropzone', '上传区', '拖放', '文件选择'], component: DropzoneSection },
     ],
   },
