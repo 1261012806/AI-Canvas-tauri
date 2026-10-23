@@ -6,6 +6,7 @@ import type { NormalizedModelExecutionProtocol } from '../../types/aiTypes';
 import type { ProviderDefinition } from './providerCatalogService';
 import { mapImageDimensions } from '../aiDimensions';
 import { getGrsaiImageCapability } from './grsaiModels';
+import { resolveConfiguredImageQuality } from './modelCapabilityValidation';
 
 export type BuiltInImageRequestContract = {
   kind: 'standard';
@@ -64,6 +65,7 @@ export function resolveBuiltInImageRequestContract(
   modelId: string,
   imageSize: string,
   aspectRatio: string,
+  imageQuality?: string,
 ): BuiltInImageRequestContract | undefined {
   if (definition?.id === 'cccapi') {
     const model = definition.models?.find((item) => item.id === modelId);
@@ -97,7 +99,7 @@ export function resolveBuiltInImageRequestContract(
     if (size) dimensions = dimensionsFromSize(size);
     // 基础款只支持 1K，直接提交比例；VIP/2.5 增强款要求精确像素。
     sizeFields = { aspectRatio: isBase || aspectRatio === 'auto' ? aspectRatio : size!,
-      quality: isBase ? 'auto' : 'medium' };
+      quality: resolveConfiguredImageQuality(capability, imageQuality) ?? (isBase ? 'auto' : 'medium') };
   }
   return {
     kind: 'protocol',

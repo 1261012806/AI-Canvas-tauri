@@ -36,6 +36,9 @@
   right: 0;
   margin-bottom: 6px;
   width: 290px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
   background: var(--theme-surface);
   border: 1px solid var(--theme-border);
   border-radius: 12px;

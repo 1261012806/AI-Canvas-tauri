@@ -68,6 +68,10 @@ const GPT_DIMENSIONS: NonNullable<ImageModelCapability['dimensionPresets']> = {
 };
 function gptCapability(variant: ImageVariant, transport: ImageTransport): ImageModelCapability {
   const apimart = transport === 'apimart';
+  // 官方 2.5 与 APIMart 2.5 Flare/Sunburst 已确认六档；未知 JSON 中转不继承同名能力。
+  // APIMart 普通 GPT Image 2 没有公布 quality 字段。
+  const qualities = transport === 'openai' || (apimart && variant === 'gpt-2.5')
+    ? ['auto', 'low', 'medium', 'high', ...(variant === 'gpt-2.5' ? ['xhigh', 'max'] : [])] : undefined;
   return {
     resolutions: apimart ? ['1k', '2k', '4k'] : ['1K', '2K', '4K'],
     defaultResolution: apimart ? '1k' : '1K',
@@ -77,6 +81,7 @@ function gptCapability(variant: ImageVariant, transport: ImageTransport): ImageM
     supportsImageReference: true,
     maxImageReferences: transport === 'images-json' ? 8 : 16,
     supportsDataUrlReference: !(apimart && variant === 'gpt-2.5'),
+    ...(qualities ? { qualities, defaultQuality: 'auto' } : {}),
     ...(!apimart ? { dimensionPresets: structuredClone(GPT_DIMENSIONS) } : {}),
   };
 }
@@ -144,7 +149,11 @@ export function createImageQuickAdaptTemplate(templateId: string): Pick<Provider
     executionProfile = { preset: 'gpt-image-gateway-json' };
     imageReferenceRequestMode = 'generation-json-image-urls';
   } else if (option.transport === 'apimart') {
-    executionProfile = { preset: 'custom', protocol: structuredClone(APIMART_PROTOCOL) };
+    const protocol = structuredClone(APIMART_PROTOCOL);
+    if (option.family === 'gpt' && option.variant === 'gpt-2.5') {
+      protocol.submit.body = { ...(protocol.submit.body as Record<string, ProtocolJsonValue>), quality: '{{imageQuality}}' };
+    }
+    executionProfile = { preset: 'custom', protocol };
     imageReferenceRequestMode = 'generation-json-image-urls';
   } else {
     executionProfile = { preset: 'custom', protocol: googleProtocol(option.variant, option.transport === 'gemini-relay') };

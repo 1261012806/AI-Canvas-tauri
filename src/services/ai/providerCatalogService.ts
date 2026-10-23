@@ -31,7 +31,9 @@ import { APIMART_OMNI_MODELS, APIMART_UPDATED_VIDEO_MODELS, isLegacyApimartOmni 
 import { getChatApiHeaders, normalizeGeminiModelId, resolveChatApiProtocol } from './chatApiProtocol';
 import { XAI_BASE_URL, XAI_MODEL_MANIFEST } from './providers/xaiModelManifest';
 import { GRSAI_ADDED_MODELS } from './grsaiModels';
-import { matchToapisCatalog, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
+import { matchToapisCatalog, resolveToapisImageModelContract, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
+import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
+import { validateModelExecutionProtocol } from './modelProtocolValidation';
 import { filterCccGroupModels } from './cccProviderGroups';
 import {
   GOOGLE_GEMINI_BASE_URL,
@@ -206,6 +208,7 @@ const CCCAPI_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     provider: 'cccapi',
     description: '速度优先的轻量图片模型，支持文生图与图片编辑',
     imageReferenceRequestMode: 'edits-multipart',
+    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
   },
   {
     id: 'gpt-image-2.5-sunburst',
@@ -214,6 +217,7 @@ const CCCAPI_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     provider: 'cccapi',
     description: '质量优先的高画质图片模型，支持文生图与图片编辑',
     imageReferenceRequestMode: 'edits-multipart',
+    imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
   },
   {
     id: 'gpt-image-2',
@@ -524,6 +528,32 @@ export function getProviderDefinition(
   return PROVIDER_DEFINITION_MAP.get(id === 'autodl-workflow' ? 'workflow-api' : id);
 }
 
+/** 设置与导入只校验有效合同的临时副本；保存的用户协议和能力声明保持原样。 */
+export function resolveProviderImageModelForValidation(
+  definition: ProviderDefinition | undefined,
+  model: ProviderModelSelection,
+): ProviderModelSelection {
+  const profile = model.executionProfile;
+  // 即使原协议不会执行，也不能用厂商合同掩盖不安全路径、非法变量或未知预设。
+  if (profile) {
+    if (!isModelProtocolPresetId(profile.preset)) throw new Error('executionProfile.preset：调用协议预设不受当前应用支持');
+    if (profile.preset === 'custom') {
+      const errors = validateModelExecutionProtocol(profile.protocol);
+      if (errors.length) throw new Error(errors[0]);
+    }
+  }
+  if (model.category !== 'image') return model;
+  if (model.imageCapability) assertImageModelCapability(model.imageCapability);
+  if (definition?.id === 'cccapi' && definition.models?.some((item) => item.id === model.id
+    && item.category === 'image' && item.imageReferenceRequestMode === 'edits-multipart')) {
+    return { ...model, executionProfile: undefined };
+  }
+  if (definition?.id === 'toapis') {
+    return { ...model, ...resolveToapisImageModelContract(model.id, profile, model.imageCapability) };
+  }
+  return model;
+}
+
 function inferModelCategory(modelId: string): GeneralModelCategory {
   const id = modelId.toLowerCase();
   if (/tts|speech|audio|music|voice|whisper|transcri/.test(id)) return 'audio';
@@ -604,6 +634,9 @@ function parseImageCapability(record: Record<string, unknown>, category: General
     resolutions: readStringArray(declared.resolutions),
     defaultResolution: typeof (declared.defaultResolution ?? declared.default_resolution) === 'string'
       ? String(declared.defaultResolution ?? declared.default_resolution) : undefined,
+    qualities: readStringArray(declared.qualities),
+    defaultQuality: typeof (declared.defaultQuality ?? declared.default_quality) === 'string'
+      ? String(declared.defaultQuality ?? declared.default_quality) : undefined,
     ratios: readStringArray(declared.ratios ?? declared.aspect_ratios ?? declared.aspectRatios),
     defaultRatio: typeof (declared.defaultRatio ?? declared.default_aspect_ratio) === 'string'
       ? String(declared.defaultRatio ?? declared.default_aspect_ratio) : undefined,

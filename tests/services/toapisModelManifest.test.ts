@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { TOAPIS_MODEL_MANIFEST, TOAPIS_TEXT_MODEL_IDS, assertToapisImageInput, assertToapisVideoInput,
-  matchToapisCatalog, toapisImageReferences, toapisVideoVariables } from '../../src/services/ai/providers/toapisModelManifest';
+  matchToapisCatalog, resolveToapisImageModelContract, toapisImageReferences, toapisVideoVariables } from '../../src/services/ai/providers/toapisModelManifest';
 import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
 import { buildModelProtocolRequest, previewModelProtocolResponse, validateModelExecutionProtocol } from '../../src/services/ai/modelProtocol';
 import { findUnusedReferenceVariables } from '../../src/services/ai/modelProtocolRuntime';
 import { buildCanonicalVideoProtocolVariables } from '../../src/services/ai/generateVideo';
 import { assertVideoModelCapability, resolveCanonicalVideoRequest } from '../../src/services/ai/videoRequestResolver';
-import type { MediaReference, ModelProtocolRequestTemplate } from '../../src/types/aiTypes';
+import type { MediaReference, ModelProtocolRequestTemplate, ProtocolJsonValue } from '../../src/types/aiTypes';
 
 function model(id: string) {
   const value = TOAPIS_MODEL_MANIFEST.find((item) => item.id === id);
@@ -93,6 +93,69 @@ describe('ToAPIs 已核对的渠道合同', () => {
     expect(findUnusedReferenceVariables(JSON.stringify(protocol), variables)).toEqual([]);
     expect(buildModelProtocolRequest({ protocol, baseUrl: 'https://toapis.cn/v1', apiKey: 'fixture', variables }).renderedBody)
       .toMatchObject({ image_urls: [{ url: 'https://cdn.example/a' }, { url: 'https://cdn.example/b' }] });
+  });
+
+  it.each([
+    ['gpt-image-2', undefined, undefined],
+    ['gpt-image-2-vip', ['low', 'medium', 'high'], 'medium'],
+    ['gpt-image-2-official', ['low', 'medium', 'high'], 'high'],
+    ['gpt-image-2.5-flare', ['high'], 'high'],
+    ['gpt-image-2.5-sunburst', ['high'], 'high'],
+    ['gpt-image-2.5-flare-vip', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], 'high'],
+    ['gpt-image-2.5-sunburst-official', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], 'high'],
+  ])('%s 的质量取值不会从同名渠道推断', (id, qualities, defaultQuality) => {
+    expect(model(id as string).imageCapability?.qualities).toEqual(qualities);
+    expect(model(id as string).imageCapability?.defaultQuality).toBe(defaultQuality);
+  });
+
+  it('可调质量进入请求而普通 GPT 2.5 继续固定 high', () => {
+    for (const [id, imageQuality, expected] of [
+      ['gpt-image-2-vip', 'low', 'low'],
+      ['gpt-image-2.5-sunburst-vip', 'max', 'max'],
+      ['gpt-image-2.5-sunburst', 'low', 'high'],
+    ]) {
+      const request = buildModelProtocolRequest({ protocol: model(id).executionProfile!.protocol!,
+        baseUrl: 'https://toapis.cn/v1', apiKey: 'fixture', variables: {
+          model: id, prompt: 'test', imageQuality, imageSize: '2K', aspectRatio: '16:9', size: '2048x1152', n: 1,
+        } });
+      expect(request.renderedBody).toMatchObject({ quality: expected });
+    }
+  });
+
+  it('只升级完整旧内置合同，保留持久化对象和用户自定义协议', () => {
+    const current = model('gpt-image-2.5-sunburst-vip');
+    const previous = structuredClone(current.executionProfile!);
+    (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    const saved = JSON.stringify(previous);
+    const resolved = resolveToapisImageModelContract(current.id, previous, { resolutions: ['2K'] });
+    expect(resolved.executionProfile).toEqual(current.executionProfile);
+    expect(resolved.imageCapability).toMatchObject({ resolutions: ['2K'],
+      qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'high' });
+    expect(JSON.stringify(previous)).toBe(saved);
+    previous.protocol!.submit.path = '/custom/images/generations';
+    const customized = resolveToapisImageModelContract(current.id, previous, { qualities: ['low', 'high'], defaultQuality: 'low' });
+    expect(customized.executionProfile).toBe(previous);
+    expect(customized.imageCapability).toMatchObject({ qualities: ['high'], defaultQuality: 'high' });
+  });
+
+  it('旧内置 GPT 2 VIP 无质量字段也精确升级，缺少查询字段的自定义协议保持原样', () => {
+    const current = model('gpt-image-2-vip');
+    const previous = structuredClone(current.executionProfile!);
+    delete (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality;
+    expect(resolveToapisImageModelContract(current.id, previous).executionProfile).toEqual(current.executionProfile);
+    delete previous.protocol!.poll!.retry;
+    const customized = resolveToapisImageModelContract(current.id, previous, { qualities: ['low', 'high'] });
+    expect(customized.executionProfile).toBe(previous);
+    expect(customized.imageCapability?.qualities).toBeUndefined();
+  });
+
+  it('用户自定义动态质量保留显式声明，不注入目录默认或更宽的选项', () => {
+    const profile = structuredClone(model('gpt-image-2.5-sunburst-vip').executionProfile!);
+    profile.protocol!.submit.path = '/custom/images/generations';
+    const capability = { qualities: ['low', 'high'], defaultQuality: 'low' };
+    expect(resolveToapisImageModelContract('gpt-image-2.5-sunburst-vip', profile, capability))
+      .toEqual({ executionProfile: profile, imageCapability: capability });
+    expect(resolveToapisImageModelContract('gpt-image-2.5-sunburst-vip', profile).imageCapability).toBeUndefined();
   });
 
   it('在付费提交前拒绝总数量与渠道组合错误，并明确修正项', () => {

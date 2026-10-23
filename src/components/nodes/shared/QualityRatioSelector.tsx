@@ -1,5 +1,5 @@
 /**
- * QualityRatioSelector 图像质量/比例选择器 — 弹出面板选择图像尺寸(1K/2K/4K)和宽高比
+ * QualityRatioSelector — 图像分辨率、生成质量和宽高比选择器
  */
 import { useState, useRef, useEffect } from 'react';
 import AnimatedButton from '../../shared/AnimatedButton';
@@ -12,16 +12,20 @@ interface RatioOption {
 
 interface QualityRatioSelectorProps {
   imageSize?: string;
+  imageQuality?: string;
+  imageQualities?: readonly string[];
+  defaultImageQuality?: string;
   aspectRatio?: string;
   onChangeImageSize?: (size: string) => void;
+  onChangeImageQuality?: (quality: string | undefined) => void;
   onChangeAspectRatio: (ratio: string) => void;
-  /** 是否显示画质选择区，默认 true */
+  /** 是否显示分辨率选择区，默认 true */
   showImageSize?: boolean;
   /** 是否显示"自适应"选项，默认 true */
   showAdaptive?: boolean;
   /** 自定义比例选项列表，不传则使用默认 */
   ratios?: RatioOption[];
-  /** 自定义画质档位，不传则使用通用档位 */
+  /** 自定义分辨率档位，不传则使用通用档位 */
   imageSizes?: readonly string[];
   /** 弹出方向：'top'(默认，向上，适合底部工具栏) | 'bottom'(向下，适合顶部工具栏) */
   placement?: 'top' | 'bottom';
@@ -29,8 +33,12 @@ interface QualityRatioSelectorProps {
 
 export default function QualityRatioSelector({
   imageSize = '1K',
+  imageQuality,
+  imageQualities,
+  defaultImageQuality,
   aspectRatio = '16:9',
   onChangeImageSize,
+  onChangeImageQuality,
   onChangeAspectRatio,
   showImageSize = true,
   showAdaptive = true,
@@ -88,6 +96,9 @@ export default function QualityRatioSelector({
   ];
 
   const ratios = customRatios || DEFAULT_RATIOS;
+  const selectedQuality = imageQualities?.find((quality) => quality.toLowerCase() === imageQuality?.toLowerCase())
+    ?? imageQualities?.find((quality) => quality.toLowerCase() === defaultImageQuality?.toLowerCase());
+  const summary = [aspectRatio, showImageSize ? imageSize : undefined, selectedQuality].filter(Boolean).join(' · ');
 
   return (
     <div className="ui-schema-renderer" data-ui-schema-model="apimart/gemini-3.1-flash-image-preview" data-ui-schema-placement="resolution" ref={ref}>
@@ -96,6 +107,9 @@ export default function QualityRatioSelector({
           type="button"
           className="img-pill-btn ui-schema-menu-trigger"
           data-ui-schema-menu-trigger="qualityRatio"
+          aria-label={summary}
+          aria-expanded={open}
+          title={summary}
           onClick={(e) => {
             e.stopPropagation();
             setOpen(!open);
@@ -107,15 +121,15 @@ export default function QualityRatioSelector({
             <path d="M9 21V9" />
           </svg>
           <span className="ui-schema-pill-label ui-schema-quality-ratio-label">
-            {showImageSize ? `${aspectRatio} · ${imageSize}` : aspectRatio}
+            {summary}
           </span>
         </AnimatedButton>
 
         {open && (
-          <div className={`img-ratio-popup ui-schema-popup ui-schema-quality-ratio-popup${placement === 'bottom' ? ' img-ratio-popup--down' : ''}`} style={{ display: 'block' }}>
+          <div className={`img-ratio-popup ui-schema-popup ui-schema-quality-ratio-popup${placement === 'bottom' ? ' img-ratio-popup--down' : ''}`}>
             {showImageSize && (
               <div className="img-rp-quality-area" data-ui-schema-field="imageSize" data-ui-schema-type="segmented" data-ui-schema-default="2K">
-                <div className="img-rp-section-label">{t('画质')}</div>
+                <div className="img-rp-section-label">{t('分辨率')}</div>
                 <div className="img-rp-quality-segmented">
                   {imageSizes.map((size) => (
                     <AnimatedButton
@@ -127,6 +141,27 @@ export default function QualityRatioSelector({
                       onClick={() => onChangeImageSize?.(size)}
                     >
                       {size}
+                    </AnimatedButton>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!!imageQualities?.length && (
+              <div data-ui-schema-field="imageQuality" data-ui-schema-type="segmented" data-ui-schema-default={defaultImageQuality}>
+                <div className="img-rp-section-label">{t('生成质量')}</div>
+                <div className="ui-segmented ui-segmented--node-image flex flex-wrap" role="group" aria-label={t('生成质量')}>
+                  {imageQualities.map((quality) => (
+                    <AnimatedButton
+                      key={quality}
+                      type="button"
+                      className={`ui-segmented__item ui-schema-option${selectedQuality === quality ? ' is-active' : ''}`}
+                      aria-pressed={selectedQuality === quality}
+                      data-ui-schema-value={quality}
+                      data-ui-schema-option-label={quality}
+                      onClick={() => onChangeImageQuality?.(quality)}
+                    >
+                      {quality}
                     </AnimatedButton>
                   ))}
                 </div>

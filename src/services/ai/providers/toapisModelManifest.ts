@@ -3,9 +3,10 @@
  * 远端 /models 决定当前站点与 Key 的可用型号；此处不包含凭据或站点自动回退。
  */
 import type { ProviderModelSelection } from '../../../types';
-import type { ImageModelCapability, NormalizedModelExecutionProtocol, ProtocolJsonValue, VideoModelCapability } from '../../../types/aiTypes';
+import type { ImageModelCapability, ModelExecutionProfile, NormalizedModelExecutionProtocol, ProtocolJsonValue, VideoModelCapability } from '../../../types/aiTypes';
 import type { ModelProtocolVariables } from '../modelProtocol';
 import type { CanonicalVideoRequest } from '../videoRequestResolver';
+import { parseModelExecutionProtocol } from '../modelProtocolValidation';
 
 export const TOAPIS_TEXT_MODEL_IDS = [
   'gemini-3.8-flash', 'gemini-4-argon', 'qwen3.8-flash', 'deepseek-v4.1-flash',
@@ -73,22 +74,36 @@ const GPT_PIXEL_SIZES: NonNullable<ImageModelCapability['dimensionPresets']> = {
 };
 const K_RESOLUTIONS = { resolutions: ['1K', '2K', '4K'], defaultResolution: '1K' };
 const METADATA_RESOLUTION: Body = { metadata: { resolution: '{{imageSize}}' } };
+const GPT_QUALITIES = ['low', 'medium', 'high'];
+const GPT_25_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const IMAGE_MODELS: ProviderModelSelection[] = [
-  ...images(['gpt-image-2', 'gpt-image-2-vip'], {
+  ...images(['gpt-image-2'], {
     resolutions: ['1k', '2k', '4k'], defaultResolution: '1k', ratios: GPT_RATIOS,
     maxImageReferences: 14, supportsBatch: true, maxBatchCount: 8,
   }, { resolution: '{{imageSize}}', reference_images: '{{imageUrls}}', image_urls: undefined }),
+  // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2-vip/generation
+  ...images(['gpt-image-2-vip'], {
+    resolutions: ['1k', '2k', '4k'], defaultResolution: '1k', ratios: GPT_RATIOS,
+    maxImageReferences: 14, supportsBatch: true, maxBatchCount: 8,
+    qualities: GPT_QUALITIES, defaultQuality: 'medium',
+  }, { resolution: '{{imageSize}}', quality: '{{imageQuality}}', reference_images: '{{imageUrls}}', image_urls: undefined }),
+  // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2/official
   ...images(['gpt-image-2-official'], { ...K_RESOLUTIONS, ratios: GPT_RATIOS,
     maxImageReferences: 16, supportsBatch: true, maxBatchCount: 4,
-  }, { resolution: '{{imageSize}}' }),
+    qualities: GPT_QUALITIES, defaultQuality: 'high',
+  }, { resolution: '{{imageSize}}', quality: '{{imageQuality}}' }),
+  // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5/generation
   ...images(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'], {
-    ...K_RESOLUTIONS, ratios: BANANA_RATIOS,
+    ...K_RESOLUTIONS, ratios: BANANA_RATIOS, qualities: ['high'], defaultQuality: 'high',
   }, { resolution: '{{imageSize}}', quality: 'high', reference_images: '{{imageUrls}}', image_urls: undefined }),
+  // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-vip/generation
+  // https://docs.toapis.com/docs/cn/api-reference/images/gpt-image-2.5-official/generation
   ...images(['gpt-image-2.5-flare-vip', 'gpt-image-2.5-sunburst-vip',
     'gpt-image-2.5-flare-official', 'gpt-image-2.5-sunburst-official'], {
     ...K_RESOLUTIONS, ratios: BANANA_RATIOS, dimensionPresets: GPT_PIXEL_SIZES,
-  }, { size: '{{size}}', quality: 'high' }),
+    qualities: GPT_25_QUALITIES, defaultQuality: 'high',
+  }, { size: '{{size}}', quality: '{{imageQuality}}' }),
   ...images(['gemini-nano-banana-2.1', 'gemini-nano-banana-2.1-vip', 'gemini-nano-banana-2.1-official'], {
     ...K_RESOLUTIONS, ratios: BANANA_WIDE_RATIOS, maxImageReferences: 14,
   }, METADATA_RESOLUTION),
@@ -332,6 +347,61 @@ export const TOAPIS_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
   },
 ];
 const MODEL_BY_ID = new Map(TOAPIS_MODEL_MANIFEST.map((model) => [model.id, model]));
+
+function comparableProtocol(protocol: unknown): string | undefined {
+  try {
+    return JSON.stringify(parseModelExecutionProtocol(protocol), (_key, value: unknown) => (
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value
+    ));
+  } catch {
+    return undefined;
+  }
+}
+
+/** 只在调用方已确认连接身份为 ToAPIs 后使用；用户修改过的协议不按模型名覆盖。 */
+export function resolveToapisImageModelContract(
+  modelId: string,
+  executionProfile?: ModelExecutionProfile,
+  imageCapability?: ImageModelCapability,
+): { executionProfile?: ModelExecutionProfile; imageCapability?: ImageModelCapability } {
+  const current = MODEL_BY_ID.get(modelId);
+  if (current?.category !== 'image') return { executionProfile, imageCapability };
+  const profile = current.executionProfile;
+  let knownContract = executionProfile === undefined;
+  if (executionProfile?.preset === 'custom' && profile?.protocol) {
+    const saved = comparableProtocol(executionProfile.protocol);
+    knownContract = saved !== undefined && saved === comparableProtocol(profile.protocol);
+    if (!knownContract && current.imageCapability?.qualities) {
+      const previous = structuredClone(profile.protocol);
+      const body = previous.submit.body as Body;
+      // 此版本之前只有 GPT 2.5 固定 high，GPT 2 VIP / official 没有质量字段。
+      if (modelId.startsWith('gpt-image-2.5-')) body.quality = 'high';
+      else delete body.quality;
+      knownContract = saved !== undefined && saved === comparableProtocol(previous);
+    }
+  }
+  if (knownContract) {
+    return {
+      executionProfile: structuredClone(profile),
+      imageCapability: { ...current.imageCapability, ...imageCapability,
+        qualities: current.imageCapability?.qualities ? [...current.imageCapability.qualities] : undefined,
+        defaultQuality: current.imageCapability?.defaultQuality },
+    };
+  }
+  // 自定义动态质量必须由用户显式声明能力；固定质量只能显示该固定值。
+  if (executionProfile?.preset === 'custom') {
+    const body = executionProfile.protocol?.submit.body;
+    const source = JSON.stringify(executionProfile.protocol?.submit);
+    if (!/{{\s*imageQuality\s*}}/.test(source ?? '')) {
+      const fixed = body && typeof body === 'object' && !Array.isArray(body) ? body.quality : undefined;
+      return { executionProfile, imageCapability: { ...imageCapability,
+        qualities: typeof fixed === 'string' && fixed && !fixed.includes('{{') ? [fixed] : undefined,
+        defaultQuality: typeof fixed === 'string' && fixed && !fixed.includes('{{') ? fixed : undefined } };
+    }
+  }
+  return { executionProfile, imageCapability };
+}
 
 /** 仅匹配已适配合同及指定的九个文本 ID；绝不把目录中的未知媒体当作通用文本。 */
 export function matchToapisCatalog(models: readonly ProviderModelSelection[]): ProviderModelSelection[] {

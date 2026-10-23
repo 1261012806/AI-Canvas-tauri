@@ -1221,12 +1221,14 @@ describe('critical canvas node interactions', () => {
     it.each([
       { type: 'source-image', entry: 'dialog' }, { type: 'source-image', entry: 'toolbar' },
       { type: 'ai-image', entry: 'dialog' }, { type: 'ai-image', entry: 'toolbar' },
-    ])('uses image models and generation for $type through $entry without changing source identity', async ({ type, entry }) => {
+    ].flatMap((entry) => ['9:16', undefined].map((aspectRatio) => ({ ...entry, aspectRatio }))))(
+      'uses image models for $type through $entry while preserving ratio $aspectRatio and source identity', async ({ type, entry, aspectRatio }) => {
       const store = createStore([{
         id: 'imported-image', type, position: { x: 12, y: 34 },
         data: { type, label: '上传图片', role: 'source', status: 'success',
           imageUrl: 'asset://original.png', filePath: 'original.png', assetId: 'original-asset',
           dramaAssetId: 'character-1', prompt: '@{reference:参考图} 重绘',
+          aspectRatio, nodeWidth: 158, nodeHeight: 280,
           model: 'old-model', provider: 'general' },
       }], () => 1);
       store.activeNodeId = 'imported-image';
@@ -1253,7 +1255,8 @@ describe('critical canvas node interactions', () => {
       }));
       vi.doMock('../../src/services/ai/mediaModelCapabilities', async () => ({
         ...await vi.importActual<typeof import('../../src/services/ai/mediaModelCapabilities')>('../../src/services/ai/mediaModelCapabilities'),
-        resolveImageParameterCapability: () => ({ defaultResolution: '1K', defaultRatio: '3:4' }),
+        resolveImageParameterCapability: () => ({ resolutions: ['1K'], defaultResolution: '1K', ratios: ['3:4', '9:16', '1:1'], defaultRatio: '3:4',
+          qualities: ['low', 'high'], defaultQuality: 'high' }),
       }));
       vi.doMock('../../src/services/projectSettingsService', async () => ({
         ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
@@ -1262,7 +1265,10 @@ describe('critical canvas node interactions', () => {
         getProjectModelKind: (nodeType: string) => nodeType === 'ai-image' ? 'image' : null,
         parseProjectModelRef: (model: string | undefined) => model ? { model, provider: 'general' } : null,
       }));
-      vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), getPendingTasksForProject: () => [] }));
+      vi.doMock('../../src/services/pollManager', () => ({
+        ...mockComfyDeliveries(), getPendingTasksForProject: () => [],
+        prepareMediaNodeGeneration: vi.fn(), registerMediaNodeOperation: () => vi.fn(), completeMediaNodeTask: vi.fn(),
+      }));
 
       const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
       const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
@@ -1272,9 +1278,11 @@ describe('critical canvas node interactions', () => {
         value: 'general/image-model', provider: 'general', label: 'Image model',
       });
       expect(store.nodes[0].data).toMatchObject({
-        type, role: 'source', model: 'general/image-model', imageSize: '1K', aspectRatio: '3:4',
+        type, role: 'source', model: 'general/image-model', imageSize: '1K', aspectRatio, imageQuality: 'high',
+        nodeWidth: 158, nodeHeight: 280,
         imageUrl: 'asset://original.png', filePath: 'original.png', assetId: 'original-asset', dramaAssetId: 'character-1',
       });
+      (panel.props.onChangeImageQuality as (quality: string) => void)('low');
       if (entry === 'dialog') await (panel.props.onSubmit as () => Promise<void>)();
       else {
         const { executeGeneration } = await import('../../src/services/generationService');
@@ -1285,13 +1293,125 @@ describe('critical canvas node interactions', () => {
       }));
       expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
         nodeId: 'imported-image', model: 'general/image-model', provider: 'general',
-        prompt: 'ai-image:@{reference:参考图} 重绘', imageSize: '1K', aspectRatio: '3:4',
+        prompt: 'ai-image:@{reference:参考图} 重绘', imageSize: '1K', aspectRatio: aspectRatio ?? '1:1', imageQuality: 'low',
       }));
       expect(generateText).not.toHaveBeenCalled();
       expect(store.nodes[0]).toMatchObject({ id: 'imported-image', type, position: { x: 12, y: 34 },
         data: { type, role: 'source', assetId: 'original-asset', dramaAssetId: 'character-1',
           status: 'success', imageUrl: 'https://example.com/result.png' } });
-      expect(store.recordOutputHistory).toHaveBeenCalledWith('imported-image', expect.objectContaining({ nodeType: 'ai-image' }));
+      expect(store.recordOutputHistory).toHaveBeenCalledWith('imported-image', expect.objectContaining({
+        nodeType: 'ai-image', params: expect.objectContaining({ imageQuality: 'low' }),
+      }));
+    });
+  });
+
+  describe('AINodeDialog image quality', () => {
+    afterEach(() => {
+      for (const module of [
+        '../../src/services/ai/mediaModelCapabilities', '../../src/services/projectSettingsService',
+        '../../src/services/imageBatchService', '../../src/services/pollManager',
+      ]) vi.doUnmock(module);
+    });
+
+    async function setupImageQualityDialog(batchCount = 1) {
+      const store = createStore([{
+        id: 'quality-image', type: 'ai-image', position: { x: 0, y: 0 },
+        data: { type: 'ai-image', label: '图片', status: 'idle', prompt: 'cat',
+          model: 'general/model-a', provider: 'general', imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max', batchCount,
+          nodeWidth: 280, nodeHeight: 158 },
+      }], () => 1);
+      store.activeNodeId = 'quality-image';
+      const generateImage = vi.fn().mockResolvedValue({ url: 'https://example.com/result.png', width: 1024, height: 1024 });
+      const generateImagesBatch = vi.fn().mockResolvedValue({ results: [{ url: 'https://example.com/result.png' }] });
+      const applyImageBatchResults = vi.fn().mockResolvedValue(true);
+      await installReactHookDriver();
+      installStoreMock(store);
+      vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+      vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+      vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }));
+      vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({ default: function PromptPanelMock() { return null; } }));
+      vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+      vi.doMock('../../src/services/aiService', () => ({
+        generateText: vi.fn(), generateImage, generateImagesBatch, generateVideo: vi.fn(), generateAudio: vi.fn(), buildPanoramaPrompt: vi.fn(),
+      }));
+      vi.doMock('../../src/services/fileService', () => ({
+        persistMediaUrlToProjectData: vi.fn(async (url: string) => ({ mediaUrl: url, sourceUrl: url, filePath: 'result.png' })),
+      }));
+      vi.doMock('../../src/services/ai/mediaModelCapabilities', () => ({
+        resolveImageParameterCapability: (model: string) => model === 'general/model-b'
+          ? { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
+            qualities: ['low', 'medium', 'high'], defaultQuality: 'medium' }
+          : undefined,
+      }));
+      vi.doMock('../../src/services/projectSettingsService', async () => ({
+        ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
+        resolveProjectGenerationPrompt: ({ prompt }: { prompt: string }) => prompt,
+        getImageNodeDimensionsForAspectRatio: () => ({ nodeWidth: 280, nodeHeight: 280 }),
+      }));
+      vi.doMock('../../src/services/pollManager', () => ({
+        ...mockComfyDeliveries(), getPendingTasksForProject: () => [],
+        prepareMediaNodeGeneration: vi.fn(), registerMediaNodeOperation: () => vi.fn(), completeMediaNodeTask: vi.fn(),
+      }));
+      vi.doMock('../../src/services/imageBatchService', () => ({
+        prepareImageBatchNodes: () => ({ nodeIds: ['quality-image', 'batch-image'] }),
+        applyImageBatchResults, failImageBatchNodes: vi.fn(),
+      }));
+      const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+      const panel = () => findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
+      return { store, panel, generateImage, generateImagesBatch, applyImageBatchResults };
+    }
+
+    it('preserves user ratio and dimensions while quality follows model changes, and still permits manual ratio edits', async () => {
+      const { store, panel } = await setupImageQualityDialog();
+      const select = (value: string) => (panel().props.onModelSelect as (model: Record<string, unknown>) => void)({ value, provider: 'general' });
+      select('general/model-a');
+      expect(store.nodes[0].data.imageQuality).toBe('max');
+      select('general/model-b');
+      expect(store.nodes[0].data.imageQuality).toBe('medium');
+      expect(store.nodes[0].data).toMatchObject({ aspectRatio: '16:9', nodeWidth: 280, nodeHeight: 158 });
+      (panel().props.onChangeAspectRatio as (ratio: string) => void)('9:16');
+      expect(store.nodes[0].data).toMatchObject({ aspectRatio: '9:16', nodeWidth: 280, nodeHeight: 280 });
+      (panel().props.onChangeImageQuality as (quality: string) => void)('high');
+      expect(store.nodes[0].data.imageQuality).toBe('high');
+      select('general/model-a');
+      expect(store.nodes[0].data.imageQuality).toBeUndefined();
+      expect(store.nodes[0].data.aspectRatio).toBe('9:16');
+      select('general/model-b');
+      (panel().props.onWorkflowSelect as (id: string | undefined) => void)('workflow-1');
+      expect(store.nodes[0].data.imageQuality).toBeUndefined();
+      select('general/model-b');
+      expect(store.nodes[0].data.imageQuality).toBe('medium');
+      (panel().props.onClearModel as () => void)();
+      expect(store.nodes[0].data.imageQuality).toBeUndefined();
+    });
+
+    it.each([
+      { count: 1, quality: undefined, expected: 'medium' }, { count: 1, quality: 'high', expected: 'high' },
+      { count: 2, quality: undefined, expected: 'medium' }, { count: 2, quality: 'high', expected: 'high' },
+    ])('passes effective quality $expected through submission/history for batch count $count', async ({ count, quality, expected }) => {
+      const { store, panel, generateImage, generateImagesBatch, applyImageBatchResults } = await setupImageQualityDialog(count);
+      const currentPanel = panel();
+      (currentPanel.props.onModelSelect as (model: Record<string, unknown>) => void)({ value: 'general/model-b', provider: 'general' });
+      (currentPanel.props.onChangeImageQuality as (quality: string | undefined) => void)(quality);
+      await (currentPanel.props.onSubmit as () => Promise<void>)();
+      if (count === 1) {
+        expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: expected }));
+        expect(store.recordOutputHistory).toHaveBeenCalledWith('quality-image', expect.objectContaining({
+          params: expect.objectContaining({ imageQuality: expected }),
+        }));
+      } else {
+        expect(generateImagesBatch).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: expected }), 2);
+        expect(applyImageBatchResults).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: expected }));
+      }
+    });
+
+    it('omits stale quality when the selected model has no quality capability', async () => {
+      const { store, panel, generateImage } = await setupImageQualityDialog();
+      await (panel().props.onSubmit as () => Promise<void>)();
+      expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: undefined }));
+      expect(store.recordOutputHistory).toHaveBeenCalledWith('quality-image', expect.objectContaining({
+        params: expect.objectContaining({ imageQuality: undefined }),
+      }));
     });
   });
 

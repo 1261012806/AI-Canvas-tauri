@@ -253,6 +253,7 @@ export const apimartMediaProviderAdapter: MediaProviderAdapter = {
       requestedCount,
       params.nodeId,
       signal,
+      params.imageQuality,
     );
   },
 

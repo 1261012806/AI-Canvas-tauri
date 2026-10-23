@@ -24,6 +24,11 @@ describe('protocol variable table', () => {
     expect(resolveProtocolFieldTemplate('size', '1024x1024', 'image')).toBe('{{size}}');
     // 同名字段按模型类别分流
     expect(resolveProtocolFieldTemplate('resolution', '2K', 'image')).toBe('{{imageSize}}');
+    expect(resolveProtocolFieldTemplate('quality', 'high', 'image')).toBe('{{imageQuality}}');
+    expect(resolveProtocolFieldTemplate('imagequality', 'max', 'image')).toBe('{{imageQuality}}');
+    expect(resolveProtocolFieldTemplate('quality', 'high', 'video')).toBeUndefined();
+    expect(getCategoryProtocolVariables('image')).toContain('imageQuality');
+    expect(getCategoryProtocolVariables('video')).not.toContain('imageQuality');
     expect(resolveProtocolFieldTemplate('resolution', '720p', 'video')).toBe('{{seedanceResolution}}');
     // 类别限定优先于取值限定
     expect(resolveProtocolFieldTemplate('firstframeimage', 'https://a/1.png', 'video')).toBe('{{firstImage}}');

@@ -21,6 +21,7 @@ interface ApplyImageBatchParams {
   projectId: string | null | undefined;
   prompt: string;
   imageSize: string;
+  imageQuality?: string;
   aspectRatio: string;
 }
 
@@ -163,6 +164,7 @@ export async function applyImageBatchResults({
   projectId,
   prompt,
   imageSize,
+  imageQuality,
   aspectRatio,
   isCurrent,
 }: ApplyImageBatchParams): Promise<boolean> {
@@ -258,7 +260,7 @@ export async function applyImageBatchResults({
       status: 'success',
       mediaUrl: item.persisted.mediaUrl,
       filePath: item.persisted.filePath,
-      params: { imageSize, aspectRatio, batchCount: batch.requestedCount, batchIndex: index + 1 },
+      params: { imageSize, imageQuality, aspectRatio, batchCount: batch.requestedCount, batchIndex: index + 1 },
     });
   }));
 

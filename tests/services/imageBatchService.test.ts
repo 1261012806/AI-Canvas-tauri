@@ -83,6 +83,19 @@ beforeEach(() => {
 });
 
 describe('imageBatchService', () => {
+  it('records the selected quality for every delivered image', async () => {
+    const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
+    const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
+    await applyImageBatchResults({ nodeId: 'source', targetNodeIds: prepared.nodeIds,
+      batch: { requestedCount: 2, failedCount: 0, results: [
+        { url: 'https://example.com/1.png', width: 2048, height: 1152 },
+        { url: 'https://example.com/2.png', width: 2048, height: 1152 },
+      ] }, projectId: 'project-a', prompt: 'cat', imageSize: '2K', imageQuality: 'max', aspectRatio: '16:9' });
+    expect(store.recordOutputHistory).toHaveBeenCalledTimes(2);
+    for (const [, record] of store.recordOutputHistory.mock.calls) {
+      expect(record.params).toMatchObject({ imageSize: '2K', imageQuality: 'max', aspectRatio: '16:9' });
+    }
+  });
   it('部分任务明确失败且其余任务均已终态时，成功产物交付后结束聚合记录', async () => {
     const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
     const receipt = { projectId: 'project-a', nodeId: 'source', taskId: 'original', attemptId: 'first' };

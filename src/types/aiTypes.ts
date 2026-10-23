@@ -18,6 +18,7 @@ export interface AIImageGenParams extends AIGenerateParams {
   runninghubModelParameters?: Record<string, string>;
   runninghubTaskContext?: import('./runninghub').RunningHubTaskContext;
   imageSize?: string;     // '1K' | '2K' | '4K'
+  imageQuality?: string;  // 厂商声明的生成质量，与分辨率独立
   aspectRatio?: string;   // '1:1' | '16:9' | '9:16' | ...
   image_urls?: string[];  // 参考图片 URL（从 @图片节点 引用中提取）
   workflowId?: string;    // ComfyUI 工作流 ID（存在时走 ComfyUI 执行）
@@ -309,6 +310,10 @@ export interface ImageModelCapability {
   resolutions?: string[];
   /** 未指定分辨率时的默认值。 */
   defaultResolution?: string;
+  /** 厂商明确支持的生成质量，如 ['auto', 'low', 'medium', 'high']；未声明时不发送。 */
+  qualities?: string[];
+  /** 未指定生成质量时的默认值，必须属于 qualities。 */
+  defaultQuality?: string;
   /** 可选宽高比，如 ['1:1', '16:9', '9:16', 'auto']。 */
   ratios?: string[];
   /** 未指定比例时的默认值。 */

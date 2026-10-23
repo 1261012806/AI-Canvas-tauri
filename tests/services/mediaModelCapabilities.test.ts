@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { normalizeSeedreamSize } from '../../src/services/ai/helpers';
 import { buildImageCapabilityRequest, getImageCapability, resolveImageParameterCapability } from '../../src/services/ai/mediaModelCapabilities';
 import { assertConfiguredImageReferences, assertImageModelCapability, assertModelCapabilityProtocol, resolveConfiguredImageParameters } from '../../src/services/ai/modelCapabilityValidation';
+import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
+import type { ProtocolJsonValue } from '../../src/types/aiTypes';
 
 describe('custom image parameter declarations', () => {
   it('resolves a gateway model using its own saved tiers instead of a same-name provider', () => {
@@ -129,6 +131,14 @@ describe('image model capability resolution', () => {
 });
 
 describe('APIMart 新图片模型合同', () => {
+  it('uses an explicit user ratio and rejects unsupported ratios instead of silently changing it', () => {
+    expect(buildImageCapabilityRequest('apimart/gpt-image-2.5-sunburst', 'portrait', { ratio: '9:16' })?.body)
+      .toMatchObject({ size: '9:16' });
+    expect(() => buildImageCapabilityRequest('apimart/gpt-image-2.5-sunburst', 'portrait', { ratio: '8:1' }))
+      .toThrow('不支持比例 8:1');
+    expect(buildImageCapabilityRequest('apimart/gpt-image-2.5-sunburst', 'portrait', {})?.body)
+      .toMatchObject({ size: '1:1' });
+  });
   it('Nano Banana 原版与官方渠道开放真实档位，保留其他厂商能力', () => {
     expect(buildImageCapabilityRequest('apimart/gemini-3.1-flash-image-preview', 'prompt', { resolution: '4K', ratio: '8:1' })?.body)
       .toMatchObject({ resolution: '4K', size: '8:1' });
@@ -163,5 +173,108 @@ describe('APIMart 新图片模型合同', () => {
   it('GPT Image Ext 显式传入版本，并限制合法比例与输出档位', () => {
     expect(buildImageCapabilityRequest('apimart/gpt-image-2.5-ext', 'prompt', { resolution: '4k', ratio: '21:9', count: 4 })?.body)
       .toEqual({ model: 'gpt-image-2.5-ext', prompt: 'prompt', version: 'flare', resolution: '4K', size: '21:9', n: 4 });
+  });
+});
+
+describe('图片生成质量按渠道隔离', () => {
+  it.each([
+    ['apimart/gpt-image-1-official', ['auto', 'low', 'medium', 'high'], 'auto'],
+    ['apimart/gpt-image-1.5-official', ['auto', 'low', 'medium', 'high'], 'auto'],
+    ['apimart/gpt-image-2-official', ['auto', 'low', 'medium', 'high'], 'auto'],
+    ['apimart/gpt-image-2.5-flare', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], 'auto'],
+    ['apimart/gpt-image-2.5-sunburst', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], 'auto'],
+    ['grsai/gpt-image-2', ['auto'], 'auto'],
+    ['grsai/gpt-image-2-vip', ['medium'], 'medium'],
+    ['grsai/gpt-image-2.5', ['auto'], 'auto'],
+    ['grsai/gpt-image-2.5-flare', ['low', 'medium', 'high'], 'medium'],
+    ['grsai/gpt-image-2.5-sunburst', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+  ])('%s 只展示该渠道文档的质量并保留默认值', (model, qualities, defaultQuality) => {
+    expect(getImageCapability(model as string)).toMatchObject({ qualities, defaultQuality });
+  });
+
+  it.each(['apimart/gpt-image-1', 'apimart/gpt-image-1.5', 'apimart/gpt-image-2',
+    'apimart/gpt-image-2.5-ext', 'apimart/gpt-image-2.5-flare-unknown',
+    'cccapi/gpt-image-2.5-flare', 'custom/gpt-image-2.5-flare', 'gpt-image-2.5-flare'])(
+    '不把同名或未知渠道 %s 当作已确认质量能力', (model) => {
+    expect(getImageCapability(model)?.qualities).toBeUndefined();
+  });
+
+  it('APIMart 请求中的质量不改变分辨率或比例，未声明质量的型号不发送质量', () => {
+    expect(buildImageCapabilityRequest('apimart/gpt-image-2.5-sunburst', 'prompt', {
+      imageQuality: 'max', resolution: '2K', ratio: '16:9',
+    })?.body).toMatchObject({ quality: 'max', resolution: '2k', size: '16:9' });
+    expect(buildImageCapabilityRequest('apimart/gpt-image-2-official', 'prompt', {})?.body).toMatchObject({ quality: 'auto' });
+    expect(() => buildImageCapabilityRequest('apimart/gpt-image-2-official', 'prompt', { imageQuality: 'max' })).toThrow('质量');
+    expect(buildImageCapabilityRequest('apimart/gpt-image-2', 'prompt', { imageQuality: 'max' })?.body).not.toHaveProperty('quality');
+  });
+
+  it('旧内置连接的标准请求补充已确认质量，自定义同名连接只使用自己的声明', () => {
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: {
+        savedCcc: { name: 'CCC', apiKey: '', catalogId: 'cccapi' },
+        savedApimart: { name: 'APIMart', apiKey: '', catalogId: 'apimart' },
+        custom: { name: 'Custom', apiKey: '', catalogId: 'custom-openai' },
+      },
+      generalModels: ['savedCcc', 'savedApimart', 'custom'].map((providerConfigId) => ({
+        id: providerConfigId, name: 'GPT', modelId: 'gpt-image-2.5-flare', category: 'image' as const, providerConfigId,
+        imageCapability: { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1' },
+      })),
+    };
+    for (const id of ['savedCcc', 'savedApimart']) {
+      expect(resolveImageParameterCapability(`general/${id}`, 'general', config)).toMatchObject({
+        resolutions: ['1K'], qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+      });
+    }
+    expect(resolveImageParameterCapability('general/custom', 'general', config)?.qualities).toBeUndefined();
+    expect(resolveImageParameterCapability('cccapi/gpt-image-2.5', 'cccapi', config)?.qualities).toBeUndefined();
+  });
+
+  it('CCC 已确认的 Images 合同优先于旧 custom 协议，质量仍按当前目录发送', () => {
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { ccc: { name: 'CCC', apiKey: '', catalogId: 'cccapi' } },
+      generalModels: [{ id: 'ccc-image', name: 'Sunburst', modelId: 'gpt-image-2.5-sunburst', category: 'image',
+        providerConfigId: 'ccc', imageCapability: { qualities: ['high'], defaultQuality: 'high' },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/old/images', body: { quality: 'high' } },
+          response: { type: 'json', result: { urlPath: 'url' } },
+        } },
+      }],
+    };
+    expect(resolveImageParameterCapability('general/ccc-image', 'general', config))
+      .toMatchObject({ qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' });
+  });
+
+  it('自定义固定质量保持单值，未映射与动态映射不能继承目录质量', () => {
+    const base = { id: 'saved', name: 'GPT', modelId: 'gpt-image-2.5-flare', category: 'image' as const,
+      providerConfigId: 'savedApimart', imageCapability: { qualities: ['low', 'high'], defaultQuality: 'low' } };
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { savedApimart: { name: 'APIMart', apiKey: '', catalogId: 'apimart' } },
+      generalModels: [{ ...base, executionProfile: { preset: 'custom', protocol: {
+        version: 2, mode: 'sync', submit: { method: 'POST', path: '/images', body: { quality: 'high' } },
+        response: { type: 'json', result: { urlPath: 'url' } },
+      } } }],
+    };
+    expect(resolveImageParameterCapability('general/saved', 'general', config)).toMatchObject({ qualities: ['high'], defaultQuality: 'high' });
+    const saved = config.generalModels![0];
+    saved.executionProfile!.protocol!.submit.body = { prompt: '{{prompt}}' };
+    expect(resolveImageParameterCapability('general/saved', 'general', config)?.qualities).toBeUndefined();
+    saved.executionProfile!.protocol!.submit.body = { quality: '{{imageQuality}}' };
+    expect(resolveImageParameterCapability('general/saved', 'general', config)).toMatchObject({ qualities: ['low', 'high'], defaultQuality: 'low' });
+  });
+
+  it('已保存的 ToAPIs 完整旧合同与当前节点目录使用相同质量能力', () => {
+    const current = TOAPIS_MODEL_MANIFEST.find((model) => model.id === 'gpt-image-2.5-sunburst-vip')!;
+    const previous = structuredClone(current.executionProfile!);
+    (previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { savedToapis: { name: 'ToAPIs', apiKey: '', catalogId: 'toapis' } },
+      generalModels: [{ id: 'saved', name: current.name, modelId: current.id, category: 'image',
+        providerConfigId: 'savedToapis', executionProfile: previous,
+        imageCapability: { ...current.imageCapability, qualities: undefined, defaultQuality: undefined },
+      }],
+    };
+    expect(resolveImageParameterCapability('general/saved', 'general', config))
+      .toMatchObject({ qualities: current.imageCapability!.qualities, defaultQuality: 'high' });
+    expect((previous.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality).toBe('high');
   });
 });

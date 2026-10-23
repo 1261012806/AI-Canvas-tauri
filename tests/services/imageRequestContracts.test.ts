@@ -10,6 +10,21 @@ function contractFor(model: string, size = '2K', ratio = '16:9') {
 }
 
 describe('built-in image request contracts', () => {
+  it.each([
+    ['gpt-image-2.5-flare', 'high'], ['gpt-image-2.5-sunburst', 'max'],
+  ])('uses the selected GRSAI quality without changing pixels (%s)', (model, quality) => {
+    const contract = resolveBuiltInImageRequestContract(getProviderDefinition('grsai'), model, '2K', '16:9', quality);
+    expect(contract?.kind === 'protocol' && contract.protocol.submit.body)
+      .toMatchObject({ aspectRatio: '2048x1152', quality });
+    expect(contract?.kind === 'protocol' && contract.dimensions).toEqual({ width: 2048, height: 1152 });
+  });
+
+  it('rejects GRSAI quality unsupported by the precise model', () => {
+    expect(() => resolveBuiltInImageRequestContract(getProviderDefinition('grsai'),
+      'gpt-image-2.5-flare', '2K', '16:9', 'max')).toThrow('不支持质量');
+    expect(() => resolveBuiltInImageRequestContract(getProviderDefinition('grsai'),
+      'gpt-image-2', '1K', '16:9', 'high')).toThrow('不支持质量');
+  });
   it.each(['nano-banana-2.1', 'nano-banana-2-lite'])('uses the native generation contract for %s', (model) => {
     const { protocol } = contractFor(model);
     expect(protocol.submit.path).toBe('/api/generate');

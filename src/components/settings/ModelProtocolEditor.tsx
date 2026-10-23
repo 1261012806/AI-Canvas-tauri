@@ -198,6 +198,7 @@ function createPreviewVariables(model: ProviderModelSelection): ModelProtocolVar
     return {
       ...common,
       imageSize,
+      imageQuality: model.imageCapability?.qualities?.length ? model.imageCapability.defaultQuality : undefined,
       aspectRatio,
       size: `${dimensions.width}x${dimensions.height}`,
       ...dimensions,

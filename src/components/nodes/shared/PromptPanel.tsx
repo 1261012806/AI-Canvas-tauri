@@ -382,8 +382,10 @@ interface PromptPanelProps {
   onDebug?: () => void;
   onPassThrough?: () => void;
   imageSize?: string;
+  imageQuality?: string;
   aspectRatio?: string;
   onChangeImageSize?: (size: string) => void;
+  onChangeImageQuality?: (quality: string | undefined) => void;
   onChangeAspectRatio?: (ratio: string) => void;
   batchCount?: number;
   onChangeBatchCount?: (count: number) => void;
@@ -462,8 +464,10 @@ export default function PromptPanel({
   onDebug,
   onPassThrough,
   imageSize,
+  imageQuality,
   aspectRatio,
   onChangeImageSize,
+  onChangeImageQuality,
   onChangeAspectRatio,
   batchCount = 1,
   onChangeBatchCount,
@@ -607,23 +611,21 @@ export default function PromptPanel({
         ?? imageResolutions[0];
       onChangeImageSize?.(fallback);
     }
-    const normalizedRatio = aspectRatio === '自适应' ? 'auto' : aspectRatio;
-    const supportedRatios: readonly string[] = imageCapability?.ratios ?? imageRatioValues ?? [];
-    if (supportedRatios.length && (!normalizedRatio || !supportedRatios.includes(normalizedRatio))) {
-      const fallback = imageCapability?.defaultRatio === 'auto'
-        ? '自适应'
-        : (imageCapability?.defaultRatio ?? supportedRatios[0]);
-      onChangeAspectRatio?.(fallback);
+    const qualities = selectedWorkflowId ? undefined : imageCapability?.qualities;
+    const selectedQuality = qualities?.find((quality) => quality.toLowerCase() === imageQuality?.toLowerCase())
+      ?? qualities?.find((quality) => quality.toLowerCase() === imageCapability?.defaultQuality?.toLowerCase());
+    if (imageQuality !== selectedQuality) {
+      onChangeImageQuality?.(selectedQuality);
     }
   }, [
-    aspectRatio,
     nodeType,
     imageCapability,
-    imageRatioValues,
     imageResolutions,
     imageSize,
-    onChangeAspectRatio,
+    imageQuality,
+    selectedWorkflowId,
     onChangeImageSize,
+    onChangeImageQuality,
   ]);
 
   const performanceMode = useAppStore((s) => s.config.performanceMode === true);
@@ -1029,8 +1031,12 @@ export default function PromptPanel({
             ) : (
               <QualityRatioSelector
                 imageSize={imageResolutions?.length === 0 ? t('未声明') : imageSize}
+                imageQuality={imageQuality}
+                imageQualities={selectedWorkflowId ? undefined : imageCapability?.qualities}
+                defaultImageQuality={selectedWorkflowId ? undefined : imageCapability?.defaultQuality}
                 aspectRatio={imageRatioValues?.length === 0 && !imageSupportsAdaptive ? t('比例待确认') : aspectRatio}
                 onChangeImageSize={onChangeImageSize || (() => {})}
+                onChangeImageQuality={onChangeImageQuality}
                 onChangeAspectRatio={onChangeAspectRatio || (() => {})}
                 showImageSize={imageResolutions === undefined || imageResolutions.length > 0}
                 imageSizes={imageResolutions}

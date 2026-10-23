@@ -330,6 +330,7 @@ const nodes = {
 
   // ── QualityRatioSelector ──
   '画质': 'Quality',
+  '生成质量': 'Generation quality',
   '比例': 'Ratio',
   '自适应': 'Adaptive',
 

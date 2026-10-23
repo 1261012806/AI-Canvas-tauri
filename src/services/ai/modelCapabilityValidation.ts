@@ -79,7 +79,7 @@ export function assertModelProtocolResultMapping(
 
 export function assertImageModelCapability(capability: ImageModelCapability): void {
   for (const [field, defaultField] of [
-    ['resolutions', 'defaultResolution'], ['ratios', 'defaultRatio'],
+    ['resolutions', 'defaultResolution'], ['ratios', 'defaultRatio'], ['qualities', 'defaultQuality'],
   ] as const) {
     const values = capability[field];
     if (values && (values.length === 0 || values.some((value) => !value.trim())
@@ -124,10 +124,24 @@ export function assertImageModelCapability(capability: ImageModelCapability): vo
   }
 }
 
+/** 未声明质量能力或默认值时沿用接口默认，不把第一个候选档位当作默认。 */
+export function resolveConfiguredImageQuality(
+  capability: ImageModelCapability | undefined,
+  imageQuality?: string,
+): string | undefined {
+  if (!capability?.qualities?.length) return undefined;
+  assertImageModelCapability({ qualities: capability.qualities, defaultQuality: capability.defaultQuality });
+  const selected = imageQuality ?? capability.defaultQuality;
+  if (selected === undefined) return undefined;
+  const match = capability.qualities.find((value) => value.toLowerCase() === selected.toLowerCase());
+  if (!match) throw new Error(`图片模型不支持质量 ${selected}，可选：${capability.qualities.join('、')}`);
+  return match;
+}
+
 export function resolveConfiguredImageParameters(
   capability: ImageModelCapability,
-  params: { imageSize?: string; aspectRatio?: string; count: number },
-): { imageSize: string; aspectRatio: string } {
+  params: { imageSize?: string; aspectRatio?: string; imageQuality?: string; count: number },
+): { imageSize: string; aspectRatio: string; imageQuality?: string } {
   assertImageModelCapability(capability);
   const select = (value: string | undefined, allowed: string[] | undefined, fallback: string | undefined, label: string, legacy: string) => {
     const normalized = value === '自适应' ? 'auto' : value;
@@ -142,9 +156,11 @@ export function resolveConfiguredImageParameters(
   if (maximum !== undefined && params.count > maximum) {
     throw new Error(`图片模型单次最多生成 ${maximum} 张图片`);
   }
+  const imageQuality = resolveConfiguredImageQuality(capability, params.imageQuality);
   return {
     imageSize: select(params.imageSize, capability.resolutions, capability.defaultResolution, '分辨率', '2K'),
     aspectRatio: select(params.aspectRatio, capability.ratios, capability.defaultRatio, '比例', '1:1'),
+    ...(imageQuality !== undefined ? { imageQuality } : {}),
   };
 }
 
@@ -171,6 +187,10 @@ export function assertModelCapabilityProtocol(model: ProviderModelSelection): vo
   }
   if (!protocol) return;
   assertModelProtocolResultMapping(model.category, protocol);
+  if (model.category === 'image' && (model.imageCapability?.qualities?.length ?? 0) > 1
+    && !modelProtocolUsesVariable(JSON.stringify(protocol.submit), 'imageQuality')) {
+    throw new Error(`模型“${model.name}”声明可调质量，但提交协议没有映射 {{imageQuality}}`);
+  }
   // 厂商预设的请求映射由各预设维护；这里不把它当成用户声明的自定义参数。
   if (model.executionProfile?.preset !== 'custom') return;
   const source = JSON.stringify(protocol.submit);

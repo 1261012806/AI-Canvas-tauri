@@ -23,6 +23,9 @@ import { createWorkflowApiDraft } from '../../src/services/workflowApi/workflowA
 import { readModelProtocolPathValues } from '../../src/services/ai/modelProtocolResponse';
 import { buildGeneralVideoProtocolVariables } from '../../src/services/ai/generateVideo';
 import { getPendingTasksForProject, MediaTaskPausedError, VideoPollingPausedError } from '../../src/services/pollManager';
+import {
+  assertImageModelCapability, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageQuality,
+} from '../../src/services/ai/modelCapabilityValidation';
 
 const jsonResponse = (
   payload: unknown,
@@ -38,6 +41,39 @@ beforeEach(() => {
 });
 
 describe('declarative model execution protocol', () => {
+  it('resolves declared image quality without inventing a channel default', () => {
+    const capability = { qualities: ['low', 'medium', 'high'] };
+    expect(resolveConfiguredImageQuality(undefined, 'max')).toBeUndefined();
+    expect(resolveConfiguredImageQuality({}, 'high')).toBeUndefined();
+    expect(resolveConfiguredImageQuality(capability)).toBeUndefined();
+    expect(resolveConfiguredImageQuality({ ...capability, defaultQuality: 'medium' })).toBe('medium');
+    expect(resolveConfiguredImageParameters(capability, { imageSize: '2K', imageQuality: 'HIGH', count: 1 }))
+      .toMatchObject({ imageSize: '2K', imageQuality: 'high' });
+    expect(() => resolveConfiguredImageQuality(capability, 'max')).toThrow('不支持质量 max');
+    expect(() => assertImageModelCapability({ qualities: ['high', 'HIGH'] })).toThrow('qualities');
+    expect(() => assertImageModelCapability({ qualities: ['low'], defaultQuality: 'max' })).toThrow('defaultQuality');
+  });
+
+  it('requires adjustable quality to consume its own variable instead of resolution', () => {
+    const protocol = getModelProtocolPreset('openai-gpt-image');
+    const model = { id: 'custom-image', name: 'Custom Image', provider: 'custom', category: 'image' as const,
+      imageCapability: { qualities: ['low', 'high'] }, executionProfile: { preset: 'custom' as const, protocol } };
+    expect(() => assertModelCapabilityProtocol(model)).not.toThrow();
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', quality: '{{imageSize}}' };
+    expect(() => assertModelCapabilityProtocol(model)).toThrow('{{imageQuality}}');
+    protocol.submit.body = { model: '{{model}}', prompt: '{{prompt}}', quality: 'high' };
+    expect(() => assertModelCapabilityProtocol({ ...model, imageCapability: { qualities: ['high'], defaultQuality: 'high' } })).not.toThrow();
+  });
+
+  it.each(['openai-image', 'openai-gpt-image', 'gpt-image-gateway-json'] as const)('maps %s quality and omits it when undeclared', (preset) => {
+    const protocol = getModelProtocolPreset(preset);
+    const variables = { model: 'image-model', prompt: 'draft', size: '2048x2048', imageSize: '2K', imageQuality: 'max', n: 1 };
+    const request = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: 'https://gateway.example/v1', protocol, variables });
+    expect(JSON.parse(String(request.init.body))).toMatchObject({ size: '2048x2048', quality: 'max' });
+    const omitted = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: 'https://gateway.example/v1', protocol, variables: { ...variables, imageQuality: undefined } });
+    expect(JSON.parse(String(omitted.init.body))).not.toHaveProperty('quality');
+  });
+
   it.each(['image', 'audio'] as const)('retains a submitted %s task after a non-timeout query failure', async (category) => {
     localStorage.clear();
     useAppStore.setState((state) => ({ currentProjectId: 'media-query-project',

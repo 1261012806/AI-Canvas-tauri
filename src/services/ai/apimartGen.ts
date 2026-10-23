@@ -187,6 +187,7 @@ export async function generateApimartImagesBatch(
   count = 1,
   nodeId?: string,
   externalSignal?: AbortSignal,
+  imageQuality?: string,
 ): Promise<BatchImageResult> {
   // 能力表驱动：命中 APIMart 生图能力表时，按模型约束分辨率 / 批量数量 / 参考图，
   // 并复用能力表换算出的结果回填尺寸；未命中则回退通用提交逻辑（兼容旧模型）。
@@ -195,6 +196,7 @@ export async function generateApimartImagesBatch(
   const capability = getImageCapability(capabilityModel);
   const capabilityRequest = buildImageCapabilityRequest(capabilityModel, prompt, {
     resolution: imageSize,
+    imageQuality,
     ratio: aspectRatio,
     count: requestedBatchCount,
     imageUrls,
@@ -239,6 +241,7 @@ export async function generateApimartImagesBatch(
         model,
         prompt,
         imageSize,
+        imageQuality,
         aspectRatio,
         batchCount: requestedCount,
         referenceImageUrls: imageUrls,

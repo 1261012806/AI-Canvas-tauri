@@ -3,9 +3,15 @@ import {
   fetchProviderModelCatalog,
   getProviderDefinition,
   createConnectionId,
+  resolveProviderImageModelForValidation,
 } from '../../src/services/ai/providerCatalogService';
 import { SORA2U_MODEL_MANIFEST } from '../../src/services/ai/providers/sora2uModelManifest';
 import { defaultModelGroups } from '../../src/components/nodes/shared/defaultModels';
+import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
+import { parseConnectionShare, serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
+import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
+import type { ProviderModelSelection } from '../../src/types';
+import type { ProtocolJsonValue } from '../../src/types/aiTypes';
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -62,6 +68,29 @@ describe('providerCatalogService 模型分类推断', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://cccapi.cn/v1/models', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer stable-fixture' }),
     }));
+  });
+
+  it('CCC 仅为文档确认的 GPT 2.5 版本提供质量，未证明的别名保持未声明', () => {
+    const models = getProviderDefinition('cccapi')!.models!;
+    for (const id of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']) {
+      expect(models.find((model) => model.id === id)?.imageCapability).toEqual({
+        qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+      });
+    }
+    expect(models.find((model) => model.id === 'gpt-image-2.5')?.imageCapability?.qualities).toBeUndefined();
+    expect(models.find((model) => model.id === 'gpt-image-2')?.imageCapability?.qualities).toBeUndefined();
+  });
+
+  it.each(['imageCapability', 'image_capability'])('保留远端 %s 的质量声明和默认值并可序列化', async (field) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [{
+      id: 'gpt-image-2.5-sunburst', [field]: { resolutions: ['1K'], qualities: ['auto', 'high'], default_quality: 'auto' },
+    }] })));
+    const result = await fetchProviderModelCatalog({ providerId: 'custom-quality',
+      config: { name: '自定义接口', apiKey: 'fixture', catalogId: 'custom-openai', baseUrl: 'https://api.example/v1' },
+    });
+    expect(result.models[0]?.imageCapability).toMatchObject({ resolutions: ['1K'], qualities: ['auto', 'high'], defaultQuality: 'auto' });
+    expect(JSON.parse(JSON.stringify(result.models[0])).imageCapability)
+      .toMatchObject({ qualities: ['auto', 'high'], defaultQuality: 'auto' });
   });
 
   it('fails a CCC group catalog explicitly instead of offering models from other groups', async () => {
@@ -547,5 +576,97 @@ describe('Sora2U 远端模型能力目录', () => {
       provider: 'sora2u',
       inputModalities: ['text', 'image'],
     });
+  });
+});
+
+describe('厂商图片有效合同校验与连接导入', () => {
+  function legacyCccModel(): ProviderModelSelection {
+    return {
+      id: 'gpt-image-2.5-sunburst', name: 'Sunburst', category: 'image', provider: 'saved-ccc',
+      imageCapability: { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto' },
+      imageReferenceRequestMode: 'edits-multipart',
+      executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+        submit: { method: 'POST', path: '/old/images', body: { prompt: '{{prompt}}', quality: 'high' } },
+        response: { type: 'json', result: { urlPath: 'url' } },
+      } },
+    };
+  }
+
+  function legacyToapisModel(): ProviderModelSelection {
+    const model = structuredClone(TOAPIS_MODEL_MANIFEST.find((item) => item.id === 'gpt-image-2.5-sunburst-vip')!);
+    (model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = 'high';
+    return model;
+  }
+
+  it('CCC 只用标准合同副本校验，原能力、旧协议和待保存模型保持原样', () => {
+    const model = legacyCccModel();
+    const original = JSON.stringify(model);
+    const effective = resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), model);
+    expect(() => assertModelCapabilityProtocol(effective)).not.toThrow();
+    expect(effective.executionProfile).toBeUndefined();
+    expect(effective.imageCapability).toBe(model.imageCapability);
+    expect(JSON.stringify(model)).toBe(original);
+    expect(() => resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), {
+      ...model, imageCapability: { qualities: ['high'], defaultQuality: 'max' },
+    })).toThrow('defaultQuality');
+  });
+
+  it('已知 ToAPIs 完整旧合同使用有效副本校验，用户原始 fixed high 仍可完整分享', () => {
+    const model = legacyToapisModel();
+    const original = JSON.stringify(model);
+    const effective = resolveProviderImageModelForValidation(getProviderDefinition('toapis'), model);
+    expect(() => assertModelCapabilityProtocol(effective)).not.toThrow();
+    expect(effective.executionProfile!.protocol!.submit.body).toMatchObject({ quality: '{{imageQuality}}' });
+    expect(JSON.stringify(model)).toBe(original);
+  });
+
+  it.each(['custom-openai', 'unknown-provider'])('相同型号在 %s 连接中不能冒充 CCC 标准合同', (catalogId) => {
+    const model = { ...legacyCccModel(), provider: 'cccapi' };
+    const effective = resolveProviderImageModelForValidation(getProviderDefinition(catalogId), model);
+    expect(effective).toBe(model);
+    expect(() => assertModelCapabilityProtocol(effective)).toThrow('质量');
+    const parsed = parseConnectionShare(serializeConnection({ name: '同名自定义连接', apiKey: '', catalogId, selectedModels: [model] }))!;
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ modelId: model.id })]));
+    expect(parsed.config.selectedModels).toEqual([]);
+  });
+
+  it.each(['cccapi', 'toapis'])('%s 导入按真实目录上下文校验，保留原始 selected/catalog 模型协议', (catalogId) => {
+    const model = catalogId === 'cccapi' ? legacyCccModel() : legacyToapisModel();
+    const parsed = parseConnectionShare(serializeConnection({ name: '旧连接', apiKey: '', catalogId,
+      selectedModels: [model], catalogModels: [model],
+    }))!;
+    expect(parsed.diagnostics).toEqual([]);
+    for (const imported of [parsed.config.selectedModels![0], parsed.config.catalogModels![0]]) {
+      expect(imported.executionProfile).toEqual(model.executionProfile);
+      expect(imported.imageCapability).toEqual(model.imageCapability);
+      expect(imported.provider).toBe('');
+    }
+  });
+
+  it.each(['https://attacker.invalid/images', 'javascript:alert(1)'])('CCC 原协议中的不安全路径 %s 仍被严格拒绝', (path) => {
+    const model = legacyCccModel();
+    model.executionProfile!.protocol!.submit.path = path;
+    expect(() => resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), model)).toThrow();
+    const parsed = parseConnectionShare(serializeConnection({ name: 'CCC', apiKey: '', catalogId: 'cccapi', selectedModels: [model] }))!;
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: 'connection.selectedModels.0.executionProfile.protocol.submit.path',
+    })]));
+    expect(parsed.config.selectedModels).toEqual([]);
+  });
+
+  it('旧 CCC 原协议的非法变量、鉴权覆盖和未知预设不能被有效合同掩盖', () => {
+    for (const body of [{ prompt: '{{process.env}}' }, { prompt: '{{prompt}}' }]) {
+      const model = legacyCccModel();
+      model.executionProfile!.protocol!.submit.body = body;
+      if (body.prompt === '{{prompt}}') model.executionProfile!.protocol!.submit.headers = { Authorization: 'unsafe-fixture' };
+      expect(() => resolveProviderImageModelForValidation(getProviderDefinition('cccapi'), model)).toThrow();
+    }
+    const payload = JSON.parse(serializeConnection({ name: 'CCC', apiKey: '', catalogId: 'cccapi', selectedModels: [legacyCccModel()] }));
+    payload.connection.selectedModels[0].executionProfile = { preset: 'unknown-preset' };
+    const parsed = parseConnectionShare(JSON.stringify(payload))!;
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: 'connection.selectedModels.0.executionProfile.preset',
+    })]));
+    expect(parsed.config.selectedModels).toEqual([]);
   });
 });

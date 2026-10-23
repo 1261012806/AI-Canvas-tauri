@@ -33,6 +33,8 @@ import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, p
 import { resolveGenerationNodeData } from '../utils/nodeGeneration';
 import { expandShotlistRowMentions } from './shotlistPromptService';
 import { buildGenerationCameraPrompt } from '../components/nodes/shared/image/cameraStudio';
+import { resolveImageParameterCapability } from './ai/mediaModelCapabilities';
+import { resolveConfiguredImageQuality } from './ai/modelCapabilityValidation';
 
 export interface GenerationResult {
   success: boolean;
@@ -212,6 +214,8 @@ export async function executeGeneration(
   try {
     if (nodeType === 'ai-image') {
       const imageSize = (data.imageSize as string) || '2K';
+      const imageQuality = workflowId ? undefined : resolveConfiguredImageQuality(
+        resolveImageParameterCapability(nodeModel, nodeProvider, store.config), data.imageQuality);
       const aspectRatio = (data.aspectRatio as string) || '1:1';
       const batchCount = cloudWorkflow ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(Number(data.batchCount) || 1)));
       if (batchCount > 1) {
@@ -226,7 +230,7 @@ export async function executeGeneration(
         store.showToast(`正在批量生成 ${batchCount} 张图片`);
         const batch = await generateImagesBatch({
           prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
-          imageSize, aspectRatio, nodeId,
+          imageSize, imageQuality, aspectRatio, nodeId,
           workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
         }, batchCount);
         taskReceipt = batch.results.find((result) => result.taskReceipt)?.taskReceipt;
@@ -241,6 +245,7 @@ export async function executeGeneration(
           projectId: submittingProjectId,
           prompt: effectivePrompt,
           imageSize,
+          imageQuality,
           aspectRatio,
         });
         return mediaDelivered ? { success: true } : { success: false, message: taskReceipt
@@ -248,7 +253,7 @@ export async function executeGeneration(
       }
       const result = await generateImage({
         prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
-        imageSize, aspectRatio, nodeId,
+        imageSize, imageQuality, aspectRatio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
       });
       taskReceipt = result.taskReceipt;
@@ -275,7 +280,7 @@ export async function executeGeneration(
         nodeId, nodeLabel: data.label, timestamp: Date.now(), prompt: effectivePrompt,
         output: persisted.sourceUrl, nodeType: 'ai-image', model: nodeModel, provider: nodeProvider,
         status: 'success', mediaUrl, filePath: persisted.filePath,
-        params: { imageSize, aspectRatio },
+        params: { imageSize, imageQuality, aspectRatio },
       });
 
       if (postProcess === 'character-8-direction-grid' && persisted.filePath) {

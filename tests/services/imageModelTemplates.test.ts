@@ -91,6 +91,33 @@ describe('explicit image quick templates', () => {
     expect(() => buildGoogleImageParts('edit', ['https://cdn.example/reference.png'])).toThrow('Base64');
   });
 
+  it('declares quality only for the explicitly confirmed template contracts', () => {
+    expect(createImageQuickAdaptTemplate('gpt-2:openai').imageCapability).toMatchObject({
+      qualities: ['auto', 'low', 'medium', 'high'], defaultQuality: 'auto',
+    });
+    for (const transport of ['openai', 'apimart']) {
+      expect(createImageQuickAdaptTemplate(`gpt-2.5:${transport}`).imageCapability).toMatchObject({
+        qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], defaultQuality: 'auto',
+      });
+    }
+    for (const id of ['gpt-2:images-json', 'gpt-2.5:images-json', 'gpt-2:apimart', 'banana-pro:apimart']) {
+      expect(createImageQuickAdaptTemplate(id).imageCapability?.qualities).toBeUndefined();
+      expect(createImageQuickAdaptTemplate(id).imageCapability?.defaultQuality).toBeUndefined();
+    }
+  });
+
+  it('sends APIMart 2.5 quality independently and keeps unconfirmed templates free of the field', () => {
+    const variables = { model: 'actual-id', prompt: 'draft', imageSize: '2k', aspectRatio: '16:9', imageQuality: 'xhigh', n: 1 };
+    for (const id of ['gpt-2.5:apimart', 'gpt-2:apimart', 'banana-pro:apimart']) {
+      const protocol = resolveModelExecutionProfile(createImageQuickAdaptTemplate(id).executionProfile)!;
+      const request = buildModelProtocolRequest({ baseUrl: 'https://apimart.example/v1', apiKey: 'fixture', protocol, variables });
+      const body = JSON.parse(String(request.init.body));
+      expect(body.resolution).toBe('2k');
+      if (id === 'gpt-2.5:apimart') expect(body.quality).toBe('xhigh');
+      else expect(body).not.toHaveProperty('quality');
+    }
+  });
+
   it('resolves APIMart polling from the actual nested submission response and array URLs', () => {
     const protocol = resolveModelExecutionProfile(createImageQuickAdaptTemplate('gpt-2.5:apimart').executionProfile)!;
     const poll = resolvePoll('https://apimart.example/v1', protocol.poll!, protocol.auth,

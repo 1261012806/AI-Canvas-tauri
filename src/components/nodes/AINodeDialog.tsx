@@ -47,6 +47,7 @@ import {
   resolveAnimationSheetAspectRatio,
 } from '../../services/ai/animationPrompt';
 import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
+import { resolveConfiguredImageQuality } from '../../services/ai/modelCapabilityValidation';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
 import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, getPendingTasksForProject, isComfyNodeDeliveryActive, isMediaTaskPausedError, pauseComfyNodeDelivery, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, resumeComfyUINodeTask, resumeRunningHubNodeTask, subscribeComfyDeliveries, updatePendingTask, removePendingTask } from '../../services/pollManager';
@@ -442,6 +443,9 @@ function AINodeDialog() {
       mediaDelivered = true;
     };
     try {
+      const imageQuality = nodeType === 'ai-image' && !latestData.workflowId
+        ? resolveConfiguredImageQuality(resolveImageParameterCapability(nodeModel, nodeProvider, store.config), latestData.imageQuality)
+        : undefined;
       const batchCount = cloudWorkflow ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(Number(latestData.batchCount) || 1)));
       if (nodeType === 'ai-image' && batchCount > 1) {
         if (postProcess) throw new Error(t('批量生成暂不支持图片后处理，请将数量设为 1'));
@@ -460,6 +464,7 @@ function AINodeDialog() {
           model: nodeModel,
           provider: nodeProvider,
           imageSize,
+          imageQuality,
           aspectRatio,
           workflowId: latestData.workflowId,
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
@@ -477,6 +482,7 @@ function AINodeDialog() {
           projectId: submittingProjectId,
           prompt: effectivePrompt,
           imageSize,
+          imageQuality,
           aspectRatio,
         });
         return;
@@ -498,6 +504,7 @@ function AINodeDialog() {
           model: nodeModel,
           provider: nodeProvider,
           imageSize,
+          imageQuality,
           aspectRatio,
           workflowId: latestData.workflowId,
           workflowInputs: latestData.workflowInputs, runninghubModelParameters: latestData.runninghubModelParameters,
@@ -543,7 +550,7 @@ function AINodeDialog() {
           filePath: persisted.filePath,
           params: isAnimation
             ? { imageSize, aspectRatio, animationAction, animationFrames, grid: ANIMATION_FRAME_GRIDS[animationFrames], animationProcessing: spriteProcessing, animationPromptVersion: 1 }
-            : { imageSize, aspectRatio, cameraSettings: latestData.cameraSettings },
+            : { imageSize, imageQuality, aspectRatio, cameraSettings: latestData.cameraSettings },
         });
         if (postProcess === 'character-8-direction-grid') {
           if (!persisted.filePath) {
@@ -854,8 +861,6 @@ function AINodeDialog() {
       const modelChanged = current.model !== model.value || current.provider !== model.provider || !!current.workflowId;
       const imageCapability = nodeType === 'ai-image' && modelChanged
         ? resolveImageParameterCapability(model.value, model.provider, state.config) : undefined;
-      const aspectRatio = imageCapability?.defaultRatio === 'auto'
-        ? '自适应' : imageCapability?.defaultRatio || '16:9';
       updateNodeData(activeNodeId!, {
         model: model.value,
         provider: model.provider,
@@ -865,8 +870,7 @@ function AINodeDialog() {
         ...(modelChanged ? { comfyRefmods: undefined } : {}),
         ...(nodeType === 'ai-image' && modelChanged ? {
           imageSize: imageCapability?.defaultResolution || '2K',
-          aspectRatio,
-          ...getImageNodeDimensionsForAspectRatio(aspectRatio),
+          imageQuality: imageCapability?.defaultQuality,
         } : {}),
         ...(nodeType === 'ai-video' && modelChanged ? {
           videoResolution: undefined,
@@ -893,10 +897,11 @@ function AINodeDialog() {
         ...(previousWorkflowId !== workflowId ? { comfyRefmods: undefined } : {}),
         workflowInputs: undefined, runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined,
         workflowApiOutputs: undefined, workflowApiStage: undefined,
+        ...(nodeType === 'ai-image' ? { imageQuality: undefined } : {}),
         ...(workflow ? { ...workflowExecution(workflow, previousWorkflowId), batchCount: 1, audioPurpose: undefined } : {}),
       });
     },
-    [activeNodeId, updateNodeData]
+    [activeNodeId, nodeType, updateNodeData]
   );
 
   const onClearModel = useCallback(() => {
@@ -913,12 +918,18 @@ function AINodeDialog() {
       runninghubStage: undefined,
       workflowApiOutputs: undefined,
       workflowApiStage: undefined,
+      ...(nodeType === 'ai-image' ? { imageQuality: undefined } : {}),
       ...(nodeType === 'ai-director' ? { directorPrevisModel: '', directorPrevisProvider: undefined } : {}),
     });
   }, [activeNodeId, nodeType, updateNodeData]);
 
   const onChangeImageSize = useCallback(
     (value: string) => updateNodeData(activeNodeId!, { imageSize: value }),
+    [activeNodeId, updateNodeData]
+  );
+
+  const onChangeImageQuality = useCallback(
+    (value: string | undefined) => updateNodeData(activeNodeId!, { imageQuality: value }),
     [activeNodeId, updateNodeData]
   );
 
@@ -1245,8 +1256,10 @@ function AINodeDialog() {
             onWorkflowInputsChange={(workflowInputs) => updateContinuousNodeData({ workflowInputs })}
             onPassThrough={supportsPassThrough ? onPassThrough : undefined}
             imageSize={(data.imageSize as string) || '2K'}
+            imageQuality={data.imageQuality}
             aspectRatio={(data.aspectRatio as string) || (nodeType === 'ai-panorama' ? '2:1' : '1:1')}
             onChangeImageSize={onChangeImageSize}
+            onChangeImageQuality={onChangeImageQuality}
             onChangeAspectRatio={onChangeAspectRatio}
             batchCount={(data.batchCount as number) || 1}
             onChangeBatchCount={onChangeBatchCount}

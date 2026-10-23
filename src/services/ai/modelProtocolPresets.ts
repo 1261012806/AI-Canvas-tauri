@@ -46,6 +46,7 @@ const OPENAI_IMAGE_PROTOCOL: NormalizedModelExecutionProtocol = {
       model: '{{model}}',
       prompt: '{{prompt}}',
       size: '{{size}}',
+      quality: '{{imageQuality}}',
       extra_body: { response_format: 'url' },
     },
   },
@@ -63,7 +64,7 @@ const OPENAI_GPT_IMAGE_PROTOCOL: NormalizedModelExecutionProtocol = {
   submit: {
     method: 'POST',
     path: '/images/generations',
-    body: { model: '{{model}}', prompt: '{{prompt}}', size: '{{size}}', n: '{{n}}' },
+    body: { model: '{{model}}', prompt: '{{prompt}}', size: '{{size}}', quality: '{{imageQuality}}', n: '{{n}}' },
   },
   response: {
     type: 'json',
@@ -81,6 +82,7 @@ const GPT_IMAGE_GATEWAY_JSON_PROTOCOL: NormalizedModelExecutionProtocol = {
     path: '/images/generations',
     body: {
       model: '{{model}}', prompt: '{{prompt}}', size: '{{size}}', n: '{{n}}',
+      quality: '{{imageQuality}}',
       images: Array.from({ length: 8 }, (_, index) => ({
         $whenPresent: `{{imageUrls.${index}}}`,
         $value: `{{imageUrls.${index}}}`,

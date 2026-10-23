@@ -27,6 +27,7 @@ import { normalizeBaseUrl } from './providerBaseUrl';
 import { isChatApiProtocol, resolveChatApiProtocol } from './chatApiProtocol';
 import { assertModelCapabilityProtocol, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { assertVideoModelCapability } from './videoRequestResolver';
+import { getProviderDefinition, resolveProviderImageModelForValidation, type ProviderDefinition } from './providerCatalogService';
 
 const SHARE_KIND = 'ai-canvas/provider-connection';
 const SHARE_VERSION = 1;
@@ -109,7 +110,7 @@ function protocolDiagnostic(error: string): { field: string; message: string } {
   return { field: polling ? 'poll' : '', message: '调用协议格式无效，请在调用协议编辑器中检查对应字段' };
 }
 
-function parseModel(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[]): ProviderModelSelection | null {
+function parseModel(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[], definition: ProviderDefinition | undefined): ProviderModelSelection | null {
   if (!isRecord(value)) {
     diagnostics.push({ path, message: '模型配置必须是 JSON 对象' });
     return null;
@@ -187,7 +188,7 @@ function parseModel(value: unknown, path: string, diagnostics: ConnectionImportD
   }
   try {
     if (model.category === 'video') assertVideoModelCapability(model.videoCapability);
-    assertModelCapabilityProtocol(model);
+    assertModelCapabilityProtocol(resolveProviderImageModelForValidation(definition, model));
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (/response\.result/.test(message)) {
@@ -204,11 +205,11 @@ function parseModel(value: unknown, path: string, diagnostics: ConnectionImportD
   return model;
 }
 
-function parseModels(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[]): ProviderModelSelection[] | undefined {
+function parseModels(value: unknown, path: string, diagnostics: ConnectionImportDiagnostic[], definition: ProviderDefinition | undefined): ProviderModelSelection[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) { diagnostics.push({ path, message: '模型列表必须是 JSON 数组' }); return undefined; }
   return value
-    .map((model, index) => parseModel(model, `${path}.${index}`, diagnostics))
+    .map((model, index) => parseModel(model, `${path}.${index}`, diagnostics, definition))
     .filter((model): model is ProviderModelSelection => model !== null);
 }
 
@@ -235,6 +236,7 @@ export function parseConnectionShare(text: string): ParsedConnectionShare | null
   if (!source) return null;
 
   const catalogId = asString(source.catalogId) || 'custom-openai';
+  const definition = getProviderDefinition(catalogId);
   let workflowApi: WorkflowApiManifest | undefined;
   let workflowApiDrafts: WorkflowApiDraft[] | undefined;
   const customWorkflow = ['workflow-api', 'autodl-workflow'].includes(catalogId);
@@ -277,8 +279,8 @@ export function parseConnectionShare(text: string): ParsedConnectionShare | null
       chatApiProtocol,
       catalogId,
       ...(catalogId === 'cccapi' ? { cccGroup: asString(source.cccGroup)?.slice(0, 120) } : {}),
-      selectedModels: customWorkflow ? [] : parseModels(source.selectedModels, 'connection.selectedModels', diagnostics),
-      catalogModels: customWorkflow ? [] : parseModels(source.catalogModels, 'connection.catalogModels', diagnostics),
+      selectedModels: customWorkflow ? [] : parseModels(source.selectedModels, 'connection.selectedModels', diagnostics, definition),
+      catalogModels: customWorkflow ? [] : parseModels(source.catalogModels, 'connection.catalogModels', diagnostics, definition),
       visibleModelCategories: visible,
     },
   };

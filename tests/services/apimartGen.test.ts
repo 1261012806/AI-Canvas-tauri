@@ -256,7 +256,7 @@ describe('APIMart image polling', () => {
       const request = buildImageCapabilityRequest(`apimart/${model}`, '风景', {
         ratio: '自适应', resolution: '2K', count: 8,
       });
-      expect(request?.body).toEqual({ model, prompt: '风景', size: 'auto', resolution: '2k', n: 4 });
+      expect(request?.body).toEqual({ model, prompt: '风景', size: 'auto', resolution: '2k', quality: 'auto', n: 4 });
       expect(request?.requestedCount).toBe(4);
     },
   );

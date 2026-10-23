@@ -17,6 +17,12 @@ const GPT_RESOLUTIONS: Record<string, string[]> = {
   'gpt-image-2-vip': ['1K', '2K', '4K'],
   'gpt-image-2.5-flare': ['1K', '2K', '4K'], 'gpt-image-2.5-sunburst': ['1K', '2K', '4K'],
 };
+// https://qmy27nhsd9.apifox.cn/452409160e0.md：质量与输出分辨率是独立合同。
+const GPT_QUALITIES: Record<string, string[]> = {
+  'gpt-image-2': ['auto'], 'gpt-image-2.5': ['auto'], 'gpt-image-2-vip': ['medium'],
+  'gpt-image-2.5-flare': ['low', 'medium', 'high'],
+  'gpt-image-2.5-sunburst': ['low', 'medium', 'high', 'xhigh', 'max'],
+};
 
 export function getGrsaiImageCapability(model: string): ImageModelCapability | undefined {
   const id = model.replace(/^grsai\//, '');
@@ -24,6 +30,8 @@ export function getGrsaiImageCapability(model: string): ImageModelCapability | u
   if (!resolutions) return undefined;
   return {
     resolutions, defaultResolution: resolutions[0],
+    ...(GPT_QUALITIES[id] ? { qualities: [...GPT_QUALITIES[id]],
+      defaultQuality: id === 'gpt-image-2' || id === 'gpt-image-2.5' ? 'auto' : 'medium' } : {}),
     ratios: GPT_RESOLUTIONS[id] ? GRSAI_GPT_RATIOS
       : id.startsWith('nano-banana-2') && id !== 'nano-banana-2-lite'
         ? [...GRSAI_NANO_RATIOS, '1:4', '4:1', '1:8', '8:1'] : GRSAI_NANO_RATIOS,

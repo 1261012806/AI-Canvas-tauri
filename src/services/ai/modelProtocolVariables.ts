@@ -103,12 +103,13 @@ export const PROTOCOL_VARIABLES: readonly ProtocolVariableSpec[] = [
   },
   {
     name: 'imageSize', supplied: IMAGE,
-    fields: ['imagesize', 'quality'],
+    fields: ['imagesize'],
     rules: [
       { key: 'resolution', categories: IMAGE },
       { key: 'imageresolution', categories: IMAGE },
     ],
   },
+  { name: 'imageQuality', supplied: IMAGE, fields: ['quality', 'imagequality'] },
   // 非图片模型的 resolution 走视频档位（'720p' 这类），图片模型由上面的规则先接走
   {
     name: 'seedanceResolution', supplied: VIDEO,
@@ -268,7 +269,8 @@ const PROTOCOL_VARIABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   toolChoice: '对话模型的工具选择策略',
   size: '输出宽高尺寸字符串，如 1280x720',
   aspectRatio: '输出宽高比，如 16:9',
-  imageSize: '图片分辨率或质量档位，如 2K',
+  imageSize: '图片分辨率档位，如 2K',
+  imageQuality: '已声明的图片生成质量，如 auto、medium；未选择且未声明默认值时省略',
   seedanceResolution: '视频分辨率档位，如 720p',
   width: '输出宽度（像素）',
   height: '输出高度（像素）',

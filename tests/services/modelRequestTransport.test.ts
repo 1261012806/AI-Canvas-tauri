@@ -41,6 +41,32 @@ afterEach(() => {
 });
 
 describe('CCC 图片异步任务与旧同步响应', () => {
+  it('passes selected CCC quality through JSON and multipart without affecting resolution', async () => {
+    useAppStore.getState().saveProviderConfig('ccc-quality', {
+      name: 'CCC', catalogId: 'cccapi', apiKey: 'fixture', baseUrl: 'https://cccapi.cn/v1',
+      selectedModels: [{ id: 'gpt-image-2.5-sunburst', name: 'Sunburst', category: 'image', provider: 'ccc-quality' }],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'ccc-quality')!;
+    const params = { provider: 'general', model: `general/${model.id}`, prompt: 'landscape',
+      imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max' };
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ data: [{ url: 'https://cdn.example/image.png' }] }));
+    await generateImagesBatch(params, 1);
+    expect(JSON.parse(transportMocks.corsSafeFetch.mock.calls[0][1].body)).toMatchObject({ quality: 'max', size: '3648x2048' });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('reference', { headers: { 'Content-Type': 'image/png' } }));
+    await generateImagesBatch({ ...params, image_urls: ['asset://localhost/ref.png'], imageQuality: 'low' }, 1);
+    const form = transportMocks.corsSafeFetch.mock.calls[1][1].body as FormData;
+    expect(form.get('quality')).toBe('low');
+    expect(form.get('size')).toBe('3648x2048');
+    expect(form.getAll('image[]')).toHaveLength(1);
+  });
+
+  it('omits quality for a CCC model without documented support', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { cccapi: { name: 'CCC', apiKey: 'fixture', baseUrl: 'https://cccapi.cn/v1' } } } }));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/image.png' }] }));
+    await generateImagesBatch({ provider: 'cccapi', model: 'cccapi/gpt-image-2', prompt: 'landscape', imageQuality: 'max' }, 1);
+    expect(JSON.parse(transportMocks.corsSafeFetch.mock.calls[0][1].body)).not.toHaveProperty('quality');
+  });
   function configureCcc() {
     useAppStore.getState().saveProviderConfig('cccapi-discount', {
       name: 'CCC', catalogId: 'cccapi', cccGroup: 'discount', apiKey: 'discount-fixture', baseUrl: 'https://cccapi.cn/v1',
@@ -146,6 +172,24 @@ describe('ToAPIs 参考素材上传与图片提交', () => {
     const general = useAppStore.getState().config.generalModels!.find((model) => model.providerConfigId === 'toapis-user')!;
     return { provider: 'general', model: `general/${general.id}`, prompt: '测试参考图' };
   }
+
+  it('upgrades a known old ToAPIs contract at execution without rewriting saved settings', async () => {
+    const params = configure('gpt-image-2.5-sunburst-vip');
+    const general = useAppStore.getState().config.generalModels![0];
+    const legacyProfile = structuredClone(general.executionProfile)!;
+    (legacyProfile.protocol!.submit.body as Record<string, unknown>).quality = 'high';
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      generalModels: [{ ...general, executionProfile: legacyProfile,
+        imageCapability: { ...general.imageCapability, qualities: undefined, defaultQuality: undefined } }],
+    } }));
+    const saved = useAppStore.getState().config;
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ id: 'quality-task' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed', result: { data: [{ url: 'https://cdn.example/image.png' }] } }));
+    await generateImagesBatch({ ...params, imageQuality: 'max', imageSize: '2K', aspectRatio: '16:9' }, 1);
+    expect(JSON.parse(transportMocks.corsSafeFetch.mock.calls[0][1].body)).toMatchObject({ quality: 'max', size: '2048x1152' });
+    expect(useAppStore.getState().config).toBe(saved);
+    expect(saved.generalModels![0].executionProfile).toEqual(legacyProfile);
+  });
 
   it.each([
     ['video', 'video/mp4', 'videos'], ['audio', 'audio/mpeg', 'audios'],
@@ -286,7 +330,7 @@ describe('image quick template request transport', () => {
     expect(submitted.prompt).toContain('1 张参考图');
     expect(submitted.prompt).toContain('3:2');
     expect(submitted).toEqual({ model: 'actual-model-id', prompt: expect.any(String),
-      size: '3:2', resolution: '2k', n: 1, image_urls: ['https://cdn.example/reference.png'] });
+      size: '3:2', resolution: '2k', quality: 'auto', n: 1, image_urls: ['https://cdn.example/reference.png'] });
     const [pollUrl, poll] = transportMocks.corsSafeFetch.mock.calls[1];
     expect(pollUrl).toBe('https://images.example/v1/tasks/task-123');
     expect(poll.headers).toMatchObject({ Authorization: 'Bearer template-fixture' });
@@ -294,6 +338,44 @@ describe('image quick template request transport', () => {
 });
 
 describe('model request transport boundary', () => {
+  it('rejects unsupported Dreamina image ratios before the CLI can silently replace them', async () => {
+    await expect(generateImagesBatch({ provider: 'dreamina', model: 'dreamina/4.0',
+      prompt: 'portrait', aspectRatio: '1:8' }, 1)).rejects.toThrow('不支持比例 1:8');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+  it('passes APIMart quality through its asynchronous adapter without a second generation', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { apimart: { name: 'APIMart', apiKey: 'fixture', baseUrl: 'https://apimart.example/v1' } },
+    } }));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'native-quality-task' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: { status: 'completed', result: { images: [{ url: ['https://cdn.example/image.png'] }] } } }));
+    const result = await generateImagesBatch({ provider: 'apimart', model: 'apimart/gpt-image-2.5-sunburst',
+      prompt: 'cat', imageSize: '2K', aspectRatio: '16:9', imageQuality: 'max' }, 1);
+    expect(result.results[0].url).toBe('https://cdn.example/image.png');
+    expect(JSON.parse(transportMocks.corsSafeFetch.mock.calls[0][1].body))
+      .toMatchObject({ model: 'gpt-image-2.5-sunburst', resolution: '2k', size: '16:9', quality: 'max' });
+    expect(transportMocks.corsSafeFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it('uses an explicitly declared custom quality and rejects unsupported values before submission', async () => {
+    useAppStore.getState().saveProviderConfig('custom-quality', {
+      name: 'Images', catalogId: 'custom-openai', apiKey: 'fixture', baseUrl: 'https://gateway.example/v1',
+      selectedModels: [{ id: 'image', name: 'Image', category: 'image', provider: 'custom-quality',
+        imageCapability: { qualities: ['low', 'high'], defaultQuality: 'low' },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/render', body: { prompt: '{{prompt}}', quality: '{{imageQuality}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } } } },
+      }],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'custom-quality')!;
+    const params = { provider: 'general', model: `general/${model.id}`, prompt: 'cat' };
+    await expect(generateImagesBatch({ ...params, imageQuality: 'max' }, 1)).rejects.toThrow('不支持质量');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ url: 'https://cdn.example/image.png' }));
+    await generateImagesBatch(params, 1);
+    await generateImagesBatch({ ...params, imageQuality: 'high' }, 1);
+    expect(transportMocks.corsSafeFetch.mock.calls.map(([, init]) => JSON.parse(init.body).quality)).toEqual(['low', 'high']);
+  });
   it('uses custom image defaults and blocks unsupported tiers before submission', async () => {
     useAppStore.getState().saveProviderConfig('custom-image-parameters', {
       name: 'Images', catalogId: 'custom-openai', apiKey: 'fixture', baseUrl: 'https://gateway.example/v1',
@@ -798,7 +880,8 @@ describe('model request transport boundary', () => {
     const [url, init] = transportMocks.corsSafeFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://cccapi.cn/v1/images/edits');
     const body = init.body as FormData;
-    expect([...new Set(body.keys())].sort()).toEqual(['image[]', 'model', 'n', 'prompt', 'size']);
+    expect([...new Set(body.keys())].sort()).toEqual(['image[]', 'model', 'n', 'prompt', 'quality', 'size']);
+    expect(body.get('quality')).toBe('auto');
     expect(body.get('model')).toBe(modelId);
     expect(body.get('n')).toBe('1');
     expect(body.get('size')).toBe('3648x2048');
@@ -814,7 +897,7 @@ describe('model request transport boundary', () => {
     });
     const [generationUrl, generationInit] = transportMocks.corsSafeFetch.mock.calls[1] as [string, RequestInit];
     expect(generationUrl).toBe('https://cccapi.cn/v1/images/generations');
-    expect(JSON.parse(generationInit.body as string)).toEqual({ model: modelId, prompt: '风景', n: 1, size: '3648x2048' });
+    expect(JSON.parse(generationInit.body as string)).toEqual({ model: modelId, prompt: '风景', n: 1, size: '3648x2048', quality: 'auto' });
     expect(useAppStore.getState().config).toBe(savedConfig);
     expect(savedConfig.generalModels?.[0].executionProfile).toEqual(legacyProfile);
   });

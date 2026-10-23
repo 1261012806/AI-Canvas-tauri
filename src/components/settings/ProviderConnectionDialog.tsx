@@ -33,6 +33,7 @@ import {
   getProviderDefinition,
   getProviderDefinitions,
   getWebSearchProviderDefinitions,
+  resolveProviderImageModelForValidation,
   type ProviderDefinition,
 } from '../../services/ai/providerCatalogService';
 import { normalizeBaseUrl } from '../../services/ai/providerBaseUrl';
@@ -748,7 +749,7 @@ export default function ProviderConnectionDialog({
         workflowDrafts.forEach((draft) => validateDeclarativeWorkflowManifest(draft.manifest));
         if (!apiKey.trim() && workflowDrafts.some((draft) => draft.manifest.protocol.auth?.type !== 'none')) throw new Error(t('请填写工作流 API Token'));
       }
-      assertProviderModelsVideoCapabilities(selectedModels);
+      assertProviderModelsVideoCapabilities(selectedModels.map((model) => resolveProviderImageModelForValidation(definition, model)));
     } catch (error) {
       setCatalogStatus('error');
       setCatalogMessage(error instanceof Error ? error.message : t('视频能力配置无效'));

@@ -10,6 +10,7 @@ export type ImageParameterKey =
   | 'model'
   | 'prompt'
   | 'imageSize'
+  | 'imageQuality'
   | 'aspectRatio'
   | 'batchCount'
   | 'referenceImageUrls';
@@ -26,6 +27,7 @@ export interface StandardImageRequestInput {
   prompt: string;
   count: number;
   size: string;
+  imageQuality?: string;
   imageUrls?: string[];
   imageReferenceRequestMode?: ImageReferenceRequestMode;
 }
@@ -36,6 +38,7 @@ const DEFAULT_IMAGE_MAPPING: ImageParameterMapping = {
     model: 'model',
     prompt: 'prompt',
     imageSize: 'size',
+    imageQuality: 'quality',
     batchCount: 'n',
     referenceImageUrls: 'image_urls',
   },
@@ -49,7 +52,7 @@ const DEFAULT_IMAGE_MAPPING: ImageParameterMapping = {
 export const IMAGE_PARAMETER_MAPPINGS: readonly ImageParameterMapping[] = [
   {
     providerId: 'apimart',
-    fields: { model: 'model', prompt: 'prompt', imageSize: 'resolution', aspectRatio: 'size', batchCount: 'n', referenceImageUrls: 'image_urls' },
+    fields: { model: 'model', prompt: 'prompt', imageSize: 'resolution', imageQuality: 'quality', aspectRatio: 'size', batchCount: 'n', referenceImageUrls: 'image_urls' },
   },
   {
     providerId: 'volcengine',
@@ -94,6 +97,7 @@ export function buildStandardImageRequestBody(input: StandardImageRequestInput):
     model: input.modelName,
     prompt: input.prompt,
     imageSize: input.size,
+    imageQuality: input.imageQuality,
     batchCount: input.count,
     referenceImageUrls: input.imageUrls,
   });

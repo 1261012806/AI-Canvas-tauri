@@ -16,6 +16,21 @@ describe('image capability editor', () => {
     expect(html).toContain('Nano Banana 快速适配');
     expect(html).toContain('grid-cols-1 gap-2 sm:grid-cols-2');
     expect(html).toContain('保存连接后生效');
+    expect(html).toContain('质量（可多选）');
+    expect(html).toContain('接口默认（省略 quality）');
+    expect(html).toContain('auto（自动）');
+    expect(html).toContain('自定义质量');
     expect(html.match(/>应用模板<\/button>/g)).toHaveLength(2);
+  });
+
+  it('shows the declared quality and default without selecting other candidates', () => {
+    const html = renderToStaticMarkup(createElement(ImageCapabilityEditor, {
+      model: { id: 'custom-image', name: 'Custom Image', category: 'image', provider: 'custom',
+        imageCapability: { qualities: ['medium'], defaultQuality: 'medium' } },
+      onChange: () => undefined, onApplyTemplate: () => undefined, onClose: () => undefined,
+    }));
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(html).toContain('>medium</button>');
+    expect(html).not.toContain('声明可调质量');
   });
 });

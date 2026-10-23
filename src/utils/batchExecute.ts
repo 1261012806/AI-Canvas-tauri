@@ -31,6 +31,8 @@ import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, p
 import { getCloudWorkflowPersistedOutput } from '../services/workflowExecutionService';
 import { completeRunningHubNodeTask } from '../services/ai/providers/runninghubWorkflow';
 import { videoInputFingerprint } from '../services/videoBatchPlanning';
+import { resolveImageParameterCapability } from '../services/ai/mediaModelCapabilities';
+import { resolveConfiguredImageQuality } from '../services/ai/modelCapabilityValidation';
 
 export interface BatchContext {
   commitToHistory: () => void;
@@ -138,6 +140,8 @@ async function executeOneNode(
     } else if (nt === 'ai-image' || nt === 'ai-animation') {
       const isAnimation = nt === 'ai-animation';
       const imageSize = (d.imageSize as string) || '2K';
+      const imageQuality = isAnimation || d.workflowId ? undefined : resolveConfiguredImageQuality(
+        resolveImageParameterCapability(d.model, d.provider, useAppStore.getState().config), d.imageQuality);
       const animationAction = d.animationAction ?? 'idle';
       const animationFrames = d.animationFrames ?? 8;
       const aspectRatio = isAnimation
@@ -152,6 +156,7 @@ async function executeOneNode(
         model: d.model!,
         provider: d.provider!,
         imageSize,
+        imageQuality,
         aspectRatio,
         workflowId: d.workflowId,
         workflowInputs: d.workflowInputs,
@@ -205,7 +210,7 @@ async function executeOneNode(
               animationProcessing: spriteProcessing,
               animationPromptVersion: 1,
             }
-          : { imageSize, aspectRatio },
+          : { imageSize, imageQuality, aspectRatio },
       });
     } else if (nt === 'ai-panorama') {
       const imageSize = (d.imageSize as string) || '2K';

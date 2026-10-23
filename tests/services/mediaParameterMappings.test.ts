@@ -4,6 +4,15 @@ import { buildStandardImageRequestBody, mapImageParameters } from '../../src/ser
 import { mapVideoParameters } from '../../src/services/ai/videoParameterMappings';
 
 describe('media parameter mappings', () => {
+  it('keeps image quality separate from resolution and omits undeclared quality', () => {
+    const input = { modelName: 'gpt-image-2.5-sunburst', prompt: 'cat', count: 1, size: '2048x1152' };
+    expect(buildStandardImageRequestBody({ ...input, imageQuality: 'max' })).toMatchObject({
+      size: '2048x1152', quality: 'max',
+    });
+    expect(buildStandardImageRequestBody(input)).not.toHaveProperty('quality');
+    expect(mapImageParameters('apimart', input.modelName, { imageSize: '2K', imageQuality: 'low' }))
+      .toEqual({ resolution: '2K', quality: 'low' });
+  });
   it('maps standard image UI fields to OpenAI-compatible fields', () => {
     expect(buildStandardImageRequestBody({
       modelName: 'flux-2-pro',

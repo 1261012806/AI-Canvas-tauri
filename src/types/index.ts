@@ -277,7 +277,8 @@ export interface BaseNodeData {
   videoHeight?: number;       // 视频原始高度（用于节点等比布局）
   nodeWidth?: number;         // 画布节点当前宽度
   nodeHeight?: number;        // 画布节点当前高度
-  imageSize?: string;         // 画质选择：'1K' | '2K' | '4K'
+  imageSize?: string;         // 分辨率选择：'1K' | '2K' | '4K'
+  imageQuality?: string;      // 厂商声明的生成质量，与分辨率独立
   aspectRatio?: string;       // 图片比例：'1:1' | '16:9' | ...
   batchCount?: number;        // 单次批量生成图片数量，默认 1
   batchGroupId?: string;      // 同一次批量生成的结果分组 ID
