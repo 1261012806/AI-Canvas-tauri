@@ -221,13 +221,15 @@ async function probeRangeSupport(url: string, signal: AbortSignal): Promise<{ si
     if (response.status === 206) {
       // Content-Range: bytes 0-0/12345
       const contentRange = response.headers.get('Content-Range');
-      const total = contentRange?.split('/')[1];
+      const total = /^bytes 0-0\/(\d+)$/iu.exec(contentRange?.trim() ?? '')?.[1];
       const size = total ? Number(total) : NaN;
-      if (Number.isFinite(size) && size > 0) return { size, ranged: true };
+      // 206 的 Content-Length 只是这个分片的长度，不能拿它当整份大小。
+      return Number.isSafeInteger(size) && size > 0 ? { size, ranged: true } : null;
     }
+    if (response.status !== 200) return null;
     const length = response.headers.get('Content-Length');
     const size = length ? Number(length) : NaN;
-    if (Number.isFinite(size) && size > 0) return { size, ranged: false };
+    if (Number.isSafeInteger(size) && size > 0) return { size, ranged: false };
     return null;
   } catch (error) {
     signal.throwIfAborted();
@@ -414,11 +416,22 @@ export type LosslessTrimResult = {
   bytes: Uint8Array;
   /** 实际生效的入点（最近的前置关键帧位置） */
   actualStart: number;
-  /** 音轨是否保留；各段音频参数不一致时会被丢弃 */
+  /** 是否保留源音轨；有声但无法直通时会抛错，交给合成处理 */
   audioKept: boolean;
-  /** 音轨被丢弃的原因，供如实告知用户 */
+  /** 源素材没有音轨时的说明，供调用方展示 */
   audioDropReason?: string;
 };
+
+function audioDecoderSignature(config: AudioDecoderConfig | null): string | null {
+  if (!config) return null;
+  const description = config.description;
+  const bytes = description
+    ? ArrayBuffer.isView(description)
+      ? new Uint8Array(description.buffer, description.byteOffset, description.byteLength)
+      : new Uint8Array(description)
+    : new Uint8Array();
+  return `${config.codec}|${config.sampleRate}|${config.numberOfChannels}|${bytes.join(',')}`;
+}
 
 /**
  * 关键帧对齐的无损裁剪导出。
@@ -455,12 +468,13 @@ export async function exportLosslessTrim(options: {
   const videoSource = new EncodedVideoPacketSource(videoCodec);
   output.addVideoTrack(videoSource, { rotation: videoTrack.rotation });
 
-  // 音频轨可选：编码不被 MP4 接受时直接丢掉，总比整个导出失败好
+  // 有声音就要保留；直通做不到时，让调用方改走合成。
   const audioTrack = await input.getPrimaryAudioTrack();
   const audioCodec = audioTrack ? await audioTrack.getCodec() : null;
-  const keepAudio = !!audioTrack
-    && !!audioCodec
-    && output.format.getSupportedAudioCodecs().includes(audioCodec);
+  if (audioTrack && (!audioCodec || !output.format.getSupportedAudioCodecs().includes(audioCodec))) {
+    throw new Error('源音频无法在 MP4 中直通保留，改用合成导出');
+  }
+  const keepAudio = !!audioTrack && !!audioCodec;
   const audioSource = keepAudio ? new EncodedAudioPacketSource(audioCodec) : null;
   if (audioSource) output.addAudioTrack(audioSource);
 
@@ -523,9 +537,7 @@ export async function exportLosslessTrim(options: {
       bytes: new Uint8Array(buffer),
       actualStart,
       audioKept: keepAudio,
-      audioDropReason: keepAudio
-        ? undefined
-        : (audioTrack ? `MP4 不接受源音频编码 ${audioCodec ?? '未知'}` : '素材没有音轨'),
+      audioDropReason: keepAudio ? undefined : '素材没有音轨',
     };
   } catch (error) {
     await output.cancel().catch(() => {});
@@ -573,15 +585,7 @@ export async function resolveCompositeAudioMode(
     const codec = await track.getCodec();
     if (!codec) throw new Error('当前设备无法识别素材音频编码，无法保留音轨');
     const config = await track.getDecoderConfig();
-    const description = config?.description;
-    const bytes = description
-      ? ArrayBuffer.isView(description)
-        ? new Uint8Array(description.buffer, description.byteOffset, description.byteLength)
-        : new Uint8Array(description)
-      : new Uint8Array();
-    const signature = config
-      ? `${config.codec}|${config.sampleRate}|${config.numberOfChannels}|${bytes.join(',')}`
-      : null;
+    const signature = audioDecoderSignature(config);
     return { clip, track, codec, signature };
   }));
   const audioClips = entries.filter((entry) => entry !== null)
@@ -859,8 +863,7 @@ export async function exportLosslessConcat(options: {
   const videoSource = new EncodedVideoPacketSource(first.codec);
   output.addVideoTrack(videoSource, { rotation: first.track.rotation });
 
-  // 音轨同样按分组直通搬运，前提是各段解码参数一致 ——
-  // 不一致就只出画面，而不是让整个导出失败
+  // 无声片段只留空档；有声片段必须兼容，不能为了直通把声音丢掉。
   const audioTracks = await Promise.all(segments.map(async (segment) => {
     const track = await segment.input.getPrimaryAudioTrack();
     if (!track) return null;
@@ -868,18 +871,22 @@ export async function exportLosslessConcat(options: {
     return {
       track,
       codec: await track.getCodec(),
-      signature: config
-        ? `${config.codec}|${config.sampleRate}|${config.numberOfChannels}`
-        : null,
+      signature: audioDecoderSignature(config),
     };
   }));
 
-  const firstAudio = audioTracks[0];
-  const audioUniform = !!firstAudio?.codec
-    && !!firstAudio.signature
-    && output.format.getSupportedAudioCodecs().includes(firstAudio.codec)
-    && audioTracks.every((entry) => entry?.signature === firstAudio.signature);
-  const audioSource = audioUniform && firstAudio.codec
+  const firstAudio = audioTracks.find((entry) => entry !== null);
+  if (firstAudio && (
+    !firstAudio.codec
+    || !firstAudio.signature
+    || !output.format.getSupportedAudioCodecs().includes(firstAudio.codec)
+    || audioTracks.some((entry) => entry !== null && (
+      entry.codec !== firstAudio.codec || entry.signature !== firstAudio.signature
+    ))
+  )) {
+    throw new Error('音频编码或解码参数不支持直通，改用合成导出以保留音轨');
+  }
+  const audioSource = firstAudio?.codec
     ? new EncodedAudioPacketSource(firstAudio.codec)
     : null;
   if (audioSource) output.addAudioTrack(audioSource);
@@ -932,8 +939,10 @@ export async function exportLosslessConcat(options: {
         for await (const packet of audioSink.packets(audioStart)) {
           if (signal?.aborted) throw new VideoExportCanceledError();
           if (packet.timestamp >= entry.segment.end) break;
-          const shifted = timelineCursor + (packet.timestamp - segmentBase);
-          if (shifted < 0) continue;
+          const offset = packet.timestamp - segmentBase;
+          // 后续片段也要挡住入点前的分组，免得声音跑进前面的无声片段。
+          if (offset < 0) continue;
+          const shifted = timelineCursor + offset;
           await audioSource.add(
             packet.clone({ timestamp: shifted }),
             firstAudioPacket && audioDecoderConfig
@@ -958,11 +967,7 @@ export async function exportLosslessConcat(options: {
       bytes: new Uint8Array(buffer),
       actualStart,
       audioKept: !!audioSource,
-      audioDropReason: audioSource
-        ? undefined
-        : (firstAudio
-          ? '各段音频编码或采样参数不一致，无法直通拼接音轨'
-          : '素材没有音轨'),
+      audioDropReason: audioSource ? undefined : '素材没有音轨',
     };
   } catch (error) {
     await output.cancel().catch(() => {});

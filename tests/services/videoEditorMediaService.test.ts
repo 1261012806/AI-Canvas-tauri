@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createResilientReader as makeReader, createVideoInput } from '../../src/services/videoEditorMediaService';
 
 const WHOLE = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
 const readers = new Set<ReturnType<typeof makeReader>>();
 const inputs: Awaited<ReturnType<typeof createVideoInput>>[] = [];
 function createResilientReader(...args: Parameters<typeof makeReader>) {
@@ -20,10 +21,10 @@ function rangeResponse(start: number, end: number) {
   } as unknown as Response;
 }
 
-function wholeResponse() {
-  return new Response(WHOLE, {
+function wholeResponse(bytes = WHOLE) {
+  return new Response(bytes, {
     status: 200,
-    headers: { 'Content-Length': String(WHOLE.length) },
+    headers: { 'Content-Length': String(bytes.length) },
   });
 }
 
@@ -284,6 +285,58 @@ describe('createResilientReader', () => {
 });
 
 describe('createVideoInput range probe', () => {
+  it.each([
+    { status: 206, contentRange: undefined },
+    { status: 206, contentRange: 'bytes 0-0/*' },
+    { status: 206, contentRange: 'bytes 0-0/invalid' },
+    { status: 203, contentRange: undefined },
+  ])('does not treat a partial or unknown response length as the whole size: %j', async ({ status, contentRange }) => {
+    const headers = new Headers({ 'Content-Length': '1' });
+    if (contentRange) headers.set('Content-Range', contentRange);
+    const cancel = vi.fn(async () => undefined);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status, headers, body: { cancel } })
+      .mockResolvedValueOnce(wholeResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const input = await createVideoInput('https://example.test/video.mp4');
+    inputs.push(input);
+    await expect(input.source.getSize()).resolves.toBe(WHOLE.length);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ headers: { Range: 'bytes=0-0' } });
+    expect(fetchMock.mock.calls[1][1]).not.toHaveProperty('headers');
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a valid 206 total on the range path', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const range = String((init?.headers as Record<string, string> | undefined)?.Range ?? '');
+      const match = /^bytes=(\d+)-(\d+)$/u.exec(range);
+      if (!match) throw new Error('whole-file download was not expected');
+      const start = Number(match[1]);
+      const end = Math.min(WHOLE.length, Number(match[2]) + 1);
+      return new Response(WHOLE.slice(start, end), { status: 206, headers: {
+        'Content-Range': `bytes ${start}-${end - 1}/${WHOLE.length}`, 'Content-Length': String(end - start),
+      } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const input = await createVideoInput('https://example.test/video.mp4');
+    inputs.push(input);
+    await expect(input.source.getSize()).resolves.toBe(WHOLE.length);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.every(([, init]) => Boolean((init?.headers as Record<string, string> | undefined)?.Range))).toBe(true);
+  });
+
+  it('still rejects a changed whole-file size after a 200 probe', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(wholeResponse())
+      .mockResolvedValueOnce(wholeResponse(new Uint8Array(WHOLE.length + 2)));
+    vi.stubGlobal('fetch', fetchMock);
+    const input = await createVideoInput('https://example.test/video.mp4');
+    inputs.push(input);
+    await expect(input.source.getSize()).rejects.toThrow('媒体大小已变化');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('cancels an ignored probe body before starting the single whole-file download', async () => {
     const cancel = vi.fn(async () => undefined);
     const probeResponse = {

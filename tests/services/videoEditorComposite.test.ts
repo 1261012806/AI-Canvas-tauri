@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from 'mediabunny';
 
 const audioMocks = vi.hoisted(() => ({
-  canEncodeAudio: vi.fn(), packetAdd: vi.fn(), started: false, events: [] as string[],
+  canEncodeAudio: vi.fn(), packetAdd: vi.fn(), videoPacketAdd: vi.fn(), started: false, events: [] as string[],
 }));
 vi.mock('mediabunny', async (importOriginal) => {
   const actual = await importOriginal<typeof import('mediabunny')>();
@@ -32,10 +32,23 @@ vi.mock('mediabunny', async (importOriginal) => {
       async add(...args: unknown[]) { audioMocks.packetAdd(...args); }
       close() {}
     },
+    EncodedVideoPacketSource: class {
+      async add(...args: unknown[]) { audioMocks.videoPacketAdd(...args); }
+      close() {}
+    },
     EncodedPacketSink: class {
-      async getPacket() { return null; }
+      track: { packetTimes?: number[]; keyTime?: number };
+      constructor(track: { packetTimes?: number[]; keyTime?: number }) { this.track = track; }
+      async getPacket() {
+        const timestamp = this.track.packetTimes?.[0];
+        return timestamp === undefined ? null : { timestamp };
+      }
+      async getKeyPacket() { return { timestamp: this.track.keyTime ?? 0 }; }
+      async getFirstKeyPacket() { return { timestamp: this.track.keyTime ?? 0 }; }
       async *packets() {
-        yield { timestamp: 0, duration: 1, clone: (options: { timestamp: number }) => ({ timestamp: options.timestamp }) };
+        for (const timestamp of this.track.packetTimes ?? [0]) {
+          yield { timestamp, duration: 0.25, clone: (options: { timestamp: number }) => ({ timestamp: options.timestamp }) };
+        }
       }
     },
   };
@@ -44,6 +57,7 @@ vi.mock('mediabunny', async (importOriginal) => {
 beforeEach(() => {
   audioMocks.canEncodeAudio.mockReset().mockResolvedValue(false);
   audioMocks.packetAdd.mockClear();
+  audioMocks.videoPacketAdd.mockClear();
   audioMocks.started = false;
   audioMocks.events = [];
 });
@@ -60,7 +74,7 @@ import {
   type VideoEditorTrack,
 } from '../../src/types/videoEditor';
 import { computeDrawRect, renderFrameAt } from '../../src/services/videoCompositor';
-import { exportComposite, resolveCompositeAudioMode } from '../../src/services/videoEditorMediaService';
+import { exportComposite, exportLosslessConcat, exportLosslessTrim, resolveCompositeAudioMode } from '../../src/services/videoEditorMediaService';
 import {
   createTrack,
   moveTrack,
@@ -96,6 +110,31 @@ describe('needsCompositing', () => {
   });
   it('stays on the lossless path for a plain single-track timeline', () => {
     expect(needsCompositing([videoTrack([clip({ id: 'a' }), clip({ id: 'b' })])])).toBe(false);
+  });
+
+  it.each([{ muted: true }, { volume: 0 }, { volume: 0.5 }, { volume: 2 }])(
+    'composites visible video-track audio changes: %j', (settings) => {
+      expect(needsCompositing([{ ...videoTrack([clip({ id: 'a' })]), ...settings }])).toBe(true);
+    },
+  );
+
+  it.each([
+    { volume: 0 }, { volume: 0.5 }, { volume: 2 },
+    { volumePoints: [{ t: 0, gain: 0 }, { t: 1, gain: 1 }] },
+  ])('composites clip gains and volume envelopes without a visual edit: %j', (settings) => {
+    expect(needsCompositing([videoTrack([clip({ id: 'a', ...settings })])])).toBe(true);
+  });
+
+  it('keeps default audio settings and irrelevant edits on the lossless path', () => {
+    const main = { ...videoTrack([clip({ id: 'a', volume: 1, volumePoints: [] })]), muted: false, volume: 1 };
+    expect(needsCompositing([main])).toBe(false);
+    expect(needsCompositing([{ ...videoTrack([]), muted: true, volume: 0 }])).toBe(false);
+    expect(needsCompositing([
+      main,
+      { ...videoTrack([clip({ id: 'hidden', volume: 0.5 })]), id: 'hidden', hidden: true, muted: true, volume: 0 },
+      { id: 'muted', kind: 'audio', name: '静音配音', muted: true, volume: 0.5,
+        clips: [clip({ id: 'voice', volume: 0, volumePoints: [{ t: 0, gain: 0 }] })] },
+    ])).toBe(false);
   });
 
   it('switches to compositing once a second video track exists', () => {
@@ -498,11 +537,12 @@ describe('hasMixedSources', () => {
 });
 
 function audioInput(options: {
-  codec?: string; sampleRate?: number; channels?: number; description?: Uint8Array;
-  decodable?: boolean; silent?: boolean; unknownConfig?: boolean;
+  codec?: string | null; sampleRate?: number; channels?: number; description?: Uint8Array;
+  decodable?: boolean; silent?: boolean; unknownConfig?: boolean; packetTimes?: number[];
 } = {}): Input {
-  const codec = options.codec ?? 'aac';
+  const codec = options.codec === undefined ? 'aac' : options.codec;
   const track = {
+    packetTimes: options.packetTimes,
     getCodec: async () => codec,
     getDecoderConfig: async () => options.unknownConfig ? null : ({
       codec, sampleRate: options.sampleRate ?? 48_000, numberOfChannels: options.channels ?? 2,
@@ -625,5 +665,102 @@ describe('composite packet-copy output lifecycle', () => {
     expect(audioMocks.events).toEqual(['audio.track', 'output.start', 'video.add', 'video.add']);
     expect(audioMocks.packetAdd).toHaveBeenCalledOnce();
     expect(audioMocks.packetAdd.mock.calls[0][0]).toMatchObject({ timestamp: 1 });
+  });
+});
+
+function losslessInput(options: Parameters<typeof audioInput>[0] & { videoKeyTime?: number } = {}): Input {
+  const video = {
+    displayWidth: 640, displayHeight: 360, rotation: 0,
+    keyTime: options.videoKeyTime ?? 0,
+    packetTimes: [options.videoKeyTime ?? 0],
+    getCodec: async () => 'avc',
+    getDecoderConfig: async () => ({ codec: 'avc1.42001e', codedWidth: 640, codedHeight: 360 }),
+  };
+  return { ...audioInput(options), getPrimaryVideoTrack: async () => video } as unknown as Input;
+}
+
+describe('lossless audio preservation', () => {
+  it.each([
+    { audible: [false, true], timestamps: [1] },
+    { audible: [true, false], timestamps: [0] },
+    { audible: [true, false, true], timestamps: [0, 2] },
+    { audible: [false, true, false], timestamps: [1] },
+  ])('preserves compatible audio around silent segments: %j', async ({ audible, timestamps }) => {
+    const result = await exportLosslessConcat({ segments: audible.map((hasAudio, index) => ({
+      input: losslessInput({ silent: !hasAudio }), start: 0, end: 1, label: `clip-${index}`,
+    })) });
+    expect(result.audioKept).toBe(true);
+    expect(result.audioDropReason).toBeUndefined();
+    expect(audioMocks.videoPacketAdd).toHaveBeenCalledTimes(audible.length);
+    expect(audioMocks.packetAdd.mock.calls.map(([packet]) => packet.timestamp)).toEqual(timestamps);
+    expect(audioMocks.events).toEqual(['audio.track', 'output.start']);
+  });
+
+  it.each([1, 2, 3])('exports a genuinely silent timeline with %i segments', async (count) => {
+    const result = await exportLosslessConcat({ segments: Array.from({ length: count }, (_, index) => ({
+      input: losslessInput({ silent: true }), start: 0, end: 1, label: `silent-${index}`,
+    })) });
+    expect(result.audioKept).toBe(false);
+    expect(result.audioDropReason).toBe('素材没有音轨');
+    expect(audioMocks.packetAdd).not.toHaveBeenCalled();
+    expect(audioMocks.videoPacketAdd).toHaveBeenCalledTimes(count);
+    expect(audioMocks.events).toEqual(['output.start']);
+  });
+
+  it.each([
+    { sampleRate: 44_100 },
+    { channels: 1 },
+    { description: new Uint8Array([19, 16]) },
+    { unknownConfig: true },
+    { codec: 'pcm-u8' },
+    { codec: null },
+  ])('rejects incompatible real audio before starting output: %j', async (settings) => {
+    await expect(exportLosslessConcat({ segments: [
+      { input: losslessInput(), start: 0, end: 1, label: 'aac' },
+      { input: losslessInput(settings), start: 0, end: 1, label: 'incompatible' },
+    ] })).rejects.toThrow();
+    expect(audioMocks.events).not.toContain('output.start');
+    expect(audioMocks.packetAdd).not.toHaveBeenCalled();
+    expect(audioMocks.videoPacketAdd).not.toHaveBeenCalled();
+  });
+
+  it('compares decoder-description contents rather than backing-buffer offsets', async () => {
+    const description = new Uint8Array([99, 18, 16, 99]).subarray(1, 3);
+    const result = await exportLosslessConcat({ segments: [
+      { input: losslessInput(), start: 0, end: 1, label: 'original' },
+      { input: losslessInput({ description }), start: 0, end: 1, label: 'view' },
+    ] });
+    expect(result.audioKept).toBe(true);
+    expect(audioMocks.packetAdd).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['pcm-u8', null])('rejects a single unsupported or unknown audio codec: %s', async (codec) => {
+    const input = losslessInput({ codec });
+    await expect(exportLosslessTrim({ input, start: 0, end: 1 })).rejects.toThrow();
+    await expect(exportLosslessConcat({ segments: [{ input, start: 0, end: 1, label: 'single' }] })).rejects.toThrow();
+    expect(audioMocks.events).not.toContain('output.start');
+    expect(audioMocks.packetAdd).not.toHaveBeenCalled();
+    expect(audioMocks.videoPacketAdd).not.toHaveBeenCalled();
+  });
+
+  it('does not shift a later segment pre-roll packet into the preceding silent interval', async () => {
+    const result = await exportLosslessConcat({ segments: [
+      { input: losslessInput({ silent: true }), start: 0, end: 1, label: 'silent' },
+      { input: losslessInput({ videoKeyTime: 2, packetTimes: [1.875, 2.125, 2.375] }), start: 2, end: 3, label: 'audible' },
+    ] });
+    expect(result.audioKept).toBe(true);
+    expect(audioMocks.packetAdd.mock.calls.map(([packet]) => packet.timestamp)).toEqual([1.125, 1.375]);
+    expect(audioMocks.videoPacketAdd.mock.calls.map(([packet]) => packet.timestamp)).toEqual([0, 1]);
+  });
+
+  it('still stops packet copying when cancellation arrives after the first video packet', async () => {
+    const controller = new AbortController();
+    await expect(exportLosslessConcat({
+      segments: [0, 1].map((index) => ({ input: losslessInput(), start: 0, end: 1, label: `clip-${index}` })),
+      signal: controller.signal,
+      onProgress: () => controller.abort(),
+    })).rejects.toThrow('已取消');
+    expect(audioMocks.videoPacketAdd).toHaveBeenCalledOnce();
+    expect(audioMocks.packetAdd).not.toHaveBeenCalled();
   });
 });
