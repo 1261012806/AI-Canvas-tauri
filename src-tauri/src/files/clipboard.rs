@@ -13,12 +13,28 @@ use std::process::Command;
 /// 固定用途的剪贴板工具最多等 5 秒，超时或输出超限时终止并回收进程。
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(super) fn run_clipboard_command(command: &mut Command, max_bytes: u64) -> Result<Vec<u8>, String> {
+    run_clipboard_command_until(
+        command,
+        max_bytes,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    )
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn run_clipboard_command_until(
+    command: &mut Command,
+    max_bytes: u64,
+    deadline: std::time::Instant,
+) -> Result<Vec<u8>, String> {
     use std::{
         io::Read,
         process::Stdio,
         sync::mpsc,
         time::{Duration, Instant},
     };
+    if Instant::now() >= deadline {
+        return Err("系统剪贴板读取超时，请稍后重试".into());
+    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -43,7 +59,6 @@ pub(super) fn run_clipboard_command(command: &mut Command, max_bytes: u64) -> Re
         let _ = child.wait();
         return Err("无法读取系统剪贴板输出".into());
     }
-    let deadline = Instant::now() + Duration::from_secs(5);
     let result = (|| {
         let bytes = receiver
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -184,18 +199,25 @@ fn copy_files_impl(paths: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn file_uri_list(paths: &[std::path::PathBuf]) -> Result<String, String> {
+    let mut list = String::new();
+    for path in paths {
+        let uri = url::Url::from_file_path(path).map_err(|_| "无法生成本地文件地址".to_string())?;
+        list.push_str(uri.as_str());
+        list.push('\n');
+    }
+    Ok(list)
+}
+
 // ── Linux 实现：xclip (X11) / wl-copy (Wayland) ──
 #[cfg(target_os = "linux")]
 fn copy_files_impl(paths: &[String]) -> Result<(), String> {
-    // 构建 file:// URI 列表
-    let mut uri_list = String::new();
-    for p in paths {
-        let abs = Path::new(p)
-            .canonicalize()
-            .map_err(|e| format!("路径无效 {}: {e}", p))?;
-        let abs_str = abs.to_string_lossy();
-        uri_list.push_str(&format!("file://{}\n", abs_str));
-    }
+    // 文件名里的 #、% 和换行也要保留原意，交给 URL 序列化处理。
+    let paths = paths.iter().map(|path| {
+        Path::new(path).canonicalize().map_err(|_| "剪贴板文件不存在或无法访问".to_string())
+    }).collect::<Result<Vec<_>, _>>()?;
+    let uri_list = file_uri_list(&paths)?;
 
     // 先用 x-special/gnome-copied-files target（GNOME/Nautilus 标准格式，含 copy 操作标识）
     let gnome_payload = format!("copy\n{}", uri_list);
@@ -307,10 +329,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn file_uris_round_trip_special_names_without_extra_entries() {
+        let paths = vec![
+            std::path::PathBuf::from("/tmp/中文 空格/#片段?查询%20\n图片.png"),
+            std::path::PathBuf::from("/tmp/another.jpg"),
+        ];
+        let list = file_uri_list(&paths).unwrap();
+        let restored = list.lines().map(|line| {
+            let uri = url::Url::parse(line).unwrap();
+            assert!(uri.query().is_none() && uri.fragment().is_none());
+            uri.to_file_path().unwrap()
+        }).collect::<Vec<_>>();
+        assert_eq!(restored, paths);
+        assert!(file_uri_list(&[std::path::PathBuf::from("relative.png")]).is_err());
+    }
+
+    #[test]
     fn command_output_is_bounded_and_nonzero_exit_is_rejected() {
         assert_eq!(run_clipboard_command(Command::new("sh").args(["-c", "printf 1234"]), 4).unwrap(), b"1234");
         assert!(run_clipboard_command(Command::new("sh").args(["-c", "printf 12345"]), 4).is_err());
         assert!(run_clipboard_command(Command::new("sh").args(["-c", "exit 1"]), 4).is_err());
+    }
+
+    #[test]
+    fn exhausted_clipboard_budget_does_not_start_another_command() {
+        let error = run_clipboard_command_until(
+            &mut Command::new("not-a-clipboard-tool"),
+            4,
+            std::time::Instant::now(),
+        ).unwrap_err();
+        assert!(error.contains("超时"));
     }
 
     #[test]

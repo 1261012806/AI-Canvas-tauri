@@ -1,25 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createResilientReader, createVideoInput } from '../../src/services/videoEditorMediaService';
+import { createResilientReader as makeReader, createVideoInput } from '../../src/services/videoEditorMediaService';
 
 const WHOLE = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+const readers = new Set<ReturnType<typeof makeReader>>();
+const inputs: Awaited<ReturnType<typeof createVideoInput>>[] = [];
+function createResilientReader(...args: Parameters<typeof makeReader>) {
+  const reader = makeReader(...args);
+  readers.add(reader);
+  return reader;
+}
 
 function rangeResponse(start: number, end: number) {
   return {
     ok: true,
     status: 206,
-    headers: new Headers({ 'Content-Range': `bytes ${start}-${end - 1}/${WHOLE.length}` }),
+    headers: new Headers({ 'Content-Range': `bytes ${start}-${end - 1}/${WHOLE.length}`, 'Content-Length': String(end - start) }),
     arrayBuffer: async () => WHOLE.slice(start, end).buffer,
   } as unknown as Response;
 }
 
 function wholeResponse() {
-  return {
-    ok: true,
+  return new Response(WHOLE, {
     status: 200,
-    headers: new Headers({ 'Content-Length': String(WHOLE.length) }),
-    arrayBuffer: async () => WHOLE.buffer.slice(0),
-  } as unknown as Response;
+    headers: { 'Content-Length': String(WHOLE.length) },
+  });
 }
 
 /** WKWebView 的 asset:// 在并发分片下让 fetch 直接失败时抛的就是这个 */
@@ -28,6 +33,9 @@ function webkitFetchFailure() {
 }
 
 afterEach(() => {
+  for (const reader of readers) reader.dispose();
+  readers.clear();
+  for (const input of inputs.splice(0)) input.dispose();
   vi.unstubAllGlobals();
 });
 
@@ -172,6 +180,107 @@ describe('createResilientReader', () => {
     // 越界的 end 必须夹到文件长度，否则 Range 头会请求不存在的字节
     expect(requestedRange).toBe('bytes=8-9');
   });
+
+  it('keeps large files on the range path but refuses an oversized whole-file fallback', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(rangeResponse(0, 2))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const read = createResilientReader('asset://large.mp4', 65 * 1024 * 1024);
+    expect([...(await read(0, 2))]).toEqual([0, 1]);
+    await expect(read(2, 4)).rejects.toThrow('64 MiB');
+    // 只发两次 Range 请求，不下载超限整包。
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a declared oversized whole body and cancels it before reading', async () => {
+    const cancel = vi.fn(async () => undefined);
+    const arrayBuffer = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, headers: new Headers({ 'Content-Length': String(65 * 1024 * 1024) }),
+      body: { cancel }, arrayBuffer,
+    })));
+    const read = createResilientReader('asset://large.mp4', null, false);
+    await expect(read.getSize()).rejects.toThrow('64 MiB');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('stops whole-file streams at the actual limit even when Content-Length lies', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const cancel = vi.fn(async () => undefined);
+    const readChunk = vi.fn(async () => ({ done: false, value: chunk }));
+    const arrayBuffer = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, headers: new Headers({ 'Content-Length': '1' }),
+      body: { getReader: () => ({ read: readChunk, cancel, releaseLock: vi.fn() }) }, arrayBuffer,
+    })));
+    const read = createResilientReader('asset://large.mp4', null, false);
+    await expect(read.getSize()).rejects.toThrow('64 MiB');
+    expect(readChunk).toHaveBeenCalledTimes(65);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    // 失败后释放已预留的 64 MiB，后续两个下载仍能分别预留 64 MiB。
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    })));
+    const other = [1, 2].map(() => createResilientReader('asset://next.mp4', 64 * 1024 * 1024, false));
+    const pending = other.map((reader) => reader.getSize().catch((error: unknown) => error));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    other.forEach((reader) => reader.dispose());
+    await Promise.all(pending);
+  });
+
+  it('does not use unbounded arrayBuffer when whole-file streaming is unavailable', async () => {
+    const arrayBuffer = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, headers: new Headers({ 'Content-Length': '1' }), arrayBuffer,
+    })));
+    await expect(createResilientReader('asset://video.mp4', null, false).getSize()).rejects.toThrow('无法流式');
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('shares one whole download between concurrent reads', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(wholeResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const read = createResilientReader('asset://video.mp4', WHOLE.length);
+    expect(await Promise.all([read(0, 2), read(2, 4)])).toEqual([WHOLE.slice(0, 2), WHOLE.slice(2, 4)]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('reserves the shared budget before download and frees it exactly once on dispose', async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const first = createResilientReader('asset://first.mp4', 64 * 1024 * 1024, false);
+    const second = createResilientReader('asset://second.mp4', 64 * 1024 * 1024, false);
+    const third = createResilientReader('asset://third.mp4', 64 * 1024 * 1024, false);
+    const pending = [first, second].map((reader) => reader.getSize().catch((error: unknown) => error));
+    await expect(third.getSize()).rejects.toThrow('128 MiB');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    first.dispose(); first.dispose();
+    await pending[0];
+    const replacement = createResilientReader('asset://replacement.mp4', 64 * 1024 * 1024, false);
+    const replacing = replacement.getSize().catch((error: unknown) => error);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const excess = createResilientReader('asset://excess.mp4', 1, false);
+    await expect(excess.getSize()).rejects.toThrow('128 MiB');
+    second.dispose(); replacement.dispose();
+    await Promise.all([...pending, replacing]);
+  });
+
+  it('does not retry or fall back after an AbortError', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError'));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(createResilientReader('asset://video.mp4', WHOLE.length)(0, 2)).rejects.toThrow('aborted');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 describe('createVideoInput range probe', () => {
@@ -183,19 +292,56 @@ describe('createVideoInput range probe', () => {
       headers: new Headers({ 'Content-Length': String(WHOLE.length) }),
       body: { cancel },
     } as unknown as Response;
-    const whole = {
-      ok: true,
-      status: 200,
-      blob: async () => new Blob([WHOLE], { type: 'video/mp4' }),
-    } as unknown as Response;
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(probeResponse)
-      .mockResolvedValueOnce(whole);
+      .mockResolvedValueOnce(wholeResponse());
     vi.stubGlobal('fetch', fetchMock);
 
     const input = await createVideoInput('https://example.test/video.mp4');
+    inputs.push(input);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // 这组字节不是有效视频；格式探测仍会触发真实 CustomSource 读取。
+    await input.getFormat().catch(() => undefined);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     input.dispose();
+  });
+
+  it('disposes an in-flight lazy probe without retrying or downloading the whole file', async () => {
+    let signal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init?.signal ?? undefined;
+      signal?.addEventListener('abort', () => reject(signal?.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const input = await createVideoInput('asset://video.mp4');
+    inputs.push(input);
+    const pending = input.getFormat();
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    input.dispose();
+    await rejected;
+    expect(signal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('disposes an in-flight whole-file stream after probing', async () => {
+    let endRead: ((value: ReadableStreamReadResult<Uint8Array>) => void) | undefined;
+    const cancel = vi.fn(async () => { endRead?.({ done: true, value: undefined }); });
+    const readChunk = vi.fn(() => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => { endRead = resolve; }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { 'Content-Length': '10' } }))
+      .mockResolvedValueOnce({ ok: true, headers: new Headers({ 'Content-Length': '10' }),
+        body: { getReader: () => ({ read: readChunk, cancel, releaseLock: vi.fn() }) } });
+    vi.stubGlobal('fetch', fetchMock);
+    const input = await createVideoInput('asset://video.mp4');
+    inputs.push(input);
+    const pending = input.getFormat();
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(readChunk).toHaveBeenCalledOnce());
+    input.dispose();
+    await rejected;
+    expect(cancel).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,5 +1,5 @@
 /** 媒体 URL 留在宿主，沿用编辑器读取器；隔离插件只接收播放预览字节。 */
-import { BufferTarget, Conversion, Mp4OutputFormat, Output } from 'mediabunny';
+import { BufferTarget, Conversion, Mp4OutputFormat, Output, canEncodeAudio } from 'mediabunny';
 import { createVideoInput, probeVideoSource } from '../videoEditorMediaService';
 
 export async function createPluginVideoPlayback(options: {
@@ -31,7 +31,11 @@ export async function createPluginVideoPlayback(options: {
     const scale = Math.min(1, 960 / Math.max(probe.width, probe.height));
     const width = Math.max(2, Math.round(probe.width * scale / 2) * 2);
     const height = Math.max(2, Math.round(probe.height * scale / 2) * 2);
-    const audio = Boolean(probe.audioCodec) && typeof AudioEncoder !== 'undefined';
+    const audioTrack = await input.getPrimaryAudioTrack();
+    const canEncodeAac = audioTrack && await canEncodeAudio('aac', {
+      sampleRate: 48_000, numberOfChannels: 2, bitrate: 64_000,
+    }).catch(() => false);
+    check();
     const target = new BufferTarget();
     const output = new Output({
       format: new Mp4OutputFormat({ fastStart: false }),
@@ -41,13 +45,21 @@ export async function createPluginVideoPlayback(options: {
       input, output, tracks: 'primary', tags: {}, showWarnings: false,
       video: { codec: 'avc', width, height, fit: 'contain', frameRate: 30,
         bitrate: 1_600_000, keyFrameInterval: 1, forceTranscode: true },
-      audio: audio ? { codec: 'aac', bitrate: 64_000, numberOfChannels: 2, forceTranscode: true } : { discard: true },
+      // 不支持 AAC 时让库优先复制兼容音轨，不强制改声道或重新编码。
+      audio: audioTrack
+        ? canEncodeAac
+          ? { codec: 'aac', bitrate: 64_000, numberOfChannels: 2, sampleRate: 48_000, forceTranscode: true }
+          : {}
+        : { discard: true },
     });
     check();
     const videoTrack = await input.getPrimaryVideoTrack();
     check();
     if (!conversion.isValid || !videoTrack || !conversion.utilizedTracks.includes(videoTrack)) {
       throw new Error('当前设备不能准备连续视频预览，请检查视频编码');
+    }
+    if (audioTrack && !conversion.utilizedTracks.includes(audioTrack)) {
+      throw new Error('当前设备无法保留视频音轨，请转换音频编码后重试');
     }
     conversion.onProgress = check;
     await conversion.execute();

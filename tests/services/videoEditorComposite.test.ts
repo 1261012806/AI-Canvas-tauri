@@ -1,4 +1,52 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Input } from 'mediabunny';
+
+const audioMocks = vi.hoisted(() => ({
+  canEncodeAudio: vi.fn(), packetAdd: vi.fn(), started: false, events: [] as string[],
+}));
+vi.mock('mediabunny', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('mediabunny')>();
+  return {
+    ...actual,
+    canEncodeAudio: audioMocks.canEncodeAudio,
+    Output: class {
+      format: InstanceType<typeof actual.Mp4OutputFormat>;
+      target: InstanceType<typeof actual.BufferTarget>;
+      constructor(options: { format: InstanceType<typeof actual.Mp4OutputFormat>; target: InstanceType<typeof actual.BufferTarget> }) {
+        this.format = options.format; this.target = options.target;
+      }
+      addVideoTrack() {}
+      addAudioTrack() { audioMocks.events.push('audio.track'); }
+      async start() { audioMocks.started = true; audioMocks.events.push('output.start'); }
+      async finalize() { this.target.buffer = new Uint8Array([1, 2, 3]).buffer; }
+      async cancel() {}
+    },
+    CanvasSource: class {
+      async add() {
+        if (!audioMocks.started) throw new Error('Output was not started');
+        audioMocks.events.push('video.add');
+      }
+      close() {}
+    },
+    EncodedAudioPacketSource: class {
+      async add(...args: unknown[]) { audioMocks.packetAdd(...args); }
+      close() {}
+    },
+    EncodedPacketSink: class {
+      async getPacket() { return null; }
+      async *packets() {
+        yield { timestamp: 0, duration: 1, clone: (options: { timestamp: number }) => ({ timestamp: options.timestamp }) };
+      }
+    },
+  };
+});
+
+beforeEach(() => {
+  audioMocks.canEncodeAudio.mockReset().mockResolvedValue(false);
+  audioMocks.packetAdd.mockClear();
+  audioMocks.started = false;
+  audioMocks.events = [];
+});
 
 import {
   DEFAULT_TRANSFORM,
@@ -12,7 +60,7 @@ import {
   type VideoEditorTrack,
 } from '../../src/types/videoEditor';
 import { computeDrawRect, renderFrameAt } from '../../src/services/videoCompositor';
-import { resolveCompositeAudioMode } from '../../src/services/videoEditorMediaService';
+import { exportComposite, resolveCompositeAudioMode } from '../../src/services/videoEditorMediaService';
 import {
   createTrack,
   moveTrack,
@@ -449,167 +497,133 @@ describe('hasMixedSources', () => {
   });
 });
 
+function audioInput(options: {
+  codec?: string; sampleRate?: number; channels?: number; description?: Uint8Array;
+  decodable?: boolean; silent?: boolean; unknownConfig?: boolean;
+} = {}): Input {
+  const codec = options.codec ?? 'aac';
+  const track = {
+    getCodec: async () => codec,
+    getDecoderConfig: async () => options.unknownConfig ? null : ({
+      codec, sampleRate: options.sampleRate ?? 48_000, numberOfChannels: options.channels ?? 2,
+      description: options.description ?? new Uint8Array([18, 16]),
+    }),
+    canDecode: async () => options.decodable ?? true,
+  };
+  return { getPrimaryAudioTrack: async () => options.silent ? null : track } as unknown as Input;
+}
+
 describe('resolveCompositeAudioMode', () => {
-  const audioClip = (over: Partial<VideoEditorClip> & { id: string }) => clip(over);
-  const withAudio = (clips: VideoEditorClip[]): VideoEditorTrack[] => [videoTrack(clips)];
-
-  const fakeInput = (codec = 'aac', sampleRate = 48000, channels = 2) => ({
-    getPrimaryAudioTrack: async () => ({
-      getCodec: async () => codec,
-      getDecoderConfig: async () => ({ codec, sampleRate, numberOfChannels: channels }),
-    }),
-  }) as unknown as Parameters<typeof resolveCompositeAudioMode>[1] extends
-    (clip: VideoEditorClip) => infer R ? NonNullable<R> : never;
-
-  const resolver = (input = fakeInput()) => () => input;
-
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('mixes when the browser has an AudioEncoder', async () => {
-    vi.stubGlobal('AudioEncoder', class {});
-    const result = await resolveCompositeAudioMode(
-      withAudio([audioClip({ id: 'a' })]),
-      resolver(),
-    );
+  it('probes AAC using the actual mix parameters before selecting encoding', async () => {
+    audioMocks.canEncodeAudio.mockResolvedValue(true);
+    const result = await resolveCompositeAudioMode([videoTrack([clip({ id: 'a' })])], () => audioInput());
     expect(result.mode).toBe('encode');
+    expect(audioMocks.canEncodeAudio).toHaveBeenCalledWith('aac', {
+      sampleRate: 48_000, numberOfChannels: 2, bitrate: expect.anything(),
+    });
   });
 
-  it('falls back to packet copy when AudioEncoder is missing', async () => {
-    // WebKit 至今没有 AudioEncoder，这是 macOS 上的实际情形
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      withAudio([
-        audioClip({ id: 'a', timelineStart: 0, sourceOut: 4 }),
-        audioClip({ id: 'b', timelineStart: 4, sourceOut: 4 }),
-      ]),
-      resolver(),
-    );
+  it('copies compatible audio when AudioEncoder exists but AAC is unsupported', async () => {
+    vi.stubGlobal('AudioEncoder', class {});
+    expect((await resolveCompositeAudioMode([videoTrack([
+      clip({ id: 'a', sourceOut: 4 }), clip({ id: 'b', timelineStart: 4, sourceOut: 4 }),
+    ])], () => audioInput())).mode).toBe('copy');
+  });
+
+  it('copies compatible audio after an AAC capability probe fails', async () => {
+    audioMocks.canEncodeAudio.mockRejectedValue(new Error('unsupported config'));
+    expect((await resolveCompositeAudioMode([videoTrack([clip({ id: 'a' })])], () => audioInput())).mode).toBe('copy');
+  });
+
+  it('uses PCM for overlap or volume edits when AAC is unavailable', async () => {
+    const overlap = await resolveCompositeAudioMode([videoTrack([
+      clip({ id: 'a', sourceOut: 4 }), clip({ id: 'b', timelineStart: 2, sourceOut: 4 }),
+    ])], () => audioInput());
+    expect(overlap.mode).toBe('pcm');
+    expect(overlap.reason).toContain('重叠');
+    for (const edited of [clip({ id: 'a', volume: 0.5 }), clip({ id: 'a', volumePoints: [{ t: 0, gain: 0 }] })]) {
+      expect((await resolveCompositeAudioMode([videoTrack([edited])], () => audioInput())).mode).toBe('pcm');
+    }
+    expect((await resolveCompositeAudioMode([
+      { ...videoTrack([clip({ id: 'a' })]), volume: 0.5 },
+    ], () => audioInput())).mode).toBe('pcm');
+  });
+
+  it.each([
+    { sampleRate: 44_100 },
+    { channels: 1 },
+    { description: new Uint8Array([19, 16]) },
+    { unknownConfig: true },
+  ])('does not copy incompatible decoder configurations: %j', async (options) => {
+    const inputs = [audioInput(), audioInput(options)];
+    const tracks = [videoTrack([clip({ id: 'a', sourceOut: 4 }), clip({ id: 'b', timelineStart: 4, sourceOut: 4 })])];
+    expect((await resolveCompositeAudioMode(tracks, (value) => inputs[value.id === 'a' ? 0 : 1])).mode).toBe('pcm');
+  });
+
+  it('checks source audio against MP4 support before copying packets', async () => {
+    // MP4 支持 pcm-s16，但不支持这个源 PCM 编码；必须解码后再输出。
+    const result = await resolveCompositeAudioMode([videoTrack([clip({ id: 'a' })])], () => audioInput({ codec: 'pcm-u8' }));
+    expect(result.mode).toBe('pcm');
+    expect(result.reason).toContain('MP4');
+  });
+
+  it('rejects undecodable audio that needs mixing instead of silently omitting it', async () => {
+    await expect(resolveCompositeAudioMode([videoTrack([clip({ id: 'a', volume: 0.5 })])],
+      () => audioInput({ decodable: false }))).rejects.toThrow('无法保留');
+    // 直接复制无需解码；这类素材仍可保留原音轨。
+    expect((await resolveCompositeAudioMode([videoTrack([clip({ id: 'a' })])],
+      () => audioInput({ decodable: false }))).mode).toBe('copy');
+  });
+
+  it('ignores silent video when checking audio overlap and finds a later audio track', async () => {
+    const result = await resolveCompositeAudioMode([videoTrack([
+      clip({ id: 'silent', sourceOut: 8 }), clip({ id: 'audible', timelineStart: 4, sourceOut: 4 }),
+    ])], (value) => audioInput({ silent: value.id === 'silent' }));
     expect(result.mode).toBe('copy');
   });
 
-  it('mixes into PCM instead of copying when clips overlap', async () => {
-    // 重叠必须混音，直通不可行；但 PCM 不需要 AudioEncoder，音频照样保得住
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      withAudio([
-        audioClip({ id: 'a', timelineStart: 0, sourceOut: 4 }),
-        audioClip({ id: 'b', timelineStart: 2, sourceOut: 4 }),
-      ]),
-      resolver(),
-    );
-    expect(result.mode).toBe('pcm');
-    expect(result.reason).toContain('重叠');
-  });
-
-  it('mixes into PCM instead of copying when a volume change is requested', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    expect((await resolveCompositeAudioMode(
-      withAudio([audioClip({ id: 'a', volume: 0.5 })]),
-      resolver(),
-    )).mode).toBe('pcm');
-
-    expect((await resolveCompositeAudioMode(
-      withAudio([audioClip({ id: 'a', volumePoints: [{ t: 0, gain: 0 }] })]),
-      resolver(),
-    )).mode).toBe('pcm');
-  });
-
-  it('reports no audio for an empty or fully muted timeline', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    expect((await resolveCompositeAudioMode([videoTrack([])], resolver())).mode).toBe('none');
-    expect((await resolveCompositeAudioMode(
-      [{ ...videoTrack([audioClip({ id: 'a' })]), muted: true }],
-      resolver(),
-    )).mode).toBe('none');
-  });
-
-  it('skips image clips, which carry no audio', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      withAudio([audioClip({ id: 'a', kind: 'image' })]),
-      resolver(),
-    );
-    expect(result.mode).toBe('none');
+  it('only reports no audio for silent, empty, muted, image or text content', async () => {
+    audioMocks.canEncodeAudio.mockResolvedValue(true);
+    expect((await resolveCompositeAudioMode([videoTrack([])], () => audioInput())).mode).toBe('none');
+    expect((await resolveCompositeAudioMode([
+      { ...videoTrack([clip({ id: 'a' })]), muted: true },
+    ], () => audioInput())).mode).toBe('none');
+    expect((await resolveCompositeAudioMode([videoTrack([clip({ id: 'silent' })])],
+      () => audioInput({ silent: true }))).mode).toBe('none');
+    expect((await resolveCompositeAudioMode([videoTrack([
+      clip({ id: 'image', kind: 'image' }), clip({ id: 'text', kind: 'text' }),
+    ])], () => undefined)).mode).toBe('none');
+    expect(audioMocks.canEncodeAudio).not.toHaveBeenCalled();
   });
 });
 
-describe('音轨保留策略', () => {
-  // 直通拼接要求各段音频解码参数一致，用签名比较；这里覆盖判据本身
-  const signature = (codec: string, rate: number, channels: number) =>
-    `${codec}|${rate}|${channels}`;
-
-  it('treats identical audio parameters as concatenable', () => {
-    const all = [
-      signature('mp4a.40.2', 48000, 2),
-      signature('mp4a.40.2', 48000, 2),
-    ];
-    expect(all.every((entry) => entry === all[0])).toBe(true);
-  });
-
-  it('rejects a sample rate or channel mismatch', () => {
-    expect(signature('mp4a.40.2', 44100, 2)).not.toBe(signature('mp4a.40.2', 48000, 2));
-    expect(signature('mp4a.40.2', 48000, 1)).not.toBe(signature('mp4a.40.2', 48000, 2));
-  });
-});
-
-describe('resolveCompositeAudioMode 的 PCM 兜底', () => {
-  const resolver = () => ({
-    getPrimaryAudioTrack: async () => ({
-      getCodec: async () => 'aac',
-      getDecoderConfig: async () => ({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2 }),
-    }),
-  }) as never;
-
+describe('composite packet-copy output lifecycle', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('mixes into PCM when a volume change rules out packet copy', async () => {
-    // 没有 AudioEncoder 也不该丢音频：PCM 走 mediabunny 自带的软件编码器
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      [{ id: 'v1', kind: 'video', name: 'v', clips: [clip({ id: 'a', volume: 0.5 })] }],
-      resolver,
-    );
-    expect(result.mode).toBe('pcm');
-    expect(result.reason).toContain('音量');
-  });
-
-  it('mixes into PCM when clips overlap', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      [{
-        id: 'v1', kind: 'video', name: 'v',
-        clips: [
-          clip({ id: 'a', timelineStart: 0, sourceOut: 4 }),
-          clip({ id: 'b', timelineStart: 2, sourceOut: 4 }),
-        ],
-      }],
-      resolver,
-    );
-    expect(result.mode).toBe('pcm');
-    expect(result.reason).toContain('重叠');
-  });
-
-  it('still prefers lossless packet copy when nothing needs mixing', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      [{
-        id: 'v1', kind: 'video', name: 'v',
-        clips: [
-          clip({ id: 'a', timelineStart: 0, sourceOut: 4 }),
-          clip({ id: 'b', timelineStart: 4, sourceOut: 4 }),
-        ],
-      }],
-      resolver,
-    );
-    expect(result.mode).toBe('copy');
-  });
-
-  it('only reports none when there is genuinely no audio', async () => {
-    vi.stubGlobal('AudioEncoder', undefined);
-    const result = await resolveCompositeAudioMode(
-      [{ id: 'v1', kind: 'video', name: 'v', clips: [clip({ id: 'a' })] }],
-      (() => ({ getPrimaryAudioTrack: async () => null })) as never,
-    );
-    expect(result.mode).toBe('none');
+  it('starts the output and copies a later audio track after a silent first video', async () => {
+    const surface = {
+      width: 0, height: 0,
+      getContext: () => ({ clearRect: vi.fn(), fillRect: vi.fn() }),
+    };
+    vi.stubGlobal('document', { createElement: () => surface });
+    const silent = audioInput({ silent: true });
+    const audible = audioInput();
+    const modes: string[] = [];
+    const bytes = await exportComposite({
+      tracks: [videoTrack([
+        clip({ id: 'silent', sourceOut: 1 }), clip({ id: 'audible', timelineStart: 1, sourceOut: 1 }),
+      ])],
+      duration: 2, frameRate: 1, canvas: { width: 2, height: 2 },
+      resolveVideo: () => undefined,
+      resolveAudio: (value) => value.id === 'silent' ? silent : audible,
+      onAudioMode: (mode) => modes.push(mode),
+    });
+    expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(modes).toEqual(['copy']);
+    expect(audioMocks.events).toEqual(['audio.track', 'output.start', 'video.add', 'video.add']);
+    expect(audioMocks.packetAdd).toHaveBeenCalledOnce();
+    expect(audioMocks.packetAdd.mock.calls[0][0]).toMatchObject({ timestamp: 1 });
   });
 });

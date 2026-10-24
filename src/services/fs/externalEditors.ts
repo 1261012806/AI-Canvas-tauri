@@ -111,19 +111,13 @@ export async function openInPhotoshop(filePath: string, customPath?: string): Pr
         throw new Error(`配置的 Photoshop 路径无效: ${customPath}`);
       }
 
-      const { Command } = await import('@tauri-apps/plugin-shell');
       for (const appName of [
         'Adobe Photoshop 2025',
         'Adobe Photoshop 2024',
         'Adobe Photoshop 2023',
         'Adobe Photoshop',
       ]) {
-        try {
-          await Command.create('mac-open', ['-a', appName, filePath]).execute();
-          return;
-        } catch {
-          continue;
-        }
+        if (await launchApp(appName, filePath)) return;
       }
       throw new Error('未找到 Photoshop。请在设置中手动配置 Photoshop 安装路径，或确认已安装 Adobe Photoshop');
     }
@@ -213,14 +207,8 @@ async function openInVideoEditor(
         throw new Error(`配置的 ${definition.displayName} 路径无效: ${customPath}`);
       }
 
-      const { Command } = await import('@tauri-apps/plugin-shell');
       for (const appName of definition.macAppNames) {
-        try {
-          await Command.create('mac-open', ['-a', appName, filePath]).execute();
-          return;
-        } catch {
-          continue;
-        }
+        if (await launchApp(appName, filePath)) return;
       }
       throw new Error(`未找到 ${definition.displayName}。请在设置中手动配置安装路径，或确认已安装该应用`);
     }
