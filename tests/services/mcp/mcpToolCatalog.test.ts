@@ -39,13 +39,13 @@ beforeEach(() => {
 });
 
 describe('MCP tool catalog', () => {
-  it('shows library preference and connection rules before initial discovery and full-mode creation tools', () => {
+  it('introduces each entry before preserving library and connection rules', () => {
     for (const id of ['tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production', 'episode_create_shotlist']) register(id);
     const descriptors = [MCP_CALL_DESCRIPTOR, ...[
       'tools_search', 'tools_describe', 'canvas_create_nodes', 'shotlist_prepare_production', 'episode_create_shotlist',
     ].map((id) => toMcpToolDescriptor(getAgentTool(id)!))];
     for (const descriptor of descriptors) {
-      expect(descriptor.description.startsWith('素材引用优先级：')).toBe(true);
+      expect(descriptor.description.indexOf('素材引用优先级：')).toBeGreaterThan(0);
       expect(descriptor.description).toContain('drama_reference_image_add');
       expect(descriptor.description).toContain('dramaAssetId');
       expect(descriptor.description).toContain('sourceId（提供内容）→ targetId（消费内容）');
@@ -63,13 +63,21 @@ describe('MCP tool catalog', () => {
       expect(descriptor.description).toContain('canvas_query(detail=true)');
       expect(descriptor.description).toContain('layout.warning');
     }
+    expect(descriptors[0].description.startsWith('执行工具：')).toBe(true);
+    expect(descriptors[1].description.startsWith('查找工具：')).toBe(true);
+    expect(descriptors[1].description).toContain('tools_search({"query":"*","limit":8})');
+    expect(descriptors[2].description.startsWith('读取参数：')).toBe(true);
+    for (const descriptor of descriptors.slice(3)) {
+      expect(descriptor.description.startsWith(getAgentTool(descriptor.name)!.description)).toBe(true);
+    }
     expect(descriptors[1].inputSchema).toBe(getAgentTool('tools_search')!.inputSchema);
     expect(MCP_CALL_DESCRIPTOR.annotations?.readOnlyHint).toBe(false);
   });
 
-  it('keeps library preference first in navigation, search and describe responses without clipping contracts', () => {
+  it('returns tools before guidance without clipping discovery or business contracts', () => {
     const results = [
       searchMcpToolCatalog(context, {}),
+      searchMcpToolCatalog(context, { query: '*' }),
       searchMcpToolCatalog(context, { category: 'canvas' }),
       searchMcpToolCatalog(context, { query: 'canvas_query', detail: 'schema' }),
       searchMcpToolCatalog(context, { query: 'unmatched-xyz' }),
@@ -78,14 +86,14 @@ describe('MCP tool catalog', () => {
     ];
     for (const result of results) {
       const serialized = serializeMcpCatalogResult(result);
-      expect(serialized.startsWith('{"hint":"素材引用优先级：')).toBe(true);
+      expect(serialized.startsWith('{"tools":')).toBe(true);
       const decoded = JSON.parse(serialized);
       expect(decoded.hint).toContain('不要把导演台反接回分镜表');
       expect(decoded.hint).toContain('不把制作节点反接回所属分镜表输入');
       expect(decoded.hint).toContain('分镜表不是视频生成的必建前置');
       expect(decoded.hint).toContain('video_editor_create 的 shotlistNodeId');
       expect(decoded.tools).toEqual(result.tools);
-      if (result.hint) expect(decoded.hint.endsWith(result.hint)).toBe(true);
+      if (result.hint) expect(decoded.hint.startsWith(`${result.hint}\n素材引用优先级：`)).toBe(true);
       expect(result.hint?.startsWith('素材引用优先级：')).not.toBe(true);
     }
   });
@@ -102,6 +110,35 @@ describe('MCP tool catalog', () => {
       tools: [], total: 3,
       categories: [{ id: 'canvas', count: 2 }, { id: 'media', count: 1 }],
     });
+    expect(searchMcpToolCatalog(context, {}).hint).toContain('tools_search({"query":"*","limit":8})');
+  });
+
+  it('browses every available tool with a short introduction and preserves category and permission filters', () => {
+    const expected = ['canvas_query', 'canvas_align', 'media_generate'];
+    for (let i = 0; i < 12; i += 1) {
+      const id = `file_probe_${i}`;
+      register(id, { title: `读取文件 ${i}`, description: '查看授权文件的信息。' });
+      expected.push(id);
+    }
+    register('file_hidden', { isAvailable: () => false });
+    const first = searchMcpToolCatalog(context, { query: '*', limit: 8 });
+    const last = searchMcpToolCatalog(context, { query: '*', limit: 8, offset: first.nextOffset });
+    expect(first).toMatchObject({ total: 15, returned: 8, hasMore: true, nextOffset: 8 });
+    expect(last).toMatchObject({ total: 15, returned: 7, hasMore: false });
+    expect(last.nextOffset).toBeUndefined();
+    const tools = [...first.tools, ...last.tools];
+    expect(tools.map((tool) => tool.name)).toEqual(expected.sort((a, b) => a.localeCompare(b)));
+    expect(new Set(tools.map((tool) => tool.name)).size).toBe(15);
+    expect(tools.every((tool) => tool.title && tool.description && tool.description.length <= 120 && !tool.inputSchema)).toBe(true);
+    expect(first.hint).toContain('不要把本页当作全部能力');
+    expect(searchMcpToolCatalog(context, { query: ' * ', category: 'canvas' }).tools.map((tool) => tool.name))
+      .toEqual(['canvas_align', 'canvas_query']);
+    expect(searchMcpToolCatalog({ ...context, mode: 'plan' }, { query: '*', category: 'canvas' }).tools.map((tool) => tool.name))
+      .toEqual(['canvas_query']);
+    expect(searchMcpToolCatalog({ ...context, toolAllowlist: [] }, { query: '*' }))
+      .toMatchObject({ tools: [], total: 0, returned: 0, hasMore: false });
+    expect(searchMcpToolCatalog(context, { query: '*', offset: 99 }).hint).toContain('offset=0');
+    expect(searchMcpToolCatalog(context, { query: 'unmatched*' }).tools).toHaveLength(0);
   });
 
   it('ranks exact IDs first and recalls Chinese phrases and English categories', () => {
@@ -130,6 +167,8 @@ describe('MCP tool catalog', () => {
     expect(described.tools).toHaveLength(1);
     expect(described.tools[0].inputSchema).toEqual(schema);
     expect(searchMcpToolCatalog(context, { query: 'canvas_text', detail: 'schema', limit: 1 }).tools[0].inputSchema).toEqual(schema);
+    expect(searchMcpToolCatalog(context, { query: '*', category: 'canvas', detail: 'schema' }).tools
+      .find((tool) => tool.name === 'canvas_text')!.inputSchema).toEqual(schema);
     expect(() => describeMcpToolCatalog(context, { names: ['canvas_query', 'canvas_align', 'media_generate', 'canvas_text'] })).toThrow('1 至 3');
   });
 

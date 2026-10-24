@@ -64,7 +64,7 @@ export function isMcpDiscoveryTool(name: string): boolean {
 export const MCP_SEARCH_SCHEMA: AgentToolSchema = {
   type: 'object', additionalProperties: false,
   properties: {
-    query: { type: 'string', maxLength: 240, description: '需求、工具名或关键词；省略时查看类别导航。' },
+    query: { type: 'string', maxLength: 240, description: '需求、工具名或关键词；传 "*" 逐页浏览全部当前可用工具的名称和简介，省略时查看类别导航。' },
     category: { type: 'string', minLength: 1, maxLength: 64, description: '类别 ID，可从无参数搜索的导航中获取。' },
     limit: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_RESULTS, description: '默认 5。' },
     offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: '默认 0；保持 query/category 不变，使用上次 nextOffset 继续翻页。目录会随当前可用能力变化，不是固定快照。无 query/category 时仅允许 0。' },
@@ -83,7 +83,7 @@ export const MCP_DESCRIBE_SCHEMA: AgentToolSchema = {
 export const MCP_CALL_DESCRIPTOR: McpToolDescriptor = {
   name: MCP_CALL_TOOL_NAME,
   title: '调用 AI Canvas 工具',
-  description: `${MCP_CONNECTION_RULES}\n用 tools_search / tools_describe 获取真实工具名和参数后，在 name 和 arguments 中提交一次调用；已知参数可直接复用。可能写入、删除或调用付费模型，按目标工具权限执行；写入和生成失败后不要自动重试。不支持递归调用发现入口。`,
+  description: `执行工具：用真实工具名 name 和参数对象 arguments 调用一个业务工具，例如 {"name":"canvas_query","arguments":{}}。先用 tools_search 查找、tools_describe 读取完整参数；已知参数可直接复用。可能写入、删除或调用付费模型，按目标工具权限执行；写入和生成失败后不要自动重试。不支持递归调用发现入口。\n${MCP_CONNECTION_RULES}`,
   inputSchema: {
     type: 'object', required: ['name', 'arguments'], additionalProperties: false,
     properties: {
@@ -109,9 +109,16 @@ export function toMcpToolDescriptor(definition: AgentToolDefinition): McpToolDes
   const showConnectionRules = isMcpDiscoveryTool(definition.id)
     || definition.id === 'canvas_create_nodes' || definition.id === 'shotlist_prepare_production'
     || definition.id === 'episode_create_shotlist';
+  const introduction = definition.id === 'tools_search'
+    ? '查找工具：调用 tools_search({"query":"*","limit":8}) 逐页查看全部可用工具的名称、中文标题和简短说明；这三个入口不代表只有三项能力。用返回的 nextOffset 作为 offset 继续，直到 hasMore=false；也可按单个需求或类别搜索。'
+    : definition.id === 'tools_describe'
+      ? '读取参数：调用 tools_describe({"names":["canvas_query"]}) 获取已发现工具的完整说明和参数，再用 tools_call 执行；搜索已返回完整 schema 时无需重复读取。'
+      : '';
+  const description = [introduction, definition.description, showConnectionRules ? MCP_CONNECTION_RULES : '']
+    .filter(Boolean).join('\n');
   return {
     name: definition.id, title: definition.title,
-    description: showConnectionRules ? `${MCP_CONNECTION_RULES}\n${definition.description}` : definition.description,
+    description,
     inputSchema: definition.inputSchema,
   };
 }
@@ -165,7 +172,7 @@ function score(tool: AgentToolDefinition, query: string, terms: string[]): numbe
 
 export function serializeMcpCatalogResult(result: McpToolCatalogResult): string {
   const { hint, ...catalog } = result;
-  const json = JSON.stringify({ hint: `${MCP_CONNECTION_RULES}${hint ? `\n${hint}` : ''}`, ...catalog });
+  const json = JSON.stringify({ ...catalog, hint: `${hint ? `${hint}\n` : ''}${MCP_CONNECTION_RULES}` });
   if (new TextEncoder().encode(json).byteLength > MCP_CATALOG_MAX_BYTES) {
     throw new Error('工具定义超过单次返回预算，请减小 limit、改用 summary，或使用 tools_describe 每次读取一个工具；本次未返回不完整的 schema。');
   }
@@ -189,12 +196,13 @@ export function searchMcpToolCatalog(
       tools: [], total: tools.length,
       categories: [...counts].sort(([a], [b]) => a.localeCompare(b)).slice(0, 32)
         .map(([id, count]) => ({ id, title: categories[id]?.title ?? id, count })),
-      hint: '按单个目的使用 query 搜索或用 category 逐页浏览；匹配结果不等于全部能力。摘要不含完整参数，descriptionTruncated=true 表示说明也被截断；调用前使用 detail=schema 或 tools_describe 获取完整定义，已知参数可复用。',
+      hint: '这里是类别导航，不是完整工具清单。调用 tools_search({"query":"*","limit":8}) 逐页查看所有可用工具的名称、中文标题和简介；也可按单个目的用 query 搜索或用 category 浏览。摘要不含完整参数，descriptionTruncated=true 表示说明也被截断；调用前使用 detail=schema 或 tools_describe 获取完整定义，已知参数可复用。',
     };
   }
+  const browseAll = query === '*';
   const terms = searchTerms(query);
   const matches = tools.filter((tool) => !category || categoryId(tool) === category)
-    .map((tool) => ({ tool, weight: query ? score(tool, query, terms) : 1 }))
+    .map((tool) => ({ tool, weight: query && !browseAll ? score(tool, query, terms) : 1 }))
     .filter(({ weight }) => weight > 0)
     .sort((a, b) => b.weight - a.weight || a.tool.id.localeCompare(b.tool.id));
   const page = matches.slice(offset, offset + (input.limit ?? 5));
@@ -207,10 +215,10 @@ export function searchMcpToolCatalog(
     hasMore,
     ...(hasMore ? { nextOffset } : {}),
     hint: !matches.length
-      ? '未找到匹配工具，不代表能力不存在。请缩短为单个目的、使用工具 ID，或省略参数查看类别后逐页浏览。'
+      ? '未找到匹配工具，不代表能力不存在。请缩短为单个目的、使用工具 ID，或用 query="*" 逐页查看当前可用工具；未打开项目时请先发现并调用 project_list / project_open。'
       : !page.length
         ? 'offset 已超出当前匹配结果，请从 offset=0 重新查询；工具可用性可能已变化。'
-        : '匹配结果不等于全部能力，多步骤需求请拆开搜索。hasMore=true 时保持 query/category 不变，用 nextOffset 继续；目录随当前可用能力变化。摘要不含完整参数，descriptionTruncated=true 表示说明也被截断；调用前用 detail=schema 或 tools_describe 获取完整定义，已知参数可直接复用 tools_call。',
+        : `${browseAll ? '这是当前可用工具的分页清单，尚有后续页时不要把本页当作全部能力。' : '匹配结果不等于全部能力，多步骤需求请拆开搜索；不确定名称时用 query="*" 浏览全部。'}hasMore=true 时保持 query/category 不变，用 nextOffset 作为 offset 继续，直到 hasMore=false；目录随当前项目和配置变化。摘要不含完整参数，descriptionTruncated=true 表示说明也被截断；调用前用 detail=schema 或 tools_describe 获取完整定义，已知参数可直接复用 tools_call。`,
   };
 }
 
