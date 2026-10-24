@@ -30,8 +30,12 @@ import Select from '../../shared/Select';
 import ModelSelector from './ModelSelector';
 import QualityRatioSelector from './QualityRatioSelector';
 import PresetAdvancedEditor from './PresetAdvancedEditor';
+import PresetImportDialog from './PresetImportDialog';
 import { validatePresetAdvancedConfig } from '../../../services/presetTemplateService';
 import { groupPresetsByFolder, resolvePresetFolderId, UNGROUPED_PRESET_FOLDER_ID } from '../../../utils/presetFolders';
+import { serializePresetShare } from '../../../services/presetShareService';
+import { copyText } from '../../../services/clipboardService';
+import { exportJsonTextFile } from '../../../services/fileService';
 
 const PLACEHOLDER_MARKER = '\u200B'; // zero-width space as placeholder pill
 
@@ -168,6 +172,9 @@ export default function PresetManager() {
   const [folderToDelete, setFolderToDelete] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [folderBusy, setFolderBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const shareBusyRef = useRef(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [template, setTemplate] = useState('');
@@ -201,6 +208,10 @@ export default function PresetManager() {
   useEffect(() => {
     queueMicrotask(() => { setFolderEditor(null); setFolderToDelete(null); });
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!presetManagerOpen) queueMicrotask(() => setImportOpen(false));
+  }, [presetManagerOpen]);
 
   // 高级模式的结构错误实时算，编辑器里已经列出来了，这里只用来锁保存
   const advancedError = useMemo(
@@ -363,6 +374,50 @@ export default function PresetManager() {
     } catch (error) { showToast(error instanceof Error ? error.message : t('保存失败，编辑内容已保留'), 'error'); }
     finally { setSaving(false); }
   }, [selectedId, name, description, template, triggerMode, folderId, activeTab, presetFolders, thumbnail, presetModel, presetProvider, presetImageSize, presetAspectRatio, modelOverrideActive, sizeOverrideActive, presetMode, advancedConfig, updateUserPreset, showToast, saving, folderBusy, t]);
+
+  const handleShare = async (action: 'copy' | 'export') => {
+    if (!selectedId || !name.trim() || saving || folderBusy || shareBusyRef.current) return;
+    shareBusyRef.current = true;
+    setShareBusy(true);
+    try {
+      const content = serializePresetShare({
+        id: selectedId,
+        nodeType: activeTab,
+        name: name.trim(),
+        description: description.trim(),
+        promptTemplate: presetMode === 'basic' && editorRef.current
+          ? serializePresetEditor(editorRef.current) : template,
+        triggerMode,
+        icon: selectedPreset?.icon,
+        thumbnail,
+        model: modelOverrideActive ? (presetModel || undefined) : undefined,
+        provider: modelOverrideActive ? (presetProvider || undefined) : undefined,
+        imageSize: sizeOverrideActive ? (presetImageSize || undefined) : undefined,
+        aspectRatio: sizeOverrideActive ? (presetAspectRatio || undefined) : undefined,
+        mode: presetMode,
+        advanced: presetMode === 'advanced' ? advancedConfig : undefined,
+      });
+      if (action === 'copy') {
+        const copied = await copyText(content);
+        showToast(t(copied ? '快捷指令 JSON 已复制' : '复制失败'), copied ? 'success' : 'error');
+      } else if (await exportJsonTextFile(content, name.trim())) {
+        showToast(t('快捷指令 JSON 已导出'), 'success');
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? t(error.message) : t('分享快捷指令失败'), 'error');
+    } finally {
+      shareBusyRef.current = false;
+      setShareBusy(false);
+    }
+  };
+
+  const handleImport = async (preset: UserPreset) => {
+    await addUserPreset(preset);
+    setPresetManagerOpen(true, preset.nodeType);
+    setSelectedId(preset.id);
+    setActiveFolderId(UNGROUPED_PRESET_FOLDER_ID);
+    showToast(t('快捷指令已导入为新副本'), 'success');
+  };
 
   const handleFolderSave = async () => {
     if (!folderEditor || folderBusy || saving) return;
@@ -568,6 +623,10 @@ export default function PresetManager() {
             <AnimatedButton type="button" className="preset-manager-new-btn" onClick={handleNew} disabled={saving || folderBusy}>
               {t('新建')}
             </AnimatedButton>
+            <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm ui-btn--block" disabled={saving || folderBusy || shareBusy}
+              onClick={() => setImportOpen(true)}>
+              <Icon icon="mdi:import" width={16} /> {t('导入 JSON')}
+            </button>
             <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ui-btn--block" disabled={saving || folderBusy}
               onClick={() => { setFolderToDelete(null); setFolderEditor({ name: '' }); }}>
               <Icon icon="mdi:folder-plus-outline" width={16} /> {t('新建文件夹')}
@@ -702,6 +761,18 @@ export default function PresetManager() {
           <div className="preset-manager-detail-pane">
             {selectedId ? (
               <fieldset className="preset-manager-detail m-0 min-w-0 border-0 p-0" disabled={saving || folderBusy}>
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('分享快捷指令')}>
+                  <span className="ui-label">{t('分享')}</span>
+                  <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={shareBusy || !name.trim() || !!advancedError}
+                    onClick={() => { void handleShare('copy'); }}>
+                    <Icon icon="mdi:content-copy" width={14} /> {t('复制 JSON')}
+                  </button>
+                  <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={shareBusy || !name.trim() || !!advancedError}
+                    onClick={() => { void handleShare('export'); }}>
+                    <Icon icon="mdi:export" width={14} /> {t('导出 JSON')}
+                  </button>
+                  <span className="ui-hint w-full">{t('分享当前编辑内容，模型和工作流需要在接收方配置。')}</span>
+                </div>
                 <label className="preset-manager-field">
                   <span className="preset-manager-label">{t('名字')}</span>
                   <input
@@ -925,6 +996,7 @@ export default function PresetManager() {
         </div>
       </motion.div>
       </div>{/* /preset-modal-wrapper */}
+      {importOpen && <PresetImportDialog onClose={() => setImportOpen(false)} onImport={handleImport} />}
     </>
       )}
     </AnimatePresence>,

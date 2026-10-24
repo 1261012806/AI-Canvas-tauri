@@ -48,7 +48,7 @@ const PRESET_PARAMETER_TYPES: PresetParameterType[] = [
   'select',
   'boolean',
 ];
-const MAX_AGENT_PRESET_STEPS = 10;
+const MAX_AGENT_PRESET_STEPS = 20;
 const MAX_AGENT_PRESET_PARAMETERS = 20;
 
 interface PresetParameterInput {
