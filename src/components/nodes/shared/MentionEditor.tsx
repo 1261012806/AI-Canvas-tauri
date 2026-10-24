@@ -984,19 +984,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const handleSelectDramaMention = useCallback(
     (item: ReturnType<typeof resolveDramaMentionItems>[number]) => {
       if (!isCurrentEditorOwner()) return;
-      // 仅当绑图节点上已有真实图片时，才 @ 图像节点；否则始终 @drama 芯片（解析时展开单条简介）
-      if (item.imageNodeId && !item.id.startsWith('global/')) {
-        const imgNode = nodes.find((n) => n.id === item.imageNodeId);
-        const hasImage = !!(
-          (imgNode?.data?.imageUrl as string | undefined)
-          || (imgNode?.data?.thumbnailUrl as string | undefined)
-          || item.imageUrl
-        );
-        if (imgNode && hasImage) {
-          handleSelectCanvasMention(item.imageNodeId, item.name);
-          return;
-        }
-      }
+      // 资产库始终保留 @drama 身份，绑图节点只用于读取缩略图。
       restoreMentionCursor();
       deleteAtChar();
       let thumb: string | undefined;
@@ -1010,7 +998,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       setShowMention(false);
       setMentionQuery('');
     },
-    [isCurrentEditorOwner, nodes, handleSelectCanvasMention, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
+    [isCurrentEditorOwner, nodes, restoreMentionCursor, deleteAtChar, insertDramaChipAtCursor],
   );
 
   // ── Insert an asset reference chip ──
@@ -1773,7 +1761,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           setDramaActionPicker(false);
           setDramaActionId(null);
           focusMentionCursor();
-        } else if (item.kind !== 'character' && references[0]) {
+        } else if (references[0]) {
           handleSelectDramaReference(item, references[0].id, references[0].imageUrl);
         } else handleSelectDramaMention(item);
       },
