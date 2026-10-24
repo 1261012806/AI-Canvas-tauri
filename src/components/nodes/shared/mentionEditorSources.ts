@@ -10,6 +10,7 @@ import { bestNodeThumb } from './mentionEditorDom';
 import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import type { DramaAsset, DramaAssetKind } from '../../../types/dramaAssets';
 import { emptyDramaAssetLibrary } from '../../../types/dramaAssets';
+import { matchesDramaAssetQuery } from '../../../services/dramaAssetSearch';
 import { buildShotlistRowMentionId } from '../../../types/shotlist';
 
 export interface CanvasMentionItem {
@@ -208,20 +209,19 @@ export function resolveDramaMentionItems(
   const items = [
     ...projectAssets,
     ...globalAssets.map((asset) => ({ ...asset, id: `global/${asset.id}` })),
-  ].map((asset) => ({
+  ].filter((asset) => matchesDramaAssetQuery(asset, query)).map((asset) => ({
     id: asset.id,
     name: asset.name,
     aliases: asset.kind === 'character' ? asset.aliases : undefined,
     kind: asset.kind as string,
     imageNodeId: asset.id.startsWith('global/') ? undefined : asset.imageNodeId,
     imageUrl: asset.imageUrl,
-    referenceImages: asset.kind === 'character' ? asset.referenceImages : undefined,
+    referenceImages: asset.referenceImages,
     voice: nodeType === 'ai-audio' ? resolveDramaVoiceRef(asset) : null,
   }));
   const candidates = nodeType === 'ai-audio' ? items.filter((item) => item.voice) : items;
   // 分类数量和筛选共用完整候选，不能提前截断而丢失排在后面的场景或道具。
-  if (!query) return candidates;
-  return candidates.filter((asset) => matchesMentionQuery(query, [asset.name, asset.id, ...(asset.aliases ?? [])]));
+  return candidates;
 }
 
 /** 全局弹框独立于 @ 菜单开关，只从原始全局资产生成带作用域的候选。 */
@@ -233,12 +233,7 @@ export function resolveGlobalAssetPickerItems(
 ) {
   const filtered = globalAssets.filter((asset) => {
     if (kind !== null && asset.kind !== kind) return false;
-    const details = asset.kind === 'character'
-      ? [...(asset.aliases ?? []), asset.identity, asset.ageBand, asset.gender, asset.personality, asset.wardrobeDefault, asset.voiceNotes]
-      : asset.kind === 'scene'
-        ? [asset.placeType, asset.timeOfDay, asset.atmosphere, asset.spatialNotes]
-        : [asset.ownerName, asset.category, asset.significance];
-    return matchesMentionQuery(query, [asset.name, asset.id, asset.key, asset.summary, asset.visualNotes, asset.storyRole, ...details]);
+    return matchesDramaAssetQuery(asset, query);
   });
   return resolveDramaMentionItems(emptyDramaAssetLibrary(), '', nodeType, filtered);
 }

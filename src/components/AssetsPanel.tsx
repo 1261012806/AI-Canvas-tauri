@@ -76,6 +76,7 @@ import AssetFileContextMenu from './assets/AssetFileContextMenu';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import type { AssetImageBatchEntry } from '../types/assetImage';
 import type { DramaAssetKind } from '../types/dramaAssets';
+import type { AssetRepairTarget } from '../services/fs/assetRepair';
 
 const AssetTextPreview = lazy(() => import('./assets/AssetTextPreview'));
 const DramaAssetsPanel = lazy(() => import('./DramaAssetsPanel'));
@@ -84,6 +85,7 @@ const RefModAssetsPanel = lazy(() => import('./assets/RefModAssetsPanel'));
 const AssetImageBatchReverseDialog = lazy(() => import('./assets/AssetImageBatchReverseDialog'));
 const GlobalCreativeAssetsPanel = lazy(() => import('./assets/GlobalCreativeAssetsPanel'));
 const GlobalCreativeAssetFileDialog = lazy(() => import('./assets/GlobalCreativeAssetsPanel').then((module) => ({ default: module.GlobalCreativeAssetFileDialog })));
+const AssetRepairDialog = lazy(() => import('./assets/AssetRepairDialog'));
 
 /** 仅磁盘真实文件可拖拽（排除节点引用的 node:// / virtual:// 虚拟路径）*/
 function isDraggableEntry(file: AssetFileEntry): boolean {
@@ -241,6 +243,7 @@ export default function AssetsPanel() {
   const [batchReverse, setBatchReverse] = useState<{ scope: string; entries: AssetImageBatchEntry[] } | null>(null);
   const closeBatchReverse = useCallback(() => setBatchReverse(null), []);
   const [fileMenu, setFileMenu] = useState<{ file: AssetFileEntry; scope: string; projectId?: string; x: number; y: number; confirmDelete?: boolean } | null>(null);
+  const [repairTarget, setRepairTarget] = useState<AssetRepairTarget | null>(null);
   const fileOperationRef = useRef<AbortController | null>(null);
   const fileScopeRef = useRef<string | null>(null);
   const [hoverDetails, setHoverDetails] = useState<{ key: string; scope: string; text: string } | null>(null);
@@ -635,13 +638,14 @@ export default function AssetsPanel() {
   }, [assetsPanelOpen, markDramaAssetsViewed, unreadDramaAssetCount, visibleTab]);
 
   const handleClose = useCallback(() => {
+    setRepairTarget(null);
     setCreativeFile(null);
     setImagePreview(null);
     setBatchReverse(null);
     setSelectedProjectId(null); // 复位项目选择，下次打开默认当前项目
     setFilterRowExpanded(false);
     setAssetsPanelOpen(false);
-  }, [setAssetsPanelOpen]);
+  }, [setAssetsPanelOpen, setRepairTarget]);
 
   const handleLocateNode = useCallback((nodeId: string) => {
     const focusNode = () => {
@@ -1594,6 +1598,7 @@ export default function AssetsPanel() {
                       onCopy={(selection) => { void handleFolderClipboard(selection, 'copy'); }}
                       onPaste={(selection) => { void handleFolderClipboard(selection, 'paste'); }}
                       onRemove={(rootPath) => { void handleRemoveFolder(rootPath); }}
+                      onRepair={(rootPath) => setRepairTarget({ kind: 'folder', path: rootPath, name: shortFolderName(rootPath) })}
                       creativeKind={globalCreativeKind} creativeCounts={creativeCounts}
                       onSelectCreative={(kind) => {
                         setGlobalCreativeKind(kind); setFileMenu(null); setImagePreview(null); setTextPreview(null); dismissHover();
@@ -1612,6 +1617,8 @@ export default function AssetsPanel() {
                         {activeTab === 'permanent' ? folderLabel : translate('项目文件')}
                       </span>
                       <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || loading || !isTauriEnv()}
+                          onClick={() => setRepairTarget({ kind: 'all' })}>{translate('修复失效素材')}</button>
                         <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS.map((option) => ({ ...option, label: translate(option.label) }))} size="sm" className="w-[86px]"
                           aria-label={translate("排序方式")} onChange={(value) => changeFileSort(value, value === 'usedAt' ? 'desc' : sortOrder)} />
                         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
@@ -1831,6 +1838,8 @@ export default function AssetsPanel() {
     </Suspense>}
     {assetsPanelOpen && fileMenu?.scope === previewScope &&
       <AssetFileContextMenu key={`${fileMenu.scope}:${fileMenu.file.path}:${fileMenu.confirmDelete}`} name={fileMenu.file.name}
+        usageTarget={{ kind: 'file', assetId: fileMenu.file.assetId, path: fileMenu.file.path, name: fileMenu.file.name }}
+        onRepair={fileMenu.file.assetId && isTauriEnv() ? () => setRepairTarget({ kind: 'file', assetId: fileMenu.file.assetId, path: fileMenu.file.path, name: fileMenu.file.name }) : undefined}
         x={fileMenu.x} y={fileMenu.y} confirmDelete={fileMenu.confirmDelete}
         canFileActions={isLocalAssetFile(fileMenu.file) && isTauriEnv()}
         canCopyPrompt={fileMenu.file.category === 'image' || fileMenu.file.category === 'video'}
@@ -1845,6 +1854,9 @@ export default function AssetsPanel() {
           setCreativeFile({ file: { ...target.file }, kind, scope: target.scope });
         } : undefined}
         onReveal={() => performFileAction('reveal')} onDelete={() => performFileAction('delete')} onClose={closeFileMenu} />}
+    {assetsPanelOpen && repairTarget && <Suspense fallback={<p role="status">{translate('正在读取失效素材…')}</p>}>
+      <AssetRepairDialog target={repairTarget} onClose={() => setRepairTarget(null)} onRepaired={() => { void loadFiles().then(loadTags); }} />
+    </Suspense>}
     {assetsPanelOpen && creativeFile?.scope === previewScope && <Suspense fallback={<p role="status">{translate("正在打开创作资产…")}</p>}>
       <GlobalCreativeAssetFileDialog key={`${creativeFile.kind}:${creativeFile.file.assetId ?? creativeFile.file.path}`} file={creativeFile.file} kind={creativeFile.kind}
         onClose={() => setCreativeFile(null)} onSaved={() => {

@@ -309,9 +309,8 @@ async function previewDramaContent(source: ReferencePreviewSource, state: Previe
       : { ...extra, ...unavailable(title, '全部参考图暂无可用图片', 'image') };
   }
   if (referenceImageId !== undefined) {
-    const reference = asset.kind === 'character' ? asset.referenceImages?.find((item) => item.id === referenceImageId) : undefined;
-    const image = reference && asset.kind === 'character'
-      ? resolveDramaAssetImageRef({ ...asset, imageNodeId: undefined, imageUrl: undefined, referenceImages: [reference] }, nodes, referenceImageId) : null;
+    const reference = asset.referenceImages?.find((item) => item.id === referenceImageId);
+    const image = reference ? resolveDramaAssetImageRef(asset, nodes, referenceImageId) : null;
     return image ? mediaPreview('image', title, image.imageUrl, signal, { ...extra, prompt: reference?.prompt })
       : { ...extra, ...unavailable(title, '指定参考图已删除或尚无图片', 'image') };
   }

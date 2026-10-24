@@ -26,6 +26,8 @@ import {
 } from '../../services/storageQuota';
 import AnimatedButton from '../shared/AnimatedButton';
 import { useT } from '../../i18n';
+import AssetRepairDialog from '../assets/AssetRepairDialog';
+import type { AssetRepairTarget } from '../../services/fs/assetRepair';
 
 // ============================================
 // 颜色映射
@@ -299,7 +301,8 @@ async function collectLiveReferences(projectId = useAppStore.getState().currentP
   if (state.currentProjectId !== projectId || (projectId && !root)) {
     throw new Error('当前项目的实时文件引用无法确认，请重新扫描');
   }
-  return collectNodeFilePaths([{ data: { nodes: state.nodes, history: state.history, messages: state.messages } }], root ?? undefined);
+  return collectNodeFilePaths([{ data: { nodes: state.nodes, history: state.history, messages: state.messages, dramaAssets: state.dramaAssets,
+    globalCharacters: state.globalCharacters, globalScenes: state.globalScenes, globalProps: state.globalProps } }], root ?? undefined);
 }
 
 export default function StorageHealthCenter() {
@@ -316,6 +319,7 @@ export default function StorageHealthCenter() {
   const [activeSection, setActiveSection] = useState<string>('overview');
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
   const scannedRef = useRef(false);
+  const [repairTarget, setRepairTarget] = useState<AssetRepairTarget | null>(null);
 
   // 执行扫描
   const handleScan = useCallback(async () => {
@@ -327,7 +331,7 @@ export default function StorageHealthCenter() {
       // 收集所有节点的 filePath 引用
       const projectId = useAppStore.getState().currentProjectId;
       const nodeFilePaths = () => collectLiveReferences(projectId);
-      const assetFolders = [] as { path: string; label: string }[];
+      const assetFolders = (useAppStore.getState().config.assetFolders ?? []).map((path) => ({ path, label: path.replace(/\\/g, '/').split('/').pop() || path }));
 
       const result = await scanStorageHealth(useAppStore.getState().projects, nodeFilePaths, assetFolders);
       if (useAppStore.getState().currentProjectId !== projectId) throw new Error('项目已切换，请重新扫描');
@@ -566,6 +570,16 @@ export default function StorageHealthCenter() {
           )}
         </AnimatedButton>
       </div>
+
+      <div className="ui-card p-3 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2"><p className="text-xs text-canvas-text">{t('失效素材与目录')}</p>
+          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={scanning} onClick={() => setRepairTarget({ kind: 'all' })}>{t('修复失效素材')}</button></div>
+        {report?.offlineFolders.map((folder) => <div key={folder.path} className="flex items-center justify-between gap-2">
+          <span className="text-xs text-canvas-text-secondary truncate">{folder.label}</span>
+          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setRepairTarget({ kind: 'folder', path: folder.path, name: folder.label })}>{t('重新定位文件夹')}</button>
+        </div>)}
+      </div>
+      {repairTarget && <AssetRepairDialog target={repairTarget} onClose={() => setRepairTarget(null)} onRepaired={() => { void handleScan(); }} />}
 
       {/* 浏览器存储配额 — 画布数据存在 IndexedDB 里，配额用尽会导致自动保存失败 */}
       {browserStorage && browserStorage.quota > 0 && (() => {

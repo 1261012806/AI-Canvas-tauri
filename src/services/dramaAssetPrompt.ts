@@ -147,18 +147,16 @@ export function resolveDramaVoiceRef(asset: DramaAsset | undefined, clipId?: str
   return { ...clip, url, label: `${asset.name} · ${clip.label?.trim() || '音频'}` };
 }
 
-/** 已绑图像节点且该节点已有图时，才视为「可引图」；指定 referenceImageId 时引用角色的那一张参考图 */
+/** 指定 referenceImageId 时只解析人物 / 场景 / 道具的那张图，失效时绝不替换为主图。 */
 export function resolveDramaAssetImageRef(
   asset: DramaAsset,
   nodes: Array<{ id: string; data?: Record<string, unknown> }>,
   referenceImageId?: string,
 ): { imageNodeId?: string; imageUrl: string } | null {
-  const reference = asset.kind === 'character'
-    ? referenceImageId !== undefined
+  const reference = referenceImageId !== undefined
       ? asset.referenceImages?.find((item) => item.id === referenceImageId)
       : asset.referenceImages?.find((item) => item.id === asset.primaryReferenceImageId)
-        || asset.referenceImages?.[0]
-    : undefined;
+        || asset.referenceImages?.[0];
   if (referenceImageId !== undefined && !reference) return null;
   const imageNodeId = asset.id.startsWith('global/') ? undefined
     : referenceImageId !== undefined ? reference?.sourceNodeId : reference?.sourceNodeId || asset.imageNodeId;
@@ -187,7 +185,7 @@ export function preferredDramaMentionForNode(
     const mentions = new Set<string>();
     for (const asset of assets) {
       if (/[:#{}\r\n]/.test(asset.id) || /[{}\r\n]/.test(asset.name)) continue;
-      const references = asset.kind === 'character' && asset.referenceImages?.length
+      const references = asset.referenceImages?.length
         ? asset.referenceImages.map((reference) => reference.id) : [undefined];
       for (const referenceId of references) {
         if (referenceId && /[:{}\r\n]/.test(referenceId)) continue;

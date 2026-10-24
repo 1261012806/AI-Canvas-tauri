@@ -3,14 +3,16 @@ import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../types';
 import { t } from '../i18n';
 import type { DramaAsset, DramaAssetWriteOptions } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, normalizeDramaVisualAsset } from '../types/dramaAssets';
 import { getAssetIndexById, putAssetIndex, deleteImportedAssetIndexes } from './indexedDbService';
 import { getAssetUrlFromPath, getGlobalFilesDir, getProjectDataDir, isTauriEnv, joinPath, sanitizeFileName, stripVerbatimPrefix } from './fileService';
 import { prepareGlobalCharacter } from './characterLibraryService';
 import { localMediaUrlToPath } from '../utils/mediaUrl';
 import {
   buildDramaAssetTransferDocument, parseDramaAssetTransferDocument, remapImportedAssets,
+  buildDramaAssetImportPreview, getDramaAssetTransferMediaIds, selectDramaAssetTransferDocument,
   DRAMA_ASSET_TRANSFER_LIMITS, type DramaAssetTransferMedia, type ImportedDramaAssetMedia,
+  type DramaAssetIdentity, type DramaAssetImportPreview, type DramaAssetTransferDocument,
 } from './dramaAssetTransferFormat';
 import {
   cleanupDramaAssetTransferDirectory, copyImportedDramaAssetMedia, createDramaAssetArchiveWorkspace,
@@ -20,8 +22,12 @@ import {
 } from './fs/dramaAssetArchive';
 
 export const DRAMA_ASSET_ARCHIVE_EXTENSION = 'aicassets';
-export interface DramaAssetTransferOptions extends DramaAssetWriteOptions { onProgress?: (text: string) => void }
-export interface DramaAssetTransferResult { assetCount: number; mediaCount: number }
+export type { DramaAssetIdentity, DramaAssetImportPreview } from './dramaAssetTransferFormat';
+export interface DramaAssetTransferOptions extends DramaAssetWriteOptions {
+  onProgress?: (text: string) => void;
+  chooseAssets?: (preview: DramaAssetImportPreview, signal?: AbortSignal) => Promise<readonly DramaAssetIdentity[] | null>;
+}
+export interface DramaAssetTransferResult { assetCount: number; mediaCount: number; assets: DramaAssetIdentity[] }
 export interface ExportProjectDramaAssetsInput {
   projectId: string;
   ownerId: string;
@@ -34,6 +40,7 @@ export interface ExportProjectDramaAssetsInput {
 export interface ImportProjectDramaAssetsInput {
   projectId: string;
   ownerId: string;
+  existingAssets?: readonly DramaAsset[];
   commit: (assets: DramaAsset[]) => Promise<void>;
 }
 export interface ExportGlobalDramaAssetsInput {
@@ -42,13 +49,19 @@ export interface ExportGlobalDramaAssetsInput {
   assets: readonly DramaAsset[];
 }
 export interface ImportGlobalDramaAssetsInput {
+  existingAssets?: readonly DramaAsset[];
+  commit: (assets: DramaAsset[]) => Promise<void>;
+}
+export interface CopyGlobalDramaAssetsToProjectInput {
+  ownerId: string;
+  assets: readonly DramaAsset[];
   commit: (assets: DramaAsset[]) => Promise<void>;
 }
 
 type ExportInput = { name: string; assetName?: string; assets: readonly DramaAsset[] } & (
   { scope: 'project'; ownerId: string; nodes: readonly Node<BaseNodeData>[] } | { scope: 'global' }
 );
-type ImportInput = { commit: (assets: DramaAsset[]) => Promise<void> } & (
+type ImportInput = { existingAssets?: readonly DramaAsset[]; commit: (assets: DramaAsset[]) => Promise<void> } & (
   { scope: 'project'; ownerId: string } | { scope: 'global' }
 );
 
@@ -63,6 +76,36 @@ const pathKey = (value: string) => {
   const clean = stripVerbatimPrefix(value).replace(/\\/g, '/').replace(/\/+$/, '');
   return /^[a-z]:\//i.test(clean) ? clean.toLowerCase() : clean;
 };
+
+class DramaAssetMediaError extends Error {}
+class DramaAssetCommitError extends Error {}
+const visibleName = (value: string) => [...value].map((character) => (
+  character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? ' ' : character
+)).join('').slice(0, 120);
+function referenceLabel(asset: DramaAsset, index: number): string {
+  const label = asset.kind !== 'character' ? asset.referenceImages?.[index]?.label : undefined;
+  return label ? t('参考图「{name}」', { name: visibleName(label) }) : t('参考图 {index}', { index: index + 1 });
+}
+function mediaLabel(asset: DramaAsset, mediaId: string): string {
+  const token = `aicasset-media:${mediaId}`;
+  const referenceIndex = asset.referenceImages?.findIndex((reference) => reference.imageUrl === token) ?? -1;
+  if (referenceIndex >= 0) return referenceLabel(asset, referenceIndex);
+  if (asset.kind === 'character') {
+    const voiceIndex = asset.voiceClips?.findIndex((clip) => clip.audioUrl === token) ?? -1;
+    if (voiceIndex >= 0) return t('声音「{name}」', { name: visibleName(asset.voiceClips![voiceIndex].label || t('声音 {index}', { index: voiceIndex + 1 })) });
+    for (const action of asset.actions ?? []) {
+      const media = action.media?.find((item) => item.url === token);
+      if (media) return t('动作「{action}」的素材「{name}」', { action: visibleName(action.name), name: visibleName(media.name) });
+    }
+  }
+  return t('主图');
+}
+function importMediaError(document: DramaAssetTransferDocument, media: DramaAssetTransferMedia): Error {
+  const asset = document.assets.find((item) => getDramaAssetTransferMediaIds(item).includes(media.id))!;
+  return new DramaAssetMediaError(t('资产包中「{name}」的{item}校验失败，请重新导出后重试', {
+    name: visibleName(asset.name), item: mediaLabel(asset, media.id),
+  }));
+}
 
 function projectRelativePath(value: string): string {
   if (!value || value.includes('\\') || value.includes('\0') || value.split('/').some((part) => !part || part === '.' || part === '..' || part.includes(':'))) {
@@ -131,56 +174,70 @@ async function prepareExportAssets(input: ExportInput, workspace: DramaAssetArch
   const cache = new Map<string, { kind: MediaKind; token: string }>();
   const media: DramaAssetTransferMedia[] = [];
   let totalBytes = 0;
-  const collect = async (source: MediaSource, kind: MediaKind): Promise<string> => {
-    const resolved = await resolveMediaSource(source, kind, rootDirectory, nodes, input.scope, options);
-    assertDramaAssetWriteCurrent(options);
-    const key = resolved.filePath ? pathKey(resolved.filePath) : resolved.url!;
-    const previous = cache.get(key);
-    if (previous) {
-      if (previous.kind !== kind) throw new Error(t('同一媒体存在不一致的用途类型'));
-      return previous.token;
+  const collect = async (source: MediaSource, kind: MediaKind, asset: DramaAsset, item: string): Promise<string> => {
+    try {
+      const resolved = await resolveMediaSource(source, kind, rootDirectory, nodes, input.scope, options);
+      assertDramaAssetWriteCurrent(options);
+      const key = resolved.filePath ? pathKey(resolved.filePath) : resolved.url!;
+      const previous = cache.get(key);
+      if (previous) {
+        if (previous.kind !== kind) throw new Error(t('同一媒体存在不一致的用途类型'));
+        return previous.token;
+      }
+      if (media.length >= DRAMA_ASSET_TRANSFER_LIMITS.media) throw new Error(t('创作资产媒体数量超过限制'));
+      const id = `media-${crypto.randomUUID()}`;
+      const copied = await stageDramaAssetArchiveMedia(workspace, resolved, id, extensionFor(resolved, kind), kind, options);
+      assertDramaAssetWriteCurrent(options);
+      totalBytes += copied.totalBytes;
+      if (!copied.totalBytes || totalBytes > DRAMA_ASSET_TRANSFER_LIMITS.mediaBytes) throw new Error(t('创作资产媒体为空或超过包大小限制'));
+      media.push({ id, kind, path: copied.relativePath, bytes: copied.totalBytes, sha256: copied.digest });
+      const token = `aicasset-media:${id}`;
+      cache.set(key, { kind, token });
+      options.onProgress?.(t('正在收集媒体 {count}', { count: media.length }));
+      return token;
+    } catch {
+      assertDramaAssetWriteCurrent(options);
+      throw new DramaAssetMediaError(t('资产「{name}」的{item}无法导出，请修复素材后重试', { name: visibleName(asset.name), item }));
     }
-    if (media.length >= DRAMA_ASSET_TRANSFER_LIMITS.media) throw new Error(t('创作资产媒体数量超过限制'));
-    const id = `media-${crypto.randomUUID()}`;
-    const copied = await stageDramaAssetArchiveMedia(workspace, resolved, id, extensionFor(resolved, kind), kind, options);
-    assertDramaAssetWriteCurrent(options);
-    totalBytes += copied.totalBytes;
-    if (!copied.totalBytes || totalBytes > DRAMA_ASSET_TRANSFER_LIMITS.mediaBytes) throw new Error(t('创作资产媒体为空或超过包大小限制'));
-    media.push({ id, kind, path: copied.relativePath, bytes: copied.totalBytes, sha256: copied.digest });
-    const token = `aicasset-media:${id}`;
-    cache.set(key, { kind, token });
-    options.onProgress?.(t('正在收集媒体 {count}', { count: media.length }));
-    return token;
   };
   const assets: DramaAsset[] = [];
-  for (const asset of input.assets) {
+  for (const sourceAsset of input.assets) {
     assertDramaAssetWriteCurrent(options);
+    const asset = sourceAsset.kind === 'character' ? sourceAsset : normalizeDramaVisualAsset(sourceAsset);
     const runtime = asset as DramaAsset & { assetId?: string; relativePath?: string; filePath?: string };
     const topSource: MediaSource = { url: asset.imageUrl, filePath: runtime.filePath,
       assetId: asset.imageAssetId || runtime.assetId,
       relativePath: asset.imageAssetId ? asset.imageRelativePath : runtime.relativePath,
       sourceNodeId: asset.imageNodeId, requireIndex: !!asset.imageAssetId };
     if (asset.kind !== 'character') {
-      assets.push({ ...asset, imageUrl: hasMedia(topSource) ? await collect(topSource, 'image') : undefined });
+      const referenceImages = [];
+      for (const [index, reference] of (asset.referenceImages ?? []).entries()) {
+        referenceImages.push({ ...reference, imageUrl: await collect({ ...reference, url: reference.imageUrl }, 'image', asset, referenceLabel(asset, index)) });
+      }
+      const primary = referenceImages.find((reference) => reference.id === asset.primaryReferenceImageId) ?? referenceImages[0];
+      assets.push({ ...asset, referenceImages, imageUrl: primary?.imageUrl
+        ?? (hasMedia(topSource) ? await collect(topSource, 'image', asset, t('主图')) : undefined) });
       continue;
     }
     const referenceImages = [];
-    for (const reference of asset.referenceImages ?? []) {
-      referenceImages.push({ ...reference, imageUrl: await collect({ ...reference, url: reference.imageUrl }, 'image') });
+    for (const [index, reference] of (asset.referenceImages ?? []).entries()) {
+      referenceImages.push({ ...reference, imageUrl: await collect({ ...reference, url: reference.imageUrl }, 'image', asset, referenceLabel(asset, index)) });
     }
     const voiceClips = [];
-    for (const clip of asset.voiceClips ?? []) {
-      voiceClips.push({ ...clip, audioUrl: await collect({ ...clip, url: clip.audioUrl }, 'audio') });
+    for (const [index, clip] of (asset.voiceClips ?? []).entries()) {
+      voiceClips.push({ ...clip, audioUrl: await collect({ ...clip, url: clip.audioUrl }, 'audio', asset,
+        t('声音「{name}」', { name: visibleName(clip.label || t('声音 {index}', { index: index + 1 })) })) });
     }
     const actions = [];
     for (const action of asset.actions ?? []) {
       const actionMedia = [];
-      for (const item of action.media ?? []) actionMedia.push({ ...item, url: await collect(item, item.kind === 'video' ? 'video' : 'image') });
+      for (const item of action.media ?? []) actionMedia.push({ ...item, url: await collect(item, item.kind === 'video' ? 'video' : 'image', asset,
+        t('动作「{action}」的素材「{name}」', { action: visibleName(action.name), name: visibleName(item.name) })) });
       actions.push({ ...action, media: actionMedia });
     }
     const primary = referenceImages.find((reference) => reference.id === asset.primaryReferenceImageId) ?? referenceImages[0];
     assets.push({ ...asset, referenceImages, voiceClips, actions,
-      imageUrl: primary?.imageUrl ?? (hasMedia(topSource) ? await collect(topSource, 'image') : undefined) });
+      imageUrl: primary?.imageUrl ?? (hasMedia(topSource) ? await collect(topSource, 'image', asset, t('主图')) : undefined) });
   }
   // 项目库按类型管理卡片 ID，包格式使用全局唯一 ID；包内重建避免合法跨类同 ID 冲突。
   return buildDramaAssetTransferDocument({ exportedAt: Date.now(), name: input.name,
@@ -233,53 +290,46 @@ async function exportDramaAssets(input: ExportInput, options: DramaAssetTransfer
     options.onProgress?.(t('正在打包创作资产'));
     const result = await guardedDramaAssetTransfer(() => packDramaAssetArchive(workspace!, outputPath, JSON.stringify(document)), options);
     if (result.assetCount !== document.media.length) throw new Error(t('资产包媒体集合不完整'));
-    return { assetCount: document.assets.length, mediaCount: document.media.length };
+    return { assetCount: document.assets.length, mediaCount: document.media.length,
+      assets: input.assets.map(({ kind, id }) => ({ kind, id })) };
   } catch (error) {
     assertDramaAssetWriteCurrent(options);
+    if (error instanceof DramaAssetMediaError) throw error;
     if (error instanceof Error && error.message.startsWith('创作资产包无效')) throw new Error(t('创作资产包无效，请检查文件后重试'), { cause: error });
     throw new Error(t('创作资产导出失败，请确认全部媒体可用'), { cause: error });
   } finally { await cleanup(workspace?.directory, options); }
 }
 
-async function importDramaAssets(input: ImportInput, options: DramaAssetTransferOptions): Promise<DramaAssetTransferResult | null> {
-  assertDramaAssetWriteCurrent(options);
-  if (!isTauriEnv()) throw new Error(t('创作资产包导入仅支持桌面应用'));
-  const archivePath = await guardedDramaAssetTransfer(() => open({ title: t('导入创作资产'), multiple: false,
-    filters: [{ name: t('AI Canvas 创作资产包'), extensions: [DRAMA_ASSET_ARCHIVE_EXTENSION] }],
-  }), options);
-  if (!archivePath || typeof archivePath !== 'string') return null;
-  let workspace: DramaAssetArchiveWorkspace | undefined;
+/** File import and cross-scope copies share one indexed-media and accepted-save boundary. */
+async function commitImportedDocument(
+  document: DramaAssetTransferDocument, workspace: DramaAssetArchiveWorkspace, input: ImportInput,
+  options: DramaAssetTransferOptions, verifiedSources: ReadonlyMap<string, string> = new Map(),
+): Promise<DramaAssetTransferResult> {
   let folder: DramaAssetImportFolder | undefined;
   const indexes: Array<{ assetId: string; path: string }> = [];
   let commitAttempted = false;
   try {
-    options.onProgress?.(t('正在读取创作资产包'));
-    workspace = await createDramaAssetArchiveWorkspace(options);
-    assertDramaAssetWriteCurrent(options);
-    const unpacked = await guardedDramaAssetTransfer(() => unpackDramaAssetArchive(workspace!, archivePath), options);
-    if (Object.keys(unpacked.texts).length !== 1 || typeof unpacked.texts['manifest.json'] !== 'string') throw new Error(t('资产包清单集合无效'));
-    const document = parseDramaAssetTransferDocument(unpacked.texts['manifest.json']);
-    if (!document.assets.length) throw new Error(t('资产包没有可导入的创作资产'));
-    const declared = new Set(document.media.map((entry) => entry.path));
-    const actual = new Set(unpacked.assetPaths);
-    if (actual.size !== unpacked.assetPaths.length || actual.size !== declared.size
-      || [...actual].some((path) => !declared.has(path))
-      || unpacked.assetBytes !== document.media.reduce((total, entry) => total + entry.bytes, 0)) throw new Error(t('资产包媒体集合不完整'));
     folder = await (input.scope === 'global' ? createGlobalDramaAssetImportFolder(options) : createDramaAssetImportFolder(input.ownerId, options));
     assertDramaAssetWriteCurrent(options);
     const mediaById = new Map<string, ImportedDramaAssetMedia>();
     for (const [index, media] of document.media.entries()) {
       options.onProgress?.(t('正在验证并复制媒体 {current}/{total}', { current: index + 1, total: document.media.length }));
-      const sourcePath = joinPath(workspace.assetsDirectory, media.path);
-      const copied = await copyImportedDramaAssetMedia(sourcePath, folder.directory, options);
+      const sourcePath = verifiedSources.get(media.id) ?? joinPath(workspace.assetsDirectory, media.path);
+      const copied = await copyImportedDramaAssetMedia(sourcePath, folder.directory, options).catch(() => {
+        assertDramaAssetWriteCurrent(options);
+        throw importMediaError(document, media);
+      });
       assertDramaAssetWriteCurrent(options);
-      if (copied.totalBytes !== media.bytes || copied.digest.toLowerCase() !== media.sha256) throw new Error(t('资产包媒体摘要或大小不匹配'));
+      if (copied.totalBytes !== media.bytes || copied.digest.toLowerCase() !== media.sha256) throw importMediaError(document, media);
       const path = stripVerbatimPrefix(copied.path).replace(/\\/g, '/');
       const prefix = `${pathKey(folder.directory)}/`;
       if (!pathKey(path).startsWith(prefix)) throw new Error(t('导入媒体位置无效'));
-      const info = await readImportedDramaAssetStat(path, options);
+      const info = await readImportedDramaAssetStat(path, options).catch(() => {
+        assertDramaAssetWriteCurrent(options);
+        throw importMediaError(document, media);
+      });
       assertDramaAssetWriteCurrent(options);
-      if (info.size !== media.bytes) throw new Error(t('导入媒体大小不匹配'));
+      if (info.size !== media.bytes) throw importMediaError(document, media);
       const relativePath = `${folder.relativeDirectory}/${path.split('/').pop()!}`;
       const assetId = crypto.randomUUID();
       indexes.push({ assetId, path });
@@ -288,25 +338,24 @@ async function importDramaAssets(input: ImportInput, options: DramaAssetTransfer
         fingerprint: `${info.size}:${info.mtimeMs}`, size: info.size, mtimeMs: info.mtimeMs,
         status: 'online', updatedAt: Date.now() }), options);
       const url = await guardedDramaAssetTransfer(() => getAssetUrlFromPath(path), options);
-      if (!url) throw new Error(t('导入媒体无法生成本地引用'));
+      if (!url) throw importMediaError(document, media);
       mediaById.set(media.id, { assetId, relativePath, url });
     }
     const remapped = remapImportedAssets(document.assets, mediaById);
     const assets = input.scope === 'global' ? remapped.map(prepareGlobalImportedAsset) : remapped;
     options.onProgress?.(t('正在保存资产'));
     assertDramaAssetWriteCurrent(options);
-    // 开始保存后，不因窗口关闭或取消把已提交结果误判为失败，也不删除可能已被引用的媒体。
+    // An accepted save retains its files, even if the view closes while metadata is committing.
     commitAttempted = true;
     retainDramaAssetTransferDirectory(folder.directory);
     await input.commit(assets);
-    return { assetCount: assets.length, mediaCount: document.media.length };
+    return { assetCount: assets.length, mediaCount: document.media.length,
+      assets: assets.map(({ kind, id }) => ({ kind, id })) };
   } catch (error) {
-    if (commitAttempted) throw new Error(input.scope === 'global'
+    if (commitAttempted) throw new DramaAssetCommitError(input.scope === 'global'
       ? t('创作资产保存失败，导入媒体已保留，请重新打开资产库检查')
       : t('创作资产保存失败，导入媒体已保留，请重新打开项目检查'), { cause: error });
-    assertDramaAssetWriteCurrent(options);
-    if (error instanceof Error && error.message.startsWith('创作资产包无效')) throw new Error(t('创作资产包无效，请检查文件后重试'), { cause: error });
-    throw new Error(t('创作资产包导入失败，媒体不完整或无法复制'), { cause: error });
+    throw error;
   } finally {
     if (!commitAttempted) {
       let indexesCleaned = true;
@@ -317,8 +366,108 @@ async function importDramaAssets(input: ImportInput, options: DramaAssetTransfer
       if (indexesCleaned) await cleanup(folder?.directory, options);
       else if (folder) retainDramaAssetTransferDirectory(folder.directory);
     }
+  }
+}
+
+async function importDramaAssets(input: ImportInput, options: DramaAssetTransferOptions): Promise<DramaAssetTransferResult | null> {
+  assertDramaAssetWriteCurrent(options);
+  if (!isTauriEnv()) throw new Error(t('创作资产包导入仅支持桌面应用'));
+  const archivePath = await guardedDramaAssetTransfer(() => open({ title: t('导入创作资产'), multiple: false,
+    filters: [{ name: t('AI Canvas 创作资产包'), extensions: [DRAMA_ASSET_ARCHIVE_EXTENSION] }],
+  }), options);
+  if (!archivePath || typeof archivePath !== 'string') return null;
+  let workspace: DramaAssetArchiveWorkspace | undefined;
+  try {
+    options.onProgress?.(t('正在读取创作资产包'));
+    workspace = await createDramaAssetArchiveWorkspace(options);
+    assertDramaAssetWriteCurrent(options);
+    const unpacked = await guardedDramaAssetTransfer(() => unpackDramaAssetArchive(workspace!, archivePath), options);
+    if (Object.keys(unpacked.texts).length !== 1 || typeof unpacked.texts['manifest.json'] !== 'string') throw new Error(t('资产包清单集合无效'));
+    let document = parseDramaAssetTransferDocument(unpacked.texts['manifest.json']);
+    if (!document.assets.length) throw new Error(t('资产包没有可导入的创作资产'));
+    const declared = new Set(document.media.map((entry) => entry.path));
+    const actual = new Set(unpacked.assetPaths);
+    if (actual.size !== unpacked.assetPaths.length || actual.size !== declared.size
+      || [...actual].some((path) => !declared.has(path))
+      || unpacked.assetBytes !== document.media.reduce((total, entry) => total + entry.bytes, 0)) throw new Error(t('资产包媒体集合不完整'));
+    const verifiedSources = new Map<string, string>();
+    if (options.chooseAssets) {
+      // The whole package remains checked, including media belonging to unchecked cards.
+      // Existing bounded native copies avoid loading large videos into JavaScript memory.
+      for (const [index, media] of document.media.entries()) {
+        options.onProgress?.(t('正在校验资产包媒体 {current}/{total}', { current: index + 1, total: document.media.length }));
+        try {
+          const copied = await copyImportedDramaAssetMedia(joinPath(workspace.assetsDirectory, media.path), workspace.incomingDirectory, options);
+          assertDramaAssetWriteCurrent(options);
+          if (copied.totalBytes !== media.bytes || copied.digest.toLowerCase() !== media.sha256) throw importMediaError(document, media);
+          verifiedSources.set(media.id, copied.path);
+        } catch {
+          assertDramaAssetWriteCurrent(options);
+          throw importMediaError(document, media);
+        }
+      }
+      options.onProgress?.(t('请选择要导入的创作资产'));
+      const selection = await options.chooseAssets(buildDramaAssetImportPreview(document, input.existingAssets), options.signal);
+      assertDramaAssetWriteCurrent(options);
+      if (!selection?.length) return null;
+      document = selectDramaAssetTransferDocument(document, selection);
+    }
+    return await commitImportedDocument(document, workspace, input, options, verifiedSources);
+  } catch (error) {
+    if (error instanceof DramaAssetCommitError) throw error;
+    assertDramaAssetWriteCurrent(options);
+    if (error instanceof DramaAssetMediaError) throw error;
+    if (error instanceof Error && error.message.startsWith('创作资产包无效')) throw new Error(t('创作资产包无效，请检查文件后重试'), { cause: error });
+    throw new Error(t('创作资产包导入失败，媒体不完整或无法复制'), { cause: error });
+  } finally {
     await cleanup(workspace?.directory, options);
   }
+}
+
+/** Materialize global files into the target project before accepting the new cards. */
+export async function copyGlobalDramaAssetsToProject(
+  input: CopyGlobalDramaAssetsToProjectInput, options: DramaAssetTransferOptions = {},
+): Promise<DramaAssetTransferResult> {
+  assertDramaAssetWriteCurrent(options);
+  if (!isTauriEnv()) throw new Error(t('创作资产包导入仅支持桌面应用'));
+  if (!input.assets.length || input.assets.length > DRAMA_ASSET_TRANSFER_LIMITS.assets) throw new Error(t('没有可导出的资产或数量超过限制'));
+  let workspace: DramaAssetArchiveWorkspace | undefined;
+  try {
+    workspace = await createDramaAssetArchiveWorkspace(options);
+    assertDramaAssetWriteCurrent(options);
+    const document = await prepareExportAssets({ scope: 'global', name: t('全局创作资产'), assets: input.assets }, workspace, options);
+    assertDramaAssetWriteCurrent(options);
+    return await commitImportedDocument(document, workspace, { scope: 'project', ownerId: input.ownerId, commit: input.commit }, options);
+  } catch (error) {
+    if (error instanceof DramaAssetCommitError) throw error;
+    assertDramaAssetWriteCurrent(options);
+    if (error instanceof DramaAssetMediaError) throw error;
+    throw new Error(t('复制失败，请重试'), { cause: error });
+  } finally { await cleanup(workspace?.directory, options); }
+}
+
+/** The inverse copy uses the same atomic global import and independent media identities. */
+export async function copyProjectDramaAssetsToGlobal(
+  input: { ownerId: string; assets: readonly DramaAsset[]; nodes: readonly Node<BaseNodeData>[];
+    commit: (assets: DramaAsset[]) => Promise<void> }, options: DramaAssetTransferOptions = {},
+): Promise<DramaAssetTransferResult> {
+  assertDramaAssetWriteCurrent(options);
+  if (!isTauriEnv()) throw new Error(t('创作资产包导入仅支持桌面应用'));
+  if (!input.assets.length || input.assets.length > DRAMA_ASSET_TRANSFER_LIMITS.assets) throw new Error(t('没有可导出的资产或数量超过限制'));
+  let workspace: DramaAssetArchiveWorkspace | undefined;
+  try {
+    workspace = await createDramaAssetArchiveWorkspace(options);
+    assertDramaAssetWriteCurrent(options);
+    const document = await prepareExportAssets({ scope: 'project', name: t('创作资产'), ownerId: input.ownerId,
+      assets: input.assets, nodes: input.nodes }, workspace, options);
+    assertDramaAssetWriteCurrent(options);
+    return await commitImportedDocument(document, workspace, { scope: 'global', commit: input.commit }, options);
+  } catch (error) {
+    if (error instanceof DramaAssetCommitError) throw error;
+    assertDramaAssetWriteCurrent(options);
+    if (error instanceof DramaAssetMediaError) throw error;
+    throw new Error(t('复制失败，请重试'), { cause: error });
+  } finally { await cleanup(workspace?.directory, options); }
 }
 
 export function exportProjectDramaAssets(input: ExportProjectDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {
@@ -331,9 +480,9 @@ export function exportGlobalDramaAssets(input: ExportGlobalDramaAssetsInput, opt
 }
 
 export function importProjectDramaAssets(input: ImportProjectDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {
-  return importDramaAssets({ scope: 'project', ownerId: input.ownerId, commit: input.commit }, options);
+  return importDramaAssets({ scope: 'project', ownerId: input.ownerId, existingAssets: input.existingAssets, commit: input.commit }, options);
 }
 
 export function importGlobalDramaAssets(input: ImportGlobalDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {
-  return importDramaAssets({ scope: 'global', commit: input.commit }, options);
+  return importDramaAssets({ scope: 'global', existingAssets: input.existingAssets, commit: input.commit }, options);
 }

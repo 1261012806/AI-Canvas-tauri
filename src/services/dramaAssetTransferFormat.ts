@@ -1,4 +1,5 @@
 import type { DramaAsset, DramaCharacter } from '../types/dramaAssets';
+import { MAX_DRAMA_REFERENCE_IMAGES } from '../types/dramaAssets';
 import { localMediaUrlToPath } from '../utils/mediaUrl';
 
 export const DRAMA_ASSET_TRANSFER_FORMAT = 'ai-canvas-creative-assets';
@@ -31,6 +32,13 @@ export interface ImportedDramaAssetMedia {
   url: string;
 }
 
+export interface DramaAssetIdentity { kind: DramaAsset['kind']; id: string }
+export interface DramaAssetImportPreview {
+  name: string;
+  items: Array<DramaAssetIdentity & { name: string; mediaIds: string[]; sameName: boolean }>;
+  media: Array<Pick<DramaAssetTransferMedia, 'id' | 'kind' | 'bytes'>>;
+}
+
 type Data = Record<string, unknown>;
 type MediaKind = DramaAssetTransferMedia['kind'];
 const BASE_KEYS = ['id', 'kind', 'name', 'key', 'summary', 'visualNotes', 'storyRole', 'importance', 'firstSeen',
@@ -38,8 +46,10 @@ const BASE_KEYS = ['id', 'kind', 'name', 'key', 'summary', 'visualNotes', 'story
 const CHARACTER_KEYS = ['libraryOrder', 'aliases', 'identity', 'ageBand', 'gender', 'personality', 'relationships',
   'wardrobeDefault', 'voiceNotes', 'referenceImages', 'primaryReferenceImageId', 'avatarReferenceImageId', 'avatarCrop',
   'voiceClips', 'primaryVoiceClipId', 'actions'];
+const VISUAL_KEYS = ['referenceImages', 'primaryReferenceImageId'];
 const SCENE_KEYS = ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'];
 const PROP_KEYS = ['ownerName', 'category', 'significance'];
+const VISUAL_REFERENCE_KEYS = ['id', 'label', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
 const REFERENCE_KEYS = ['id', 'kind', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
 const VOICE_KEYS = ['id', 'kind', 'label', 'audioUrl', 'transcript', 'durationSec', 'createdAt', 'updatedAt'];
 const ACTION_KEYS = ['id', 'category', 'customCategory', 'name', 'prompt', 'media', 'createdAt', 'updatedAt'];
@@ -170,7 +180,7 @@ function readAssets(value: unknown, context: ReadContext): DramaAsset[] {
   const assets = list(value, DRAMA_ASSET_TRANSFER_LIMITS.assets).map((input) => {
     const asset = { ...object(input) };
     const kind = choice(asset.kind, ['character', 'scene', 'prop']);
-    keys(asset, [...BASE_KEYS, ...(kind === 'character' ? CHARACTER_KEYS : kind === 'scene' ? SCENE_KEYS : PROP_KEYS)]);
+    keys(asset, [...BASE_KEYS, ...(kind === 'character' ? CHARACTER_KEYS : [...VISUAL_KEYS, ...(kind === 'scene' ? SCENE_KEYS : PROP_KEYS)])]);
     asset.id = id(asset.id); times(asset);
     textFields(asset, ['name', 'key', 'summary', 'visualNotes'], ['storyRole', 'firstSeen']);
     string(asset.name, true);
@@ -180,6 +190,17 @@ function readAssets(value: unknown, context: ReadContext): DramaAsset[] {
     mediaField(asset, 'imageUrl', 'image', context);
     if (kind !== 'character') {
       textFields(asset, [], kind === 'scene' ? SCENE_KEYS : PROP_KEYS);
+      if (asset.referenceImages !== undefined) {
+        const references = list(asset.referenceImages, MAX_DRAMA_REFERENCE_IMAGES).map((item) => {
+          const reference = readMember(item, VISUAL_REFERENCE_KEYS);
+          textFields(reference, ['label', 'prompt']);
+          mediaField(reference, 'imageUrl', 'image', context, true);
+          return reference;
+        });
+        unique(references); asset.referenceImages = references;
+        if (asset.primaryReferenceImageId !== undefined
+          && !references.some((reference) => reference.id === id(asset.primaryReferenceImageId))) invalid('主参考图指针无效');
+      } else if (asset.primaryReferenceImageId !== undefined) invalid('主参考图指针无效');
       return asset;
     }
     textFields(asset, ['identity'], ['ageBand', 'gender', 'personality', 'wardrobeDefault', 'voiceNotes']);
@@ -231,8 +252,11 @@ function readAssets(value: unknown, context: ReadContext): DramaAsset[] {
 }
 
 function sanitizeAsset(asset: DramaAsset): Data {
-  const result = pick(asset, [...BASE_KEYS, ...(asset.kind === 'character' ? CHARACTER_KEYS : asset.kind === 'scene' ? SCENE_KEYS : PROP_KEYS)]);
-  if (asset.kind !== 'character') return result;
+  const result = pick(asset, [...BASE_KEYS, ...(asset.kind === 'character' ? CHARACTER_KEYS : [...VISUAL_KEYS, ...(asset.kind === 'scene' ? SCENE_KEYS : PROP_KEYS)])]);
+  if (asset.kind !== 'character') {
+    if (asset.referenceImages !== undefined) result.referenceImages = list(asset.referenceImages, MAX_DRAMA_REFERENCE_IMAGES).map((item) => pick(item, VISUAL_REFERENCE_KEYS));
+    return result;
+  }
   if (asset.relationships !== undefined) result.relationships = list(asset.relationships).map((item) => pick(item, ['targetName', 'relation']));
   if (asset.avatarCrop !== undefined) result.avatarCrop = pick(asset.avatarCrop, ['x', 'y', 'width', 'height']);
   if (asset.referenceImages !== undefined) result.referenceImages = list(asset.referenceImages).map((item) => pick(item, REFERENCE_KEYS));
@@ -293,6 +317,47 @@ export function parseDramaAssetTransferDocument(input: unknown): DramaAssetTrans
   return result;
 }
 
+/** Only media-bearing fields participate; token-looking prose is not a dependency. */
+export function getDramaAssetTransferMediaIds(asset: DramaAsset): string[] {
+  const urls = [asset.imageUrl, ...(asset.referenceImages ?? []).map((reference) => reference.imageUrl)];
+  if (asset.kind === 'character') {
+    urls.push(...(asset.voiceClips ?? []).map((clip) => clip.audioUrl),
+      ...(asset.actions ?? []).flatMap((action) => (action.media ?? []).map((media) => media.url)));
+  }
+  return [...new Set(urls.filter((url): url is string => url !== undefined).map(mediaToken))];
+}
+
+export function buildDramaAssetImportPreview(
+  document: DramaAssetTransferDocument, existingAssets: readonly DramaAsset[] = [],
+): DramaAssetImportPreview {
+  const nameKey = (asset: Pick<DramaAsset, 'kind' | 'name'>) => `${asset.kind}:${asset.name.normalize('NFKC').trim().toLowerCase()}`;
+  const existing = new Set(existingAssets.map(nameKey));
+  const names = new Map<string, number>();
+  for (const asset of document.assets) names.set(nameKey(asset), (names.get(nameKey(asset)) ?? 0) + 1);
+  return { name: document.name,
+    items: document.assets.map((asset) => ({ kind: asset.kind, id: asset.id, name: asset.name,
+      mediaIds: getDramaAssetTransferMediaIds(asset), sameName: existing.has(nameKey(asset)) || names.get(nameKey(asset))! > 1 })),
+    media: document.media.map(({ id: mediaId, kind, bytes }) => ({ id: mediaId, kind, bytes })),
+  };
+}
+
+/** The chooser cannot introduce identities or omit a selected asset's media. */
+export function selectDramaAssetTransferDocument(
+  document: DramaAssetTransferDocument, selection: readonly DramaAssetIdentity[],
+): DramaAssetTransferDocument {
+  const selected = new Set<string>();
+  for (const item of list(selection, DRAMA_ASSET_TRANSFER_LIMITS.assets)) {
+    const value = object(item); keys(value, ['kind', 'id']);
+    const key = `${choice(value.kind, ['character', 'scene', 'prop'])}:${id(value.id)}`;
+    if (selected.has(key) || !document.assets.some((asset) => `${asset.kind}:${asset.id}` === key)) invalid('所选资产身份无效');
+    selected.add(key);
+  }
+  if (!selected.size) invalid('没有选择创作资产');
+  const assets = document.assets.filter((asset) => selected.has(`${asset.kind}:${asset.id}`));
+  const used = new Set(assets.flatMap(getDramaAssetTransferMediaIds));
+  return { ...document, assets, media: document.media.filter((media) => used.has(media.id)) };
+}
+
 /** 媒体已由宿主复制并重新索引；返回项目本地引用，不继承源机器或全局库的身份。 */
 export function remapImportedAssets(
   assets: readonly DramaAsset[], mediaById: ReadonlyMap<string, ImportedDramaAssetMedia>,
@@ -300,8 +365,8 @@ export function remapImportedAssets(
 ): DramaAsset[] {
   const context: ReadContext = { media: new Map([...mediaById.keys()].map((key) => [key, undefined])), used: new Set() };
   const safeAssets = readAssets(assets, context);
-  const allocated = new Set(safeAssets.flatMap((asset) => [asset.id, ...(asset.kind === 'character' ? [
-    ...(asset.referenceImages ?? []).map((reference) => reference.id), ...(asset.voiceClips ?? []).map((voice) => voice.id),
+  const allocated = new Set(safeAssets.flatMap((asset) => [asset.id, ...(asset.referenceImages ?? []).map((reference) => reference.id), ...(asset.kind === 'character' ? [
+    ...(asset.voiceClips ?? []).map((voice) => voice.id),
     ...(asset.actions ?? []).flatMap((action) => [action.id, ...(action.media ?? []).map((media) => media.id)]),
   ] : [])]));
   const allocate = () => {
@@ -316,7 +381,20 @@ export function remapImportedAssets(
   };
   return safeAssets.map((asset) => {
     const next = { ...asset, ...bind(asset.imageUrl, 'imageUrl'), id: allocate() };
-    if (asset.kind !== 'character') return next;
+    if (asset.kind !== 'character') {
+      const referenceIds = new Map<string, string>();
+      const referenceImages = (asset.referenceImages ?? []).map((reference) => {
+        const nextId = allocate(); referenceIds.set(reference.id, nextId);
+        return { ...reference, ...bind(reference.imageUrl, 'imageUrl'), id: nextId };
+      });
+      if (asset.referenceImages === undefined && asset.imageUrl) {
+        const referenceId = allocate();
+        referenceImages.push({ id: referenceId, label: '', prompt: '', ...bind(asset.imageUrl, 'imageUrl'),
+          createdAt: asset.createdAt, updatedAt: asset.updatedAt });
+      }
+      return { ...next, kind: asset.kind, referenceImages,
+        primaryReferenceImageId: asset.primaryReferenceImageId ? referenceIds.get(asset.primaryReferenceImageId) : referenceImages[0]?.id };
+    }
     const character = asset as DramaCharacter;
     const referenceIds = new Map<string, string>(); const voiceIds = new Map<string, string>();
     const referenceImages = (character.referenceImages ?? []).map((reference) => {

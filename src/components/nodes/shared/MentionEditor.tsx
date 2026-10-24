@@ -34,11 +34,11 @@ import {
   buildDramaActionMentionId,
   buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
-import type { CharacterReferenceImage, DramaAssetKind } from '../../../types/dramaAssets';
+import type { CharacterReferenceImage, DramaAssetReferenceImage, DramaAssetKind } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../../utils/referencePreviewEvents';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
-import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
+import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
 import {
   bestNodeThumb,
   buildAssetChipEl,
@@ -1664,7 +1664,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   }, [currentProjectId, nodeId, handleEditorMouseLeave]);
 
   // ── @ 面板数据：输入图（画布节点） / 资产库（短剧资产） / ComfyUI 节点（工作流 IO） ──
-  const dramaThumbOf = useCallback((item: { imageNodeId?: string; imageUrl?: string; referenceImages?: CharacterReferenceImage[] }) => {
+  const dramaThumbOf = useCallback((item: { imageNodeId?: string; imageUrl?: string; referenceImages?: Array<CharacterReferenceImage | DramaAssetReferenceImage> }) => {
     if (!item.imageNodeId) return item.imageUrl || item.referenceImages?.find((reference) => reference.imageUrl)?.imageUrl;
     const n = nodes.find((x) => x.id === item.imageNodeId);
     return bestNodeThumb(n?.data ?? {}) || item.imageUrl;
@@ -1700,9 +1700,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const drillItem = !isAudioNode && dramaRefPickerId
     ? allDramaMentionItems.find((item) => item.id === dramaRefPickerId)
     : undefined;
-  const drillRefs: CharacterReferenceImage[] = (drillItem?.referenceImages ?? [])
-    .filter((reference) => !!reference.imageUrl);
   const drillAsset = drillItem ? findDramaAsset(dramaAssets, drillItem.id, globalAssets) : undefined;
+  const drillRefs: Array<CharacterReferenceImage | DramaAssetReferenceImage> = (drillItem?.referenceImages ?? []).flatMap((reference) => {
+    const image = drillAsset ? resolveDramaAssetImageRef(drillAsset, nodes, reference.id) : undefined;
+    return image ? [{ ...reference, imageUrl: image.imageUrl }] : [];
+  });
   const drillCharacter = drillAsset?.kind === 'character' ? drillAsset : undefined;
   const drillActions = drillCharacter?.actions ?? [];
   const drillAction = drillActions.find((action) => action.id === dramaActionId);
@@ -1720,9 +1722,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
   // 默认资产页和全局搜索共用选中逻辑，角色的参考图、动作、声音仍可继续下钻。
   const buildDramaPickerItem = (item: ReturnType<typeof resolveDramaMentionItems>[number]): MentionPickerItem => {
-    const references = (item.referenceImages ?? []).filter((reference) => !!reference.imageUrl);
-    const multiRef = references.length > 1;
     const asset = findDramaAsset(dramaAssets, item.id, globalAssets);
+    const references = (item.referenceImages ?? []).flatMap((reference) => {
+      const image = asset ? resolveDramaAssetImageRef(asset, nodes, reference.id) : undefined;
+      return image ? [{ ...reference, imageUrl: image.imageUrl }] : [];
+    });
+    const multiRef = references.length > 1;
     const character = asset?.kind === 'character' ? asset : undefined;
     const hasActions = !!character?.actions?.length;
     const avatarReference = character?.referenceImages?.find((reference) => reference.id === character.avatarReferenceImageId)
@@ -1768,6 +1773,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           setDramaActionPicker(false);
           setDramaActionId(null);
           focusMentionCursor();
+        } else if (item.kind !== 'character' && references[0]) {
+          handleSelectDramaReference(item, references[0].id, references[0].imageUrl);
         } else handleSelectDramaMention(item);
       },
     };
@@ -1828,7 +1835,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         };
       })
     : drillItem ? [
-      ...(drillRefs.length > 1 ? [{
+      ...(drillItem.kind === 'character' && drillRefs.length > 1 ? [{
         key: 'drama-merge-all',
         label: t('全部拼成一张'),
         icon: 'lucide:layout-grid',
@@ -1837,7 +1844,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       }] : []),
       ...drillRefs.map((reference) => ({
         key: `drama-ref:${reference.id}`,
-        label: t(CHARACTER_REFERENCE_KIND_LABELS[reference.kind]),
+        label: 'kind' in reference ? t(CHARACTER_REFERENCE_KIND_LABELS[reference.kind]) : reference.label || t('参考图'),
         thumbnailUrl: reference.imageUrl,
         onSelect: () => handleSelectDramaReference(drillItem, reference.id, reference.imageUrl),
       })),

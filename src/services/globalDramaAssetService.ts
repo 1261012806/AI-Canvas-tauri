@@ -1,6 +1,6 @@
 /** 全局创作资产元数据；人物沿用原表，场景与道具不依赖项目节点。 */
 import type { DramaAsset, DramaAssetWriteOptions, DramaProp, DramaScene } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary } from '../types/dramaAssets';
 import {
   deleteGlobalDramaAsset,
   getAllGlobalDramaAssets,
@@ -23,7 +23,10 @@ export interface GlobalDramaAssetSaveOptions extends DramaAssetWriteOptions {
 }
 
 function prepareGlobalAsset(asset: DramaScene | DramaProp): DramaScene | DramaProp {
-  const detached = { ...asset } as (DramaScene | DramaProp) & {
+  const normalized = normalizeDramaVisualAsset(asset);
+  const detached = { ...normalized, referenceImages: normalized.referenceImages?.map((reference) => ({
+    ...reference, filePath: undefined, sourceNodeId: undefined,
+  })) } as (DramaScene | DramaProp) & {
     filePath?: string; path?: string; sourceNodeId?: string;
   };
   delete detached.imageNodeId;
@@ -40,10 +43,14 @@ export async function loadGlobalDramaAssetCards(): Promise<DramaAsset[]> {
   const assets = await Promise.all(storedAssets.map(async (asset) => {
     if (asset.kind !== 'scene' && asset.kind !== 'prop') throw new Error('全局创作资产记录无效');
     const detached = prepareGlobalAsset(asset);
-    if (!detached.imageAssetId) return detached;
-    const indexed = await getAssetIndexById(detached.imageAssetId);
-    if (!indexed || indexed.status !== 'online') return { ...detached, imageUrl: undefined };
-    return { ...detached, imageRelativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
+    const referenceImages = await Promise.all((detached.referenceImages ?? []).map(async (reference) => {
+      if (!reference.assetId) return reference;
+      const indexed = await getAssetIndexById(reference.assetId);
+      return !indexed || indexed.status !== 'online' || indexed.source !== 'global'
+        ? { ...reference, imageUrl: undefined }
+        : { ...reference, relativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
+    }));
+    return syncDramaVisualAssetPrimary({ ...detached, referenceImages }, true);
   }));
   return [...characters, ...assets.sort((a, b) => b.updatedAt - a.updatedAt)];
 }
@@ -57,20 +64,29 @@ export async function saveGlobalDramaAssetCard(
   if ((asset.kind !== 'scene' && asset.kind !== 'prop') || !asset.id.trim() || !asset.name.trim()) {
     throw new Error('全局创作资产记录无效');
   }
-  let persisted = prepareGlobalAsset(asset);
-  if (isTauriEnv() && (asset.imageUrl || asset.imageAssetId || options.imageFilePath)) {
-    const subtype = asset.imageUrl?.match(/^data:image\/([a-zA-Z0-9.+-]+);/i)?.[1];
+  const normalized = normalizeDramaVisualAsset(asset);
+  const referenceImages = [];
+  for (const reference of normalized.referenceImages ?? []) {
+    assertDramaAssetWriteCurrent(options);
+    if (!isTauriEnv()) {
+      referenceImages.push({ ...reference, filePath: undefined, sourceNodeId: undefined });
+      continue;
+    }
+    const filePath = reference.filePath || (reference.id === normalized.primaryReferenceImageId ? options.imageFilePath : undefined);
+    const subtype = reference.imageUrl?.match(/^data:image\/([a-zA-Z0-9.+-]+);/i)?.[1];
     const extension = subtype === 'jpeg' ? 'jpg' : subtype
-      ?? options.imageFilePath?.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1]
+      ?? filePath?.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1]
       ?? 'png';
     const image = await persistGlobalMedia(asset.name, {
-      id: asset.id, kind: asset.kind, assetId: asset.imageAssetId,
-      filePath: options.imageFilePath, url: asset.imageUrl, extension, category: 'image',
+      id: reference.id, kind: asset.kind, assetId: reference.assetId,
+      filePath, url: reference.imageUrl, extension, category: 'image',
     }, options);
     assertDramaAssetWriteCurrent(options);
-    if (!image?.assetId) throw new Error('创作资产主图保存失败');
-    persisted = { ...persisted, imageAssetId: image.assetId, imageRelativePath: image.relativePath, imageUrl: image.url };
+    if (!image?.assetId) throw new Error('创作资产参考图保存失败');
+    referenceImages.push({ ...reference, filePath: undefined, sourceNodeId: undefined,
+      assetId: image.assetId, relativePath: image.relativePath, imageUrl: image.url });
   }
+  const persisted = syncDramaVisualAssetPrimary(prepareGlobalAsset({ ...normalized, referenceImages }), true);
   assertDramaAssetWriteCurrent(options);
   await putGlobalDramaAsset(persisted, options);
   assertDramaAssetWriteCurrent(options);

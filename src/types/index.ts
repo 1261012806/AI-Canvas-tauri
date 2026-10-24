@@ -851,6 +851,8 @@ export interface AppConfig {
   assetWaterfallColumns?: number; // 资产管理瀑布流列数，默认 3，范围 2-6
   assetSortBy?: AssetSortBy; // 资产文件排序字段，默认 name
   assetSortOrder?: AssetSortOrder; // 资产文件排序方向，默认 asc
+  creativeAssetSortBy?: 'name' | 'createdAt' | 'updatedAt';
+  creativeAssetSortOrder?: AssetSortOrder;
   photoshopPath?: string;    // Photoshop 安装路径，自动检测失败时手动配置
   jianyingPath?: string;     // 剪映专业版安装路径，自动检测失败时手动配置
   premierePath?: string;     // Adobe Premiere Pro 安装路径，自动检测失败时手动配置

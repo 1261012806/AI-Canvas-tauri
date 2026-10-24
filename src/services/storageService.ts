@@ -46,8 +46,8 @@ import {
 } from './fs/core';
 import { walkDirectoryFiles } from './fs/assetLibrary';
 import { identifyAsset, resolveIndexedAssetPath } from './fs/assetIndex';
-import type { DramaAssetLibrary, DramaProp, DramaScene } from '../types/dramaAssets';
-import { normalizeDramaAssetLibrary } from '../types/dramaAssets';
+import type { DramaAssetLibrary, DramaProp, DramaScene, DramaAssetReferenceImage } from '../types/dramaAssets';
+import { normalizeDramaAssetLibrary, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary } from '../types/dramaAssets';
 import { deleteProviderSecretIfUnchanged, hasPlaintextSecret, readProviderSecretFingerprint, restoreConfigSecrets, stripConfigSecrets } from './providerSecretService';
 import { enqueueConfigPersistence } from './configPersistenceQueue';
 import { applyConfigPatch, ConfigConflictError, configValuesEqual, configWithoutSecrets, createConfigPatch, type ConfigChange } from './configPatch';
@@ -421,8 +421,8 @@ function dramaAssetsContainInlineMedia(library: DramaAssetLibrary | undefined): 
     || (character.actions ?? []).some((action) => (
       (action.media ?? []).some(assetReferenceContainsInlineMedia)
     ))
-  )) || library.scenes.some((scene) => isTransientMediaValue(scene.imageUrl))
-    || library.props.some((prop) => isTransientMediaValue(prop.imageUrl));
+  )) || [...library.scenes, ...library.props].some((asset) => isTransientMediaValue(asset.imageUrl)
+    || (asset.referenceImages ?? []).some(assetReferenceContainsInlineMedia));
 }
 
 function projectRecordContainsInlineMedia(record: ProjectSaveData): boolean {
@@ -603,6 +603,7 @@ async function recoverVideoReferenceIdentities(
   for (const character of library?.characters ?? []) {
     sources.push(character, ...(character.referenceImages ?? []), ...(character.voiceClips ?? []));
   }
+  for (const asset of [...(library?.scenes ?? []), ...(library?.props ?? [])]) sources.push(asset, ...(asset.referenceImages ?? []));
   const identities = new Map<string, AssetReferenceLike>();
   for (const source of sources) {
     if (!source || (!source.assetId && !source.relativePath)) continue;
@@ -711,18 +712,16 @@ async function restoreProjectSettings(
 }
 
 /** 项目内复制的全局场景/道具只引用全局身份，不按项目目录重建索引或复制文件。 */
-async function resolveGlobalDramaImage<T extends DramaScene | DramaProp>(asset: T, lookup: ProjectFileLookup): Promise<T> {
-  if (!asset.imageAssetId) return asset;
-  const detached = { ...asset } as T & AssetReferenceLike;
-  delete detached.imageNodeId;
-  delete detached.filePath;
-  delete detached.assetId;
-  delete detached.relativePath;
-  const indexed = await getAssetIndexById(asset.imageAssetId).catch(() => undefined);
-  if (!indexed || indexed.status !== 'online' || !await projectFileExists(indexed.path, lookup).catch(() => false)) {
-    return { ...detached, imageUrl: undefined };
-  }
-  return { ...detached, imageRelativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
+async function resolveVisualAssetReference(
+  reference: DramaAssetReferenceImage, lookup: ProjectFileLookup,
+  resolveProject: (reference: DramaAssetReferenceImage) => Promise<DramaAssetReferenceImage>,
+): Promise<DramaAssetReferenceImage> {
+  const indexed = reference.assetId ? await getAssetIndexById(reference.assetId).catch(() => undefined) : undefined;
+  if (indexed?.source !== 'global') return resolveProject(reference);
+  const detached = { ...reference, sourceNodeId: undefined, filePath: undefined };
+  return indexed.status !== 'online' || !await projectFileExists(indexed.path, lookup).catch(() => false)
+    ? { ...detached, imageUrl: undefined }
+    : { ...detached, relativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
 }
 
 /** 角色库参考图与角色声音与画布节点共用本地文件，落库时同样只保留 assetId + relativePath */
@@ -758,10 +757,14 @@ async function serializeProjectDramaAssets(
       imageUrl: primaryReference?.imageUrl ?? topLevel.imageUrl,
     };
   });
-  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => asset.imageAssetId
-    ? resolveGlobalDramaImage(asset, context) : serializeReference(asset));
-  const props = await mapWithConcurrency(library.props, 2, (asset) => asset.imageAssetId
-    ? resolveGlobalDramaImage(asset, context) : serializeReference(asset));
+  const serializeVisual = async <T extends DramaScene | DramaProp>(asset: T): Promise<T> => {
+    const normalized = normalizeDramaVisualAsset(asset);
+    const referenceImages = await mapWithConcurrency(normalized.referenceImages ?? [], 2,
+      (reference) => resolveVisualAssetReference(reference, context, serializeReference));
+    return syncDramaVisualAssetPrimary({ ...normalized, referenceImages });
+  };
+  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => serializeVisual(asset));
+  const props = await mapWithConcurrency(library.props, 2, (asset) => serializeVisual(asset));
   return { ...library, characters, scenes, props };
 }
 
@@ -819,10 +822,14 @@ async function restoreProjectDramaAssets(
       imageUrl: primaryReference?.imageUrl ?? topLevel.imageUrl,
     };
   });
-  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => asset.imageAssetId
-    ? resolveGlobalDramaImage(asset, lookup) : restoreReference(asset));
-  const props = await mapWithConcurrency(library.props, 2, (asset) => asset.imageAssetId
-    ? resolveGlobalDramaImage(asset, lookup) : restoreReference(asset));
+  const restoreVisual = async <T extends DramaScene | DramaProp>(asset: T): Promise<T> => {
+    const normalized = normalizeDramaVisualAsset(asset);
+    const referenceImages = await mapWithConcurrency(normalized.referenceImages ?? [], 2,
+      (reference) => resolveVisualAssetReference(reference, lookup, restoreReference));
+    return syncDramaVisualAssetPrimary({ ...normalized, referenceImages });
+  };
+  const scenes = await mapWithConcurrency(library.scenes, 2, (asset) => restoreVisual(asset));
+  const props = await mapWithConcurrency(library.props, 2, (asset) => restoreVisual(asset));
   return { ...library, characters, scenes, props };
 }
 

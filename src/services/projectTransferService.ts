@@ -190,8 +190,10 @@ function collectAssetReferences(record: ProjectSaveData): AssetReferenceLike[] {
     character.voiceClips?.forEach((clip) => pushReference(clip));
     character.actions?.forEach((action) => action.media?.forEach(pushReference));
   });
-  record.dramaAssets?.scenes?.forEach(pushReference);
-  record.dramaAssets?.props?.forEach(pushReference);
+  [...(record.dramaAssets?.scenes ?? []), ...(record.dramaAssets?.props ?? [])].forEach((asset) => {
+    pushReference(asset);
+    asset.referenceImages?.forEach(pushReference);
+  });
   return references;
 }
 

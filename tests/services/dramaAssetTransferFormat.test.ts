@@ -3,6 +3,7 @@ import type { DramaCharacter, DramaScene } from '../../src/types/dramaAssets';
 import {
   buildDramaAssetTransferDocument, detachDramaAssetTransferMentions, DRAMA_ASSET_TRANSFER_LIMITS,
   parseDramaAssetTransferDocument, remapImportedAssets,
+  buildDramaAssetImportPreview, getDramaAssetTransferMediaIds, selectDramaAssetTransferDocument,
   type DramaAssetTransferDocument, type DramaAssetTransferMedia, type ImportedDramaAssetMedia,
 } from '../../src/services/dramaAssetTransferFormat';
 
@@ -62,6 +63,73 @@ describe('创作资产包纯格式', () => {
     expect(parsed).toEqual(input); expect(parsed).not.toBe(input);
     expect((parsed.assets[0] as DramaCharacter).actions![0].media).toHaveLength(2);
     expect(parsed.assets[1]).toMatchObject({ kind: 'scene', placeType: '室内', imageUrl: token('image') });
+  });
+
+  it('预览按同类别名称提示副本，所选闭包去重共享媒体并拒绝伪造身份', () => {
+    const value = document();
+    const existing = { ...value.assets[1], id: 'existing-scene', name: ' 客厅 ' };
+    const preview = buildDramaAssetImportPreview(value, [existing]);
+    expect(preview.items).toMatchObject([
+      { kind: 'character', sameName: false, mediaIds: ['image', 'voice', 'video'] },
+      { kind: 'scene', sameName: true, mediaIds: ['image'] },
+    ]);
+    expect(preview.media).toEqual(media.map(({ id, kind, bytes }) => ({ id, kind, bytes })));
+    expect(JSON.stringify(preview)).not.toContain('media/人物.png');
+    const selected = selectDramaAssetTransferDocument(value, [{ kind: 'scene', id: value.assets[1].id }]);
+    expect(selected.assets).toEqual([value.assets[1]]);
+    expect(selected.media).toEqual([media[0]]);
+    expect(selectDramaAssetTransferDocument(value, value.assets.map(({ kind, id }) => ({ kind, id }))).media).toHaveLength(3);
+    for (const selection of [[], [{ kind: 'scene' as const, id: 'missing' }],
+      [{ kind: 'prop' as const, id: value.assets[1].id }],
+      [{ kind: 'scene' as const, id: value.assets[1].id }, { kind: 'scene' as const, id: value.assets[1].id }]]) {
+      expect(() => selectDramaAssetTransferDocument(value, selection)).toThrow();
+    }
+    expect(value.assets).toHaveLength(2);
+    expect(value.media).toHaveLength(3);
+  });
+
+  it('场景道具多图保留标签、独立重映射与主图指针，剥离本机身份', () => {
+    const scene: DramaScene = { ...document().assets[1], kind: 'scene',
+      referenceImages: [{ id: 'day', label: '白天', prompt: '窗外阳光', imageUrl: token('image'), createdAt: 1, updatedAt: 2 },
+        { id: 'night', label: '夜晚', prompt: '夜景', imageUrl: token('night'), createdAt: 1, updatedAt: 2 }],
+      primaryReferenceImageId: 'night', imageUrl: token('night') };
+    Object.assign(scene.referenceImages![0], { assetId: 'old', filePath: '/private/day.png', sourceNodeId: 'node' });
+    const sceneMedia = [media[0], { ...media[0], id: 'night', path: 'media/night.png' }];
+    const value = buildDramaAssetTransferDocument({ name: '场景包', exportedAt: 3, assets: [scene], media: sceneMedia });
+    expect(getDramaAssetTransferMediaIds(value.assets[0])).toEqual(['night', 'image']);
+    expect(JSON.stringify(value)).not.toMatch(/sourceNodeId|assetId|filePath/);
+    const local = new Map<string, ImportedDramaAssetMedia>(sceneMedia.map((item) => [item.id, {
+      assetId: `local-${item.id}`, relativePath: item.path, url: `asset://localhost/project/${item.path}`,
+    }]));
+    let counter = 0;
+    const imported = remapImportedAssets(value.assets, local, () => `fresh-${++counter}`)[0];
+    expect(imported.kind).toBe('scene');
+    if (imported.kind !== 'scene') throw new Error('Missing imported scene');
+    expect(imported.referenceImages).toMatchObject([{ label: '白天', assetId: 'local-image' }, { label: '夜晚', assetId: 'local-night' }]);
+    expect(imported.primaryReferenceImageId).toBe(imported.referenceImages![1].id);
+    expect(imported.referenceImages!.map((item) => item.id)).not.toContain('day');
+    const invalid = { ...value, assets: [{ ...value.assets[0], primaryReferenceImageId: 'unknown' }] };
+    expect(() => parseDramaAssetTransferDocument(invalid)).toThrow();
+    Object.assign(value.assets[0].referenceImages![0], { filePath: '/private/escape.png' });
+    expect(() => parseDramaAssetTransferDocument(value)).toThrow();
+  });
+
+  it('旧单图包导入时补带本地身份的参考图，明确清空的数组不复活图片', () => {
+    const source = document().assets[1];
+    const local = new Map<string, ImportedDramaAssetMedia>([['image', {
+      assetId: 'local-image', relativePath: 'media/image.png', url: 'asset://localhost/project/media/image.png',
+    }]]);
+    let counter = 0;
+    const restored = remapImportedAssets([source], local, () => `fresh-${++counter}`)[0];
+    expect(restored.kind).toBe('scene');
+    if (restored.kind !== 'scene') throw new Error('Missing scene');
+    expect(restored.referenceImages).toMatchObject([{ assetId: 'local-image', relativePath: 'media/image.png',
+      imageUrl: local.get('image')!.url, label: '', prompt: '' }]);
+    expect(restored.primaryReferenceImageId).toBe(restored.referenceImages![0].id);
+    const cleared = remapImportedAssets([{ ...source, imageUrl: undefined, referenceImages: [] }], new Map(), () => `clear-${++counter}`)[0];
+    expect(cleared.referenceImages).toEqual([]);
+    expect(cleared.imageUrl).toBeUndefined();
+    expect(cleared.primaryReferenceImageId).toBeUndefined();
   });
 
   it('拒绝未知格式、版本、清单字段与资产种类', () => {

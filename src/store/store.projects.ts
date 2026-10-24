@@ -38,6 +38,9 @@ import {
 } from '../services/indexedDbService';
 import { describeStorageError, type StorageFailureKind } from '../services/storageQuota';
 import { relocateMediaReferences } from '../services/indexedDb/mediaRelocations';
+import { applyAssetRepairs, type AssetRepairPreview } from '../services/fs/assetRepair';
+import type { DramaAssetWriteOptions } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import { isWebviewRecovery } from '../services/webviewRecoveryService';
 
 type ProjectLoadStatus = 'loading' | 'ready' | 'error';
@@ -458,6 +461,7 @@ export interface ProjectSlice {
   moveGlobalAssetToFolder: (file: fileService.AssetFileEntry, selection: fileService.AssetFolderSelection,
     options?: fileService.FileTransferOptions) => Promise<{ path: string; moved: boolean }>;
   renameAssetFile: (file: fileService.AssetFileEntry, name: string, projectId?: string) => Promise<fileService.AssetFileRenameResult>;
+  repairAssetLocations: (preview: AssetRepairPreview, assetIds: readonly string[], options?: DramaAssetWriteOptions) => Promise<number>;
 }
 
 type ProjectSliceSet = Parameters<StateCreator<AppState, [], [], ProjectSlice>>[0];
@@ -653,6 +657,32 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       if (relocateMediaReferences(state.nodes, [move]) !== state.nodes) state.commitToHistory();
       set((current) => ({ ...relocateMediaReferences(current, [move]), recentAssetsRevision: current.recentAssetsRevision + 1 }));
     }),
+
+  repairAssetLocations: async (preview, assetIds, options = {}) => {
+    const initialRoot = get().config.baseDataDir;
+    const assertCurrent = () => {
+      assertDramaAssetWriteCurrent(options);
+      if (get().config.baseDataDir !== initialRoot) throw new Error(t('素材根目录已变化，请重新预览'));
+      if (preview.target.kind === 'folder' && !(get().config.assetFolders ?? []).includes(preview.target.path)) {
+        throw new Error(t('原目录引用已移除，请重新选择'));
+      }
+    };
+    assertCurrent();
+    return applyAssetRepairs(preview, assetIds, get().config.assetFolders ?? [], (moves) => {
+      const state = get();
+      if (relocateMediaReferences(state.nodes, moves) !== state.nodes) state.commitToHistory();
+      set((current) => ({ ...relocateMediaReferences(current, moves), recentAssetsRevision: current.recentAssetsRevision + 1 }));
+      if (preview.target.kind === 'folder' && preview.selectedRoot) {
+        const oldRoot = preview.target.path;
+        const selectedRoot = preview.selectedRoot;
+        const current = get().config.assetFolders ?? [];
+        const allRepaired = !preview.truncated && preview.candidates.length > 0 && preview.candidates.every((candidate) => assetIds.includes(candidate.index.assetId));
+        const assetFolders = allRepaired ? current.map((root) => root === oldRoot ? selectedRoot : root)
+          : [...current, selectedRoot];
+        get().updateConfig({ assetFolders: [...new Set(assetFolders)] });
+      }
+    }, { ...options, assertCurrent });
+  },
 
   setProjectName: (name) => {
     const state = get();

@@ -95,12 +95,10 @@ export function resolveDramaMentionPreview(
   }
 
   if (referenceImageId !== undefined) {
-    const reference = asset.kind === 'character'
-      ? asset.referenceImages?.find((item) => item.id === referenceImageId)
-      : undefined;
+    const reference = asset.referenceImages?.find((item) => item.id === referenceImageId);
     // 指定图身份失效时不回落主视觉，与实际生成的精确引用一致。
-    const image = reference && asset.kind === 'character'
-      ? resolveDramaAssetImageRef({ ...asset, imageNodeId: undefined, imageUrl: undefined, referenceImages: [reference] }, sourceNodes, referenceImageId)
+    const image = reference
+      ? resolveDramaAssetImageRef(asset, sourceNodes, referenceImageId)
       : null;
     return {
       ...preview,

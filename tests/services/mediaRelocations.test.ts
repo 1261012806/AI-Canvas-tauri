@@ -10,6 +10,52 @@ beforeEach(() => {
 const move = { projectId: 'p', oldPath: 'D:/p/a.png', newPath: 'D:/p/group/a-new.png',
   oldAssetUrl: 'asset://old', assetUrl: 'asset://new', relativePath: 'group/a-new.png' };
 
+it('repairs exact encoded asset tokens without changing prose, malformed tokens or ordinary move prompts', async () => {
+  const relocation = await import('../../src/services/indexedDb/mediaRelocations');
+  const { openDB } = await import('../../src/services/indexedDb/schema');
+  const db = await openDB();
+  const repair: MediaRelocation = { ...move, assetMove: { assetId: 'stable', source: 'project', projectId: 'p',
+    rootPath: 'D:/p', totalBytes: 4, mtimeMs: 20, digest: 'a'.repeat(64), repair: true } };
+  const prompt = `正文 ${move.oldPath} @asset{${encodeURIComponent(move.oldPath)}} @asset{%ZZ}`;
+  expect(relocation.relocateMediaReferences(prompt, [move])).toBe(prompt);
+  const expected = `正文 ${move.oldPath} @asset{${encodeURIComponent(move.newPath)}} @asset{%ZZ}`;
+  expect(relocation.relocateMediaReferences(prompt, [repair])).toBe(expected);
+  expect(await replayJournal(db, { prompt }, [{ ...move, oldPath: 'D:/other.png' }, repair])).toEqual({ prompt: expected });
+});
+
+it('atomically repairs stable identities, missing global image snapshots and metadata prompt tokens', async () => {
+  const relocation = await import('../../src/services/indexedDb/mediaRelocations');
+  const { openDB } = await import('../../src/services/indexedDb/schema');
+  const db = await openDB();
+  const before = { assetId: 'stable', path: move.oldPath, fingerprint: '4:1', size: 4, mtimeMs: 1 };
+  await put(db, 'assetIndex', before);
+  await put(db, 'globalDramaAssets', { id: 'scene', kind: 'scene', imageAssetId: 'stable' });
+  await put(db, 'metadata', { id: 'asset-image:fixture', assetId: 'stable', prompt: `@asset{${encodeURIComponent(move.oldPath)}}` });
+  const repair: MediaRelocation = { ...move, assetMove: { assetId: 'stable', source: 'global', rootPath: 'D:/p',
+    totalBytes: 4, mtimeMs: 20, digest: 'a'.repeat(64), repair: true } };
+  await relocation.persistAssetRepairBatch([repair], [before]);
+  expect(await read(db, 'assetIndex', 'stable')).toMatchObject({ path: move.newPath, contentDigest: 'a'.repeat(64), status: 'online' });
+  expect(await read(db, 'globalDramaAssets', 'scene')).toMatchObject({ imageAssetId: 'stable', imageUrl: move.assetUrl, imageRelativePath: move.relativePath });
+  expect(await read(db, 'metadata', 'asset-image:fixture')).toMatchObject({ prompt: `@asset{${encodeURIComponent(move.newPath)}}` });
+  expect((await read(db, 'metadata', 'media-relocations'))?.moves).toEqual([repair]);
+});
+
+it('rejects changed or duplicate repair identities before any persisted reference is changed', async () => {
+  const relocation = await import('../../src/services/indexedDb/mediaRelocations');
+  const { openDB } = await import('../../src/services/indexedDb/schema');
+  const db = await openDB();
+  const before = { assetId: 'stable', path: move.oldPath, fingerprint: '4:1' };
+  await put(db, 'assetIndex', { ...before, fingerprint: '9:2' });
+  await put(db, 'history', { id: 'history', filePath: move.oldPath });
+  const repair: MediaRelocation = { ...move, assetMove: { assetId: 'stable', source: 'global', rootPath: 'D:/p',
+    totalBytes: 4, mtimeMs: 20, digest: 'a'.repeat(64), repair: true } };
+  await expect(relocation.persistAssetRepairBatch([repair], [before])).rejects.toThrow('已变化');
+  await expect(relocation.persistAssetRepairBatch([repair, { ...repair, assetMove: { ...repair.assetMove!, assetId: 'other' } }],
+    [before, { ...before, assetId: 'other' }])).rejects.toThrow('批次无效');
+  expect(await read(db, 'history', 'history')).toMatchObject({ filePath: move.oldPath });
+  expect(await read(db, 'metadata', 'media-relocations')).toBeUndefined();
+});
+
 it('迁移全局场景道具主图身份及相对路径，迟到保存不能恢复旧地址', async () => {
   const service = await import('../../src/services/indexedDbService');
   const relocation = await import('../../src/services/indexedDb/mediaRelocations');

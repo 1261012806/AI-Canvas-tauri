@@ -2,6 +2,7 @@
  * 解析工作流输入中的画布节点、剧本资产和本地资产引用，并替换为可提交的实际内容。
  */
 import { useAppStore } from '../store/useAppStore';
+import { t } from '../i18n';
 import { findDramaAsset, listGlobalDramaAssets, loadGlobalDramaAssetsForPrompt, resolveDramaActionMediaRef, resolveDramaAssetImageRef, resolveDramaVoiceRef } from './dramaAssetPrompt';
 import type { DramaAsset } from '../types/dramaAssets';
 import { parseDramaMentionId } from '../types/dramaAssets';
@@ -35,13 +36,17 @@ function resolveNodeReferenceValue(
       if (!media) throw new Error(`动作素材引用已失效：${dramaName || '未命名动作'}`);
       return media.url;
     }
-    if (!asset) return dramaName || _match;
+    if (!asset) {
+      if (referenceImageId !== undefined) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || t('资产') }));
+      return dramaName || _match;
+    }
     const imageReference = resolveDramaAssetImageRef(
       asset,
       nodes as Array<{ id: string; data?: Record<string, unknown> }>,
       referenceImageId,
     );
     if (imageReference) return imageReference.imageUrl;
+    if (referenceImageId !== undefined) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || asset.name }));
     // 无图：展开单条简介字段（与 formatDramaAssetTextBrief 同信息，避免循环依赖用内联）
     const parts = [
       asset.name,

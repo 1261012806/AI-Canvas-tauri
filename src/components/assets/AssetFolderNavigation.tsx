@@ -15,6 +15,7 @@ export interface AssetFolderNavigationProps {
   readOnly?: boolean;
   onSelect: (selection: AssetFolderSelection) => void;
   onRemove?: (rootPath: string) => void;
+  onRepair?: (rootPath: string) => void;
   globalRootPath: string | null;
   onCreate?: (selection: AssetFolderSelection, name: string) => Promise<void>;
   onOpen?: (selection: AssetFolderSelection) => void;
@@ -34,7 +35,7 @@ const folderMotionClass = ' [transition:transform_var(--transition-base)] motion
 const folderDropClass = ' outline outline-1 outline-dashed outline-brand -outline-offset-1 motion-safe:scale-[1.02]';
 
 export default function AssetFolderNavigation({
-  folders, selection, totalCount, globalCount, compact, loading, readOnly = false, onSelect, onRemove,
+  folders, selection, totalCount, globalCount, compact, loading, readOnly = false, onSelect, onRemove, onRepair,
   globalRootPath, onCreate, onOpen, onCopy, onPaste, dropTarget,
   creativeKind, creativeCounts, onSelectCreative,
 }: AssetFolderNavigationProps) {
@@ -129,6 +130,9 @@ export default function AssetFolderNavigation({
             <span className="min-w-0 flex-1 truncate text-left">{folder.name}</span>
             <span className="ui-list__trailing">{receiving ? t('放入') : folder.availability === 'online' ? folder.fileCount : '—'}</span>
           </button>
+          {!readOnly && onRepair && folder.parentRelativePath === null && folder.rootPath !== globalRootPath && <button type="button"
+            className="ui-icon-btn ui-icon-btn--sm" disabled={loading} aria-label={t('重新定位文件夹 {name}', { name: folder.name })}
+            title={t('重新定位文件夹')} onClick={() => onRepair(folder.rootPath)}><Icon icon="lucide:folder-search" aria-hidden="true" /></button>}
           {!readOnly && onRemove && folder.parentRelativePath === null && folder.rootPath !== globalRootPath && (
             <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--danger assets-folder-remove"
               aria-label={t('移除文件夹引用 {name}', { name: folder.name })} title={t("取消引用，保留本地文件")} disabled={loading}

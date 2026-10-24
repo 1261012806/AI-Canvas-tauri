@@ -1,5 +1,7 @@
 import { openDB, STORE_METADATA } from './schema';
 import { localMediaUrlToPath } from '../../utils/mediaUrl';
+import { assertDramaAssetWriteCurrent, type DramaAssetWriteOptions } from '../../types/dramaAssets';
+import { t } from '../../i18n';
 
 export interface MediaRelocation {
   oldPath: string;
@@ -12,7 +14,8 @@ export interface MediaRelocation {
   /** 用户在资源库改名时，也把对应节点的标题一起更新。 */
   renamedFileName?: string;
   /** 全局资产移动：项目引用不再使用原项目相对路径，身份保持不变。 */
-  assetMove?: { assetId: string; rootPath: string; source: 'global' | 'folder'; digest: string; totalBytes: number; mtimeMs: number };
+  assetMove?: { assetId: string; rootPath: string; source: 'project' | 'global' | 'folder'; projectId?: string;
+    digest: string; totalBytes: number; mtimeMs: number; repair?: boolean };
 }
 const JOURNAL_ID = 'media-relocations';
 const STORES = ['projects', 'history', 'chatMessages', 'assetIndex', 'assetMeta', 'assetMetaV2',
@@ -31,9 +34,10 @@ export function mediaFileAllocationKey(path: string): string {
   return /^win/i.test(platform) ? normalized.toLowerCase() : normalized;
 }
 
-/** Rewrite exact file references only; prompts and arbitrary embedded text are not rewritten. */
+/** 精确文件引用迁移；显式修复另同步真实 @asset 路径 token，普通正文不改。 */
 export function relocateMediaReferences<T>(value: T, moves: readonly MediaRelocation[]): T {
   const lookup = new Map(moves.map((move) => [pathKey(move.oldPath), move]));
+  const repairs = new Map(moves.filter((move) => move.assetMove?.repair).map((move) => [move.assetMove!.assetId, move]));
   const resolve = (path: string | undefined): MediaRelocation | undefined => {
     if (!path) return undefined;
     let found = lookup.get(pathKey(path));
@@ -54,16 +58,26 @@ export function relocateMediaReferences<T>(value: T, moves: readonly MediaReloca
       const known = moves.find((move) => move.oldAssetUrl === item);
       if (known) return resolve(known.oldPath)?.assetUrl ?? known.assetUrl;
       const local = resolve(localMediaUrlToPath(item));
-      return local ? local.assetUrl : item;
+      if (local) return local.assetUrl;
+      return item.replace(/@asset\{([^}\r\n]+)\}/g, (token, encoded: string) => {
+        try {
+          const path = decodeURIComponent(encoded);
+          if (!moves.some((move) => move.assetMove?.repair && pathKey(move.oldPath) === pathKey(path))) return token;
+          const move = resolve(path);
+          return move ? `@asset{${encodeURIComponent(move.newPath)}}` : token;
+        } catch { return token; }
+      });
     }
     if (!item || typeof item !== 'object' || (Object.getPrototypeOf(item) !== Object.prototype && !Array.isArray(item))) return item;
     const original = item as Record<string, unknown>;
-    const identityMove = resolve(typeof original.filePath === 'string' ? original.filePath : typeof original.path === 'string' ? original.path : undefined);
+    const identityMove = (typeof original.assetId === 'string' ? repairs.get(original.assetId) : undefined)
+      ?? resolve(typeof original.filePath === 'string' ? original.filePath : typeof original.path === 'string' ? original.path : undefined);
     // 旧位置后来放入了另一份资产：旧日志只修复原身份，不能挪走新文件的索引或标签。
     if (identityMove?.assetMove?.assetId && typeof original.assetId === 'string' && original.assetId !== identityMove.assetMove.assetId) return item;
-    const imageMove = typeof original.imageUrl === 'string'
+    const imageMove = (typeof original.imageAssetId === 'string' ? repairs.get(original.imageAssetId) : undefined)
+      ?? (typeof original.imageUrl === 'string'
       ? resolve(localMediaUrlToPath(original.imageUrl))
-        ?? moves.find((move) => move.oldAssetUrl === original.imageUrl) : undefined;
+        ?? moves.find((move) => move.oldAssetUrl === original.imageUrl) : undefined);
     if (imageMove?.assetMove && typeof original.imageAssetId === 'string'
       && original.imageAssetId !== imageMove.assetMove.assetId) return item;
     if (seen.has(item)) return seen.get(item);
@@ -78,9 +92,11 @@ export function relocateMediaReferences<T>(value: T, moves: readonly MediaReloca
     const record = item as Record<string, unknown>;
     if (imageMove && typeof record.imageAssetId === 'string' && !Array.isArray(next)) {
       next.imageRelativePath = imageMove.relativePath;
+      if (imageMove.assetMove?.repair) next.imageUrl = imageMove.assetUrl;
       changed = true;
     }
-    const move = resolve(typeof record.filePath === 'string' ? record.filePath : typeof record.path === 'string' ? record.path : undefined);
+    const move = (typeof record.assetId === 'string' ? repairs.get(record.assetId) : undefined)
+      ?? resolve(typeof record.filePath === 'string' ? record.filePath : typeof record.path === 'string' ? record.path : undefined);
     if (move && !Array.isArray(next)) {
       if (move.assetMove) {
         if ('fingerprint' in record && 'assetId' in record) {
@@ -92,10 +108,26 @@ export function relocateMediaReferences<T>(value: T, moves: readonly MediaReloca
           next.size = move.assetMove.totalBytes;
           next.status = 'online';
           next.updatedAt = Date.now();
-          delete next.projectId;
+          if (move.assetMove.source === 'project') next.projectId = move.assetMove.projectId;
+          else delete next.projectId;
+          if (move.assetMove.repair) next.contentDigest = move.assetMove.digest;
         } else {
           // 此路径以全局资产根目录为基准，不能交给项目目录解析。
-          delete next.relativePath;
+          if (move.assetMove.repair && typeof record.type !== 'string'
+            && ('relativePath' in record || ['imageUrl', 'audioUrl', 'videoUrl', 'url'].some((field) => field in record))) next.relativePath = move.relativePath;
+          else delete next.relativePath;
+          if (move.assetMove.repair) {
+            const preferred = typeof record.type === 'string' ? record.type.includes('video') ? 'videoUrl'
+              : record.type.includes('audio') ? 'audioUrl' : 'imageUrl'
+              : 'url' in record ? 'url' : 'audioUrl' in record ? 'audioUrl' : 'imageUrl';
+            for (const field of ['imageUrl', 'audioUrl', 'videoUrl', 'url']) {
+              const currentPath = typeof record[field] === 'string' ? localMediaUrlToPath(record[field] as string) : undefined;
+              if (currentPath && pathKey(currentPath) === pathKey(move.oldPath)
+                || field === preferred && field in record && record[field] === undefined) next[field] = move.assetUrl;
+            }
+            if ('relativePath' in record || 'filePath' in record || ['imageUrl', 'audioUrl', 'videoUrl', 'url'].some((field) => field in record)) next[preferred] = move.assetUrl;
+            if (typeof record.filePath === 'string') next.filePath = move.newPath;
+          }
         }
       } else if ('relativePath' in record || 'filePath' in record) next.relativePath = move.relativePath;
       if (move.ownerId && 'assetId' in record) delete next.assetId;
@@ -125,6 +157,9 @@ function collectRelocationReferences(value: unknown): Set<string> | null {
       references.add(pathKey(item));
       const local = localMediaUrlToPath(item);
       if (local) references.add(pathKey(local));
+      for (const token of item.matchAll(/@asset\{([^}\r\n]+)\}/g)) {
+        try { references.add(pathKey(decodeURIComponent(token[1]))); } catch { /* 不猜测损坏 token。 */ }
+      }
       return;
     }
     if (!item || typeof item !== 'object'
@@ -151,7 +186,7 @@ function relocateJournalReferences<T>(value: T, moves: readonly MediaRelocation[
   let references = moves.length > 1 ? collectRelocationReferences(value) : null;
   let current = value;
   for (const move of moves) {
-    if (references && !references.has(pathKey(move.oldPath))
+    if (references && !references.has(pathKey(move.oldPath)) && !(move.assetMove?.repair && references.has(move.assetMove.assetId))
       && (move.oldAssetUrl === undefined || !references.has(move.oldAssetUrl))) continue;
     const next = move.ownerId
       ? relocateOwnedMediaReferences(current, move, move.ownerId)
@@ -225,6 +260,66 @@ export async function persistMediaRelocation(move: MediaRelocation, sharedNodeId
     };
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用迁移失败'));
+  });
+}
+
+/** 明确选择并验证过的失效文件一起重连；旧索引、目标占用及引用迁移共享同一事务。 */
+export async function persistAssetRepairBatch(
+  moves: readonly MediaRelocation[], expected: readonly { assetId: string; path: string; fingerprint: string; contentDigest?: string }[],
+  options: DramaAssetWriteOptions = {},
+): Promise<void> {
+  assertDramaAssetWriteCurrent(options);
+  if (!moves.length || moves.length !== expected.length || moves.length > 500
+    || moves.some((move) => !move.assetMove?.repair || !move.assetMove.assetId)
+    || new Set(moves.map((move) => move.assetMove?.assetId)).size !== moves.length
+    || new Set(moves.map((move) => mediaFileAllocationKey(move.newPath))).size !== moves.length) throw new Error(t('修复批次无效'));
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  const stores = STORES.filter((name) => db.objectStoreNames.contains(name));
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([...stores, STORE_METADATA], 'readwrite');
+    let failure: unknown;
+    const fail = (error: unknown) => { failure ??= error; try { tx.abort(); } catch { /* 等待既有终态。 */ } };
+    const abort = () => fail(new DOMException(t('素材修复已取消'), 'AbortError'));
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(failure ?? tx.error ?? new Error(t('素材修复保存失败'))); };
+    const indexes = tx.objectStore('assetIndex').getAll();
+    indexes.onsuccess = () => {
+      try {
+        assertDramaAssetWriteCurrent(options);
+        const records = indexes.result as Array<{ assetId: string; path: string; fingerprint: string; contentDigest?: string }>;
+        for (const before of expected) {
+          const current = records.find((entry) => entry.assetId === before.assetId);
+          const move = moves.find((entry) => entry.assetMove?.assetId === before.assetId);
+          if (!current || !move || pathKey(current.path) !== pathKey(before.path) || current.fingerprint !== before.fingerprint || current.contentDigest !== before.contentDigest
+            || records.some((entry) => entry.assetId !== before.assetId && mediaFileAllocationKey(entry.path) === mediaFileAllocationKey(move.newPath))) throw new Error(t('素材身份或位置已变化，请重新预览'));
+        }
+        const journal = tx.objectStore(STORE_METADATA).get(JOURNAL_ID);
+        journal.onsuccess = () => {
+          try {
+            assertDramaAssetWriteCurrent(options);
+            tx.objectStore(STORE_METADATA).put({ id: JOURNAL_ID, moves: [...(journal.result?.moves ?? []), ...moves], pending: journal.result?.pending ?? [] });
+            for (const name of [...stores, STORE_METADATA]) {
+              const store = tx.objectStore(name);
+              const request = store.openCursor();
+              request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) return;
+                if (name === STORE_METADATA && cursor.primaryKey === JOURNAL_ID) { cursor.continue(); return; }
+                const value = relocateMediaReferences(cursor.value, moves);
+                if (value !== cursor.value) {
+                  if (typeof store.keyPath === 'string' && value[store.keyPath] !== cursor.value[store.keyPath]) { cursor.delete(); store.put(value); }
+                  else cursor.update(value);
+                }
+                cursor.continue();
+              };
+            }
+          } catch (error) { fail(error); }
+        };
+      } catch (error) { fail(error); }
+    };
   });
 }
 

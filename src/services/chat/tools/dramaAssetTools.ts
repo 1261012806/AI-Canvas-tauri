@@ -94,7 +94,7 @@ function summarizeAsset(asset: DramaAsset, scope?: CharacterLibraryScope) {
     mention: assetMention(asset, scope),
     imageReady: Boolean(resolveDramaAssetImageRef(asset, scope === 'global' ? [] : useAppStore.getState().nodes)),
     ...(scope !== 'global' ? { imageNodeId: asset.imageNodeId } : {}),
-    referenceImageCount: character?.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
+    referenceImageCount: asset.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
     voiceClipCount: character?.voiceClips?.length ?? 0,
     actionCount: character?.actions?.length ?? 0,
     hasVoice: Boolean(character?.primaryVoiceClipId),
@@ -146,8 +146,8 @@ function characterMediaSchema(audio: boolean): AgentToolSchema {
       kind: { type: 'string', enum: audio
         ? ['timbre', 'line', 'emotion', 'other']
         : ['primary', 'avatar', 'full_body', 'expression', 'turnaround', 'outfit', 'other'] },
+      label: { type: 'string' as const, maxLength: 120 },
       ...(audio ? {
-        label: { type: 'string' as const, maxLength: 120 },
         transcript: { type: 'string' as const, maxLength: 4000 },
       } : { prompt: { type: 'string' as const, maxLength: 4000 } }),
     },
@@ -185,25 +185,26 @@ async function bindAssetMedia(
   const mediaUrl = audio ? node.data.audioUrl : node.data.imageUrl ?? node.data.thumbnailUrl;
   if (!mediaUrl?.trim()) return fail('源节点没有可用媒体');
   if (!audio && asset.kind !== 'character') {
-    const reused = scope === 'global'
-      ? Boolean(asset.imageAssetId && asset.imageAssetId === node.data.assetId && asset.imageUrl === mediaUrl)
-      : asset.imageNodeId === node.id && asset.imageUrl === mediaUrl;
-    if (scope === 'global') {
-      try {
-        const saved = await store.bindGlobalDramaAssetImage(asset.kind, asset.id, node.id, {
-          signal: context.signal, assertCurrent,
-        });
-        assertCurrent();
-        if (!saved) return fail('全局资产参考图保存失败，请重新查询资产后重试');
-      } catch {
-        return fail('全局资产参考图保存失败或画布已变化，请查询资产核对，勿自动重试');
-      }
-    } else if (!reused) store.bindDramaAssetImage(asset.kind, asset.id, node.id, mediaUrl);
-    return {
-      status: 'success', summary: '已绑定资产参考图',
-      modelContent: JSON.stringify({ assetId: asset.id, kind: asset.kind, scope, nodeId: node.id,
-        imageReady: true, reused, mention: assetMention(asset, scope) }),
-    };
+    const stableId = `mcp-image-${encodeURIComponent(context.projectId)}-${encodeURIComponent(node.id)}`;
+    const existing = asset.referenceImages?.find((reference) => reference.id === stableId
+      || scope === 'project' && reference.sourceNodeId === node.id);
+    const now = Date.now();
+    const referenceImageId = existing?.id ?? stableId;
+    try {
+      const saved = await store.addDramaAssetReferenceImage(scope, asset.kind, asset.id, {
+        id: referenceImageId, label: input.label ?? existing?.label ?? node.data.label ?? '',
+        prompt: input.prompt ?? existing?.prompt ?? '', imageUrl: mediaUrl,
+        sourceNodeId: node.id, assetId: node.data.assetId, relativePath: node.data.relativePath, filePath: node.data.filePath,
+        createdAt: existing?.createdAt ?? now, updatedAt: now,
+      }, { signal: context.signal, assertCurrent, makePrimary: input.makePrimary });
+      assertCurrent();
+      if (!saved) return fail('资产参考图保存失败，请重新查询资产后重试');
+      return { status: 'success', summary: '已绑定资产参考图',
+        modelContent: JSON.stringify({ assetId: asset.id, kind: asset.kind, scope, nodeId: node.id,
+          referenceImageId, imageReady: true, reused: Boolean(existing), mention: assetMention(asset, scope, referenceImageId) }) };
+    } catch {
+      return fail('资产参考图保存失败或画布已变化，请查询资产核对，勿自动重试');
+    }
   }
   const character = asset as DramaCharacter;
   // 全局库不保留项目 sourceNodeId；稳定 ID 仍保证同源节点重复绑定不增殖。
@@ -385,10 +386,12 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
             imageReady: Boolean(resolveDramaAssetImageRef(asset, input.scope === 'global' ? [] : useAppStore.getState().nodes)),
             ...(input.scope !== 'global' ? { imageNodeId: asset.imageNodeId } : {}),
             brief: formatDramaAssetTextBrief(asset),
-            referenceImageCount: character?.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
-            referenceImages: character?.referenceImages?.map((reference) => ({
-              id: reference.id, kind: reference.kind,
-              isPrimary: reference.id === character.primaryReferenceImageId,
+            referenceImageCount: asset.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
+            referenceImages: asset.referenceImages?.map((reference) => ({
+              id: reference.id, ...('kind' in reference ? { kind: reference.kind } : { label: reference.label }),
+              prompt: reference.prompt || undefined,
+              imageReady: Boolean(resolveDramaAssetImageRef(asset, input.scope === 'global' ? [] : useAppStore.getState().nodes, reference.id)),
+              isPrimary: reference.id === asset.primaryReferenceImageId,
               mention: assetMention(asset, input.scope, reference.id),
             })) ?? [],
             voiceClips: character?.voiceClips?.map((clip) => ({
@@ -552,7 +555,7 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
       description: (audio ? '把当前画布中已有音频产物绑定到指定角色。' : '把当前画布中已有图片绑定到人物、场景或道具；已生成的场景/道具也必须调用本工具关联，不能只录入文字。')
         + '本机文件先用 file_import_media_to_canvas 导入，再传 nodeId；不接受路径或 URL。'
         + (audio ? 'scope 支持 project/global，仅绑定角色声音，重复绑定复用素材 ID，makePrimary 可设主音色。'
-          : 'scope=project/global 均支持人物、场景、道具；全局图片保存为独立受管素材。角色重复绑定复用素材 ID，makePrimary 可设主素材，场景/道具只有一张主参考图。')
+          : 'scope=project/global 均支持人物、场景、道具的多张参考图；全局图片保存为独立受管素材。重复绑定同源节点复用素材 ID，makePrimary 可设主图，label 可标注角度或时段；返回单图精确引用。')
         + '不生成媒体，不隐藏或修改源节点。返回可直接写进下游提示词的库引用；库引用不需要额外连线。',
       inputSchema: characterMediaSchema(audio), effect: 'asset_write',
       authorize: authorizeCurrentProject,

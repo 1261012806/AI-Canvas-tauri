@@ -192,6 +192,7 @@ export default function RecentAssetsSection() {
       </div>}
       {!panelOpen && fileMenu?.scope === scopeKey && entries.some((entry) => entry.file.assetId === fileMenu.entry.file.assetId) &&
         <AssetFileContextMenu key={`${fileMenu.entry.file.assetId}:${fileMenu.x}:${fileMenu.y}`} name={fileMenu.entry.file.name}
+          usageTarget={{ kind: 'file', assetId: fileMenu.entry.file.assetId, path: fileMenu.entry.file.path, name: fileMenu.entry.file.name }}
           x={fileMenu.x} y={fileMenu.y} canFileActions={isTauriEnv() && fileMenu.entry.file.availability !== 'offline'}
           canCopyPrompt={fileMenu.entry.file.category === 'image' || fileMenu.entry.file.category === 'video'}
           onCopy={() => performFileAction('copy')} onCopyPrompt={() => performFileAction('prompt')}

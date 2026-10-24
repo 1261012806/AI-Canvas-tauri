@@ -2,6 +2,7 @@
  * ai/promptResolver — @mention prompt 解析
  */
 import { useAppStore } from '../../store/useAppStore';
+import { t } from '../../i18n';
 import { isRemoteMediaUrl } from '../../utils/mediaUrl';
 import { readFileToDataUrl, getFileCategory, getAssetUrlFromPath } from '../fileService';
 import { imageUrlReachable, resolveNodeImageUrl, mergeImageWithOverlays } from './imageUtils';
@@ -278,6 +279,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
           nodes as Array<{ id: string; data?: Record<string, unknown> }>,
           referenceImageId,
         );
+        if (referenceImageId !== undefined && !imgRef) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || dramaAsset.name }));
         if (imgRef) {
           const imgNode = nodes.find((n) => n.id === imgRef.imageNodeId);
           const key = `drama:${dramaId}`;
@@ -298,6 +300,7 @@ export async function resolvePromptToChatContent(rawPrompt: string, options?: { 
           parts.push(formatDramaAssetTextBrief(dramaAsset));
         }
       } else {
+        if (referenceImageId !== undefined) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || t('资产') }));
         parts.push(dramaName || match[0]);
       }
       lastIndex = chipRegex.lastIndex;
@@ -703,6 +706,7 @@ async function resolvePromptReferences(
           nodes as Array<{ id: string; data?: Record<string, unknown> }>,
           referenceImageId,
         );
+        if (referenceImageId !== undefined && !imgRef) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || dramaAsset.name }));
         if (imgRef) {
           const imgNode = nodes.find((n) => n.id === imgRef.imageNodeId);
           const key = `drama:${dramaId}`;
@@ -724,6 +728,7 @@ async function resolvePromptReferences(
         }
         return formatDramaAssetTextBrief(dramaAsset);
       }
+      if (referenceImageId !== undefined) throw new Error(t('参考图引用已失效：{name}', { name: dramaName || t('资产') }));
       return dramaName || '';
     }
 

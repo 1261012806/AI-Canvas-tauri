@@ -5,17 +5,24 @@ import { t, useT } from '../../i18n';
 import { useAppStore } from '../../store/useAppStore';
 import { generateId } from '../../store/store.utils';
 import type { DramaAsset, DramaAssetKind, DramaAssetWriteOptions, DramaCharacter } from '../../types/dramaAssets';
-import { DRAMA_ASSET_KIND_LABEL } from '../../types/dramaAssets';
+import { DRAMA_ASSET_KIND_LABEL, MAX_DRAMA_REFERENCE_IMAGES, normalizeDramaVisualAsset } from '../../types/dramaAssets';
 import { normalizeAssetKey } from '../../services/dramaAssetExtract';
 import { formatDramaAssetTextBrief } from '../../services/dramaAssetPrompt';
-import { confirmAction } from '../../services/confirmDialog';
 import { getAssetUrlFromPath, isTauriEnv, uploadSourceFileToProject, type AssetFileEntry } from '../../services/fileService';
 import { exportGlobalDramaAssets, importGlobalDramaAssets } from '../../services/dramaAssetTransferService';
+import type { DramaAssetIdentity } from '../../services/dramaAssetTransferFormat';
+import { dramaAssetIdentityKey } from '../../services/dramaAssetSearch';
+import { copyDramaAssetSelection } from '../../services/dramaAssetBatchCopy';
+import { useDramaAssetList } from '../../hooks/useDramaAssetList';
+import { useDramaAssetImportDialog } from '../../hooks/useDramaAssetImportDialog';
+import DramaAssetListControls from './DramaAssetListControls';
 import { DramaAssetCard } from '../DramaAssetsPanel';
 import ModalOverlay from '../shared/ModalOverlay';
 import Select from '../shared/Select';
 
 const CharacterAssetDialog = lazy(() => import('../CharacterAssetDialog'));
+const AssetUsageDialog = lazy(() => import('./AssetUsageDialog'));
+const DramaVisualReferencesDialog = lazy(() => import('./DramaVisualReferencesDialog'));
 
 function globalAssets(kind: DramaAssetKind): DramaAsset[] {
   const state = useAppStore.getState();
@@ -122,7 +129,15 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
           createdAt: Date.now(), updatedAt: Date.now(),
         }], primaryReferenceImageId: asset.primaryReferenceImageId ?? reference?.id ?? referenceId };
       } else {
-        asset = { ...asset, imageAssetId: file.assetId, imageUrl: url, imageNodeId: undefined };
+        const normalized = normalizeDramaVisualAsset(asset);
+        const reference = normalized.referenceImages?.find((item) => item.assetId === file.assetId);
+        if (!reference && (normalized.referenceImages?.length ?? 0) >= MAX_DRAMA_REFERENCE_IMAGES) throw new Error(t('每个场景或道具最多保存 {count} 张参考图', { count: MAX_DRAMA_REFERENCE_IMAGES }));
+        const referenceId = reference?.id ?? `reference-${generateId()}`;
+        asset = { ...normalized, imageAssetId: file.assetId, imageUrl: url, imageNodeId: undefined,
+          referenceImages: reference ? normalized.referenceImages : [...(normalized.referenceImages ?? []), {
+            id: referenceId, label: file.name.replace(/\.[^.]+$/, ''), prompt: '', assetId: file.assetId,
+            imageUrl: url, createdAt: Date.now(), updatedAt: Date.now(),
+          }], primaryReferenceImageId: referenceId };
       }
       if (!await useAppStore.getState().saveGlobalDramaAsset(asset, { signal: request.signal })) throw new Error('保存失败，文件和原资产仍保留，请重试');
       if (!request.signal.aborted) onSaved();
@@ -141,7 +156,7 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
     {!targetId && <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("名称")}
       <input autoFocus className="ui-input" value={name} disabled={saving} onChange={(event) => setName(event.target.value)} />
     </label>}
-    {targetId && kind !== 'character' && <p className="ui-hint">{t("将替换所选资产的主图，原图片文件仍保留。")}</p>}
+    {targetId && kind !== 'character' && <p className="ui-hint">{t('将添加为参考图并设为主图，原参考图和文件均保留。')}</p>}
     {error && <p role="alert" className="ui-alert ui-alert--danger">{t(error)}</p>}
     <div className="flex justify-end gap-2">
       <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>{t("取消")}</button>
@@ -163,7 +178,12 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
   })));
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<{ asset: DramaAsset; creating: boolean } | null>(null);
-  const [operationKind, setOperationKind] = useState<'manage' | 'upload' | 'import' | 'export' | null>(null);
+  const [operationKind, setOperationKind] = useState<'manage' | 'upload' | 'import' | 'export' | 'copy' | null>(null);
+  const [lastImported, setLastImported] = useState<DramaAssetIdentity[]>([]);
+  const [onlyImported, setOnlyImported] = useState(false);
+  const [usage, setUsage] = useState<{ asset: DramaAsset; deleting: boolean } | null>(null);
+  const [galleryAsset, setGalleryAsset] = useState<DramaAsset | null>(null);
+  const { chooseAssets, dialog: importDialog } = useDramaAssetImportDialog();
   const [operationProgress, setOperationProgress] = useState('');
   const [cancelRequested, setCancelRequested] = useState(false);
   const [savingAssets, setSavingAssets] = useState(false);
@@ -178,20 +198,25 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
     return () => { mounted.current = false; operation.current?.controller.abort(); unsubscribe(); };
   }, [kind]);
   const source = kind === 'character' ? characters : kind === 'scene' ? scenes : props;
-  const items = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return source.filter((asset) => !query || [asset.name, asset.summary, asset.visualNotes].some((text) => text.toLowerCase().includes(query)));
-  }, [source, search]);
+  const sourceItems = useMemo(() => {
+    if (!onlyImported) return source;
+    const keys = new Set(lastImported.map(dramaAssetIdentityKey));
+    return [...characters, ...scenes, ...props].filter((asset) => keys.has(dramaAssetIdentityKey(asset)));
+  }, [source, onlyImported, lastImported, characters, scenes, props]);
+  const list = useDramaAssetList(sourceItems, search, `global:${kind}:${onlyImported}`);
+  const { items } = list;
+  const usageTarget = useMemo(() => usage ? { kind: 'creative' as const, scope: 'global' as const,
+    assetKind: usage.asset.kind, assetId: usage.asset.id, name: usage.asset.name } : null, [usage]);
   const imageNodes = useMemo(() => nodes.filter((node) => ['ai-image', 'source-image', 'ai-panorama', 'ai-storyboard'].includes(node.type ?? '')
     && Boolean(node.data.imageUrl || node.data.thumbnailUrl)).map((node) => ({ id: node.id, label: node.data.label || node.data.fileName || node.id })), [nodes]);
   const run = async (
-    actionKind: 'manage' | 'upload' | 'import' | 'export',
+    actionKind: 'manage' | 'upload' | 'import' | 'export' | 'copy',
     action: (options: DramaAssetWriteOptions & { onProgress: (text: string) => void }) => Promise<void>,
   ) => {
     if (operation.current || !mounted.current || !useAppStore.getState().assetsPanelOpen) return;
     const request = { controller: new AbortController(), saving: false };
     operation.current = request; setOperationKind(actionKind); setCancelRequested(false); setSavingAssets(false);
-    setOperationProgress(actionKind === 'manage' ? '' : t(actionKind === 'upload' ? '正在上传素材' : actionKind === 'import' ? '正在导入创作资产' : '正在导出创作资产'));
+    setOperationProgress(actionKind === 'manage' ? '' : t(actionKind === 'upload' ? '正在上传素材' : actionKind === 'import' ? '正在导入创作资产' : actionKind === 'copy' ? '正在复制资产' : '正在导出创作资产'));
     const assertCurrent = () => {
       if (operation.current !== request || request.controller.signal.aborted || !mounted.current || !useAppStore.getState().assetsPanelOpen) {
         request.controller.abort();
@@ -213,24 +238,32 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
       }
     }
   };
-  const transfer = (actionKind: 'import' | 'export', selectedAsset?: DramaAsset) => run(actionKind, async (options) => {
-    const assets = globalAssets(kind);
+  const transfer = (actionKind: 'import' | 'export', selectedAsset?: DramaAsset, subset?: readonly DramaAsset[]) => run(actionKind, async (options) => {
+    const allAssets = [...globalAssets('character'), ...globalAssets('scene'), ...globalAssets('prop')];
+    const assets = selectedAsset || subset ? allAssets : globalAssets(kind);
     const selected = selectedAsset ? assets.find((asset) => asset.kind === selectedAsset.kind && asset.id === selectedAsset.id) : undefined;
     if (selectedAsset && !selected) throw new Error(t('资产已删除，请重新选择'));
+    const selectedKeys = subset ? new Set(subset.map(dramaAssetIdentityKey)) : null;
+    const exportAssets = selected ? [selected] : selectedKeys ? assets.filter((asset) => selectedKeys.has(dramaAssetIdentityKey(asset))) : assets;
+    if (selectedKeys && exportAssets.length !== selectedKeys.size) throw new Error(t('资产已删除，请重新选择'));
     const result = actionKind === 'export' ? await exportGlobalDramaAssets({
       libraryName: t('全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) }),
-      ...(selected ? { assetName: selected.name } : {}), assets: selected ? [selected] : assets,
-    }, options) : await importGlobalDramaAssets({ commit: async (assets) => {
+      ...(selected ? { assetName: selected.name } : {}), assets: exportAssets,
+    }, options) : await importGlobalDramaAssets({ existingAssets: allAssets, commit: async (assets) => {
       options.assertCurrent?.();
       await useAppStore.getState().importGlobalDramaAssets(assets, options);
-    } }, options);
+    } }, { ...options, chooseAssets });
     if (!result || options.signal?.aborted) return;
     options.assertCurrent?.();
+    if (actionKind === 'import') { setLastImported(result.assets); setOnlyImported(false); }
     showToast(t(actionKind === 'export' ? '已导出 {count} 项全局创作资产，包含 {mediaCount} 份媒体' : '已导入 {count} 项全局创作资产，包含 {mediaCount} 份媒体', {
       count: result.assetCount, mediaCount: result.mediaCount,
     }), 'success');
   });
   const upload = (asset?: DramaAsset) => run('upload', async (options) => {
+    if (asset && asset.kind !== 'character' && (normalizeDramaVisualAsset(asset).referenceImages?.length ?? 0) >= MAX_DRAMA_REFERENCE_IMAGES) {
+      throw new Error(t('每个场景或道具最多保存 {count} 张参考图', { count: MAX_DRAMA_REFERENCE_IMAGES }));
+    }
     const selected = await uploadSourceFileToProject('.png,.jpg,.jpeg,.webp,.gif,.bmp', null);
     if (!selected) return;
     options.assertCurrent?.();
@@ -241,27 +274,32 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
       if (!await save({ ...latest, referenceImages: [...(latest.referenceImages ?? []), {
         id: referenceId, kind: 'primary', imageUrl: selected.dataUrl, prompt: '', createdAt: Date.now(), updatedAt: Date.now(),
       }], primaryReferenceImageId: latest.primaryReferenceImageId ?? referenceId }, options)) return;
-    } else if (!await save({ ...latest, imageUrl: selected.dataUrl, imageAssetId: undefined, imageRelativePath: undefined, imageNodeId: undefined }, options)) return;
+    } else {
+      const referenceId = `reference-${generateId()}`;
+      const visual = normalizeDramaVisualAsset(latest);
+      if ((visual.referenceImages?.length ?? 0) >= MAX_DRAMA_REFERENCE_IMAGES) throw new Error(t('每个场景或道具最多保存 {count} 张参考图', { count: MAX_DRAMA_REFERENCE_IMAGES }));
+      if (!await save({ ...latest, imageUrl: selected.dataUrl, imageAssetId: undefined, imageRelativePath: undefined, imageNodeId: undefined,
+        referenceImages: [...(visual.referenceImages ?? []), { id: referenceId, label: selected.fileName.replace(/\.[^.]+$/, ''), prompt: '',
+          imageUrl: selected.dataUrl, createdAt: Date.now(), updatedAt: Date.now() }], primaryReferenceImageId: referenceId }, options)) return;
+    }
     if (!options.signal?.aborted) { options.assertCurrent?.(); showToast(t('已添加到全局创作资产')); }
   });
-  const handleCopyToProject = (asset: DramaAsset) => {
-    const state = useAppStore.getState();
-    if (!state.currentProjectId || state.currentProjectId === 'default') return;
-    if (asset.kind === 'character') {
-      if (!state.copyGlobalCharacterToProject(asset.id)) return;
-    } else {
-      const { id, createdAt, updatedAt } = newAsset(asset.kind, asset.name);
-      state.upsertDramaAsset({ ...asset, id, imageNodeId: undefined, createdAt, updatedAt });
-    }
-    showToast('已复制到本项目');
-  };
+  const handleCopyToProject = (assets: readonly DramaAsset[]) => run('copy', async (options) => {
+    const count = await copyDramaAssetSelection('global', assets, options);
+    if (!options.signal?.aborted) { options.assertCurrent?.(); showToast(t('已复制 {count} 项资产', { count }), 'success'); }
+  });
   return <div className={`flex min-h-0 min-w-0 flex-1 flex-col${compact ? ' drama-assets--compact' : ''}`}>
     <div className="flex min-w-0 flex-wrap items-center gap-2 p-3">
-      <h3 className="shrink-0 text-sm font-medium text-canvas-text">{t('全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })} <span className="text-canvas-text-muted">{source.length}</span></h3>
+      <h3 className="shrink-0 text-sm font-medium text-canvas-text">{onlyImported ? t('本次导入') : t('全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })} <span className="text-canvas-text-muted">{sourceItems.length}</span></h3>
+      <DramaAssetListControls inline sortBy={list.sortBy} sortOrder={list.sortOrder} onSort={list.changeSort}
+        selecting={list.selecting} onSelecting={list.toggleSelecting} selectedCount={list.selected.length} visibleCount={items.length}
+        onSelectAll={list.selectAll} onExport={() => void transfer('export', undefined, list.selected)}
+        onCopy={currentProjectId && currentProjectId !== 'default' ? () => void handleCopyToProject(list.selected) : undefined}
+        copyLabel={t('复制到本项目')} busy={busy || loading || Boolean(loadError)} canExport={isTauriEnv()} />
       <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
         <label className="ui-input-group w-48 max-w-full">
           <Search size={14} aria-hidden="true" className="pointer-events-none ml-2 shrink-0 self-center text-canvas-text-muted" />
-          <input className="ui-input ui-input--sm select-text" aria-label={t('搜索全局创作资产')} placeholder={t('搜索名称、简介…')}
+          <input className="ui-input ui-input--sm select-text" aria-label={t('搜索全局创作资产')} placeholder={t('搜索名称、简介、别名…')}
             value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || loading || Boolean(loadError)} onClick={() => void upload()}>
@@ -280,6 +318,12 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
         </button>
       </div>
     </div>
+    {lastImported.length > 0 && <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs text-canvas-text-secondary">
+      <span>{t('本次导入 {count} 项资产', { count: lastImported.length })}</span>
+      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy} onClick={() => {
+        setSearch(''); setOnlyImported((value) => !value); list.clearSelection();
+      }}>{t(onlyImported ? '显示全部资产' : '查看本次导入')}</button>
+    </div>}
     {operationProgress && <div role="status" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs text-canvas-text-secondary">
       <span className="min-w-0 flex-1 break-words">{operationProgress}</span>
       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" aria-label={t('取消资产操作')}
@@ -299,26 +343,35 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
             <p>{t('可新建资产、上传图片、导入资产包，或从文件右键菜单添加；保存后可跨项目使用。')}</p>
           </div> : items.map((asset) => <DramaAssetCard key={asset.id} asset={asset} thumb={asset.imageUrl}
             imageNodes={imageNodes} editing={false} uploading={busy} manageUploadedImage
-            onOpen={asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, origin: 'assets' }) : undefined}
+            selecting={list.selecting} selected={list.selectedKeys.has(dramaAssetIdentityKey(asset))} onToggleSelect={() => list.toggle(asset)}
+            onOpen={list.selecting ? () => list.toggle(asset) : asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, origin: 'assets' }) : undefined}
+            onViewUsage={() => setUsage({ asset, deleting: false })}
+            onManageImages={asset.kind !== 'character' ? () => setGalleryAsset(asset) : undefined}
             onToggleEdit={() => setEditing({ asset, creating: false })}
             onSaveFields={() => {}}
-            onDelete={() => void run('manage', async (options) => {
-              if (await confirmAction(t('删除全局{kind}「{name}」？共用图片、声音和动作文件将保留。', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]), name: asset.name }), { title: t('删除创作资产') })) {
-                options.assertCurrent?.();
-                await remove(kind, asset.id, options);
-              }
-            })}
-            onBindImage={(nodeId) => void run('manage', async (options) => { if (await bind(kind, asset.id, nodeId, options) && !options.signal?.aborted) showToast(t('已绑定全局资产图片')); })}
+            onDelete={() => setUsage({ asset, deleting: true })}
+            onBindImage={(nodeId) => void run('manage', async (options) => { if (await bind(asset.kind, asset.id, nodeId, options) && !options.signal?.aborted) showToast(t('已绑定全局资产图片')); })}
             onUploadImage={() => void upload(asset)}
             onExport={isTauriEnv() ? () => void transfer('export', asset) : undefined}
             onCopyBrief={() => { void navigator.clipboard.writeText(formatDramaAssetTextBrief(asset)).then(() => showToast('简介已复制')).catch(() => showToast('复制失败', 'error')); }}
             onManageVoice={asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, section: 'voice', origin: 'assets' }) : undefined}
             onManageActions={asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, section: 'action', origin: 'assets' }) : undefined}
-            onCopyToScope={currentProjectId && currentProjectId !== 'default' ? () => handleCopyToProject(asset) : undefined} copyToScopeLabel={t("复制到本项目")} />)}
+            onCopyToScope={currentProjectId && currentProjectId !== 'default' ? () => void handleCopyToProject([asset]) : undefined} copyToScopeLabel={t("复制到本项目")} />)}
         </div>}
     {editing && (editing.asset.kind === 'character' ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">{t("正在打开角色编辑器…")}</p>}>
       <CharacterAssetDialog key={editing.asset.id} isOpen scope="global" character={editing.creating ? null : editing.asset as DramaCharacter}
         onClose={() => setEditing(null)} onSaved={() => setEditing(null)} />
     </Suspense> : <GlobalAssetEditor key={editing.asset.id} asset={editing.asset} creating={editing.creating} onClose={() => setEditing(null)} />)}
+    {importDialog}
+    {usage && usageTarget && <Suspense fallback={null}><AssetUsageDialog target={usageTarget} onClose={() => setUsage(null)}
+      onConfirmDelete={usage.deleting ? async () => {
+        if (!mounted.current || !useAppStore.getState().assetsPanelOpen) throw new Error(t('资产操作已取消'));
+        if (globalAssets(usage.asset.kind).find((asset) => asset.id === usage.asset.id) !== usage.asset) throw new Error(t('资产已变化，请重新选择'));
+        if (!await remove(usage.asset.kind, usage.asset.id)) throw new Error(t('删除失败，请重试'));
+        setUsage(null);
+      } : undefined} /></Suspense>}
+    {galleryAsset && galleryAsset.kind !== 'character' && <Suspense fallback={null}>
+      <DramaVisualReferencesDialog key={dramaAssetIdentityKey(galleryAsset)} scope="global" asset={galleryAsset} onClose={() => setGalleryAsset(null)} />
+    </Suspense>}
   </div>;
 }

@@ -89,6 +89,24 @@ export interface CharacterReferenceImage {
   updatedAt: number;
 }
 
+/** 场景 / 道具的独立参考图；标题可标注时段、角度或细节。 */
+export interface DramaAssetReferenceImage {
+  id: string;
+  label: string;
+  prompt: string;
+  assetId?: string;
+  relativePath?: string;
+  /** 仅运行期使用，持久化时收敛为受管文件身份。 */
+  filePath?: string;
+  imageUrl?: string;
+  /** 仅项目内可保留来源节点。 */
+  sourceNodeId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const MAX_DRAMA_REFERENCE_IMAGES = 32;
+
 /** 角色声音片段：上传的音频文件或画布音频节点的产物。 */
 export interface CharacterVoiceClip {
   id: string;
@@ -202,6 +220,8 @@ export interface DramaCharacter extends DramaAssetBase {
 
 export interface DramaScene extends DramaAssetBase {
   kind: 'scene';
+  referenceImages?: DramaAssetReferenceImage[];
+  primaryReferenceImageId?: string;
   placeType?: string;
   timeOfDay?: string;
   atmosphere?: string;
@@ -210,6 +230,8 @@ export interface DramaScene extends DramaAssetBase {
 
 export interface DramaProp extends DramaAssetBase {
   kind: 'prop';
+  referenceImages?: DramaAssetReferenceImage[];
+  primaryReferenceImageId?: string;
   ownerName?: string;
   category?: string;
   significance?: string;
@@ -544,8 +566,8 @@ export function normalizeDramaAssetLibrary(value: unknown): DramaAssetLibrary {
   const characters = Array.isArray(library.characters)
     ? (library.characters as DramaCharacter[]).map(normalizeDramaCharacter)
     : [];
-  const scenes = Array.isArray(library.scenes) ? library.scenes as DramaScene[] : [];
-  const props = Array.isArray(library.props) ? library.props as DramaProp[] : [];
+  const scenes = Array.isArray(library.scenes) ? (library.scenes as DramaScene[]).map((asset) => normalizeDramaVisualAsset(asset)) : [];
+  const props = Array.isArray(library.props) ? (library.props as DramaProp[]).map((asset) => normalizeDramaVisualAsset(asset)) : [];
   return {
     version: 2,
     lastExtract: asRecord(library.lastExtract)
@@ -555,6 +577,50 @@ export function normalizeDramaAssetLibrary(value: unknown): DramaAssetLibrary {
     characters,
     scenes,
     props,
+  };
+}
+
+/** 旧单主图只在尚无多图字段时迁入；删除全部参考图不会再次复活旧主图。 */
+export function normalizeDramaVisualAsset<T extends DramaScene | DramaProp>(asset: T): T {
+  const fallbackTime = asset.updatedAt || asset.createdAt;
+  const seen = new Set<string>();
+  const referenceImages = (Array.isArray(asset.referenceImages) ? asset.referenceImages : [])
+    .slice(0, MAX_DRAMA_REFERENCE_IMAGES)
+    .flatMap((value, index) => {
+      const reference = asRecord(value);
+      if (!reference) return [];
+      const id = typeof reference.id === 'string' && reference.id.trim() ? reference.id : `ref-${asset.id}-${index}`;
+      if (seen.has(id)) return [];
+      seen.add(id);
+      const text = (key: string) => typeof reference[key] === 'string' ? reference[key] as string : undefined;
+      return [{ id, label: text('label') ?? '', prompt: text('prompt') ?? '',
+        assetId: text('assetId'), relativePath: text('relativePath'), filePath: text('filePath'),
+        imageUrl: text('imageUrl'), sourceNodeId: text('sourceNodeId'),
+        createdAt: finiteNumber(reference.createdAt, fallbackTime), updatedAt: finiteNumber(reference.updatedAt, fallbackTime) }];
+    });
+  if (asset.referenceImages === undefined && (asset.imageUrl || asset.imageNodeId || asset.assetId || asset.imageAssetId || asset.relativePath)) {
+    referenceImages.push({ id: `legacy-${asset.id}`, label: '', prompt: '',
+      imageUrl: asset.imageUrl, sourceNodeId: asset.imageNodeId,
+      assetId: asset.imageAssetId || asset.assetId, relativePath: asset.imageRelativePath || asset.relativePath,
+      filePath: (asset as T & { filePath?: string }).filePath,
+      createdAt: asset.createdAt, updatedAt: asset.updatedAt });
+  }
+  const primaryReferenceImageId = referenceImages.some((reference) => reference.id === asset.primaryReferenceImageId)
+    ? asset.primaryReferenceImageId : referenceImages[0]?.id;
+  return { ...asset, referenceImages, primaryReferenceImageId };
+}
+
+/** 主图是指定参考图的兼容投影；明确清空后同时移除旧单图身份。 */
+export function syncDramaVisualAssetPrimary<T extends DramaScene | DramaProp>(asset: T, global = false): T {
+  const normalized = normalizeDramaVisualAsset(asset);
+  const primary = normalized.referenceImages?.find((reference) => reference.id === normalized.primaryReferenceImageId);
+  return { ...normalized,
+    imageUrl: primary?.imageUrl, imageNodeId: global ? undefined : primary?.sourceNodeId,
+    assetId: global ? undefined : primary?.assetId,
+    relativePath: global ? undefined : primary?.relativePath,
+    filePath: global ? undefined : primary?.filePath,
+    imageAssetId: global ? primary?.assetId : undefined,
+    imageRelativePath: global ? primary?.relativePath : undefined,
   };
 }
 

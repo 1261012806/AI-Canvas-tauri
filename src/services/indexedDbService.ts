@@ -323,6 +323,13 @@ function inspectImportedGlobalAssets(assets: readonly DramaAsset[]): ImportedGlo
       if (asset.imageUrl !== undefined || asset.imageAssetId !== undefined || asset.imageRelativePath !== undefined) {
         addMedia(asset.imageAssetId, asset.imageRelativePath, asset.imageUrl);
       }
+      const references = members(asset.referenceImages);
+      for (const reference of references) addMedia(reference.assetId, reference.relativePath, reference.imageUrl);
+      if (asset.primaryReferenceImageId !== undefined && !references.some((reference) => reference.id === asset.primaryReferenceImageId)) invalid();
+      if (references.length && asset.imageUrl !== undefined
+        && !references.some((reference) => reference.id === asset.primaryReferenceImageId
+          && reference.imageUrl === asset.imageUrl && reference.assetId === asset.imageAssetId
+          && reference.relativePath === asset.imageRelativePath)) invalid();
       continue;
     }
     if (asset.imageAssetId !== undefined || asset.imageRelativePath !== undefined || asset.volcengineBinding !== undefined
@@ -1069,7 +1076,7 @@ export async function putAssetImageRecord(record: import('../types/assetImage').
       if ((current?.revision ?? 0) !== expectedRevision || current && current.contentDigest !== record.contentDigest) {
         conflict = true; tx.abort(); return;
       }
-      store.put(record);
+      withRelocatedMedia(tx, record, (next) => store.put(next));
     };
     if (replacement) {
       const tags = tx.objectStore(STORE_ASSET_META_V2);
@@ -1261,6 +1268,8 @@ export interface AssetIndexRecord {
   fingerprint: string;
   size: number;
   mtimeMs: number;
+  /** 固定块 asset-image-sha256-chain-v1 全内容摘要；旧索引可以没有，不从元数据补造。 */
+  contentDigest?: string;
   /** 最近一次真实使用时间（毫秒）；扫描刷新不产生或清空使用记录。 */
   lastUsedAt?: number;
   status: 'online' | 'offline';
@@ -1273,6 +1282,15 @@ export async function getAssetIndexById(assetId: string): Promise<AssetIndexReco
     const tx = db.transaction(STORE_ASSET_INDEX, 'readonly');
     const request = tx.objectStore(STORE_ASSET_INDEX).get(assetId);
     request.onsuccess = () => resolve(request.result as AssetIndexRecord | undefined);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function getAllAssetIndexes(): Promise<AssetIndexRecord[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(STORE_ASSET_INDEX, 'readonly').objectStore(STORE_ASSET_INDEX).getAll();
+    request.onsuccess = () => resolve(request.result as AssetIndexRecord[]);
     request.onerror = () => reject(request.error);
   });
 }
@@ -1307,6 +1325,9 @@ export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
       current.onsuccess = () => {
         const lastUsedAt = latestAssetUsageTime(next.lastUsedAt, current.result?.lastUsedAt);
         const merged = { ...next };
+        if (!merged.contentDigest && current.result?.size === next.size && current.result?.mtimeMs === next.mtimeMs) {
+          merged.contentDigest = current.result.contentDigest;
+        }
         if (lastUsedAt === undefined) delete merged.lastUsedAt;
         else merged.lastUsedAt = lastUsedAt;
         store.put(merged);

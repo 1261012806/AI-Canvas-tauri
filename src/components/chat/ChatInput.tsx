@@ -16,7 +16,8 @@ import type { ChatImageReference } from '../../types/chat';
 import { parseChatImageReferences } from '../../services/chat/chatImageReferenceService';
 import MentionPicker, { type MentionPickerItem } from '../shared/MentionPicker';
 import { resolveDramaMentionItems } from '../nodes/shared/mentionEditorSources';
-import { listGlobalDramaAssets } from '../../services/dramaAssetPrompt';
+import { findDramaAsset, listGlobalDramaAssets, resolveDramaAssetImageRef } from '../../services/dramaAssetPrompt';
+import { buildDramaMentionId } from '../../types/dramaAssets';
 import {
   bestNodeThumb, buildChipEl, buildDramaChipEl, buildSkillChipEl, getNodeMetaMap,
   resolveDramaChipPresentation, syncMediaReferenceLabels,
@@ -343,8 +344,18 @@ export default function ChatInput({
     [filteredCanvasNodes, effectiveTab],
   );
   const visibleDramaAssets = useMemo(
-    () => effectiveTab === 'assets' ? kindedDramaAssets : [],
-    [effectiveTab, kindedDramaAssets],
+    () => effectiveTab === 'assets' ? kindedDramaAssets.flatMap((item) => {
+      if (item.kind === 'character' || !item.referenceImages?.length) return [item];
+      const asset = findDramaAsset(dramaAssets, item.id, globalAssets);
+      if (!asset) return [item];
+      return item.referenceImages.flatMap((reference, index) => {
+        const image = resolveDramaAssetImageRef(asset, item.id.startsWith('global/') ? [] : canvasNodes, reference.id);
+        return image ? [{ ...item, id: buildDramaMentionId(item.id, reference.id),
+          name: `${item.name} · ${'label' in reference && reference.label || t('参考图 {number}', { number: index + 1 })}`,
+          imageNodeId: undefined, imageUrl: image.imageUrl, referenceImages: undefined }] : [];
+      });
+    }) : [],
+    [effectiveTab, kindedDramaAssets, dramaAssets, globalAssets, canvasNodes, t],
   );
   const visibleMediaModels = useMemo(
     () => effectiveTab === 'models' ? kindedMediaModels : [],

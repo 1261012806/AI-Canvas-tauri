@@ -21,6 +21,7 @@ import director from './director';
 import assets from './assets';
 import imageEditor from './imageEditor';
 import volcengine from './volcengine';
+import assetManagement from './assetManagement';
 
 const koKR: Record<string, string> = {
   ...canvas,
@@ -41,6 +42,7 @@ const koKR: Record<string, string> = {
   ...assets,
   ...imageEditor,
   ...volcengine,
+  ...assetManagement,
 };
 
 export default koKR;

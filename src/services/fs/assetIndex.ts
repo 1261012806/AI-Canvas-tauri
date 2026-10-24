@@ -58,7 +58,7 @@ async function migrateLegacyTags(assetId: string, path: string): Promise<void> {
   }).catch(() => undefined);
 }
 
-/** 注册/刷新一个磁盘资产；若指纹对应的旧位置已离线，则沿用旧 assetId。 */
+/** 注册/刷新磁盘资产；自动恢复仅接受唯一丢失候选及一致内容摘要，旧记录交给显式修复。 */
 export async function identifyAsset(path: string, options: IdentifyAssetOptions): Promise<AssetIndexRecord> {
   const normalizedPath = normalizePath(path);
   const fileStat = options.size == null || options.mtimeMs == null
@@ -75,11 +75,18 @@ export async function identifyAsset(path: string, options: IdentifyAssetOptions)
 
   if (!existing) {
     const candidates = await getAssetIndexesByFingerprint(fingerprint);
+    const missingCandidates: AssetIndexRecord[] = [];
     for (const candidate of candidates) {
-      if (!(await pathExists(candidate.path))) {
-        existing = candidate;
-        break;
+      try { await stat(candidate.path); }
+      catch (error) {
+        if (/no such file|path not found|not found|找不到指定|ENOENT|os error [23]\b/i.test(String(error))) missingCandidates.push(candidate);
+        // 权限/读取错误不当作丢失，也不自动接管身份。
       }
+    }
+    if (missingCandidates.length === 1 && missingCandidates[0].contentDigest) {
+      const { fingerprintAssetImage } = await import('./assetImageMetadata');
+      const content = await fingerprintAssetImage(normalizedPath);
+      if (content.digest === missingCandidates[0].contentDigest) existing = missingCandidates[0];
     }
   }
 
@@ -93,6 +100,7 @@ export async function identifyAsset(path: string, options: IdentifyAssetOptions)
     fingerprint,
     size,
     mtimeMs,
+    ...(existing?.contentDigest && existing.size === size && existing.mtimeMs === mtimeMs ? { contentDigest: existing.contentDigest } : {}),
     status: 'online',
     updatedAt: Date.now(),
   };

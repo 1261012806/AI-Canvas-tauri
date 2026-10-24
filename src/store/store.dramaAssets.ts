@@ -17,11 +17,12 @@ import type {
   DramaAssetKind,
   DramaAssetLibrary,
   DramaAssetWriteOptions,
+  DramaAssetReferenceImage,
   DramaCharacter,
   DramaProp,
   DramaScene,
 } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent, emptyDramaAssetLibrary, normalizeDramaCharacter } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, emptyDramaAssetLibrary, normalizeDramaCharacter, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary, MAX_DRAMA_REFERENCE_IMAGES } from '../types/dramaAssets';
 import type { DramaExtractParseResult } from '../services/dramaAssetExtract';
 import { mergeDramaExtractIntoLibrary, normalizeAssetKey } from '../services/dramaAssetExtract';
 import {
@@ -169,6 +170,13 @@ export interface DramaAssetsSlice {
   saveGlobalDramaAsset: (asset: DramaAsset, options?: GlobalDramaAssetSaveOptions) => Promise<boolean>;
   deleteGlobalDramaAsset: (kind: DramaAssetKind, id: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
   bindGlobalDramaAssetImage: (kind: DramaAssetKind, id: string, nodeId: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
+  saveDramaVisualAsset: (scope: CharacterLibraryScope, asset: DramaScene | DramaProp, options?: DramaAssetWriteOptions) => Promise<boolean>;
+  addDramaAssetReferenceImage: (scope: CharacterLibraryScope, kind: 'scene' | 'prop', id: string, reference: DramaAssetReferenceImage,
+    options?: DramaAssetWriteOptions & { makePrimary?: boolean }) => Promise<boolean>;
+  updateDramaAssetReferenceImage: (scope: CharacterLibraryScope, kind: 'scene' | 'prop', id: string, referenceId: string,
+    patch: Partial<Pick<DramaAssetReferenceImage, 'label' | 'prompt'>>, options?: DramaAssetWriteOptions) => Promise<boolean>;
+  removeDramaAssetReferenceImage: (scope: CharacterLibraryScope, kind: 'scene' | 'prop', id: string, referenceId: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
+  setDramaAssetPrimaryReference: (scope: CharacterLibraryScope, kind: 'scene' | 'prop', id: string, referenceId: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
   reorderCharacters: (scope: CharacterLibraryScope, ids: string[], projectId: string | null) => Promise<boolean>;
   saveCharacterCard: (
     scope: CharacterLibraryScope,
@@ -606,6 +614,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   },
 
   upsertDramaAsset: (asset) => {
+    if (asset.kind !== 'character') asset = syncDramaVisualAssetPrimary(asset);
     const lib = get().dramaAssets;
     set({
       dramaAssets: mapKindList(lib, asset.kind, (list) => (
@@ -675,6 +684,18 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       imageUrl
       || (node?.data?.imageUrl as string | undefined)
       || (node?.data?.thumbnailUrl as string | undefined);
+    if (kind !== 'character') {
+      const asset = findDramaAssetByKind(lib, kind, id);
+      if (!asset || asset.kind === 'character') return;
+      const existing = normalizeDramaVisualAsset(asset).referenceImages?.find((reference) => reference.sourceNodeId === imageNodeId);
+      void get().addDramaAssetReferenceImage('project', kind, id, {
+        id: existing?.id ?? `reference-${generateId()}`, label: existing?.label ?? node?.data.label ?? '',
+        prompt: existing?.prompt ?? node?.data.prompt ?? '', imageUrl: resolvedUrl, sourceNodeId: imageNodeId,
+        assetId: node?.data.assetId, relativePath: node?.data.relativePath, filePath: node?.data.filePath,
+        createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+      }, { makePrimary: true });
+      return;
+    }
     set({
       dramaAssets: mapKindList(lib, kind, (list) =>
         patchList(list, id, {
@@ -729,7 +750,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
               avatarCrop: undefined,
               updatedAt: Date.now(),
             } as DramaAsset
-          : { ...rest, updatedAt: Date.now() } as DramaAsset;
+          : { ...rest, referenceImages: [], primaryReferenceImageId: undefined, updatedAt: Date.now() } as DramaAsset;
       });
     set({ dramaAssets: mapKindList(lib, kind, strip) });
     silentSave(get);
@@ -766,15 +787,11 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
             updatedAt: Date.now(),
           };
         }
-        const matchingReference = item.kind === 'character'
-          ? item.referenceImages?.find((reference) => reference.sourceNodeId === imageNodeId)
-          : undefined;
+        const matchingReference = item.referenceImages?.find((reference) => reference.sourceNodeId === imageNodeId);
         if (item.imageNodeId === imageNodeId || matchingReference) {
-          const primary = item.kind === 'character'
-            ? item.referenceImages?.find((reference) => reference.id === item.primaryReferenceImageId) ?? item.referenceImages?.[0]
-            : undefined;
+          const primary = item.referenceImages?.find((reference) => reference.id === item.primaryReferenceImageId) ?? item.referenceImages?.[0];
           const syncPrimary = item.imageNodeId === imageNodeId || primary?.sourceNodeId === imageNodeId;
-          const referencesUnchanged = item.kind !== 'character' || (item.referenceImages ?? []).every((reference) => (
+          const referencesUnchanged = (item.referenceImages ?? []).every((reference) => (
             reference.sourceNodeId !== imageNodeId || reference.imageUrl === imageUrl && sameImageIdentity(reference, nodeFileIdentity)
           ));
           if ((!syncPrimary || item.imageUrl === imageUrl && sameImageIdentity(item, nodeFileIdentity)
@@ -783,13 +800,13 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
           return {
             ...item,
             ...(syncPrimary ? { ...nodeFileIdentity, imageUrl, imageAssetId: undefined, imageRelativePath: undefined } : {}),
-            ...(item.kind === 'character' ? {
+            ...{
               referenceImages: (item.referenceImages ?? []).map((reference) =>
                 reference.sourceNodeId === imageNodeId
                   ? { ...reference, ...nodeFileIdentity, imageUrl, updatedAt: Date.now() }
                   : reference,
               ),
-            } : {}),
+            },
             updatedAt: Date.now(),
           };
         }
@@ -964,16 +981,21 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const initial = get();
     const previous = (asset.kind === 'scene' ? initial.globalScenes : initial.globalProps)
       .find((item) => item.id === asset.id);
-    const source = asset.imageNodeId ? initial.nodes.find((node) => node.id === asset.imageNodeId) : undefined;
-    if (asset.imageNodeId && !isEligibleCharacterReferenceNode(source)) return false;
+    const normalized = normalizeDramaVisualAsset(asset);
+    const sourceIds = [...new Set((normalized.referenceImages ?? []).flatMap((reference) => reference.sourceNodeId ? [reference.sourceNodeId] : []))];
+    const sources = sourceIds.map((id) => initial.nodes.find((node) => node.id === id));
+    if (sources.some((source) => !isEligibleCharacterReferenceNode(source))) return false;
     const controller = new AbortController();
-    const guard = source ? registerCanvasDerivation(initial, source.id, { onCancel: () => controller.abort() }) : null;
-    if (source && !guard) return false;
+    const guards = sources.flatMap((source) => {
+      const guard = source && registerCanvasDerivation(initial, source.id, { onCancel: () => controller.abort() });
+      return guard ? [guard] : [];
+    });
+    if (guards.length !== sources.length) { guards.forEach(completeCanvasDerivation); return false; }
     const abort = () => controller.abort();
     options.signal?.addEventListener('abort', abort, { once: true });
     const assertCurrent = () => {
       assertDramaAssetWriteCurrent(options);
-      if (controller.signal.aborted || (guard && !isCanvasDerivationFresh(guard, get()))) {
+      if (controller.signal.aborted || guards.some((guard) => !isCanvasDerivationFresh(guard, get()))) {
         throw new Error('画布已变化，创作资产未保存');
       }
       const current = (asset.kind === 'scene' ? get().globalScenes : get().globalProps)
@@ -985,13 +1007,13 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     });
     try {
       assertCurrent();
-      const input = source ? {
-        ...asset, imageUrl: source.data.imageUrl || source.data.thumbnailUrl,
-        imageAssetId: source.data.assetId, imageRelativePath: source.data.relativePath,
-      } : asset;
+      const input = { ...normalized, referenceImages: normalized.referenceImages?.map((reference) => {
+        const source = sources.find((node) => node?.id === reference.sourceNodeId);
+        return source ? { ...reference, imageUrl: source.data.imageUrl || source.data.thumbnailUrl,
+          assetId: source.data.assetId, relativePath: source.data.relativePath, filePath: source.data.filePath } : reference;
+      }) };
       const persisted = await saveGlobalDramaAssetCard(input, {
         ...options, signal: controller.signal, assertCurrent,
-        imageFilePath: source?.data.filePath ?? options.imageFilePath,
       });
       assertCurrent();
       unsubscribe();
@@ -1007,7 +1029,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     } finally {
       unsubscribe();
       options.signal?.removeEventListener('abort', abort);
-      if (guard) completeCanvasDerivation(guard);
+      guards.forEach(completeCanvasDerivation);
     }
   },
 
@@ -1033,7 +1055,17 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const asset = (kind === 'character' ? initial.globalCharacters
       : kind === 'scene' ? initial.globalScenes : initial.globalProps).find((item) => item.id === id);
     if (!asset || initial.globalDramaAssetsError) return false;
-    if (kind !== 'character') return get().saveGlobalDramaAsset({ ...asset, imageNodeId: nodeId }, options);
+    if (kind !== 'character') {
+      const normalized = normalizeDramaVisualAsset(asset as DramaScene | DramaProp);
+      const existing = normalized.referenceImages?.find((reference) => reference.assetId && reference.assetId === source.data.assetId);
+      return get().addDramaAssetReferenceImage('global', kind, id, {
+        id: existing?.id ?? `reference-${generateId()}`, label: existing?.label ?? source.data.label ?? '',
+        prompt: existing?.prompt ?? source.data.prompt ?? '', sourceNodeId: source.id,
+        assetId: source.data.assetId, relativePath: source.data.relativePath, filePath: source.data.filePath,
+        imageUrl: source.data.imageUrl || source.data.thumbnailUrl,
+        createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
+      }, { ...options, makePrimary: true });
+    }
     const controller = new AbortController();
     const guard = registerCanvasDerivation(initial, nodeId, { onCancel: () => controller.abort() });
     if (!guard) return false;
@@ -1103,6 +1135,75 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     } finally {
       characterOrderSaves.delete(key);
     }
+  },
+
+  saveDramaVisualAsset: async (scope, asset, options) => {
+    try { assertDramaAssetWriteCurrent(options); } catch { return false; }
+    if (scope === 'global') return get().saveGlobalDramaAsset(normalizeDramaVisualAsset(asset), options);
+    const normalized = syncDramaVisualAssetPrimary(asset);
+    const initial = get();
+    const projectId = initial.currentProjectId;
+    if (!projectId || initial.projectLoadStatus !== 'ready') return false;
+    const previous = findDramaAssetByKind(initial.dramaAssets, asset.kind, asset.id);
+    set((state) => ({ dramaAssets: mapKindList(state.dramaAssets, asset.kind, (list) =>
+      list.some((item) => item.id === asset.id) ? list.map((item) => item.id === asset.id ? normalized : item) : [...list, normalized]) }));
+    try {
+      if (await get().saveCurrentProjectSilent() !== projectId) throw new Error('保存失败');
+      return true;
+    } catch {
+      if (get().currentProjectId === projectId && findDramaAssetByKind(get().dramaAssets, asset.kind, asset.id) === normalized) {
+        set((state) => ({ dramaAssets: mapKindList(state.dramaAssets, asset.kind, (list) =>
+          previous ? list.map((item) => item.id === asset.id ? previous : item) : list.filter((item) => item.id !== asset.id)) }));
+      }
+      get().showToast?.(t('参考图保存失败，素材文件已保留，请重试'), 'error');
+      return false;
+    }
+  },
+
+  addDramaAssetReferenceImage: async (scope, kind, id, reference, options) => {
+    const state = get();
+    const asset = (scope === 'global' ? kind === 'scene' ? state.globalScenes : state.globalProps
+      : kind === 'scene' ? state.dramaAssets.scenes : state.dramaAssets.props).find((item) => item.id === id);
+    if (!asset) return false;
+    const normalized = normalizeDramaVisualAsset(asset);
+    const references = normalized.referenceImages ?? [];
+    if (!references.some((item) => item.id === reference.id) && references.length >= MAX_DRAMA_REFERENCE_IMAGES) return false;
+    const referenceImages = references.some((item) => item.id === reference.id)
+      ? references.map((item) => item.id === reference.id ? reference : item) : [...references, reference];
+    return get().saveDramaVisualAsset(scope, { ...normalized, referenceImages,
+      primaryReferenceImageId: options?.makePrimary || !normalized.primaryReferenceImageId ? reference.id : normalized.primaryReferenceImageId,
+      updatedAt: Date.now() }, options);
+  },
+
+  updateDramaAssetReferenceImage: async (scope, kind, id, referenceId, patch, options) => {
+    const state = get();
+    const asset = (scope === 'global' ? kind === 'scene' ? state.globalScenes : state.globalProps
+      : kind === 'scene' ? state.dramaAssets.scenes : state.dramaAssets.props).find((item) => item.id === id);
+    if (!asset) return false;
+    const normalized = normalizeDramaVisualAsset(asset);
+    if (!normalized.referenceImages?.some((item) => item.id === referenceId)) return false;
+    return get().saveDramaVisualAsset(scope, { ...normalized, updatedAt: Date.now(), referenceImages: normalized.referenceImages.map((reference) =>
+      reference.id === referenceId ? { ...reference, ...patch, updatedAt: Date.now() } : reference) }, options);
+  },
+
+  removeDramaAssetReferenceImage: async (scope, kind, id, referenceId, options) => {
+    const state = get();
+    const asset = (scope === 'global' ? kind === 'scene' ? state.globalScenes : state.globalProps
+      : kind === 'scene' ? state.dramaAssets.scenes : state.dramaAssets.props).find((item) => item.id === id);
+    if (!asset) return false;
+    const normalized = normalizeDramaVisualAsset(asset);
+    if (!normalized.referenceImages?.some((item) => item.id === referenceId)) return false;
+    const referenceImages = normalized.referenceImages.filter((reference) => reference.id !== referenceId);
+    return get().saveDramaVisualAsset(scope, { ...normalized, referenceImages, updatedAt: Date.now(),
+      primaryReferenceImageId: normalized.primaryReferenceImageId === referenceId ? referenceImages[0]?.id : normalized.primaryReferenceImageId }, options);
+  },
+
+  setDramaAssetPrimaryReference: async (scope, kind, id, referenceId, options) => {
+    const state = get();
+    const asset = (scope === 'global' ? kind === 'scene' ? state.globalScenes : state.globalProps
+      : kind === 'scene' ? state.dramaAssets.scenes : state.dramaAssets.props).find((item) => item.id === id);
+    if (!asset || !normalizeDramaVisualAsset(asset).referenceImages?.some((item) => item.id === referenceId)) return false;
+    return get().saveDramaVisualAsset(scope, { ...asset, primaryReferenceImageId: referenceId, updatedAt: Date.now() }, options);
   },
 
   saveCharacterCard: async (scope, character, options) => {

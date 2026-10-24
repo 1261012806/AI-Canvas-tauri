@@ -20,6 +20,7 @@ import director from './director';
 import assets from './assets';
 import imageEditor from './imageEditor';
 import volcengine from './volcengine';
+import assetManagement from './assetManagement';
 
 const enUS: Record<string, string> = {
   ...common,
@@ -40,6 +41,7 @@ const enUS: Record<string, string> = {
   ...assets,
   ...imageEditor,
   ...volcengine,
+  ...assetManagement,
 };
 
 export default enUS;

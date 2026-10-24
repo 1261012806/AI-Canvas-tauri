@@ -6,7 +6,7 @@ import { findSavedAssetImage, identifyAssetImage, resolveAssetImageReferences } 
 import { isTauriEnv } from './fs/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { parseDramaMentionId, type DramaAssetLibrary } from '../types/dramaAssets';
-import { resolveDramaActionMediaRef } from './dramaAssetPrompt';
+import { resolveDramaActionMediaRef, resolveDramaAssetImageRef } from './dramaAssetPrompt';
 import { bestNodeThumb } from '../components/nodes/shared/mentionEditorDom';
 import { ANIMATION_ACTION_LABELS, ANIMATION_FRAME_GRIDS, type AnimationAction } from '../types';
 import { buildAnimationSpritePrompt, resolveAnimationSheetAspectRatio, type AnimationFrameCount } from './ai/animationPrompt';
@@ -196,12 +196,14 @@ export async function resolvePromptImageReferences(
             name = `${found?.name ?? ''} ${media.label || '动作'}`.trim();
           }
         } else if (found) {
-          const picked = referenceImageId && found.kind === 'character'
+          const picked = referenceImageId !== undefined
             ? found.referenceImages?.find((img) => img.id === referenceImageId)
             : undefined;
-          if (picked) {
-            url = picked.imageUrl;
-            name = `${found.name} · 参考图`;
+          if (referenceImageId !== undefined) {
+            // 指定图片失效时保留缺失状态，不悄悄换成主图。
+            const resolved = resolveDramaAssetImageRef(found, nodes ?? [], referenceImageId);
+            url = resolved?.imageUrl;
+            name = `${found.name} · ${picked && 'label' in picked ? picked.label || '参考图' : '参考图'}`;
           } else if (found.imageNodeId && nodes) {
             const node = nodes.find((n) => n.id === found.imageNodeId);
             url = bestNodeThumb(node?.data ?? {}) || (node?.data?.imageUrl as string | undefined) || found.imageUrl;

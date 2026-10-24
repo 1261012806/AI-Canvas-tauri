@@ -32,7 +32,8 @@ vi.mock('../../src/services/fs/dramaAssetArchive', () => ({
   },
 }));
 
-import { exportGlobalDramaAssets, exportProjectDramaAssets, importGlobalDramaAssets, importProjectDramaAssets } from '../../src/services/dramaAssetTransferService';
+import { exportGlobalDramaAssets, exportProjectDramaAssets, importGlobalDramaAssets, importProjectDramaAssets,
+  copyGlobalDramaAssetsToProject, type DramaAssetImportPreview } from '../../src/services/dramaAssetTransferService';
 
 const sha256 = 'a'.repeat(64);
 const workspace = { directory: '/staging', assetsDirectory: '/staging/assets', mediaDirectory: '/staging/assets/media', incomingDirectory: '/staging/incoming' };
@@ -75,7 +76,7 @@ describe('project creative asset packages', () => {
     setLocale(locale);
     const selected: DramaAsset = { ...base, id: 'selected-prop', name: '角色甲', kind: 'prop' };
     expect(await exportProjectDramaAssets({ projectId: 'episode', ownerId: 'series', projectName: '项目乙',
-      assetName: selected.name, assets: [selected], nodes: [] })).toEqual({ assetCount: 1, mediaCount: 0 });
+      assetName: selected.name, assets: [selected], nodes: [] })).toMatchObject({ assetCount: 1, mediaCount: 0, assets: [{ kind: 'prop', id: selected.id }] });
     expect(io.save.mock.calls[0][0].defaultPath).toBe(defaultPath);
     const packed = JSON.parse(io.pack.mock.calls[0][2]);
     expect(packed.assets).toHaveLength(1);
@@ -103,7 +104,7 @@ describe('project creative asset packages', () => {
       nodes: [{ id: 'image-node', type: 'ai-image', position: { x: 0, y: 0 }, data: {
         type: 'ai-image', label: '来源图', filePath: '/source/live.png', imageUrl: 'asset://localhost//source/live.png',
       } }] });
-    expect(result).toEqual({ assetCount: 3, mediaCount: 5 });
+    expect(result).toMatchObject({ assetCount: 3, mediaCount: 5 });
     expect(io.stage.mock.calls[0][1]).toEqual({ filePath: '/source/live.png' });
     const packed = JSON.parse(io.pack.mock.calls[0][2]);
     expect(packed.media.map((entry: { kind: string }) => entry.kind)).toEqual(['image', 'audio', 'image', 'video', 'image']);
@@ -123,7 +124,7 @@ describe('project creative asset packages', () => {
     const assets: DramaAsset[] = [{ ...base, id: 'shared', kind: 'character', identity: '主角' },
       { ...base, id: 'shared', kind: 'scene' }, { ...base, id: 'shared', kind: 'prop' }];
     expect(await exportProjectDramaAssets({ projectId: 'episode', ownerId: 'series', projectName: '项目', assets, nodes: [] }))
-      .toEqual({ assetCount: 3, mediaCount: 0 });
+      .toMatchObject({ assetCount: 3, mediaCount: 0 });
     const packed = JSON.parse(io.pack.mock.calls[0][2]);
     expect(new Set(packed.assets.map((asset: DramaAsset) => asset.id)).size).toBe(3);
     expect(packed.assets.every((asset: DramaAsset) => asset.id !== 'shared')).toBe(true);
@@ -146,7 +147,7 @@ describe('project creative asset packages', () => {
     io.index.mockResolvedValue(undefined);
     await expect(exportProjectDramaAssets({ projectId: 'episode', ownerId: 'series', projectName: '项目', nodes: [],
       assets: [{ ...base, id: 'scene', kind: 'scene', imageAssetId: 'missing', imageUrl: 'asset://localhost/old.png' }],
-    })).rejects.toThrow('导出失败');
+    })).rejects.toThrow('无法导出');
     expect(io.pack).not.toHaveBeenCalled();
     expect(io.cleanup).toHaveBeenCalledWith('/staging');
   });
@@ -160,7 +161,9 @@ describe('project creative asset packages', () => {
         relativePath: 'Library/import-one/item.png' });
       expect(assets[0]).not.toHaveProperty('imageAssetId');
     }));
-    expect(await importProjectDramaAssets(input)).toEqual({ assetCount: 1, mediaCount: 1 });
+    const result = await importProjectDramaAssets(input);
+    expect(result).toMatchObject({ assetCount: 1, mediaCount: 1 });
+    expect(result?.assets).toEqual(vi.mocked(input.commit).mock.calls[0][0].map(({ kind, id }) => ({ kind, id })));
     expect(io.putIndex.mock.calls[0][0]).toMatchObject({ path: '/project/Library/import-one/item.png', projectId: 'series', source: 'project' });
     expect(input.commit).toHaveBeenCalledTimes(1);
     expect(io.deleteIndexes).not.toHaveBeenCalled();
@@ -171,7 +174,7 @@ describe('project creative asset packages', () => {
     const original: DramaAsset = { ...base, id: 'existing-prop', kind: 'prop' };
     const library: DramaAsset[] = [original];
     const commit = vi.fn(async (assets: DramaAsset[]) => { library.push(...assets); });
-    expect(await importProjectDramaAssets(importInput(commit))).toEqual({ assetCount: 1, mediaCount: 1 });
+    expect(await importProjectDramaAssets(importInput(commit))).toMatchObject({ assetCount: 1, mediaCount: 1 });
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0][0]).toHaveLength(1);
     expect(library).toHaveLength(2);
@@ -186,7 +189,7 @@ describe('project creative asset packages', () => {
     if (failure === 'bytes') io.copy.mockResolvedValue({ path: '/project/Library/import-one/item.png', totalBytes: 2, digest: sha256 });
     if (failure === 'digest') io.copy.mockResolvedValue({ path: '/project/Library/import-one/item.png', totalBytes: 3, digest: 'b'.repeat(64) });
     const input = importInput();
-    await expect(importProjectDramaAssets(input)).rejects.toThrow('导入失败');
+    await expect(importProjectDramaAssets(input)).rejects.toThrow(/导入失败|校验失败/);
     expect(input.commit).not.toHaveBeenCalled();
     expect(io.putIndex).not.toHaveBeenCalled();
     expect(io.cleanup).toHaveBeenCalledWith('/staging');
@@ -206,7 +209,7 @@ describe('project creative asset packages', () => {
   it('treats a completed commit as success even when the view cancels while it is saving', async () => {
     const controller = new AbortController();
     const input = importInput(vi.fn(async () => { controller.abort(); }));
-    expect(await importProjectDramaAssets(input, { signal: controller.signal })).toEqual({ assetCount: 1, mediaCount: 1 });
+    expect(await importProjectDramaAssets(input, { signal: controller.signal })).toMatchObject({ assetCount: 1, mediaCount: 1 });
     expect(io.deleteIndexes).not.toHaveBeenCalled();
     expect(io.cleanup.mock.calls).toEqual([['/staging']]);
   });
@@ -217,9 +220,129 @@ describe('project creative asset packages', () => {
     expect(io.deleteIndexes).not.toHaveBeenCalled();
     expect(io.cleanup.mock.calls).toEqual([['/staging']]);
   });
+
+  it('verifies the full package before choosing, then only copies and returns selected asset identities', async () => {
+    const bundle = buildDramaAssetTransferDocument({ exportedAt: 1, name: '混合包',
+      assets: [scene, { ...base, id: 'prop-old', kind: 'prop', name: '桌子', imageUrl: 'aicasset-media:image-two' }],
+      media: [{ id: 'image-one', kind: 'image', path: 'media/item.png', bytes: 3, sha256 },
+        { id: 'image-two', kind: 'image', path: 'media/other.png', bytes: 3, sha256 }] });
+    io.unpack.mockResolvedValue({ texts: { 'manifest.json': JSON.stringify(bundle) }, assetPaths: ['media/item.png', 'media/other.png'], assetBytes: 6 });
+    io.copy.mockImplementation(async (source: string, directory: string) => ({ path: `${directory}/${source.split('/').pop()}`, totalBytes: 3, digest: sha256 }));
+    const chooseAssets = vi.fn(async (preview: DramaAssetImportPreview) => {
+      expect(io.copy).toHaveBeenCalledTimes(2);
+      expect(io.createFolder).not.toHaveBeenCalled();
+      expect(io.putIndex).not.toHaveBeenCalled();
+      expect(preview.items[0]).toMatchObject({ id: scene.id, sameName: true, mediaIds: ['image-one'] });
+      expect(preview.media).toEqual([{ id: 'image-one', kind: 'image', bytes: 3 }, { id: 'image-two', kind: 'image', bytes: 3 }]);
+      return [{ kind: 'scene' as const, id: scene.id }];
+    });
+    const commit = vi.fn(async (_assets: DramaAsset[]) => undefined);
+    const result = await importProjectDramaAssets({ ...importInput(commit), existingAssets: [scene] }, { chooseAssets });
+    expect(io.copy.mock.calls.map((call) => call[1])).toEqual([workspace.incomingDirectory, workspace.incomingDirectory, folder.directory]);
+    expect(io.copy.mock.calls[2][0]).toBe('/staging/incoming/item.png');
+    expect(io.putIndex).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0][0]).toHaveLength(1);
+    expect(result).toEqual({ assetCount: 1, mediaCount: 1,
+      assets: commit.mock.calls[0][0].map(({ kind, id }) => ({ kind, id })) });
+    expect(result!.assets[0].id).not.toBe(scene.id);
+  });
+
+  it.each(['cancel', 'abort', 'unknown'])('does not allocate final files or save when asset selection is %s', async (mode) => {
+    const controller = new AbortController();
+    io.copy.mockResolvedValue({ path: '/staging/incoming/item.png', totalBytes: 3, digest: sha256 });
+    const chooseAssets = vi.fn(async () => {
+      if (mode === 'abort') controller.abort();
+      return mode === 'cancel' ? null : [{ kind: 'scene' as const, id: mode === 'unknown' ? 'unknown' : scene.id }];
+    });
+    const input = importInput();
+    const work = importProjectDramaAssets(input, { signal: controller.signal, chooseAssets });
+    if (mode === 'cancel') expect(await work).toBeNull();
+    else await expect(work).rejects.toThrow(mode === 'abort' ? '取消' : '资产包无效');
+    expect(io.createFolder).not.toHaveBeenCalled();
+    expect(io.putIndex).not.toHaveBeenCalled();
+    expect(input.commit).not.toHaveBeenCalled();
+    expect(io.cleanup).toHaveBeenCalledExactlyOnceWith(workspace.directory);
+  });
+
+  it('rejects corrupt media before selection can hide it, with a useful name and no filesystem details', async () => {
+    io.copy.mockResolvedValue({ path: '/staging/incoming/item.png', totalBytes: 3, digest: 'b'.repeat(64) });
+    const chooseAssets = vi.fn(async () => []);
+    const input = importInput();
+    await expect(importProjectDramaAssets(input, { chooseAssets })).rejects.toThrow('资产包中「资产」的主图校验失败');
+    expect(chooseAssets).not.toHaveBeenCalled();
+    expect(io.createFolder).not.toHaveBeenCalled();
+    expect(input.commit).not.toHaveBeenCalled();
+  });
+
+  it.each(['reference', 'voice', 'action'])('names the broken %s media without exposing native errors', async (slot) => {
+    const asset: DramaAsset = { ...base, id: 'person', kind: 'character', name: '人物甲', identity: '主角' };
+    if (slot === 'reference') asset.referenceImages = [{ id: 'reference', kind: 'primary', imageUrl: 'asset://localhost//private/image.png', prompt: '', createdAt: 1, updatedAt: 1 }];
+    if (slot === 'voice') asset.voiceClips = [{ id: 'voice', kind: 'line', label: '问候', audioUrl: 'asset://localhost//private/audio.wav', transcript: '', createdAt: 1, updatedAt: 1 }];
+    if (slot === 'action') asset.actions = [{ id: 'action', category: 'walking', name: '行走', prompt: '', createdAt: 1, updatedAt: 1,
+      media: [{ id: 'motion', kind: 'video', name: '抬脚', url: 'asset://localhost//private/video.mp4', createdAt: 1, updatedAt: 1 }] }];
+    io.stage.mockRejectedValue(new Error('native failed at /private/credential/path'));
+    const failure = await exportProjectDramaAssets({ projectId: 'episode', ownerId: 'series', projectName: '项目', assets: [asset], nodes: [] })
+      .then(() => '', (error: Error) => error.message);
+    expect(failure).toContain('人物甲');
+    expect(failure).toContain(slot === 'reference' ? '参考图 1' : slot === 'voice' ? '声音「问候」' : '动作「行走」的素材「抬脚」');
+    expect(failure).not.toContain('/private');
+    expect(io.pack).not.toHaveBeenCalled();
+  });
 });
 
 describe('global creative asset packages', () => {
+  it('materializes selected global media into the project without archive dialogs and returns fresh identities', async () => {
+    const source: DramaAsset[] = [{ ...base, id: 'global-scene', kind: 'scene', imageAssetId: 'global-image' },
+      { ...base, id: 'global-person', kind: 'character', identity: '主角', voiceClips: [{ id: 'global-voice',
+        kind: 'timbre', assetId: 'voice-index', transcript: '', createdAt: 1, updatedAt: 1 }], primaryVoiceClipId: 'global-voice' }];
+    const before = JSON.stringify(source);
+    io.copy.mockImplementation(async (path: string, directory: string) => ({ path: `${directory}/${path.split('/').pop()}`, totalBytes: 3, digest: sha256 }));
+    const commit = vi.fn(async (_assets: DramaAsset[]) => undefined);
+    const result = await copyGlobalDramaAssetsToProject({ ownerId: 'series', assets: source, commit });
+    expect(io.open).not.toHaveBeenCalled(); expect(io.save).not.toHaveBeenCalled();
+    expect(io.pack).not.toHaveBeenCalled(); expect(io.unpack).not.toHaveBeenCalled();
+    expect(io.putIndex).toHaveBeenCalledTimes(2);
+    expect(io.putIndex.mock.calls.every((call) => call[0].source === 'project' && call[0].projectId === 'series'
+      && call[0].path.startsWith(folder.directory))).toBe(true);
+    const saved = commit.mock.calls[0][0];
+    expect(saved.every((asset) => !source.some((original) => original.id === asset.id))).toBe(true);
+    const person = saved.find((asset) => asset.kind === 'character');
+    expect(person?.kind).toBe('character');
+    if (person?.kind !== 'character') throw new Error('Missing copied character');
+    expect(person.primaryVoiceClipId).toBe(person.voiceClips![0].id);
+    expect(person.voiceClips![0].id).not.toBe('global-voice');
+    expect(person.voiceClips![0].assetId).not.toBe('voice-index');
+    expect(person.voiceClips![0].relativePath).toMatch(/^Library\/import-one\//);
+    expect(saved[0]).not.toHaveProperty('imageAssetId');
+    expect(result).toEqual({ assetCount: 2, mediaCount: 2, assets: saved.map(({ kind, id }) => ({ kind, id })) });
+    expect(JSON.stringify(source)).toBe(before);
+  });
+
+  it('uses the import cleanup and accepted-save rules for cross-scope copies', async () => {
+    const source: DramaAsset[] = [{ ...base, id: 'global-scene', kind: 'scene', imageAssetId: 'global-image' }];
+    const controller = new AbortController();
+    const commit = vi.fn(async (_assets: DramaAsset[]) => { controller.abort(); });
+    expect(await copyGlobalDramaAssetsToProject({ ownerId: 'series', assets: source, commit }, { signal: controller.signal }))
+      .toMatchObject({ assetCount: 1, mediaCount: 1 });
+    expect(io.retain).toHaveBeenCalledExactlyOnceWith(folder.directory);
+    expect(io.deleteIndexes).not.toHaveBeenCalled();
+    expect(io.cleanup.mock.calls).toEqual([[workspace.directory]]);
+  });
+
+  it('exports every scene reference with its label and preserves the selected primary image', async () => {
+    io.index.mockImplementation(async (id: string) => ({ assetId: id, status: 'online', source: 'global', path: `/global/${id}.png` }));
+    await exportGlobalDramaAssets({ libraryName: '全局场景', assets: [{ ...base, id: 'scene', kind: 'scene',
+      referenceImages: [{ id: 'day', label: '日景', prompt: '阳光', assetId: 'day-image', createdAt: 1, updatedAt: 1 },
+        { id: 'night', label: '夜景', prompt: '月光', assetId: 'night-image', createdAt: 1, updatedAt: 1 }],
+      primaryReferenceImageId: 'night' }] });
+    expect(io.stage.mock.calls.map((call) => call[1])).toEqual([{ filePath: '/global/day-image.png' }, { filePath: '/global/night-image.png' }]);
+    const packed = JSON.parse(io.pack.mock.calls[0][2]);
+    expect(packed.assets[0].referenceImages).toMatchObject([{ label: '日景', prompt: '阳光' }, { label: '夜景', prompt: '月光' }]);
+    expect(packed.assets[0].imageUrl).toBe(packed.assets[0].referenceImages[1].imageUrl);
+    expect(packed.assets[0].primaryReferenceImageId).toBe('night');
+    expect(packed.media).toHaveLength(2);
+  });
+
   it('exports all supplied kinds from global indexes and root without project or source-node lookup', async () => {
     const assets: DramaAsset[] = [{ ...base, id: 'character', kind: 'character', identity: '主角',
       imageNodeId: 'stale-project-node', primaryReferenceImageId: 'reference',
@@ -229,7 +352,7 @@ describe('global creative asset packages', () => {
       actions: [{ id: 'action', category: 'walking', name: '走路', prompt: '', createdAt: 1, updatedAt: 1,
         media: [{ id: 'motion', kind: 'video', name: 'motion.mp4', url: 'asset://localhost//global/motion.mp4', createdAt: 1, updatedAt: 1 }] }],
     }, { ...base, id: 'scene', kind: 'scene', imageAssetId: 'global-image' }, { ...base, id: 'prop', kind: 'prop' }];
-    expect(await exportGlobalDramaAssets({ libraryName: '全局创作资产', assets })).toEqual({ assetCount: 3, mediaCount: 4 });
+    expect(await exportGlobalDramaAssets({ libraryName: '全局创作资产', assets })).toMatchObject({ assetCount: 3, mediaCount: 4 });
     expect(io.projectDir).not.toHaveBeenCalled();
     expect(io.globalDir).toHaveBeenCalledTimes(1);
     expect(io.stage.mock.calls[0][1]).toEqual({ filePath: '/global/people/reference.png' });
@@ -253,7 +376,7 @@ describe('global creative asset packages', () => {
     io.index.mockResolvedValue({ assetId: 'project-image', source: 'project', status: 'online', path: '/project/image.png' });
     await expect(exportGlobalDramaAssets({ libraryName: '全局场景',
       assets: [{ ...base, id: 'scene', kind: 'scene', imageAssetId: 'project-image', imageUrl: 'asset://localhost//global/old.png' }],
-    })).rejects.toThrow('导出失败');
+    })).rejects.toThrow('无法导出');
     expect(io.stage).not.toHaveBeenCalled();
     expect(io.projectDir).not.toHaveBeenCalled();
     expect(io.pack).not.toHaveBeenCalled();
@@ -287,7 +410,7 @@ describe('global creative asset packages', () => {
         if (asset.kind !== 'character') expect(asset).toMatchObject({ imageAssetId: indexed.assetId, imageRelativePath: 'import-one/item.png' });
       }
     });
-    expect(await importGlobalDramaAssets({ commit })).toEqual({ assetCount: 3, mediaCount: 1 });
+    expect(await importGlobalDramaAssets({ commit })).toMatchObject({ assetCount: 3, mediaCount: 1 });
     expect(commit).toHaveBeenCalledTimes(1);
     expect(io.createFolder).not.toHaveBeenCalled();
     expect(io.copy.mock.calls[0][1]).toBe(globalFolder.directory);
@@ -314,7 +437,7 @@ describe('global creative asset packages', () => {
     io.copy.mockResolvedValue({ path: `${globalFolder.directory}/item.png`, totalBytes: 3, digest: sha256 });
     const controller = new AbortController();
     const commit = vi.fn(async (_assets: DramaAsset[]) => { controller.abort(); });
-    expect(await importGlobalDramaAssets({ commit }, { signal: controller.signal })).toEqual({ assetCount: 1, mediaCount: 1 });
+    expect(await importGlobalDramaAssets({ commit }, { signal: controller.signal })).toMatchObject({ assetCount: 1, mediaCount: 1 });
     expect(io.deleteIndexes).not.toHaveBeenCalled();
     expect(io.cleanup.mock.calls).toEqual([['/staging']]);
   });

@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import ModalOverlay from '../shared/ModalOverlay';
 import type { DramaAssetKind } from '../../types/dramaAssets';
+import type { AssetUsageTarget } from '../../types/assetUsage';
+import AssetUsageDialog from './AssetUsageDialog';
 
 export interface AssetFileContextMenuProps {
   name: string;
@@ -18,16 +20,19 @@ export interface AssetFileContextMenuProps {
   onDelete: () => Promise<void>;
   onClose: () => void;
   onCreateCreativeAsset?: (kind: DramaAssetKind) => Promise<void>;
+  usageTarget?: AssetUsageTarget;
+  onRepair?: () => void;
 }
 
 /** 资产文件菜单只管理交互；路径、提示词查询及删除由资产面板编排。 */
 export default function AssetFileContextMenu({ name, x, y, canFileActions, canCopyPrompt,
-  confirmDelete = false, onCopy, onCopyPrompt, onReveal, onDelete, onClose, onCreateCreativeAsset }: AssetFileContextMenuProps) {
+  confirmDelete = false, onCopy, onCopyPrompt, onReveal, onDelete, onClose, onCreateCreativeAsset, usageTarget, onRepair }: AssetFileContextMenuProps) {
   useT();
   const menuRef = useRef<HTMLDivElement>(null);
   const [confirming, setConfirming] = useState(confirmDelete);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showUsage, setShowUsage] = useState(false);
   const pendingRef = useRef(false);
   const mountedRef = useRef(false);
   const close = useCallback(() => { if (!pendingRef.current) onClose(); }, [onClose]);
@@ -39,7 +44,7 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
   }, []);
 
   useEffect(() => {
-    if (confirming) return;
+    if (confirming || showUsage) return;
     const menu = menuRef.current;
     const items = () => Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
     items()[0]?.focus();
@@ -69,7 +74,7 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
       window.removeEventListener('resize', close);
       window.removeEventListener('scroll', close, capture);
     };
-  }, [close, confirming]);
+  }, [close, confirming, showUsage]);
 
   // 同步租约阻止快速连点；确认失败保留对话框，用户可以检查权限后重试。
   const run = async (action: () => Promise<void>) => {
@@ -80,6 +85,8 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
     finally { pendingRef.current = false; if (mountedRef.current) setPending(false); }
   };
 
+  if (usageTarget && (confirming || showUsage)) return <AssetUsageDialog target={usageTarget} onClose={close}
+    onConfirmDelete={confirming ? onDelete : undefined} />;
   if (confirming) return <ModalOverlay isOpen onClose={close} ariaLabel={t("移入回收站")} zIndex={360}
     motionPreset="quick" closeOnBackdrop={!pending} className="w-[min(420px,calc(100vw-24px))] p-3 gap-3">
     <h3 className="text-sm font-semibold text-canvas-text">{t("移入系统回收站？")}</h3>
@@ -102,6 +109,10 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
       <Icon icon="lucide:clipboard-copy" className="w-4 h-4" />{t("复制提示词")}</button>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canFileActions || pending} onClick={() => void run(onReveal)}>
       <Icon icon="lucide:folder-open" className="w-4 h-4" />{t("打开文件所在目录")}</button>
+    {usageTarget && <button type="button" role="menuitem" className="ui-menu__item" disabled={pending} onClick={() => setShowUsage(true)}>
+      <Icon icon="lucide:link" className="w-4 h-4" />{t('查看使用位置')}</button>}
+    {onRepair && <button type="button" role="menuitem" className="ui-menu__item" disabled={pending} onClick={() => { onRepair(); onClose(); }}>
+      <Icon icon="lucide:folder-search" className="w-4 h-4" />{t('重新定位文件')}</button>}
     {onCreateCreativeAsset && <>
       <div className="ui-menu__sep" />
       {([{ kind: 'character', label: t('添加到全局人物'), icon: 'lucide:contact-round' },
