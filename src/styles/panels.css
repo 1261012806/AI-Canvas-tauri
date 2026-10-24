@@ -1944,7 +1944,6 @@ button.wf-ionode-badge.is-default {
   border-top: 1px solid var(--theme-border);
 }
 .drama-assets--compact .drama-assets-toolbar { flex-wrap: wrap; gap: 4px; }
-.drama-assets--compact .drama-assets-toolbar > button { padding: 6px; }
 .drama-assets--compact .drama-assets-search { order: -1; width: 100%; margin-left: 0; }
 .drama-assets--compact .drama-assets-grid { grid-template-columns: minmax(0, 1fr); }
 .drama-assets--compact .drama-asset-card-layout { grid-template-columns: 56px minmax(0, 1fr); gap: 8px; }

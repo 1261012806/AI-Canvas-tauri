@@ -15,6 +15,8 @@ import {
 } from './characterLibraryService';
 import { getAssetUrlFromPath, isTauriEnv } from './fileService';
 
+export { addImportedGlobalDramaAssets } from './indexedDbService';
+
 export interface GlobalDramaAssetSaveOptions extends DramaAssetWriteOptions {
   /** 仅本次复制的来源路径，绝不写入资产元数据。 */
   imageFilePath?: string;
@@ -25,6 +27,8 @@ function prepareGlobalAsset(asset: DramaScene | DramaProp): DramaScene | DramaPr
     filePath?: string; path?: string; sourceNodeId?: string;
   };
   delete detached.imageNodeId;
+  delete detached.assetId;
+  delete detached.relativePath;
   delete detached.filePath;
   delete detached.path;
   delete detached.sourceNodeId;

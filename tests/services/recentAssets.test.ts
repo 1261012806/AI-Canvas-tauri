@@ -25,6 +25,21 @@ function index(assetId: string, path = `/global/file/${assetId}.png`, patch: Par
 const scope = { folderRoots: ['/external'], projectIds: ['project'] };
 
 describe('最近使用持久化与资产解析', () => {
+  it('导入回收只删除本轮ID与当前位置均匹配的索引', async () => {
+    const db = await import('../../src/services/indexedDbService');
+    await db.putAssetIndex(index('own', '/project/Library/import-one/own.png'));
+    await db.putAssetIndex(index('moved', '/project/Library/other/moved.png'));
+    await db.putAssetIndex(index('unrelated'));
+    await db.deleteImportedAssetIndexes([
+      { assetId: 'own', path: '/project/Library/import-one/own.png' },
+      { assetId: 'moved', path: '/project/Library/import-one/moved.png' },
+      { assetId: 'missing', path: '/project/Library/import-one/missing.png' },
+    ]);
+    expect(await db.getAssetIndexById('own')).toBeUndefined();
+    expect(await db.getAssetIndexById('moved')).toBeDefined();
+    expect(await db.getAssetIndexById('unrelated')).toBeDefined();
+  });
+
   it('原子合并并发写入，重复使用更新位置且旧请求不倒退时间', async () => {
     const db = await import('../../src/services/indexedDbService');
     await Promise.all(Array.from({ length: 60 }, (_, i) => db.recordRecentAssetUsage(`asset-${i}`, i)));

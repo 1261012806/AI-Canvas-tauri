@@ -30,7 +30,7 @@ import {
   findDramaAssetByKind,
   purposeLabel,
 } from '../services/dramaAssetPrompt';
-import { generateId } from './store.utils';
+import { generateId, seriesOwnerId } from './store.utils';
 import { nodeHeightForAspectRatio } from '../utils/nodeBounds';
 import type { BaseNodeData, CharacterLibraryNodeLink } from '../types';
 import {
@@ -46,6 +46,7 @@ import {
   saveGlobalCharacterOrder,
 } from '../services/characterLibraryService';
 import {
+  addImportedGlobalDramaAssets,
   deleteGlobalDramaAssetCard,
   loadGlobalDramaAssetCards,
   saveGlobalDramaAssetCard,
@@ -54,6 +55,7 @@ import {
 import { reorderCharacterSubset, sortCharactersForLibrary } from '../services/characterOrder';
 
 const characterOrderSaves = new Set<string>();
+const dramaAssetImports = new Set<string>();
 
 export type CharacterLibraryScope = 'project' | 'global';
 
@@ -135,6 +137,8 @@ export interface DramaAssetsSlice {
   ) => void;
   /** 按 id 新增或整体覆盖一个资产；角色建议走 saveCharacterCard 以便归一化参考图。 */
   upsertDramaAsset: (asset: DramaAsset) => void;
+  /** 追加资产包生成的新身份，等待项目/剧集落盘；不按名称覆盖现有条目。 */
+  importDramaAssets: (assets: readonly DramaAsset[], options?: DramaAssetWriteOptions) => Promise<number>;
   confirmDramaAsset: (kind: DramaAssetKind, id: string, confirmed?: boolean) => void;
   deleteDramaAsset: (kind: DramaAssetKind, id: string) => void;
   updateDramaAssetFields: (
@@ -160,6 +164,7 @@ export interface DramaAssetsSlice {
   createImageNodeFromDramaAsset: (kind: DramaAssetKind, id: string) => string | null;
   loadGlobalCharacters: () => Promise<void>;
   loadGlobalDramaAssets: () => Promise<void>;
+  importGlobalDramaAssets: (assets: readonly DramaAsset[], options?: DramaAssetWriteOptions) => Promise<number>;
   saveGlobalDramaAsset: (asset: DramaAsset, options?: GlobalDramaAssetSaveOptions) => Promise<boolean>;
   deleteGlobalDramaAsset: (kind: DramaAssetKind, id: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
   bindGlobalDramaAssetImage: (kind: DramaAssetKind, id: string, nodeId: string, options?: DramaAssetWriteOptions) => Promise<boolean>;
@@ -375,6 +380,29 @@ async function saveCharacterActionWithNode(
   }
 }
 
+function syncCharacterPrimaryImage(character: DramaCharacter): DramaCharacter {
+  const primary = character.referenceImages?.find((reference) => reference.id === character.primaryReferenceImageId)
+    ?? character.referenceImages?.[0];
+  const synced = {
+    ...character,
+    assetId: primary?.assetId,
+    relativePath: primary?.relativePath,
+    filePath: primary?.filePath,
+    imageNodeId: primary?.sourceNodeId,
+    imageUrl: primary?.imageUrl,
+    imageAssetId: undefined,
+    imageRelativePath: undefined,
+  };
+  return synced;
+}
+
+function sameImageIdentity(
+  first: { assetId?: string; relativePath?: string; filePath?: string },
+  second: { assetId?: string; relativePath?: string; filePath?: string },
+): boolean {
+  return first.assetId === second.assetId && first.relativePath === second.relativePath && first.filePath === second.filePath;
+}
+
 function upsertCharacterReference(
   character: DramaCharacter,
   reference: CharacterReferenceImage,
@@ -390,20 +418,14 @@ function upsertCharacterReference(
     : reference;
   if (existingIndex >= 0) references[existingIndex] = persistedReference;
   else references.push(persistedReference);
-  return normalizeDramaCharacter({
+  return syncCharacterPrimaryImage(normalizeDramaCharacter({
     ...character,
     referenceImages: references,
     primaryReferenceImageId: makePrimary || !character.primaryReferenceImageId
       ? persistedReference.id
       : character.primaryReferenceImageId,
-    imageNodeId: makePrimary || !character.imageNodeId
-      ? persistedReference.sourceNodeId
-      : character.imageNodeId,
-    imageUrl: makePrimary || !character.imageUrl
-      ? persistedReference.imageUrl
-      : character.imageUrl,
     updatedAt: Date.now(),
-  });
+  }));
 }
 
 function upsertCharacterVoiceClip(
@@ -473,6 +495,7 @@ function pickSpawnPosition(nodes: Node<BaseNodeData>[]): { x: number; y: number 
 
 export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsSlice> = (set, get, api) => {
   let globalAssetsLoad: Promise<void> | undefined;
+  let globalAssetsImporting = false;
   return ({
   dramaAssets: emptyDramaAssetLibrary(),
   globalCharacters: [],
@@ -527,6 +550,57 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       next.characters.length + next.scenes.length + next.props.length;
     if (total > 0) {
       get().setDramaAssetsPanelOpen(true);
+    }
+  },
+
+  importDramaAssets: async (assets, options) => {
+    assertDramaAssetWriteCurrent(options);
+    const initial = get();
+    const projectId = initial.currentProjectId;
+    if (!projectId || initial.projectLoadStatus !== 'ready') throw new Error('请先打开并保存项目');
+    const ownerId = seriesOwnerId(initial.projects, projectId);
+    if (dramaAssetImports.has(ownerId)) throw new Error('正在导入创作资产，请稍后重试');
+    if (!assets.length) return 0;
+    const ids = new Set<string>();
+    const existing = new Set([...initial.dramaAssets.characters, ...initial.dramaAssets.scenes, ...initial.dramaAssets.props]
+      .map((asset) => asset.id));
+    const additions = assets.map((asset) => {
+      if (!asset || !['character', 'scene', 'prop'].includes(asset.kind) || !asset.id?.trim()
+        || typeof asset.name !== 'string' || !asset.name.trim() || ids.has(asset.id) || existing.has(asset.id)) {
+        throw new Error('导入资产身份无效或与当前资产冲突');
+      }
+      ids.add(asset.id);
+      return asset.kind === 'character'
+        ? syncCharacterPrimaryImage(normalizeDramaCharacter({ ...asset, libraryOrder: undefined })) : asset;
+    });
+    assertDramaAssetWriteCurrent(options);
+    dramaAssetImports.add(ownerId);
+    try {
+      set((state) => ({ dramaAssets: {
+        ...state.dramaAssets,
+        characters: [...state.dramaAssets.characters, ...additions.filter((asset): asset is DramaCharacter => asset.kind === 'character')],
+        scenes: [...state.dramaAssets.scenes, ...additions.filter((asset): asset is DramaScene => asset.kind === 'scene')],
+        props: [...state.dramaAssets.props, ...additions.filter((asset): asset is DramaProp => asset.kind === 'prop')],
+      } }));
+      // saveCurrentProjectSilent 同步捕获当前画布与所属剧集库；已接受的保存不因关闭界面而撤销。
+      if (await get().saveCurrentProjectSilent() !== projectId) throw new Error('保存失败');
+      return additions.length;
+    } catch {
+      const latest = get();
+      if (latest.currentProjectId && latest.projectLoadStatus === 'ready'
+        && seriesOwnerId(latest.projects, latest.currentProjectId) === ownerId) {
+        set((state) => ({ dramaAssets: {
+          ...state.dramaAssets,
+          characters: state.dramaAssets.characters.filter((asset) => !ids.has(asset.id)),
+          scenes: state.dramaAssets.scenes.filter((asset) => !ids.has(asset.id)),
+          props: state.dramaAssets.props.filter((asset) => !ids.has(asset.id)),
+        } }));
+        // 撤回只涉及本批新 ID；恢复保存失败时保留素材，避免已落盘的共享库引用失效。
+        await get().saveCurrentProjectSilent().catch(() => undefined);
+      }
+      throw new Error('创作资产导入保存失败，素材文件已保留，请重试');
+    } finally {
+      dramaAssetImports.delete(ownerId);
     }
   },
 
@@ -605,6 +679,9 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
         patchList(list, id, {
           imageNodeId,
           imageUrl: resolvedUrl,
+          assetId: node?.data.assetId,
+          relativePath: node?.data.relativePath,
+          filePath: node?.data.filePath,
           imageAssetId: undefined,
           imageRelativePath: undefined,
         } as Partial<DramaAsset>),
@@ -634,9 +711,12 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const strip = (list: DramaAsset[]): DramaAsset[] =>
       list.map((item) => {
         if (item.id !== id) return item;
-        const rest = { ...item };
+        const rest = { ...item } as DramaAsset & { filePath?: string };
         delete rest.imageNodeId;
         delete rest.imageUrl;
+        delete rest.assetId;
+        delete rest.relativePath;
+        delete rest.filePath;
         delete rest.imageAssetId;
         delete rest.imageRelativePath;
         return item.kind === 'character'
@@ -689,12 +769,19 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
           ? item.referenceImages?.find((reference) => reference.sourceNodeId === imageNodeId)
           : undefined;
         if (item.imageNodeId === imageNodeId || matchingReference) {
-          if (item.imageUrl === imageUrl && matchingReference?.imageUrl === imageUrl) return item;
+          const primary = item.kind === 'character'
+            ? item.referenceImages?.find((reference) => reference.id === item.primaryReferenceImageId) ?? item.referenceImages?.[0]
+            : undefined;
+          const syncPrimary = item.imageNodeId === imageNodeId || primary?.sourceNodeId === imageNodeId;
+          const referencesUnchanged = item.kind !== 'character' || (item.referenceImages ?? []).every((reference) => (
+            reference.sourceNodeId !== imageNodeId || reference.imageUrl === imageUrl && sameImageIdentity(reference, nodeFileIdentity)
+          ));
+          if ((!syncPrimary || item.imageUrl === imageUrl && sameImageIdentity(item, nodeFileIdentity)
+            && !item.imageAssetId && !item.imageRelativePath) && referencesUnchanged) return item;
           changed = true;
           return {
             ...item,
-            imageUrl: item.imageNodeId === imageNodeId ? imageUrl : item.imageUrl,
-            ...(item.imageNodeId === imageNodeId ? { imageAssetId: undefined, imageRelativePath: undefined } : {}),
+            ...(syncPrimary ? { ...nodeFileIdentity, imageUrl, imageAssetId: undefined, imageRelativePath: undefined } : {}),
             ...(item.kind === 'character' ? {
               referenceImages: (item.referenceImages ?? []).map((reference) =>
                 reference.sourceNodeId === imageNodeId
@@ -720,9 +807,10 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const dramaAssetKind = node?.data?.dramaAssetKind as DramaAssetKind | undefined;
     if (dramaAssetId && dramaAssetKind) {
       const asset = findDramaAssetByKind(next, dramaAssetKind, dramaAssetId);
-      if (asset && (asset.imageNodeId !== imageNodeId || asset.imageUrl !== imageUrl)) {
+      if (asset && (asset.imageNodeId !== imageNodeId || asset.imageUrl !== imageUrl || !sameImageIdentity(asset, nodeFileIdentity))) {
         changed = true;
-        const bindPatch = { imageNodeId, imageUrl, imageAssetId: undefined, imageRelativePath: undefined, updatedAt: Date.now() };
+        const bindPatch = { ...nodeFileIdentity, imageNodeId, imageUrl,
+          imageAssetId: undefined, imageRelativePath: undefined, updatedAt: Date.now() };
         if (dramaAssetKind === 'character') {
           next.characters = next.characters.map((c) =>
             c.id === dramaAssetId ? { ...c, ...bindPatch } : c,
@@ -806,9 +894,11 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   },
 
   loadGlobalCharacters: async () => {
+    const before = get().globalCharacters;
     set({ globalCharactersLoading: true });
     try {
-      set({ globalCharacters: await loadGlobalCharacterCards() });
+      const loaded = await loadGlobalCharacterCards();
+      set((current) => ({ globalCharacters: mergeLoadedGlobalAssets(before, current.globalCharacters, loaded) }));
     } catch {
       get().showToast?.('全局角色加载失败', 'error');
     } finally {
@@ -842,6 +932,29 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       }
     })();
     return globalAssetsLoad;
+  },
+
+  importGlobalDramaAssets: async (assets, options) => {
+    assertDramaAssetWriteCurrent(options);
+    if (globalAssetsImporting) throw new Error('正在导入全局创作资产，请稍后重试');
+    if (!assets.length) return 0;
+    globalAssetsImporting = true;
+    try {
+      await get().loadGlobalDramaAssets();
+      assertDramaAssetWriteCurrent(options);
+      if (get().globalDramaAssetsError) throw new Error(get().globalDramaAssetsError!);
+      const existing = new Set([...get().globalCharacters, ...get().globalScenes, ...get().globalProps].map((asset) => asset.id));
+      if (assets.some((asset) => existing.has(asset.id))) throw new Error('全局创作资产身份已存在，请重新导入');
+      const additions = assets.map((asset) => asset.kind === 'character' ? { ...asset, libraryOrder: undefined } : asset);
+      const saved = await addImportedGlobalDramaAssets(additions, options);
+      // 成功事务已经接受本批；迟到关闭或取消不能让全局 Store 漏掉已持久化的记录。
+      set((current) => ({
+        globalCharacters: [...current.globalCharacters, ...saved.filter((asset): asset is DramaCharacter => asset.kind === 'character')],
+        globalScenes: [...current.globalScenes, ...saved.filter((asset): asset is DramaScene => asset.kind === 'scene')],
+        globalProps: [...current.globalProps, ...saved.filter((asset): asset is DramaProp => asset.kind === 'prop')],
+      }));
+      return saved.length;
+    } finally { globalAssetsImporting = false; }
   },
 
   saveGlobalDramaAsset: async (asset, options = {}) => {
@@ -994,8 +1107,8 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   saveCharacterCard: async (scope, character, options) => {
     const characters = scope === 'project' ? get().dramaAssets.characters : get().globalCharacters;
     const existing = characters.find((item) => item.id === character.id);
-    const normalized = normalizeDramaCharacter(existing
-      ? { ...character, libraryOrder: existing.libraryOrder } : character);
+    const normalized = syncCharacterPrimaryImage(normalizeDramaCharacter(existing
+      ? { ...character, libraryOrder: existing.libraryOrder } : character));
     if (scope === 'project') {
       try { assertDramaAssetWriteCurrent(options); } catch { return false; }
       const current = get().dramaAssets;

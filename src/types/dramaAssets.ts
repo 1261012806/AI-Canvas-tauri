@@ -161,6 +161,9 @@ export interface DramaAssetBase {
   appearances?: string[];
   imageNodeId?: string;
   imageUrl?: string;
+  /** 项目主图的受管文件身份；全局主图沿用 imageAssetId/imageRelativePath。 */
+  assetId?: string;
+  relativePath?: string;
   /** 全局场景、道具主图的稳定文件身份，不依赖项目节点。 */
   imageAssetId?: string;
   imageRelativePath?: string;

@@ -1,13 +1,15 @@
 /**
  * DramaAssetsPanel — 项目级短剧资产库（人物 / 场景 / 道具）
- * 仅管理：本地上传 / 查看 / 编辑 / 删除 / 绑图。
+ * 资产管理：本地上传 / 查看 / 编辑 / 删除 / 绑图 / 资产包导入导出。
  * 生图在画布图像节点完成：@ 资产（无图=简介，有图=参考图）+ slash 人设参考等。
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
+import { Download } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
+import { useT } from '../i18n';
 import { useAppStore } from '../store/useAppStore';
-import type { DramaAsset, DramaAssetKind } from '../types/dramaAssets';
+import type { DramaAsset, DramaAssetKind, DramaAssetWriteOptions } from '../types/dramaAssets';
 import { DRAMA_ASSET_KIND_LABEL } from '../types/dramaAssets';
 import { findDramaAssetByKind, formatDramaAssetTextBrief } from '../services/dramaAssetPrompt';
 import { confirmAction } from '../services/confirmDialog';
@@ -17,6 +19,7 @@ import { uploadSourceFileToProject, isTauriEnv } from '../services/fileService';
 import { generateId, seriesOwnerId } from '../store/store.utils';
 import { normalizeAssetKey } from '../services/dramaAssetExtract';
 import { cropImageStyle } from './character/characterReferencePresentation';
+import { exportProjectDramaAssets, importProjectDramaAssets } from '../services/dramaAssetTransferService';
 
 const KIND_TABS: Array<{ key: DramaAssetKind | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
@@ -73,6 +76,7 @@ export function DramaAssetCard({
   onManageActions,
   onCopyToScope,
   copyToScopeLabel,
+  onExport,
   manageUploadedImage = false,
 }: {
   asset: DramaAsset;
@@ -92,8 +96,10 @@ export function DramaAssetCard({
   onManageActions?: () => void;
   onCopyToScope?: () => void;
   copyToScopeLabel?: string;
+  onExport?: () => void;
   manageUploadedImage?: boolean;
 }) {
+  const t = useT();
   const [name, setName] = useState(asset.name);
   const [summary, setSummary] = useState(asset.summary);
   const [visualNotes, setVisualNotes] = useState(asset.visualNotes);
@@ -325,15 +331,27 @@ export function DramaAssetCard({
           {onCopyToScope && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onCopyToScope}>
             {copyToScopeLabel}
           </button>}
-          <button
-            type="button"
-            className="drama-asset-action-delete ui-btn ui-btn--ghost ui-btn--sm ml-auto text-red-400/80 hover:bg-red-500/10"
-            onClick={onDelete}
-            aria-label={`删除${asset.name}`}
-            title={`删除${asset.name}`}
-          >
-            <Icon icon="lucide:trash-2" width="16" height="16" aria-hidden="true" />
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {onExport && <button
+              type="button"
+              className="drama-asset-action-export ui-btn ui-btn--ghost ui-btn--sm"
+              disabled={uploading}
+              onClick={onExport}
+              aria-label={t('导出资产「{name}」', { name: asset.name })}
+              title={t('导出当前资产及其绑定媒体')}
+            >
+              <Download size={16} aria-hidden="true" />
+            </button>}
+            <button
+              type="button"
+              className="drama-asset-action-delete ui-btn ui-btn--ghost ui-btn--sm text-red-400/80 hover:bg-red-500/10"
+              onClick={onDelete}
+              aria-label={`删除${asset.name}`}
+              title={`删除${asset.name}`}
+            >
+              <Icon icon="lucide:trash-2" width="16" height="16" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -341,6 +359,7 @@ export function DramaAssetCard({
 }
 
 export default function DramaAssetsPanel({ compact = false }: { compact?: boolean }) {
+  const t = useT();
   const {
     dramaAssets,
     nodes,
@@ -367,9 +386,112 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploadKind, setUploadKind] = useState<DramaAssetKind>('character');
-  const [uploading, setUploading] = useState(false);
-  const uploadPending = useRef(false);
+  const [operationKind, setOperationKind] = useState<'upload' | 'import' | 'export' | null>(null);
+  const [operationProgress, setOperationProgress] = useState('');
+  const [cancelRequested, setCancelRequested] = useState(false);
+  const [savingAssets, setSavingAssets] = useState(false);
+  const operationRef = useRef<{
+    controller: AbortController; projectId?: string; ownerId?: string; saving: boolean;
+  } | null>(null);
+  const mounted = useRef(true);
+  const busy = operationKind !== null;
+  const uploading = operationKind === 'upload';
   const unbindPending = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    const unsubscribe = useAppStore.subscribe((state) => {
+      const operation = operationRef.current;
+      if (operation && (!state.assetsPanelOpen || !state.dramaAssetsPanelOpen
+        || (operation.projectId && (state.currentProjectId !== operation.projectId
+          || seriesOwnerId(state.projects, operation.projectId) !== operation.ownerId)))) {
+        operation.controller.abort();
+      }
+    });
+    return () => {
+      mounted.current = false;
+      operationRef.current?.controller.abort();
+      unsubscribe();
+    };
+  }, []);
+
+  const runOperation = async (
+    kind: 'upload' | 'import' | 'export',
+    task: (projectId: string, ownerId: string, options: DramaAssetWriteOptions & { onProgress: (text: string) => void }) => Promise<void>,
+  ) => {
+    const initial = useAppStore.getState();
+    if (operationRef.current || !initial.assetsPanelOpen || !initial.dramaAssetsPanelOpen) return;
+    const operation = { controller: new AbortController(), projectId: initial.currentProjectId ?? undefined,
+      ownerId: initial.currentProjectId ? seriesOwnerId(initial.projects, initial.currentProjectId) : undefined, saving: false };
+    operationRef.current = operation;
+    setOperationKind(kind);
+    setCancelRequested(false);
+    setSavingAssets(false);
+    setOperationProgress(t(kind === 'upload' ? '正在上传素材' : kind === 'import' ? '正在导入创作资产' : '正在导出创作资产'));
+    const assertCurrent = () => {
+      const current = useAppStore.getState();
+      if (operationRef.current !== operation || operation.controller.signal.aborted || !mounted.current || !current.assetsPanelOpen || !current.dramaAssetsPanelOpen
+        || (operation.projectId && (current.currentProjectId !== operation.projectId
+          || seriesOwnerId(current.projects, operation.projectId) !== operation.ownerId))) {
+        operation.controller.abort();
+        throw new Error(t('资产操作已取消'));
+      }
+    };
+    try {
+      assertCurrent();
+      const projectId = initial.currentProjectId || await initial.saveCurrentProjectSilent();
+      assertCurrent();
+      if (!projectId || useAppStore.getState().currentProjectId !== projectId) throw new Error(t('请先保存项目，再管理创作资产'));
+      operation.projectId = projectId;
+      const ownerId = seriesOwnerId(useAppStore.getState().projects, projectId);
+      operation.ownerId = ownerId;
+      assertCurrent();
+      await task(projectId, ownerId, {
+        signal: operation.controller.signal, assertCurrent,
+        onProgress: (text) => {
+          operation.saving = text === t('正在保存资产');
+          if (mounted.current && !operation.controller.signal.aborted) {
+            setSavingAssets(operation.saving);
+            setOperationProgress(text);
+          }
+        },
+      });
+    } catch (error) {
+      if (!operation.controller.signal.aborted || operation.saving) {
+        showToast(error instanceof Error ? error.message : t('资产操作失败，请重试'), 'error');
+      }
+    } finally {
+      if (operationRef.current === operation) {
+        operationRef.current = null;
+        if (mounted.current) {
+          setOperationKind(null);
+          setOperationProgress('');
+          setCancelRequested(false);
+          setSavingAssets(false);
+        }
+      }
+    }
+  };
+
+  const handleTransfer = (kind: 'import' | 'export', selectedAsset?: DramaAsset) => runOperation(kind, async (projectId, ownerId, options) => {
+    const current = useAppStore.getState();
+    const assets = [...current.dramaAssets.characters, ...current.dramaAssets.scenes, ...current.dramaAssets.props];
+    const selected = selectedAsset ? assets.find((asset) => asset.kind === selectedAsset.kind && asset.id === selectedAsset.id) : undefined;
+    if (selectedAsset && !selected) throw new Error(t('资产已删除，请重新选择'));
+    const result = kind === 'export' ? await exportProjectDramaAssets({
+      projectId, ownerId, projectName: current.projects.find((project) => project.id === ownerId)?.name || t('创作资产'),
+      ...(selected ? { assetName: selected.name } : {}),
+      assets: selected ? [selected] : assets, nodes: current.nodes,
+    }, options) : await importProjectDramaAssets({ projectId, ownerId, commit: async (assets) => {
+      options.assertCurrent?.();
+      await useAppStore.getState().importDramaAssets(assets, options);
+    } }, options);
+    if (!result || options.signal?.aborted) return;
+    options.assertCurrent?.();
+    showToast(t(kind === 'export' ? '已导出 {count} 项创作资产，包含 {mediaCount} 份媒体' : '已导入 {count} 项创作资产，包含 {mediaCount} 份媒体', {
+      count: result.assetCount, mediaCount: result.mediaCount,
+    }), 'success');
+  });
 
   const handleUnbindImage = async (asset: DramaAsset) => {
     if (unbindPending.current) return;
@@ -398,25 +520,11 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
     }
   };
 
-  const handleUpload = async (kind: DramaAssetKind, assetId?: string) => {
-    if (uploadPending.current) return;
-    uploadPending.current = true;
-    setUploading(true);
-    try {
-      const initial = useAppStore.getState();
-      const projectId = initial.currentProjectId || await initial.saveCurrentProjectSilent();
-      if (!projectId || useAppStore.getState().currentProjectId !== projectId) {
-        showToast('请先保存项目，再上传素材', 'error');
-        return;
-      }
-      const ownerId = seriesOwnerId(useAppStore.getState().projects, projectId);
+  const handleUpload = (kind: DramaAssetKind, assetId?: string) => runOperation('upload', async (_projectId, ownerId, options) => {
       const uploaded = await uploadSourceFileToProject('.png,.jpg,.jpeg,.webp,.gif,.bmp', ownerId, 'Library');
+      options.assertCurrent?.();
       if (!uploaded) return;
       const latest = useAppStore.getState();
-      if (latest.currentProjectId !== projectId || seriesOwnerId(latest.projects, projectId) !== ownerId) {
-        showToast('项目已切换，上传素材未添加到资产列表', 'info');
-        return;
-      }
       const library = latest.dramaAssets;
       const existing = [...library.characters, ...library.scenes, ...library.props]
         .find((asset) => asset.kind === kind && asset.id === assetId);
@@ -432,7 +540,8 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
         summary: '', visualNotes: '', importance: 'supporting' as const,
         confirmed: true, createdAt: now, updatedAt: now, source: 'manual' as const,
       };
-      const asset = { ...base, kind, imageNodeId: undefined, imageUrl: uploaded.dataUrl, updatedAt: now };
+      const asset = { ...base, kind, imageNodeId: undefined, imageUrl: uploaded.dataUrl, filePath: uploaded.filePath,
+        assetId: undefined, relativePath: undefined, imageAssetId: undefined, imageRelativePath: undefined, updatedAt: now };
       if (kind === 'character') {
         const referenceId = `reference-${generateId()}`;
         const character = existing?.kind === 'character' ? existing : undefined;
@@ -445,19 +554,14 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
           }],
           primaryReferenceImageId: referenceId,
           avatarReferenceImageId: undefined, avatarCrop: undefined,
-        });
+        }, options);
+        options.assertCurrent?.();
         if (!saved) throw new Error('角色素材保存失败');
       } else {
         latest.upsertDramaAsset({ ...asset, kind });
       }
       showToast(isTauriEnv() ? '素材已保存到 Library' : '素材已添加；浏览器模式不支持本地目录保存');
-    } catch {
-      showToast('上传失败，请检查项目目录是否可写后重试', 'error');
-    } finally {
-      uploadPending.current = false;
-      setUploading(false);
-    }
-  };
+  });
 
   const imageNodes = useMemo(
     () =>
@@ -542,18 +646,32 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col${compact ? ' drama-assets--compact' : ''}`}>
-      <div className="drama-assets-toolbar flex items-center gap-2 px-3 pt-3 pb-2 shrink-0">
+      <div className="drama-assets-toolbar flex flex-wrap items-center gap-2 px-3 pt-3 pb-2 shrink-0">
+        <label className="drama-assets-search ui-input-group w-48 max-w-full shrink-0">
+          <span className="sr-only">{t('搜索创作资产')}</span>
+          <Icon
+            icon="mdi:magnify"
+            width="14"
+            height="14"
+            aria-hidden="true"
+            className="pointer-events-none ml-2 shrink-0 self-center text-canvas-text-muted"
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索名称、简介..."
+            className="ui-input ui-input--sm select-text"
+          />
+        </label>
               {KIND_TABS.map(({ key, label }) => {
                 const count = key === 'all' ? totals.all : totals[key];
                 return (
                   <button
                     key={key}
                     type="button"
-                    className={`px-3 py-1 rounded-lg text-[11px] font-medium transition-colors shrink-0 ${
-                      tab === key
-                        ? 'bg-indigo-500/20 text-indigo-400'
-                        : 'text-canvas-text-muted hover:text-canvas-text-secondary hover:bg-canvas-hover'
-                    }`}
+                    className={`ui-btn ui-btn--ghost ui-btn--sm shrink-0${tab === key ? ' is-active' : ''}`}
+                    aria-pressed={tab === key}
                     onClick={() => setTab(key)}
                   >
                     {label}
@@ -569,7 +687,8 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
               {(tab === 'all' || tab === 'character') ? (
                 <button
                   type="button"
-                  className="ml-auto shrink-0 rounded-lg border border-canvas-border px-2.5 py-1.5 text-[11px] text-canvas-text-secondary transition-colors hover:bg-canvas-hover hover:text-canvas-text"
+                  className="ui-btn ui-btn--ghost ui-btn--sm ml-auto shrink-0"
+                  disabled={busy}
                   onClick={() => setCharacterLibraryOpen(true, { scope: 'project', origin: 'assets' })}
                 >
                   打开角色库
@@ -577,47 +696,54 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
               ) : null}
       <div className={`flex items-center gap-2 shrink-0 ${tab === 'all' || tab === 'character' ? '' : 'ml-auto'}`}>
         {tab === 'all' && (
-          <Select aria-label="上传资产类型" className="w-auto" value={uploadKind} disabled={uploading} fixedMenu
+          <Select aria-label="上传资产类型" className="w-auto" size="sm" value={uploadKind} disabled={busy} fixedMenu
             onChange={(selectedOptionValue) => setUploadKind(selectedOptionValue as DramaAssetKind)}>
             {KIND_TABS.filter((item) => item.key !== 'all').map((item) => (
               <option key={item.key} value={item.key}>{item.label}</option>
             ))}
           </Select>
         )}
-        <button type="button" className="ui-btn ui-btn--primary" disabled={uploading}
+        <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={busy}
           onClick={() => void handleUpload(tab === 'all' ? uploadKind : tab)}>
           <Icon icon="lucide:upload" width={14} aria-hidden="true" />
           {uploading ? '上传中…' : `上传${DRAMA_ASSET_KIND_LABEL[tab === 'all' ? uploadKind : tab]}图片`}
         </button>
       </div>
-              <div className="drama-assets-search relative w-[180px] shrink-0">
-                <svg
-                  className="pointer-events-none absolute left-2.5 top-1/2 z-10 -translate-y-1/2 text-canvas-text-muted"
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <circle cx="11" cy="11" r="8" />
-                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="搜索名称、简介..."
-                  className="ui-input w-full pl-7 pr-2"
-                />
+              <div className="flex shrink-0 items-center gap-1">
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || !isTauriEnv()}
+                  aria-label={t('导入创作资产')} title={t('导入 .aicassets 创作资产包，追加到当前项目')}
+                  onClick={() => void handleTransfer('import')}>
+                  <Icon icon="lucide:import" width={14} aria-hidden="true" />{t('导入')}
+                </button>
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || !totals.all || !isTauriEnv()}
+                  aria-label={t('导出创作资产')} title={t('导出当前项目的全部创作资产及媒体，不受分类或搜索影响')}
+                  onClick={() => void handleTransfer('export')}>
+                  <Download size={14} aria-hidden="true" />{t('导出')}
+                </button>
               </div>
       </div>
+
+      {busy && <div role="status" aria-live="polite" className="flex items-center gap-2 px-3 pb-2 text-xs text-canvas-text-secondary">
+        <Icon icon="lucide:loader-circle" width={14} className="shrink-0 animate-spin" aria-hidden="true" />
+        <span className="min-w-0 flex-1">{operationProgress}</span>
+        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" aria-label={t('取消资产操作')}
+          disabled={cancelRequested || savingAssets}
+          title={t('取消会阻止后续操作，当前文件操作结束后退出')}
+          onClick={() => {
+            const operation = operationRef.current;
+            if (!operation || operation.saving) return;
+            operation.controller.abort();
+            setCancelRequested(true);
+            setOperationProgress(t('已请求取消，等待当前文件操作结束…'));
+          }}>{t(cancelRequested ? '取消中…' : '取消')}</button>
+      </div>}
 
       {tab !== 'all' && totals[tab] > 0 ? (
         <div className="flex justify-end px-3 pb-1 shrink-0">
                 <button
                   type="button"
                   className="text-[11px] text-canvas-text-muted hover:text-red-400 transition-colors"
+                  disabled={operationKind === 'import'}
                   onClick={handleClearTab}
                 >
                   清空本类
@@ -625,7 +751,8 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
         </div>
       ) : null}
 
-      <div className={`flex-1 overflow-y-auto px-3 pb-4${items.length > 0 ? ' drama-assets-grid' : ''}`}>
+      <div className={`flex-1 overflow-y-auto px-3 pb-4${items.length > 0 ? ' drama-assets-grid' : ''}`}
+        inert={operationKind === 'import' || undefined} aria-busy={operationKind === 'import' || undefined}>
               {items.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-canvas-text-muted">
                   <svg
@@ -654,7 +781,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
               ) : (
                 items.map((asset) => (
                   <DramaAssetCard
-                    key={asset.id}
+                    key={`${asset.kind}:${asset.id}`}
                     asset={asset}
                     thumb={resolveThumb(asset, nodes as Array<{ id: string; data: Record<string, unknown> }>)}
                     imageNodes={imageNodes}
@@ -703,7 +830,8 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                       })();
                     }}
                     copyToScopeLabel="复制到全局"
-                    uploading={uploading}
+                    uploading={busy}
+                    onExport={isTauriEnv() ? () => void handleTransfer('export', asset) : undefined}
                     onUploadImage={() => void handleUpload(asset.kind, asset.id)}
                   />
                 ))

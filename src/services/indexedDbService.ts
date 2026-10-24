@@ -4,7 +4,7 @@
 import type { AgentMode, AgentTask } from '../types/agent';
 import type { ConversationContextSummary } from '../types/chat';
 import type { ProjectMemory } from '../types/memory';
-import type { DramaAssetWriteOptions, DramaCharacter, DramaProp, DramaScene } from '../types/dramaAssets';
+import type { DramaAsset, DramaAssetWriteOptions, DramaCharacter, DramaProp, DramaScene } from '../types/dramaAssets';
 import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import type { ProjectVisualDescription } from '../types/visualMemory';
 import type { AssetUsageRecord } from '../types/assetUsage';
@@ -275,6 +275,134 @@ export async function putGlobalCharacter(character: DramaCharacter, options?: Dr
 
 export async function putGlobalDramaAsset(asset: DramaScene | DramaProp, options?: DramaAssetWriteOptions): Promise<void> {
   return putGlobalLibraryRecord(STORE_GLOBAL_DRAMA_ASSETS, asset, options);
+}
+
+interface ImportedGlobalMediaReference { assetId: string; relativePath: string; path: string }
+
+function inspectImportedGlobalAssets(assets: readonly DramaAsset[]): ImportedGlobalMediaReference[] {
+  const invalid = () => { throw new Error('全局创作资产导入记录无效'); };
+  if (!Array.isArray(assets) || assets.length > 500) invalid();
+  const ids = new Set<string>();
+  const media = new Map<string, ImportedGlobalMediaReference>();
+  const record = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid();
+    return value as Record<string, unknown>;
+  };
+  const detached = (value: Record<string, unknown>) => {
+    if (['filePath', 'sourceNodeId', 'imageNodeId'].some((key) => value[key] !== undefined)) invalid();
+  };
+  const relative = (value: unknown): value is string => typeof value === 'string' && !!value
+    && !value.includes('\\') && !value.includes(':') && ![...value].some((character) => character.charCodeAt(0) < 32)
+    && !value.split('/').some((part) => !part || part === '.' || part === '..');
+  const addMedia = (assetId: unknown, relativePath: unknown, url: unknown) => {
+    if (typeof assetId !== 'string' || !assetId.trim() || !relative(relativePath) || typeof url !== 'string') return invalid();
+    const path = localMediaUrlToPath(url);
+    if (!path) return invalid();
+    const previous = media.get(assetId);
+    if (previous && (previous.relativePath !== relativePath || imageHistoryReferenceKey(previous.path) !== imageHistoryReferenceKey(path))) invalid();
+    media.set(assetId, { assetId, relativePath, path });
+    if (media.size > 5000) invalid();
+  };
+  const members = (value: unknown): Record<string, unknown>[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 1000) return invalid();
+    const seen = new Set<string>();
+    return value.map((item) => {
+      const entry = record(item); detached(entry);
+      if (typeof entry.id !== 'string' || !entry.id.trim() || seen.has(entry.id)) invalid();
+      seen.add(entry.id as string); return entry;
+    });
+  };
+  for (const asset of assets) {
+    const value = record(asset); detached(value);
+    if (!['character', 'scene', 'prop'].includes(asset.kind) || typeof asset.id !== 'string' || !asset.id.trim()
+      || typeof asset.name !== 'string' || !asset.name.trim() || ids.has(asset.id)
+      || value.assetId !== undefined || value.relativePath !== undefined) invalid();
+    ids.add(asset.id);
+    if (asset.kind !== 'character') {
+      if (asset.imageUrl !== undefined || asset.imageAssetId !== undefined || asset.imageRelativePath !== undefined) {
+        addMedia(asset.imageAssetId, asset.imageRelativePath, asset.imageUrl);
+      }
+      continue;
+    }
+    if (asset.imageAssetId !== undefined || asset.imageRelativePath !== undefined || asset.volcengineBinding !== undefined
+      || (asset.refmods !== undefined && (!Array.isArray(asset.refmods) || asset.refmods.length))) invalid();
+    const references = members(asset.referenceImages);
+    const voices = members(asset.voiceClips);
+    for (const reference of references) addMedia(reference.assetId, reference.relativePath, reference.imageUrl);
+    for (const voice of voices) addMedia(voice.assetId, voice.relativePath, voice.audioUrl);
+    for (const action of members(asset.actions)) {
+      for (const item of members(action.media)) {
+        if (!['image', 'gif', 'video'].includes(item.kind as string)) invalid();
+        addMedia(item.assetId, item.relativePath, item.url);
+      }
+    }
+    for (const [pointer, entries] of [[asset.primaryReferenceImageId, references], [asset.avatarReferenceImageId, references], [asset.primaryVoiceClipId, voices]] as const) {
+      if (pointer !== undefined && !entries.some((entry) => entry.id === pointer)) invalid();
+    }
+    if (asset.imageUrl !== undefined && !references.some((reference) => reference.imageUrl === asset.imageUrl)) invalid();
+  }
+  return [...media.values()];
+}
+
+/** 已固化全局媒体的导入批次只追加；两表及身份检查共用事务，不覆盖已有卡片。 */
+export async function addImportedGlobalDramaAssets(
+  assets: readonly DramaAsset[], options: DramaAssetWriteOptions = {},
+): Promise<DramaAsset[]> {
+  assertDramaAssetWriteCurrent(options);
+  const snapshot = structuredClone(assets).map((asset) => asset.kind === 'character' ? { ...asset, libraryOrder: undefined } : asset);
+  inspectImportedGlobalAssets(snapshot);
+  if (!snapshot.length) return [];
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_GLOBAL_DRAMA_ASSETS, STORE_ASSET_INDEX, STORE_METADATA], 'readwrite');
+    let failure: unknown;
+    let saved: DramaAsset[] = [];
+    const fail = (error: unknown) => { failure ??= error; try { tx.abort(); } catch { /* 已结束事务不再撤销。 */ } };
+    const abort = () => fail(new Error('全局创作资产导入已取消'));
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(saved); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(failure ?? tx.error ?? new Error('全局创作资产导入保存失败')); };
+    withRelocatedMedia(tx, snapshot, (relocated) => {
+      try {
+        assertDramaAssetWriteCurrent(options);
+        const references = inspectImportedGlobalAssets(relocated);
+        let pending = relocated.length * 2 + references.length;
+        const checked = () => {
+          if (--pending !== 0 || failure) return;
+          try {
+            assertDramaAssetWriteCurrent(options);
+            saved = relocated;
+            for (const asset of relocated) {
+              tx.objectStore(asset.kind === 'character' ? STORE_GLOBAL_CHARACTERS : STORE_GLOBAL_DRAMA_ASSETS).add(asset);
+            }
+          } catch (error) { fail(error); }
+        };
+        for (const asset of relocated) {
+          for (const storeName of [STORE_GLOBAL_CHARACTERS, STORE_GLOBAL_DRAMA_ASSETS]) {
+            const request = tx.objectStore(storeName).getKey(asset.id);
+            request.onsuccess = () => {
+              if (request.result !== undefined) fail(new Error('全局创作资产身份已存在，请重新导入'));
+              else checked();
+            };
+          }
+        }
+        for (const reference of references) {
+          const request = tx.objectStore(STORE_ASSET_INDEX).get(reference.assetId);
+          request.onsuccess = () => {
+            const indexed = request.result as AssetIndexRecord | undefined;
+            if (!indexed || indexed.source !== 'global' || indexed.status !== 'online' || indexed.projectId !== undefined
+              || indexed.relativePath !== reference.relativePath
+              || imageHistoryReferenceKey(indexed.path) !== imageHistoryReferenceKey(reference.path)) {
+              fail(new Error('全局创作资产导入记录无效'));
+            } else checked();
+          };
+        }
+      } catch (error) { fail(error); }
+    });
+  });
 }
 
 export async function getAllGlobalDramaAssets(): Promise<Array<DramaScene | DramaProp>> {
@@ -1186,6 +1314,24 @@ export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
     });
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
+  });
+}
+
+/** 仅回收尚未提交的资产包索引；位置已改变的记录不属于本轮可清理范围。 */
+export async function deleteImportedAssetIndexes(entries: readonly { assetId: string; path: string }[]): Promise<void> {
+  if (!entries.length) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_ASSET_INDEX, 'readwrite');
+    const store = tx.objectStore(STORE_ASSET_INDEX);
+    for (const entry of entries) {
+      const request = store.get(entry.assetId);
+      request.onsuccess = () => {
+        if (request.result?.assetId === entry.assetId && request.result.path === entry.path) store.delete(entry.assetId);
+      };
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('导入资产索引清理失败'));
   });
 }
 

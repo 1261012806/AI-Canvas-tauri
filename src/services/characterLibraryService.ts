@@ -63,8 +63,11 @@ function detachProjectAction(action: CharacterAction): CharacterAction {
 
 export function prepareGlobalCharacter(character: DramaCharacter): DramaCharacter {
   const normalized = normalizeDramaCharacter(character);
-  const detached = { ...normalized };
+  const detached = { ...normalized } as DramaCharacter & { filePath?: string };
   delete detached.imageNodeId;
+  delete detached.assetId;
+  delete detached.relativePath;
+  delete detached.filePath;
   return {
     ...detached,
     referenceImages: (normalized.referenceImages ?? []).map(detachProjectReference),

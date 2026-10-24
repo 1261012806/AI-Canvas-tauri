@@ -432,6 +432,15 @@ export async function copyAssetFileToFolder(sourcePath: string, destinationDirec
   return runNativeFileTransfer<AssetFileCopyResult>('copy_asset_file_to_folder', { sourcePath, destinationDirectory }, options);
 }
 
+/** 资产包暂存使用已有原生下载边界；调用方只提供本轮专属目录中的目标文件。 */
+export async function downloadAssetArchiveMedia(url: string, destinationPath: string, kind: 'image' | 'audio' | 'video', options?: FileTransferOptions): Promise<string> {
+  if (!isTauriEnv()) throw new Error('资产包媒体下载仅支持桌面应用');
+  const result = await runNativeFileTransfer('download_file_streamed', {
+    url, destinationPath, ...(kind === 'video' ? { expectedMediaKind: 'video' } : {}),
+  }, options);
+  return result.path;
+}
+
 /** 引用迁移成功后再次验证两份内容，才允许将源文件放入回收站。 */
 export async function finishAssetFileMove(sourcePath: string, copy: AssetFileCopyResult): Promise<void> {
   await invoke('finish_asset_file_move', { sourcePath, destinationPath: copy.path, expectedDigest: copy.digest, expectedBytes: copy.totalBytes });
