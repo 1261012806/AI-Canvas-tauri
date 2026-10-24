@@ -1,6 +1,7 @@
 /**
  * AudioNodeToolbar 音频节点浮动工具栏 + 编辑态支持
  */
+import { useT } from '../../../i18n';
 import { memo, useCallback } from 'react';
 import { Icon } from '@iconify/react';
 import type { NodeType, BaseNodeData } from '../../../types';
@@ -45,6 +46,7 @@ function AudioNodeToolbar({
   onUpload,
   onCopyFile,
 }: AudioNodeToolbarProps) {
+  const t = useT();
   const nodeType = 'ai-audio';
   const edit = useToolbarEdit({ nodeType });
   const registry = edit.registry;
@@ -82,8 +84,8 @@ function AudioNodeToolbar({
     <AnimatedButton
       key={key}
       className="ftb-btn icon-only"
-      data-tooltip={isTranscribing ? '正在转录' : '转录音频'}
-      aria-label={isTranscribing ? '正在转录音频' : '转录音频'}
+      data-tooltip={t(isTranscribing ? '正在转录' : '转录音频')}
+      aria-label={t(isTranscribing ? '正在转录音频' : '转录音频')}
       disabled={isTranscribing}
       onClick={actionMap.transcribe}
     >
@@ -113,7 +115,7 @@ function AudioNodeToolbar({
     if (key === 'togglePlay') {
       return (
         <AnimatedButton key={key} className="ftb-btn icon-only act-toggle-play"
-          data-tooltip={isPlaying ? '暂停' : '播放'} aria-label={isPlaying ? '暂停' : '播放'}
+          data-tooltip={t(isPlaying ? '暂停' : '播放')} aria-label={t(isPlaying ? '暂停' : '播放')}
           onClick={clickHandler}>
           <Icon icon={isPlaying ? 'mdi:pause' : 'mdi:play'} width={14} height={14} />
         </AnimatedButton>
@@ -124,7 +126,7 @@ function AudioNodeToolbar({
 
     if (key === 'speechToText') {
       const tooltip = isAsrRunning
-        ? `正在识别语音${asrProgress > 0 ? ` ${asrProgress}%` : '...'}`
+        ? t('正在识别语音{progress}', { progress: asrProgress > 0 ? ` ${asrProgress}%` : '...' })
         : resolvedDef.label;
       return (
         <AnimatedButton key={key} className="ftb-btn icon-only"

@@ -1,4 +1,5 @@
-﻿/**
+import { t } from '../i18n';
+/**
  * Clipboard slice — copy / paste nodes including external content from OS clipboard
  */
 import type { Node } from '@xyflow/react';
@@ -198,7 +199,7 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
     }
 
     get().commitToHistory();
-    get().showToast(`已粘贴 ${clipboard.nodes.length} 个节点`);
+    get().showToast(t('已粘贴 {count} 个节点', { count: clipboard.nodes.length }));
 
   },
 
@@ -420,7 +421,7 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
 
       if (historyCommitted) get().commitToHistory();
       if (pastedCount > 0) {
-        get().showToast(`已粘贴 ${pastedCount} 个源节点`);
+        get().showToast(t('已粘贴 {count} 个源节点', { count: pastedCount }));
       } else {
         get().showToast('剪贴板无可识别内容', 'error');
       }
@@ -630,7 +631,7 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
 
     if (historyCommitted) get().commitToHistory();
     if (pastedCount > 0) {
-      get().showToast(`${actionName} ${pastedCount} 个源节点`);
+      get().showToast(t('{action} {count} 个源节点', { action: t(actionName), count: pastedCount }));
     } else {
       get().showToast('无可识别内容', 'error');
     }

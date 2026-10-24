@@ -763,7 +763,8 @@ export default function ChatPanel({
     void attachConversationFiles(conversationId)
       .then((created) => {
         showToast(
-          `已添加 ${created.images} 张参考图，授权 ${created.texts} 个文本文件${created.failed ? '；部分图片未添加，请检查格式、大小或数量上限' : ''}`,
+          t('已添加 {images} 张参考图，授权 {texts} 个文本文件', { images: created.images, texts: created.texts })
+            + (created.failed ? t('；部分图片未添加，请检查格式、大小或数量上限') : ''),
           'info',
         );
       })

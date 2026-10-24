@@ -1,6 +1,7 @@
 /**
  * ToolbarMoreMenu — 收纳用户从节点工具栏隐藏的内置按钮。
  */
+import { useT } from '../../../../i18n';
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import type { ToolbarButtonDef } from '../../../../types';
@@ -12,6 +13,7 @@ interface ToolbarMoreMenuProps {
 }
 
 function ToolbarMoreMenu({ items, renderItem }: ToolbarMoreMenuProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -41,8 +43,8 @@ function ToolbarMoreMenu({ items, renderItem }: ToolbarMoreMenuProps) {
       <AnimatedButton
         type="button"
         className={`ftb-btn icon-only act-more${open ? ' is-active' : ''}`}
-        data-tooltip="更多"
-        aria-label="更多"
+        data-tooltip={t('更多')}
+        aria-label={t('更多')}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={toggleMenu}
@@ -54,7 +56,7 @@ function ToolbarMoreMenu({ items, renderItem }: ToolbarMoreMenuProps) {
         <div
           className="toolbar-more-menu nodrag"
           role="menu"
-          aria-label="已隐藏的工具栏按钮"
+          aria-label={t('已隐藏的工具栏按钮')}
           onClick={(event) => {
             event.stopPropagation();
             const target = event.target as HTMLElement;
@@ -68,7 +70,7 @@ function ToolbarMoreMenu({ items, renderItem }: ToolbarMoreMenuProps) {
               </div>
             ))
           ) : (
-            <div className="toolbar-more-menu-empty">暂无隐藏按钮</div>
+            <div className="toolbar-more-menu-empty">{t('暂无隐藏按钮')}</div>
           )}
         </div>
       )}

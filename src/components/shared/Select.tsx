@@ -10,6 +10,7 @@
 import { Children, Fragment, isValidElement, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { calcAnchoredPosition } from '../../utils/popupPosition';
+import { useT } from '../../i18n';
 
 export interface SelectOption<T extends string = string> {
   value: T;
@@ -99,7 +100,7 @@ export default function Select<T extends string = string>({
   children,
   required,
   name,
-  placeholder = '请选择',
+  placeholder: customPlaceholder,
   disabled = false,
   size = 'md',
   className = '',
@@ -121,6 +122,8 @@ export default function Select<T extends string = string>({
   'aria-describedby': ariaDescribedBy,
   'data-tooltip': tooltip,
 }: SelectProps<T>) {
+  const t = useT();
+  const placeholder = customPlaceholder ?? t('请选择');
   const [open, setOpen] = useState(false);
   const [invalid, setInvalid] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);

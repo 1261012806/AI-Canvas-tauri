@@ -7,6 +7,10 @@ const effects: Array<{ deps?: readonly unknown[]; cleanup?: () => void }> = [];
 let stateIndex = 0;
 let effectIndex = 0;
 const pending: Array<() => void> = [];
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useState: <T,>(initial: T | (() => T)) => {

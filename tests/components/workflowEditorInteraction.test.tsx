@@ -36,6 +36,7 @@ it('shows loading, blocks repeated opens, and retries a failed workflow from its
   let cursor = 0;
   vi.doMock('react', async () => ({
     ...await vi.importActual<typeof import('react')>('react'),
+    useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
     useCallback: <T,>(callback: T) => callback,
     useEffect: () => undefined,
     useRef: <T,>(initial: T) => {

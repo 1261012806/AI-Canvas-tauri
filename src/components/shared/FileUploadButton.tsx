@@ -1,5 +1,6 @@
 import { useRef, type InputHTMLAttributes } from 'react';
 import { Icon } from '@iconify/react';
+import { useT } from '../../i18n';
 
 interface FileUploadButtonProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'defaultValue' | 'children'> {
   label?: string;
@@ -8,7 +9,10 @@ interface FileUploadButtonProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 }
 
 /** 按钮式文件选择；调用方处理文件并提供当前名称，不负责上传或持久化。 */
-export default function FileUploadButton({ label = '选择文件', fileName = '', placeholder = '未选择文件', className = '', disabled, onChange, ...inputProps }: FileUploadButtonProps) {
+export default function FileUploadButton({ label: customLabel, fileName = '', placeholder: customPlaceholder, className = '', disabled, onChange, ...inputProps }: FileUploadButtonProps) {
+  const t = useT();
+  const label = customLabel ?? t('选择文件');
+  const placeholder = customPlaceholder ?? t('未选择文件');
   const inputRef = useRef<HTMLInputElement | null>(null);
   return <div className={`ui-file-upload ${className}`}>
     <input {...inputProps} ref={inputRef} type="file" hidden disabled={disabled} onChange={(event) => {

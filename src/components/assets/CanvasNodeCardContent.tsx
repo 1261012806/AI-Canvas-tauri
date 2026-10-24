@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { getBezierPath, Position } from '@xyflow/react';
@@ -21,6 +22,7 @@ interface Props {
 }
 
 function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpanded = false, videoPresentation, onVideoExpandedChange }: Props) {
+  useT();
   const plugins = useAppStore((state) => state.installedPlugins);
   const ports = useMemo(() => getAssetNodePorts(data, plugins), [data, plugins]);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -87,16 +89,16 @@ function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpa
         <div className="assets-node-media">
           {resolved && failedImage !== resolved ? (
             <img src={resolved} alt={data.label} draggable={false} loading="lazy" decoding="async" onError={() => setFailedImage(resolved)} />
-          ) : <span className="text-xs text-canvas-text-muted">{preview?.source === visibleMedia ? '暂无可用预览' : '加载预览…'}</span>}
+          ) : <span className="text-xs text-canvas-text-muted">{preview?.source === visibleMedia ? t('暂无可用预览') : t('加载预览…')}</span>}
         </div>
       ) : data.audioUrl ? (
         <div className="assets-node-audio">
           <Icon icon="lucide:audio-lines" width="32" height="32" aria-hidden="true" />
-          <audio key={`${projectId}:${data.audioUrl}`} src={audioSource} controls preload="none" aria-label={`${data.label} 音频预览`} />
+          <audio key={`${projectId}:${data.audioUrl}`} src={audioSource} controls preload="none" aria-label={t('{name} 音频预览', { name: data.label })} />
         </div>
       ) : (
         <div className="assets-node-text">
-          {text ? <p>{text}</p> : <span className="text-canvas-text-muted">{data.shotlistRows?.length ? `${data.shotlistRows.length} 个镜头` : '暂无内容'}</span>}
+          {text ? <p>{text}</p> : <span className="text-canvas-text-muted">{data.shotlistRows?.length ? t('{count} 个镜头', { count: data.shotlistRows.length }) : t('暂无内容')}</span>}
         </div>
       )}
       {connectable && ports.length > 0 && (
@@ -105,9 +107,9 @@ function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpa
             <div key={direction} className={`assets-node-port-group${direction === 'output' ? ' is-output' : ''}`}>
               {ports.filter((port) => port.direction === direction).map((port) => (
                 <button key={port.id} type="button" className="assets-node-port"
-                  aria-label={`从 ${data.label} 的${port.label}端口拖出连线`} title={`${port.label}：拖到画布节点连接，Esc 取消`}
+                  aria-label={t('从 {name} 的{port}端口拖出连线', { name: data.label, port: t(port.label) })} title={t('{port}：拖到画布节点连接，Esc 取消', { port: t(port.label) })}
                   onPointerDown={(event) => startConnection(event, port)}>
-                  <span className="assets-node-port-dot" aria-hidden="true" />{port.label}
+                  <span className="assets-node-port-dot" aria-hidden="true" />{t(port.label)}
                 </button>
               ))}
             </div>
@@ -118,7 +120,7 @@ function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpa
         <svg className={`assets-node-connection-overlay${drag.valid ? ' is-valid' : ''}`} aria-hidden="true">
           <path d={path} />
           <circle cx={drag.x} cy={drag.y} r="4" />
-          <text x={Math.max(8, Math.min(drag.x + 14, window.innerWidth - 160))} y={Math.max(20, drag.y - 12)}>{drag.valid ? '松开以连接' : '拖到画布节点接口'}</text>
+          <text x={Math.max(8, Math.min(drag.x + 14, window.innerWidth - 160))} y={Math.max(20, drag.y - 12)}>{drag.valid ? t('松开以连接') : t('拖到画布节点接口')}</text>
         </svg>, document.body,
       )}
     </div>

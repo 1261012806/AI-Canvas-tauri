@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Plus, Search, Upload } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { useT } from '../../i18n';
+import { t, useT } from '../../i18n';
 import { useAppStore } from '../../store/useAppStore';
 import { generateId } from '../../store/store.utils';
 import type { DramaAsset, DramaAssetKind, DramaAssetWriteOptions, DramaCharacter } from '../../types/dramaAssets';
@@ -35,6 +35,7 @@ function newAsset(kind: DramaAssetKind, name: string): DramaAsset {
 
 /** 场景与道具使用创作资产卡片；人物继续打开已有角色编辑器。 */
 function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; creating: boolean; onClose: () => void }) {
+  useT();
   const [name, setName] = useState(asset.name);
   const [summary, setSummary] = useState(asset.summary);
   const [visualNotes, setVisualNotes] = useState(asset.visualNotes);
@@ -45,9 +46,9 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const close = () => { if (!pending.current) onClose(); };
-  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={`编辑全局${DRAMA_ASSET_KIND_LABEL[asset.kind]}`}
+  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('编辑全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) })}
     className="w-[min(480px,calc(100vw-24px))] p-3 gap-3">
-    <h3 className="text-sm font-semibold text-canvas-text">{creating ? '新增' : '编辑'}全局{DRAMA_ASSET_KIND_LABEL[asset.kind]}</h3>
+    <h3 className="text-sm font-semibold text-canvas-text">{creating ? t('新增全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) }) : t('编辑全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) })}</h3>
     <form className="flex flex-col gap-3" onSubmit={(event) => {
       event.preventDefault();
       if (pending.current || !name.trim()) return;
@@ -65,22 +66,22 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
       }).catch(() => { if (!request.signal.aborted) setError('保存失败，修改仍保留，请重试'); })
         .finally(() => { pending.current = false; if (!request.signal.aborted) setSaving(false); });
     }}>
-      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">名称
+      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("名称")}
         <input autoFocus className="ui-input" value={name} disabled={saving} required onChange={(event) => setName(event.target.value)} />
       </label>
-      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">简介
+      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("简介")}
         <textarea className="ui-textarea" rows={3} value={summary} disabled={saving} onChange={(event) => setSummary(event.target.value)} />
       </label>
-      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">外形 / 视觉要点
+      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("外形 / 视觉要点")}
         <textarea className="ui-textarea" rows={3} value={visualNotes} disabled={saving} onChange={(event) => setVisualNotes(event.target.value)} />
       </label>
-      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">剧情功能（可选）
+      <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("剧情功能（可选）")}
         <input className="ui-input" value={storyRole} disabled={saving} onChange={(event) => setStoryRole(event.target.value)} />
       </label>
-      {error && <p role="alert" className="ui-alert ui-alert--danger">{error}</p>}
+      {error && <p role="alert" className="ui-alert ui-alert--danger">{t(error)}</p>}
       <div className="flex justify-end gap-2">
-        <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>取消</button>
-        <button type="submit" className="ui-btn ui-btn--primary" disabled={saving || !name.trim()}>{saving ? '保存中…' : '保存'}</button>
+        <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>{t("取消")}</button>
+        <button type="submit" className="ui-btn ui-btn--primary" disabled={saving || !name.trim()}>{saving ? t('保存中…') : t('保存')}</button>
       </div>
     </form>
   </ModalOverlay>;
@@ -90,6 +91,7 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
 export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: {
   file: AssetFileEntry; kind: DramaAssetKind; onClose: () => void; onSaved: () => void;
 }) {
+  useT();
   const cards = useAppStore(useShallow((state) => kind === 'character' ? state.globalCharacters
     : kind === 'scene' ? state.globalScenes : state.globalProps));
   const [targetId, setTargetId] = useState('');
@@ -128,30 +130,30 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
       if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : '添加失败，请重试');
     } finally { pending.current = false; if (!request.signal.aborted) setSaving(false); }
   };
-  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={`添加到全局${DRAMA_ASSET_KIND_LABEL[kind]}`}
+  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('添加到全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}
     className="w-[min(440px,calc(100vw-24px))] p-3 gap-3">
-    <h3 className="text-sm font-semibold text-canvas-text">添加到全局{DRAMA_ASSET_KIND_LABEL[kind]}</h3>
+    <h3 className="text-sm font-semibold text-canvas-text">{t('添加到全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}</h3>
     <p className="truncate text-xs text-canvas-text-secondary" title={file.name}>{file.name}</p>
-    <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">添加方式
+    <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("添加方式")}
       <Select value={targetId} disabled={saving} fixedMenu onChange={setTargetId}
-        options={[{ value: '', label: `新建${DRAMA_ASSET_KIND_LABEL[kind]}` }, ...cards.map((asset) => ({ value: asset.id, label: `添加到 ${asset.name}` }))]} />
+        options={[{ value: '', label: t('新建{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) }) }, ...cards.map((asset) => ({ value: asset.id, label: t('添加到 {name}', { name: asset.name }) }))]} />
     </label>
-    {!targetId && <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">名称
+    {!targetId && <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("名称")}
       <input autoFocus className="ui-input" value={name} disabled={saving} onChange={(event) => setName(event.target.value)} />
     </label>}
-    {targetId && kind !== 'character' && <p className="ui-hint">将替换所选资产的主图，原图片文件仍保留。</p>}
-    {error && <p role="alert" className="ui-alert ui-alert--danger">{error}</p>}
+    {targetId && kind !== 'character' && <p className="ui-hint">{t("将替换所选资产的主图，原图片文件仍保留。")}</p>}
+    {error && <p role="alert" className="ui-alert ui-alert--danger">{t(error)}</p>}
     <div className="flex justify-end gap-2">
-      <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>取消</button>
+      <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>{t("取消")}</button>
       <button type="button" className="ui-btn ui-btn--primary" disabled={saving || (!targetId && !name.trim())} onClick={() => void save()}>
-        {saving ? '添加中…' : '添加'}
+        {saving ? t('添加中…') : t('添加')}
       </button>
     </div>
   </ModalOverlay>;
 }
 
 export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: DramaAssetKind; compact: boolean }) {
-  const t = useT();
+  useT();
   const { characters, scenes, props, loading, loadError, nodes, currentProjectId, load, save, remove, bind, openCharacters, showToast } = useAppStore(useShallow((state) => ({
     characters: state.globalCharacters, scenes: state.globalScenes, props: state.globalProps,
     loading: state.globalDramaAssetsLoading, loadError: state.globalDramaAssetsError, nodes: state.nodes,
@@ -301,20 +303,20 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
             onToggleEdit={() => setEditing({ asset, creating: false })}
             onSaveFields={() => {}}
             onDelete={() => void run('manage', async (options) => {
-              if (await confirmAction(`删除全局${DRAMA_ASSET_KIND_LABEL[kind]}「${asset.name}」？共用图片、声音和动作文件将保留。`, { title: '删除创作资产' })) {
+              if (await confirmAction(t('删除全局{kind}「{name}」？共用图片、声音和动作文件将保留。', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]), name: asset.name }), { title: t('删除创作资产') })) {
                 options.assertCurrent?.();
                 await remove(kind, asset.id, options);
               }
             })}
-            onBindImage={(nodeId) => void run('manage', async (options) => { if (await bind(kind, asset.id, nodeId, options) && !options.signal?.aborted) showToast('已绑定全局资产图片'); })}
+            onBindImage={(nodeId) => void run('manage', async (options) => { if (await bind(kind, asset.id, nodeId, options) && !options.signal?.aborted) showToast(t('已绑定全局资产图片')); })}
             onUploadImage={() => void upload(asset)}
             onExport={isTauriEnv() ? () => void transfer('export', asset) : undefined}
             onCopyBrief={() => { void navigator.clipboard.writeText(formatDramaAssetTextBrief(asset)).then(() => showToast('简介已复制')).catch(() => showToast('复制失败', 'error')); }}
             onManageVoice={asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, section: 'voice', origin: 'assets' }) : undefined}
             onManageActions={asset.kind === 'character' ? () => openCharacters(true, { scope: 'global', characterId: asset.id, section: 'action', origin: 'assets' }) : undefined}
-            onCopyToScope={currentProjectId && currentProjectId !== 'default' ? () => handleCopyToProject(asset) : undefined} copyToScopeLabel="复制到本项目" />)}
+            onCopyToScope={currentProjectId && currentProjectId !== 'default' ? () => handleCopyToProject(asset) : undefined} copyToScopeLabel={t("复制到本项目")} />)}
         </div>}
-    {editing && (editing.asset.kind === 'character' ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">正在打开角色编辑器…</p>}>
+    {editing && (editing.asset.kind === 'character' ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">{t("正在打开角色编辑器…")}</p>}>
       <CharacterAssetDialog key={editing.asset.id} isOpen scope="global" character={editing.creating ? null : editing.asset as DramaCharacter}
         onClose={() => setEditing(null)} onSaved={() => setEditing(null)} />
     </Suspense> : <GlobalAssetEditor key={editing.asset.id} asset={editing.asset} creating={editing.creating} onClose={() => setEditing(null)} />)}

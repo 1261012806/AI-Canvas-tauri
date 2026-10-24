@@ -13,6 +13,13 @@ import nodes from './nodes';
 import series from './series';
 import projectSettings from './projectSettings';
 import videoEditor from './videoEditor';
+import comfyui from './comfyui';
+import help from './help';
+import workflow from './workflow';
+import director from './director';
+import assets from './assets';
+import imageEditor from './imageEditor';
+import volcengine from './volcengine';
 
 const enUS: Record<string, string> = {
   ...common,
@@ -26,6 +33,13 @@ const enUS: Record<string, string> = {
   ...series,
   ...projectSettings,
   ...videoEditor,
+  ...comfyui,
+  ...help,
+  ...workflow,
+  ...director,
+  ...assets,
+  ...imageEditor,
+  ...volcengine,
 };
 
 export default enUS;

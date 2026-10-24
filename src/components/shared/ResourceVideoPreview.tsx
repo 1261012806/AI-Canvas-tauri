@@ -10,6 +10,7 @@ import { releaseViewportVideoElement } from './viewportVideoResource';
 import { resolveVideoThumbnailPoster } from './videoThumbnailSource';
 import { fadeFast, springSmooth } from '../../utils/motion';
 import type { HistoryRecord } from '../../services/indexedDbService';
+import { useT } from '../../i18n';
 
 const AssetVideoPreview = lazy(() => import('../assets/AssetVideoPreview'));
 
@@ -44,6 +45,7 @@ interface Props {
 
 /** 仅显式展开时挂载播放器；缩略列表复用串行、可取消的共享封面缓存。 */
 export default function ResourceVideoPreview({ src, filePath, poster, revision = 0, name, expanded, onExpandedChange, className = '', presentation = 'fullscreen', projectId, historyRecord, size }: Props) {
+  const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
   // 多张卡片可能引用同一资产 ID；只有收到点击的卡片可以拥有播放器。
   const [requested, setRequested] = useState(false);
@@ -94,7 +96,7 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
       onKeyDown={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
       onDragStart={(event) => { if (active) { event.preventDefault(); event.stopPropagation(); } }}>
-      <button type="button" className="resource-video-open" aria-label={`展开播放 ${name}`} aria-expanded={active}
+      <button type="button" className="resource-video-open" aria-label={t('展开播放 {name}', { name })} aria-expanded={active}
         onClick={() => {
           if (presentation === 'inline' && !active && rootRef.current) {
             setOpeningGeometry(measureVideoGeometry(rootRef.current,
@@ -104,11 +106,11 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
           setClosing(active); setRequested(!active); onExpandedChange(!active);
         }}>
         {posterSource && posterSource !== failedPoster
-          ? <img src={posterSource} alt={`${name} 视频缩略图`} draggable={false} decoding="async" loading="lazy" onError={() => setFailedPoster(posterSource)} />
+          ? <img src={posterSource} alt={t('{name} 视频缩略图', { name })} draggable={false} decoding="async" loading="lazy" onError={() => setFailedPoster(posterSource)} />
           : <Icon icon="lucide:film" className="resource-video-placeholder" aria-hidden="true" />}
         <span className="resource-video-play"><Icon icon="lucide:play" width="20" aria-hidden="true" /></span>
       </button>
-      {presentation === 'fullscreen' && active && <Suspense fallback={<div data-tauri-drag-region className="fixed inset-0 z-[360] flex items-center justify-center bg-canvas-bg text-canvas-text-muted" role="status">加载视频预览…</div>}>
+      {presentation === 'fullscreen' && active && <Suspense fallback={<div data-tauri-drag-region className="fixed inset-0 z-[360] flex items-center justify-center bg-canvas-bg text-canvas-text-muted" role="status">{t('加载视频预览…')}</div>}>
         <AssetVideoPreview key={identity} src={source} querySrc={src} filePath={filePath} poster={posterSource} name={name}
           projectId={projectId} historyRecord={historyRecord} size={size} unavailable={resolved?.identity === identity}
           onClose={() => { setClosing(false); setRequested(false); onExpandedChange(false); }}
@@ -136,6 +138,7 @@ function ResourceVideoPlayer({ src, poster, name, anchorRef, openingGeometry, wi
   openingGeometry: VideoGeometry;
   width?: number; height?: number; unavailable: boolean; onEnded: (animate?: boolean) => void; onSourceError: () => void;
 }) {
+  const t = useT();
   const present = useIsPresent();
   const reduceMotion = useReducedMotion();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -208,7 +211,7 @@ function ResourceVideoPlayer({ src, poster, name, anchorRef, openingGeometry, wi
   }, [src, present]);
   return (
     <div className="resource-video-clip" data-performance-motion="essential" style={geometry.bounds}>
-    <motion.div ref={floatingRef} className={`resource-video-floating${present ? '' : ' is-closing'}`} role="dialog" aria-label={`${name} 视频预览`} aria-hidden={!present}
+    <motion.div ref={floatingRef} className={`resource-video-floating${present ? '' : ' is-closing'}`} role="dialog" aria-label={t('{name} 视频预览', { name })} aria-hidden={!present}
       style={{ left: geometry.left - geometry.bounds.left, top: geometry.top - geometry.bounds.top, width: geometry.width,
         transformOrigin: '0 0', '--resource-video-ratio': `${geometry.width} / ${geometry.height}` } as CSSProperties}
       initial={{ opacity: 0, ...(reduceMotion ? OPEN_TRANSFORM : openingGeometry.thumbnail) }}
@@ -218,10 +221,10 @@ function ResourceVideoPlayer({ src, poster, name, anchorRef, openingGeometry, wi
       transition={{ default: VIDEO_SPRING, opacity: fadeFast }}>
       <div className="resource-video-toolbar">
         <span className="truncate">{name}</span>
-        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" aria-label={`收起 ${name}`} onClick={() => onEnded()}>收起</button>
+        <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" aria-label={t('收起 {name}', { name })} onClick={() => onEnded()}>{t('收起')}</button>
       </div>
       {src ? <div className="resource-video-player">
-        <video ref={videoRef} src={src} poster={poster} controls playsInline preload="auto" aria-label={`${name} 视频播放`}
+        <video ref={videoRef} src={src} poster={poster} controls playsInline preload="auto" aria-label={t('{name} 视频播放', { name })}
           onLoadedMetadata={(event) => {
             const video = event.currentTarget;
             if (video.videoWidth > 0 && video.videoHeight > 0) setDimensions({ width: video.videoWidth, height: video.videoHeight });
@@ -234,8 +237,8 @@ function ResourceVideoPlayer({ src, poster, name, anchorRef, openingGeometry, wi
             if (!video) return;
             if (video.error || !video.getAttribute('src')) { video.src = src; video.load(); }
             void video.play().catch(() => setBlocked(true));
-          }}>{error ? '视频加载失败，点击重试' : '点击播放'}</button>}
-      </div> : <div className="resource-video-unavailable">{unavailable ? '视频不可用' : '加载视频…'}</div>}
+          }}>{error ? t('视频加载失败，点击重试') : t('点击播放')}</button>}
+      </div> : <div className="resource-video-unavailable">{unavailable ? t('视频不可用') : t('加载视频…')}</div>}
     </motion.div>
     </div>
   );

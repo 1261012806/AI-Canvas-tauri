@@ -4,6 +4,7 @@
  * 分组：历史（撤销/重做）→ 工具（选择/画笔/橡皮）→ 添加图层（图片/文字/形状）
  * → 画布（尺寸/背景）→ 视图（适配）→ 合成。形状收进下拉，避免横向按钮过多。
  */
+import { t as translate, useT } from '../../../../../i18n';
 import { useRef, useState } from 'react';
 import AnimatedButton from '../../../../shared/AnimatedButton';
 import QualityRatioSelector from '../../QualityRatioSelector';
@@ -69,6 +70,7 @@ const SHAPES: { type: Extract<LayerType, 'rect' | 'ellipse' | 'line' | 'arrow'>;
 ];
 
 export default function ComposerToolbar({ composer, canExport, onFit, onExport, onClose }: Props) {
+  const t = useT();
   const {
     canvas, updateCanvas, addImageLayer, addImageFileLayer, addText, addShape,
     tool, setTool, brush, setBrush, undo, redo, canUndo, canRedo,
@@ -99,7 +101,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
     if (!file) return;
     void addImageFileLayer(file, file.name).catch((error) => {
       useAppStore.getState().showToast(
-        error instanceof Error ? error.message : '图片导入失败',
+        error instanceof Error ? error.message : translate('图片导入失败'),
         'error',
       );
     });
@@ -110,13 +112,13 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
     <div data-tauri-drag-region className="composer-toolbar">
       <div className="composer-toolbar-main">
         {/* 历史 */}
-        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="撤销 (⌘Z)" aria-label="撤销" disabled={!canUndo} onClick={undo}>
+        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('撤销 (⌘Z)')} aria-label={t('撤销')} disabled={!canUndo} onClick={undo}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
             <path d="M9 14L4 9l5-5" />
             <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
           </svg>
         </AnimatedButton>
-        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="重做 (⇧⌘Z)" aria-label="重做" disabled={!canRedo} onClick={redo}>
+        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('重做 (⇧⌘Z)')} aria-label={t('重做')} disabled={!canRedo} onClick={redo}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
             <path d="M15 14l5-5-5-5" />
             <path d="M20 9H10a6 6 0 0 0 0 12h3" />
@@ -126,7 +128,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
         <div className="crop-bar-divider" />
 
         {/* 工具 */}
-        <AnimatedButton className={`crop-aspect-btn icon-only${tool === 'select' ? ' active' : ''}`} data-tooltip="选择 (V)" aria-label="选择工具" onClick={() => setTool('select')}>
+        <AnimatedButton className={`crop-aspect-btn icon-only${tool === 'select' ? ' active' : ''}`} data-tooltip={t('选择 (V)')} aria-label={t('选择工具')} onClick={() => setTool('select')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M4 3l7 17 2.5-6.5L20 11z" />
           </svg>
@@ -134,8 +136,8 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
         <div className="composer-dd">
           <AnimatedButton
             className={`crop-aspect-btn icon-only${tool === 'brush' ? ' active' : ''}`}
-            data-tooltip="画笔 (B) — 再次点击设置笔刷"
-            aria-label="画笔"
+            data-tooltip={t('画笔 (B) — 再次点击设置笔刷')}
+            aria-label={t('画笔')}
             onClick={() => (tool === 'brush' ? toggleMenu('brush') : setTool('brush'))}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
@@ -146,11 +148,11 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
           {menu === 'brush' && (
             <div className="composer-menu composer-brush-menu" onMouseLeave={() => setMenu(null)}>
               <div className="composer-menu-custom">
-                <span>颜色</span>
+                <span>{t('颜色')}</span>
                 <input type="color" value={brush.color} onChange={(e) => setBrush({ color: e.target.value })} />
               </div>
               <div className="composer-menu-custom">
-                <span>粗细 {brush.size}px</span>
+                <span>{t('粗细 {size}px', { size: brush.size })}</span>
                 <input
                   type="range"
                   min={1}
@@ -163,7 +165,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
             </div>
           )}
         </div>
-        <AnimatedButton className={`crop-aspect-btn icon-only${tool === 'eraser' ? ' active' : ''}`} data-tooltip="橡皮 (E)" aria-label="橡皮" onClick={() => setTool('eraser')}>
+        <AnimatedButton className={`crop-aspect-btn icon-only${tool === 'eraser' ? ' active' : ''}`} data-tooltip={t('橡皮 (E)')} aria-label={t('橡皮')} onClick={() => setTool('eraser')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M4 15l7-7 6 6-5 5H6z" />
             <path d="M9 20h11" />
@@ -173,7 +175,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
         <div className="crop-bar-divider" />
 
         {/* 添加图层 */}
-        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="上传图片" aria-label="上传图片" onClick={() => fileRef.current?.click()}>
+        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('上传图片')} aria-label={t('上传图片')} onClick={() => fileRef.current?.click()}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
             <polyline points="17 8 12 3 7 8" />
@@ -183,7 +185,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={handleUpload} />
 
         <div className="composer-dd">
-          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="从画布添加图片" aria-label="从画布添加图片" onClick={() => toggleMenu('canvas')}>
+          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('从画布添加图片')} aria-label={t('从画布添加图片')} onClick={() => toggleMenu('canvas')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <circle cx="8.5" cy="9" r="1.5" />
@@ -192,7 +194,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
           </AnimatedButton>
           {menu === 'canvas' && (
             <div className="composer-menu" onMouseLeave={() => setMenu(null)}>
-              {imageNodes.length === 0 && <div className="composer-menu-empty">画布暂无图片节点</div>}
+              {imageNodes.length === 0 && <div className="composer-menu-empty">{t('画布暂无图片节点')}</div>}
               {imageNodes.map((n) => {
                 const d = n.data as BaseNodeData;
                 return (
@@ -204,14 +206,14 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
                       setMenu(null);
                       void addImageLayer(d.imageUrl as string, (d.label as string) || '图片').catch((error) => {
                         useAppStore.getState().showToast(
-                          error instanceof Error ? error.message : '图片导入失败',
+                          error instanceof Error ? error.message : translate('图片导入失败'),
                           'error',
                         );
                       });
                     }}
                   >
                     <img src={d.imageUrl as string} alt="" />
-                    <span>{(d.label as string) || '图片'}</span>
+                    <span>{(d.label as string) || t('图片')}</span>
                   </button>
                 );
               })}
@@ -219,14 +221,14 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
           )}
         </div>
 
-        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="文字" aria-label="文字" onClick={() => addText()}>
+        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('文字')} aria-label={t('文字')} onClick={() => addText()}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M5 6V4h14v2M9 20h6M12 4v16" />
           </svg>
         </AnimatedButton>
 
         <div className="composer-dd">
-          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="形状" aria-label="形状" onClick={() => toggleMenu('shape')}>
+          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('形状')} aria-label={t('形状')} onClick={() => toggleMenu('shape')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
               <rect x="3" y="10" width="11" height="11" rx="1" />
               <circle cx="15.5" cy="7.5" r="4.5" />
@@ -236,7 +238,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
             <div className="composer-menu" onMouseLeave={() => setMenu(null)}>
               {SHAPES.map((s) => (
                 <button key={s.type} type="button" className="composer-menu-item row" onClick={() => { addShape(s.type); setMenu(null); }}>
-                  {s.label}
+                  {t(s.label)}
                 </button>
               ))}
             </div>
@@ -257,7 +259,7 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
 
         {/* 背景 */}
         <div className="composer-dd">
-          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="背景" aria-label="背景" onClick={() => toggleMenu('bg')}>
+          <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('背景')} aria-label={t('背景')} onClick={() => toggleMenu('bg')}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <path d="M3 12h18M12 3v18" />
@@ -267,11 +269,11 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
             <div className="composer-menu" onMouseLeave={() => setMenu(null)}>
               {BG_PRESETS.map((b) => (
                 <button key={b.label} type="button" className={`composer-menu-item row${canvas.bg === b.value ? ' active' : ''}`} onClick={() => { updateCanvas({ bg: b.value }); setMenu(null); }}>
-                  {b.label}
+                  {t(b.label)}
                 </button>
               ))}
               <div className="composer-menu-custom">
-                <span>自定义</span>
+                <span>{t('自定义')}</span>
                 <input type="color" value={canvas.bg === 'transparent' ? '#ffffff' : canvas.bg} onChange={(e) => updateCanvas({ bg: e.target.value }, 'canvas-bg')} />
               </div>
             </div>
@@ -281,20 +283,20 @@ export default function ComposerToolbar({ composer, canExport, onFit, onExport, 
       </div>
 
       <div className="composer-toolbar-actions">
-        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip="适配画布 (⌘0)" aria-label="适配画布" onClick={onFit}>
+        <AnimatedButton className="crop-aspect-btn icon-only" data-tooltip={t('适配画布 (⌘0)')} aria-label={t('适配画布')} onClick={onFit}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
           </svg>
         </AnimatedButton>
-        <AnimatedButton className="crop-action-btn confirm" data-tooltip="合成为新节点" aria-label="导出" disabled={!canExport} onClick={onExport}>
+        <AnimatedButton className="crop-action-btn confirm" data-tooltip={t('合成为新节点')} aria-label={t('导出')} disabled={!canExport} onClick={onExport}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M3 17l5-5 3 3 8-8" />
           </svg>
-          <span>合成</span>
+          <span>{t('合成')}</span>
         </AnimatedButton>
       </div>
 
-      <AnimatedButton className="composer-toolbar-close crop-aspect-btn crop-aspect-close act-cancel" data-tooltip="关闭 (Esc)" aria-label="关闭" onClick={onClose}>
+      <AnimatedButton className="composer-toolbar-close crop-aspect-btn crop-aspect-close act-cancel" data-tooltip={t('关闭 (Esc)')} aria-label={t('关闭')} onClick={onClose}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>

@@ -12,6 +12,7 @@ import { AVATAR_ASPECT, cropImageStyle } from '../character/characterReferencePr
 import ViewportImage from './ViewportImage';
 import ExpandableSearch, { type ExpandableSearchProps } from './ExpandableSearch';
 import VideoThumbnail from './VideoThumbnail';
+import { useT } from '../../i18n';
 
 export interface MentionPickerTab {
   id: string;
@@ -80,7 +81,7 @@ export default function MentionPicker({
   items,
   activeKey,
   onItemHover,
-  emptyText = '没有可引用的内容',
+  emptyText,
   leading,
   footer,
   listId,
@@ -90,6 +91,7 @@ export default function MentionPicker({
   search,
   onHeightChange,
 }: MentionPickerProps) {
+  const t = useT();
   const hasChipRow = !!leading || (chips?.length ?? 0) > 0;
   const gridRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLButtonElement>(null);
@@ -262,7 +264,7 @@ export default function MentionPicker({
 
       <div ref={gridRef} className="mention-picker-grid" id={listId} role="listbox" aria-label={ariaLabel}>
         {items.length === 0 ? (
-          <div className="mention-picker-empty">{emptyText}</div>
+          <div className="mention-picker-empty">{emptyText ?? t('没有可引用的内容')}</div>
         ) : (
           items.map((item) => (
             <div key={item.key} className="relative min-w-0" role="presentation">
@@ -309,8 +311,8 @@ export default function MentionPicker({
               <button
                 type="button"
                 className="ui-icon-btn absolute bottom-6 right-1 bg-canvas-surface text-canvas-text"
-                aria-label={`${playingKey === item.key ? '暂停试听' : '试听'}：${item.label}`}
-                title={playingKey === item.key ? '暂停试听' : '试听'}
+                aria-label={playingKey === item.key ? t('暂停试听：{name}', { name: item.label }) : t('试听：{name}', { name: item.label })}
+                title={playingKey === item.key ? t('暂停试听') : t('试听')}
                 disabled={item.disabled}
                 onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
                 onClick={(event) => { event.stopPropagation(); togglePreview(item); }}
@@ -323,7 +325,7 @@ export default function MentionPicker({
         )}
       </div>
 
-      {previewError && <p role="status" className="text-xs text-canvas-text-muted">声音试听失败，请重试</p>}
+      {previewError && <p role="status" className="text-xs text-canvas-text-muted">{t('声音试听失败，请重试')}</p>}
       {footer && <div className="mention-picker-footer">{footer}</div>}
       </div>
     </div>

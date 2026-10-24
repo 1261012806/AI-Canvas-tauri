@@ -1,6 +1,7 @@
 /**
  * MentionEditor @提及编辑器 — 支持 @引用其他节点输出的富文本输入框，实时渲染为彩色标签芯片
  */
+import { t as translate, useT } from '../../../i18n';
 import { lazy, Suspense, useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useId, forwardRef, useImperativeHandle } from 'react';
 import { createPortal } from 'react-dom';
 import type { PromptSubmitShortcut, WorkflowIONodeType } from '../../../types';
@@ -56,6 +57,7 @@ import {
   serializeDOM,
   syncGlobalCharacterReferenceChips,
   syncShotlistReferenceChips,
+  syncMentionChipLocale,
   syncImageReferenceLabels,
   ZWSP,
 } from './mentionEditorDom';
@@ -139,7 +141,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   disabled = false,
   onChange,
   onSubmit,
-  placeholder = '输入提示词开始创作   (Enter 生成，Shift+Enter 换行)',
+  placeholder = translate('输入提示词开始创作   (Enter 生成，Shift+Enter 换行)'),
   ariaLabel,
   portalDropdown = false,
   nodeId,
@@ -152,6 +154,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   onSlashTrigger,
   className = '',
 }: MentionEditorProps, ref) {
+  const t = useT();
   // ── @ Mention state ──
   const [showMention, setShowMention] = useState(false);
   useEffect(() => {
@@ -352,6 +355,11 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     syncHistory();
   }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalAssets, dramaAssets]);
 
+  useLayoutEffect(() => {
+    const root = editorRef.current;
+    if (root && !composingRef.current) syncMentionChipLocale(root, nodeMetaMap, t);
+  }, [compositionRevision, nodeMetaMap, t]);
+
   // ── Cursor save/restore ──
   const saveCursor = (root: HTMLElement): number => {
     const sel = window.getSelection();
@@ -523,7 +531,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     globalAssetsRequestedRef.current = true;
     if (!state.globalDramaAssetsLoading) void state.loadGlobalDramaAssets().catch(() => {
       globalAssetsRequestedRef.current = false;
-      useAppStore.getState().showToast('全局创作资产加载失败，请重试', 'error');
+      useAppStore.getState().showToast(translate('全局创作资产加载失败，请重试'), 'error');
     });
   }, [showMention, resourceSearchExpanded, showAssetPicker, hasGlobalAssetReference]);
 
@@ -632,12 +640,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     if (!root || !nodeId || !localComfyWorkflow || !canMentionRefmod || state.currentProjectId !== currentProjectId) return;
     try {
       const node = state.nodes.find((item) => item.id === nodeId);
-      if (!node) throw new Error('视频节点已不存在，请重新打开提示词');
-      if (node.data.role === 'source' || node.data.status === 'loading') throw new Error('源视频或正在生成的视频不能修改角色引用');
+      if (!node) throw new Error(translate('视频节点已不存在，请重新打开提示词'));
+      if (node.data.role === 'source' || node.data.status === 'loading') throw new Error(translate('源视频或正在生成的视频不能修改角色引用'));
       const currentPrompt = serializeDOM(root);
       const token = chip?.getAttribute('data-refmod-raw') || undefined;
       const initial = manualIndex === undefined ? (token ? parseComfyRefmodMentions(token).mentions[0]?.selection : undefined) : node.data.comfyRefmods?.[manualIndex];
-      if (manualIndex !== undefined && !initial) throw new Error('手工绑定已变化，请重新打开列表');
+      if (manualIndex !== undefined && !initial) throw new Error(translate('手工绑定已变化，请重新打开列表'));
       const parsed = parseComfyRefmodMentions(currentPrompt);
       const otherMentions = [...parsed.mentions];
       const editingIndex = token ? otherMentions.findIndex((item) => item.token === token) : -1;
@@ -653,26 +661,26 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       refmodSessionRef.current = session;
       setRefmodSession(session); setRefmodUiError('');
       setShowMention(false); setMentionQuery('');
-    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : '读取 ComfyUI 角色引用失败'); }
+    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : translate('读取 ComfyUI 角色引用失败')); }
   }, [nodeId, localComfyWorkflow, canMentionRefmod, currentProjectId]);
 
   const editRefmodChip = useCallback((chip: HTMLElement) => {
     try {
       const raw = chip.getAttribute('data-refmod-raw') || '';
       const mention = parseComfyRefmodMentions(raw).mentions[0];
-      if (!mention) throw new Error('角色引用已损坏，请删除后重新选择');
+      if (!mention) throw new Error(translate('角色引用已损坏，请删除后重新选择'));
       const saved = useAppStore.getState().config.comfyRefmodAssets?.find((item) => comfyRefmodKey(item) === comfyRefmodKey(mention.selection));
       const asset = saved ?? { ...mention.selection, id: comfyRefmodKey(mention.selection), name: mention.label, tags: [], updatedAt: 0 };
       openRefmodSettings(asset, resolveComfyRefmodChipPresentation(raw)?.thumbnailUrl, chip);
-    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : '无法编辑角色引用'); }
+    } catch (cause) { setRefmodUiError(cause instanceof Error ? cause.message : translate('无法编辑角色引用')); }
   }, [openRefmodSettings]);
 
   const applyRefmodMention = useCallback(async (selection: ComfyRefmodSelection) => {
     const session = refmodSessionRef.current;
     const root = editorRef.current;
-    if (!session || !root) throw new Error('角色设置已关闭，请重新选择');
+    if (!session || !root) throw new Error(translate('角色设置已关闭，请重新选择'));
     const assertCurrent = () => {
-      if (disabledRef.current) throw new Error('编辑器已禁用，请停止当前操作后重试');
+      if (disabledRef.current) throw new Error(translate('编辑器已禁用，请停止当前操作后重试'));
       const state = useAppStore.getState();
       const node = state.nodes.find((item) => item.id === session.nodeId);
       if (refmodSessionRef.current !== session || state.currentProjectId !== session.projectId
@@ -680,7 +688,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         || state.workflows.find((item) => item.id === session.workflow.id) !== session.workflow || !node
         || node.data.role === 'source' || node.data.status === 'loading'
         || session.nodeSnapshot !== JSON.stringify([node.data.workflowId, node.data.provider, node.data.comfyRefmods])
-        || serializeDOM(root) !== session.prompt) throw new Error('项目、工作流或提示词已变化，请关闭设置后重新选择');
+        || serializeDOM(root) !== session.prompt) throw new Error(translate('项目、工作流或提示词已变化，请关闭设置后重新选择'));
       return node;
     };
     const current = assertCurrent();
@@ -692,7 +700,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     assertCurrent();
     const resolved = prepared.find((item) => item.loaderNodeId === selection.loaderNodeId && item.slot === selection.slot
       && comfyRefmodKey(item) === comfyRefmodKey(selection));
-    if (!resolved) throw new Error('无法确认目标槽位，请刷新目录后重试');
+    if (!resolved) throw new Error(translate('无法确认目标槽位，请刷新目录后重试'));
     if (session.manualIndex !== undefined) {
       const latest = assertCurrent();
       const next = [...(latest.data.comfyRefmods ?? [])];
@@ -705,14 +713,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const chip = buildComfyRefmodChipEl(raw, session.thumbnailUrl);
     root.focus({ preventScroll: true });
     const caret = window.getSelection();
-    if (!caret) throw new Error('无法恢复提示词光标，请重新打开设置');
+    if (!caret) throw new Error(translate('无法恢复提示词光标，请重新打开设置'));
     let range: Range;
     if (session.chip) {
-      if (!root.contains(session.chip) || session.chip.getAttribute('data-refmod-raw') !== session.token) throw new Error('角色胶囊已变化，请重新选择');
+      if (!root.contains(session.chip) || session.chip.getAttribute('data-refmod-raw') !== session.token) throw new Error(translate('角色胶囊已变化，请重新选择'));
       session.chip.replaceWith(chip);
       range = document.createRange();
     } else {
-      if (!session.range || !root.contains(session.range.startContainer) || !root.contains(session.range.endContainer)) throw new Error('插入位置已变化，请重新输入 @ 选择');
+      if (!session.range || !root.contains(session.range.startContainer) || !root.contains(session.range.endContainer)) throw new Error(translate('插入位置已变化，请重新输入 @ 选择'));
       caret.removeAllRanges(); caret.addRange(session.range);
       deleteAtChar();
       range = caret.rangeCount ? caret.getRangeAt(0) : session.range;
@@ -734,7 +742,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     if (state.currentProjectId !== currentProjectId || !node || !currentEditorNode || node.data.status === 'loading' || node.data.role === 'source'
       || selectedWorkflowRef.current !== selectedWorkflow
       || JSON.stringify([node.data.workflowId, node.data.comfyRefmods]) !== JSON.stringify([currentEditorNode.data.workflowId, manualRefmods])) {
-      setRefmodUiError('项目或视频绑定已变化，请重新打开 ComfyUI 角色列表'); return;
+      setRefmodUiError(translate('项目或视频绑定已变化，请重新打开 ComfyUI 角色列表')); return;
     }
     state.updateNodeData(node.id, { comfyRefmods: manualRefmods.filter((item) => item !== reference) });
     setRefmodUiError('');
@@ -1576,9 +1584,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         const mention = parseComfyRefmodMentions(source.id).mentions[0];
         if (!mention) return null;
         return { label: mention.label, outputType: 'image', thumbnailUrl: resolveComfyRefmodChipPresentation(source.id)?.thumbnailUrl,
-          text: `${mention.selection.fileName}\n加载节点 #${mention.selection.loaderNodeId} · 槽位 ${mention.selection.slot}\n${mention.selection.loaderType === 'refmods-lab' ? '参考强度沿用工作流 Combine 设置' : `参考强度 ${mention.selection.strength}`}`,
-          missing: false, description: 'ComfyUI 角色参考包 · 双击调整槽位和强度，生成前重新校验' };
-      } catch { return { label: source.label, outputType: 'text', text: '', missing: true, description: '角色引用已损坏，请删除后重新选择' }; }
+          text: `${mention.selection.fileName}\n${t('加载节点 #{node} · 槽位 {slot}', { node: mention.selection.loaderNodeId, slot: mention.selection.slot })}\n${mention.selection.loaderType === 'refmods-lab' ? t('参考强度沿用工作流 Combine 设置') : t('参考强度 {strength}', { strength: mention.selection.strength })}`,
+          missing: false, description: t('ComfyUI 角色参考包 · 双击调整槽位和强度，生成前重新校验') };
+      } catch { return { label: source.label, outputType: 'text', text: '', missing: true, description: t('角色引用已损坏，请删除后重新选择') }; }
     }
     const category = getFileCategory(source.label);
     return {
@@ -1587,9 +1595,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       thumbnailUrl: category === 'image' && !chipTip.assetUnavailable ? chipTip.assetUrl : undefined,
       videoUrl: category === 'video' && !chipTip.assetUnavailable ? chipTip.assetUrl : undefined,
       text: '', missing: !!chipTip.assetUnavailable,
-      description: chipTip.assetUnavailable ? '素材文件不可用' : `素材库 · ${{ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]}`,
+      description: chipTip.assetUnavailable ? t('素材文件不可用') : t('素材库 · {kind}', { kind: t({ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]) }),
     };
-  }, [chipTip, currentProjectId, dramaAssets, globalAssets, nodeId, nodeMetaMap, nodes]);
+  }, [chipTip, currentProjectId, dramaAssets, globalAssets, nodeId, nodeMetaMap, nodes, t]);
   useEffect(() => {
     // 捕获画布、文字选择和胶囊拖动；原生拖放开始后可能立即收到 pointercancel。
     let nativeDragging = false;
@@ -1669,7 +1677,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       thumbnailUrl: node.thumbnailUrl,
       video: node.outputType === 'video' ? { src: node.videoUrl, filePath: node.filePath } : undefined,
       icon: MEDIA_ICONS[node.outputType],
-      badge: node.isSelf ? '自身' : node.displayId != null ? `#${node.displayId}` : undefined,
+      badge: node.isSelf ? t('自身') : node.displayId != null ? `#${node.displayId}` : undefined,
       onSelect: () => handleSelectCanvasMention(node.id, node.label),
     })),
   ];
@@ -1677,14 +1685,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     key: `wf:${node.id}`,
     label: node.label,
     icon: MEDIA_ICONS[node._ioType === 'image' || node._ioType === 'video' || node._ioType === 'audio' ? node._ioType : 'text'],
-    badge: '工作流',
+    badge: t('工作流'),
     onSelect: () => handleSelectWorkflowMention(node._ioNodeId, node.label, node._ioType),
   }));
   const refmodTabItems: MentionPickerItem[] = refmodOptions.entries
     .filter(({ asset, characterName }) => matchesMentionQuery(mentionQuery, [asset.name, asset.fileName, characterName, ...asset.tags]))
     .map(({ asset, thumbnailUrl, characterName }) => ({
       key: `refmod:${comfyRefmodKey(asset)}`, label: asset.name, thumbnailUrl,
-      icon: 'mdi:account-box-outline', badge: 'ComfyUI 角色', title: `${asset.name}${characterName ? ` · ${characterName}` : ''}\n${asset.fileName}`,
+      icon: 'mdi:account-box-outline', badge: t('ComfyUI 角色'), title: `${asset.name}${characterName ? ` · ${characterName}` : ''}\n${asset.fileName}`,
       onSelect: () => openRefmodSettings(asset, thumbnailUrl),
     }));
   const workflowTabItems = effectiveComfySection === 'roles' ? refmodTabItems : workflowInputItems;
@@ -1705,8 +1713,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     for (const item of dramaMentionItems) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
     if (counts.size === 0) return [];
     return [
-      { id: 'all', label: '全部', count: dramaMentionItems.length },
-      ...[...counts].map(([kind, count]) => ({ id: kind, label: DRAMA_KIND_LABELS[kind] ?? kind, count })),
+      { id: 'all', label: t('全部'), count: dramaMentionItems.length },
+      ...[...counts].map(([kind, count]) => ({ id: kind, label: DRAMA_KIND_LABELS[kind] ? t(DRAMA_KIND_LABELS[kind]) : kind, count })),
     ];
   })();
 
@@ -1737,9 +1745,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       thumbnailUrl: avatarReference?.imageUrl || thumb,
       thumbnailCrop: avatarCrop,
       disabled: emptyCharacter,
-      title: emptyCharacter ? '该角色暂无可引用的素材' : undefined,
+      title: emptyCharacter ? t('该角色暂无可引用的素材') : undefined,
       icon: isAudioNode ? MEDIA_ICONS.audio : item.kind === 'scene' ? 'lucide:mountain' : item.kind === 'prop' ? 'lucide:box' : 'mdi:account-box-outline',
-      badge: isAudioNode ? '音频' : multiRef ? `${references.length} 图` : thumb ? undefined : '简介',
+      badge: isAudioNode ? t('音频') : multiRef ? t('{count} 图', { count: references.length }) : thumb ? undefined : t('简介'),
       onSelect: () => {
         if (emptyCharacter || !isCurrentEditorOwner()) return;
         if (isAudioNode) {
@@ -1769,7 +1777,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     ? (drillCharacter.voiceClips ?? []).map((clip) => ({
       key: `drama-voice:${clip.id}`,
       audioPreviewUrl: resolveDramaVoiceRef(drillCharacter, clip.id)?.url,
-      label: clip.label?.trim() || '角色声音',
+      label: clip.label?.trim() || t('角色声音'),
       icon: MEDIA_ICONS.audio,
       disabled: !resolveDramaVoiceRef(drillCharacter, clip.id),
       onSelect: () => {
@@ -1791,7 +1799,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         thumbnailUrl: media.kind === 'video' ? undefined : media.url,
         video: media.kind === 'video' ? { src: media.url, filePath: media.filePath } : undefined,
         icon: media.kind === 'video' ? 'lucide:film' : 'mdi:image-outline',
-        badge: media.kind === 'video' ? '视频' : media.kind === 'gif' ? 'GIF' : '图片',
+        badge: media.kind === 'video' ? t('视频') : media.kind === 'gif' ? 'GIF' : t('图片'),
         disabled: !resolveDramaActionMediaRef(drillCharacter, drillAction.id, media.id),
         onSelect: () => {
           if (useAppStore.getState().currentProjectId !== currentProjectId) return;
@@ -1815,26 +1823,26 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         return {
           key: `drama-action:${action.id}`, label: action.name, thumbnailUrl: image?.url,
           video: video ? { src: video.url, filePath: video.filePath } : undefined,
-          icon: 'lucide:accessibility', badge: `${action.media?.length ?? 0} 素材`,
+          icon: 'lucide:accessibility', badge: t('{count} 素材', { count: action.media?.length ?? 0 }),
           onSelect: () => setDramaActionId(action.id),
         };
       })
     : drillItem ? [
       ...(drillRefs.length > 1 ? [{
         key: 'drama-merge-all',
-        label: '全部拼成一张',
+        label: t('全部拼成一张'),
         icon: 'lucide:layout-grid',
-        badge: `${drillRefs.length} 图`,
+        badge: t('{count} 图', { count: drillRefs.length }),
         onSelect: () => handleSelectDramaReference(drillItem, DRAMA_MENTION_MERGE_ALL, drillRefs[0]?.imageUrl),
       }] : []),
       ...drillRefs.map((reference) => ({
         key: `drama-ref:${reference.id}`,
-        label: CHARACTER_REFERENCE_KIND_LABELS[reference.kind],
+        label: t(CHARACTER_REFERENCE_KIND_LABELS[reference.kind]),
         thumbnailUrl: reference.imageUrl,
         onSelect: () => handleSelectDramaReference(drillItem, reference.id, reference.imageUrl),
       })),
       ...(drillRefs.length === 0 ? [{
-        key: 'drama-brief', label: dramaThumbOf(drillItem) ? '主视觉' : '角色简介', icon: 'lucide:text',
+        key: 'drama-brief', label: dramaThumbOf(drillItem) ? t('主视觉') : t('角色简介'), icon: 'lucide:text',
         thumbnailUrl: dramaThumbOf(drillItem),
         disabled: drillItem.kind === 'character' && !dramaThumbOf(drillItem),
         onSelect: () => handleSelectDramaMention(drillItem),
@@ -1885,31 +1893,31 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         key: `node:${node.id}`, label: node.label, thumbnailUrl: node.thumbnailUrl,
         video: node.outputType === 'video' ? { src: node.videoUrl, filePath: node.filePath } : undefined,
         icon: MEDIA_ICONS[node.outputType],
-        badge: node.isSelf ? '自身' : node.displayId != null ? `#${node.displayId}` : '节点',
+        badge: node.isSelf ? t('自身') : node.displayId != null ? `#${node.displayId}` : t('节点'),
         onSelect: () => handleSelectCanvasMention(node.id, node.label),
       };
     } else if (candidate.source === 'drama') {
       item = buildDramaPickerItem(candidate.item);
-      item.badge = `${candidate.item.id.startsWith('global/') ? '全局' : ''}${DRAMA_KIND_LABELS[candidate.item.kind]}`;
+      item.badge = candidate.item.id.startsWith('global/') ? t('全局{kind}', { kind: t(DRAMA_KIND_LABELS[candidate.item.kind]) }) : t(DRAMA_KIND_LABELS[candidate.item.kind]);
     } else if (candidate.source === 'file') {
       const file = candidate.item;
       item = {
         key: `file:${file.path}`, label: file.name, thumbnailUrl: file.assetUrl,
-        icon: MEDIA_ICONS.image, badge: file.source === 'folder' ? '目录图片' : '全局图片',
+        icon: MEDIA_ICONS.image, badge: file.source === 'folder' ? t('目录图片') : t('全局图片'),
         disabled: file.availability === 'offline',
-        title: file.availability === 'offline' ? `${file.name} · 文件当前不可用` : file.name,
+        title: file.availability === 'offline' ? t('{name} · 文件当前不可用', { name: file.name }) : file.name,
         onSelect: () => handleSelectAsset(file),
       };
     } else if (candidate.source === 'workflow') {
       const workflowNode = candidate.item;
       item = {
-        key: `wf:${workflowNode.id}`, label: workflowNode.label, badge: '工作流',
+        key: `wf:${workflowNode.id}`, label: workflowNode.label, badge: t('工作流'),
         icon: MEDIA_ICONS[workflowNode._ioType === 'image' || workflowNode._ioType === 'video' || workflowNode._ioType === 'audio' ? workflowNode._ioType : 'text'],
         onSelect: () => handleSelectWorkflowMention(workflowNode._ioNodeId, workflowNode.label, workflowNode._ioType),
       };
     } else {
       const { asset, thumbnailUrl } = candidate.item;
-      item = { key: `refmod:${comfyRefmodKey(asset)}`, label: asset.name, thumbnailUrl, badge: 'ComfyUI 角色',
+      item = { key: `refmod:${comfyRefmodKey(asset)}`, label: asset.name, thumbnailUrl, badge: t('ComfyUI 角色'),
         icon: 'mdi:account-box-outline', onSelect: () => openRefmodSettings(asset, thumbnailUrl) };
     }
     return { ...item, domId: `${resourceSearchListId}-item-${index}` };
@@ -2116,8 +2124,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
               <p className="mt-2 line-clamp-2 break-words text-xs font-medium text-canvas-text">{chipPreview.label}</p>
               <span className="mt-1 text-[11px] text-canvas-text-muted">
                 {chipPreview.displayId != null ? `#${chipPreview.displayId} · ` : ''}
-                {chipPreview.description ?? (chipPreview.missing ? '引用节点已不存在' : ({ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本内容' }[chipPreview.outputType]))}
-                {chipPreview.thumbnailUrls && chipPreview.thumbnailUrls.length > 4 ? ' · 预览前4张' : ''}
+                {chipPreview.description ?? (chipPreview.missing ? t('引用节点已不存在') : ({ image: t('图像素材'), video: t('视频素材'), audio: t('音频素材'), text: t('文本内容') }[chipPreview.outputType]))}
+                {chipPreview.thumbnailUrls && chipPreview.thumbnailUrls.length > 4 ? t(' · 预览前4张') : ''}
               </span>
             </motion.div>
           )}
@@ -2134,7 +2142,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
           style={{ left: mentionDropdownPosition.left, top: mentionDropdownPosition.top }}
         >
           <MentionPicker
-            ariaLabel="引用节点或资产"
+            ariaLabel={t('引用节点或资产')}
             onHeightChange={handleMentionHeightChange}
             search={{
               expanded: resourceSearchExpanded,
@@ -2152,8 +2160,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 setResourceSearchVisible(SEARCH_PAGE_SIZE);
                 setResourceSearchActiveKey(null);
               },
-              label: '搜索全局资源',
-              placeholder: '节点 ID、#编号、文件名、角色或道具',
+              label: t('搜索全局资源'),
+              placeholder: t('节点 ID、#编号、文件名、角色或道具'),
               onKeyDown: handleResourceSearchKeyDown,
               listId: resourceSearchListId,
               activeDescendant: activeSearchItem?.domId,
@@ -2163,8 +2171,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             activeKey={resourceSearchExpanded ? activeSearchItem?.key : undefined}
             onItemHover={resourceSearchExpanded ? setResourceSearchActiveKey : undefined}
             tabs={[
-              { id: 'nodes', label: isAudioNode ? '输入音频' : '输入图', icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:image-multiple-outline' },
-              { id: 'assets', label: '资产库', icon: 'mdi:bookshelf' },
+              { id: 'nodes', label: isAudioNode ? t('输入音频') : t('输入图'), icon: isAudioNode ? MEDIA_ICONS.audio : 'mdi:image-multiple-outline' },
+              { id: 'assets', label: t('资产库'), icon: 'mdi:bookshelf' },
               ...(localComfyWorkflow ? [{ id: 'workflow', label: 'ComfyUI' }] : []),
             ]}
             activeTab={effectiveTab}
@@ -2180,25 +2188,25 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             leading={!resourceSearchExpanded && effectiveTab === 'workflow' ? (
               <div className="flex w-full flex-col gap-2">
                 <div className="flex flex-wrap gap-1.5">
-                  <button type="button" className={`mention-picker-chip${effectiveComfySection === 'inputs' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'inputs'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('inputs')}>工作流输入</button>
-                  {canMentionRefmod && <button type="button" className={`mention-picker-chip${effectiveComfySection === 'roles' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'roles'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('roles')}>ComfyUI 角色</button>}
+                  <button type="button" className={`mention-picker-chip${effectiveComfySection === 'inputs' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'inputs'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('inputs')}>{t('工作流输入')}</button>
+                  {canMentionRefmod && <button type="button" className={`mention-picker-chip${effectiveComfySection === 'roles' ? ' active' : ''}`} aria-pressed={effectiveComfySection === 'roles'} onMouseDown={(event) => event.preventDefault()} onClick={() => setComfySection('roles')}>{t('ComfyUI 角色')}</button>}
                 </div>
-                {effectiveComfySection === 'inputs' ? <div className="flex flex-wrap gap-1.5" aria-label="工作流输入类型">
+                {effectiveComfySection === 'inputs' ? <div className="flex flex-wrap gap-1.5" aria-label={t('工作流输入类型')}>
                   {workflowMentionFilterChips(filteredWorkflowMentions).map((filter) => <button key={filter.id} type="button" className={`mention-picker-chip${workflowMediaFilter === filter.id ? ' active' : ''}`}
                     aria-pressed={workflowMediaFilter === filter.id} onMouseDown={(event) => event.preventDefault()} onClick={() => setWorkflowMediaFilter(filter.id)}>{filter.label}<span className="mention-picker-chip-count">{filter.count}</span></button>)}
                 </div> : <>
-                  <div className="flex items-center justify-between gap-2 text-xs text-canvas-text-muted"><span>{refmodOptions.catalog?.serverName ?? '当前工作流服务器'}</span>
-                    <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={refmodOptions.loading} onMouseDown={(event) => event.preventDefault()} onClick={refmodOptions.refresh}>{refmodOptions.loading ? '读取中…' : '刷新目录'}</button>
+                  <div className="flex items-center justify-between gap-2 text-xs text-canvas-text-muted"><span>{refmodOptions.catalog?.serverName ?? t('当前工作流服务器')}</span>
+                    <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={refmodOptions.loading} onMouseDown={(event) => event.preventDefault()} onClick={refmodOptions.refresh}>{refmodOptions.loading ? t('读取中…') : t('刷新目录')}</button>
                   </div>
                   {refmodOptions.error && <p className="ui-alert ui-alert--warning text-xs" role="status">{refmodOptions.error}</p>}
-                  {manualRefmods.length > 0 && <details className="text-xs text-canvas-text-secondary"><summary className="cursor-pointer" onMouseDown={(event) => event.preventDefault()}>已绑定 {manualRefmods.length} 项（资源库/拖入）</summary>
+                  {manualRefmods.length > 0 && <details className="text-xs text-canvas-text-secondary"><summary className="cursor-pointer" onMouseDown={(event) => event.preventDefault()}>{t('已绑定 {count} 项（资源库/拖入）', { count: manualRefmods.length })}</summary>
                     <div className="mt-1 max-h-24 space-y-1 overflow-y-auto">{manualRefmods.map((reference, index) => <div key={`${comfyRefmodKey(reference)}:${index}`} className="flex items-center gap-2 rounded border border-canvas-border p-2">
                       <span className="min-w-0 flex-1 truncate" title={reference.fileName}>{reference.fileName}</span>
                       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => {
                         const saved = useAppStore.getState().config.comfyRefmodAssets?.find((item) => comfyRefmodKey(item) === comfyRefmodKey(reference));
                         openRefmodSettings(saved ?? { ...reference, id: comfyRefmodKey(reference), name: reference.fileName, tags: [], updatedAt: 0 }, undefined, undefined, index);
-                      }}>编辑</button>
-                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => removeManualRefmod(reference)}>移除</button>
+                      }}>{t('编辑')}</button>
+                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0" onMouseDown={(event) => event.preventDefault()} onClick={() => removeManualRefmod(reference)}>{t('移除')}</button>
                     </div>)}</div>
                   </details>}
                 </>}
@@ -2208,7 +2216,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 <button
                   type="button"
                   className="mention-picker-chip"
-                  aria-label={dramaActionPicker || dramaVoicePicker ? '返回角色参考图' : '返回资产列表'}
+                  aria-label={dramaActionPicker || dramaVoicePicker ? t('返回角色参考图') : t('返回资产列表')}
                   onMouseDown={(e) => {
                     e.preventDefault();
                     if (dramaActionPicker || dramaVoicePicker) {
@@ -2229,7 +2237,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                     onMouseDown={(e) => { e.preventDefault(); setDramaVoicePicker(false); setDramaActionPicker(true); setDramaActionId(null); }}
                   >
                     <Icon icon="lucide:accessibility" width="12" height="12" />
-                    动作
+                    {t('动作')}
                     <span className="mention-picker-chip-count">{drillActions.length}</span>
                   </button>
                 )}
@@ -2246,12 +2254,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                     }}
                   >
                     <Icon icon={MEDIA_ICONS.audio} width="12" height="12" />
-                    声音
+                    {t('声音')}
                     <span className="mention-picker-chip-count">{drillCharacter.voiceClips?.length ?? 0}</span>
                   </button>
                 )}
                 {dramaActionPicker && drillAction && (
-                  <button type="button" className="mention-picker-chip" aria-label="返回动作列表"
+                  <button type="button" className="mention-picker-chip" aria-label={t('返回动作列表')}
                     onMouseDown={(e) => { e.preventDefault(); setDramaActionId(null); }}>
                     <Icon icon="lucide:chevron-left" width="12" height="12" />
                     {drillAction.name}
@@ -2261,12 +2269,12 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
             ) : undefined}
             items={resourceSearchExpanded ? resourceSearchItems : activeTabItems}
             mediaAspectRatio={!resourceSearchExpanded && effectiveTab === 'assets' ? AVATAR_ASPECT : undefined}
-            emptyText={resourceSearchExpanded ? resourceSearchLoading ? '正在读取资源…' : assetLoadError ? '暂无匹配结果，部分图片目录读取失败' : '没有匹配的资源'
+            emptyText={resourceSearchExpanded ? resourceSearchLoading ? t('正在读取资源…') : assetLoadError ? t('暂无匹配结果，部分图片目录读取失败') : t('没有匹配的资源')
               : effectiveTab === 'assets' && drillItem && dramaVoicePicker
-              ? '该角色暂无声音，请先在角色库中添加'
+              ? t('该角色暂无声音，请先在角色库中添加')
               : effectiveTab === 'assets' && drillItem && dramaActionPicker
-              ? drillAction ? '该动作暂无图片、GIF 或视频素材' : '该角色暂无动作，请先在角色库中添加'
-              : mentionQuery ? '无匹配节点或资产' : effectiveTab === 'workflow' ? effectiveComfySection === 'roles' ? refmodOptions.loading ? '正在读取 ComfyUI 角色…' : '当前工作流暂无可用角色参考包' : '当前筛选下暂无工作流输入' : effectiveTab === 'assets' ? isAudioNode ? '暂无带音频的角色，请先在角色库中添加音频' : '暂无短剧资产' : '暂无可引用的输入'}
+              ? drillAction ? t('该动作暂无图片、GIF 或视频素材') : t('该角色暂无动作，请先在角色库中添加')
+              : mentionQuery ? t('无匹配节点或资产') : effectiveTab === 'workflow' ? effectiveComfySection === 'roles' ? refmodOptions.loading ? t('正在读取 ComfyUI 角色…') : t('当前工作流暂无可用角色参考包') : t('当前筛选下暂无工作流输入') : effectiveTab === 'assets' ? isAudioNode ? t('暂无带音频的角色，请先在角色库中添加音频') : t('暂无短剧资产') : t('暂无可引用的输入')}
             footer={(
               <>
               {resourceSearchExpanded && ((assetLoadError && !assetLoading)
@@ -2274,20 +2282,20 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-canvas-text-secondary">
                   {assetLoadError && !assetLoading && (
                     <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
-                      title="部分图片目录读取失败，点击重试"
+                      title={t('部分图片目录读取失败，点击重试')}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setAssetLoadRevision((revision) => revision + 1)}>
-                      重试
+                      {t('重试')}
                     </button>
                   )}
                   {resourceSearchVisible < resourceSearchCandidates.length && (
                     <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ml-auto"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setResourceSearchVisible((count) => count + SEARCH_PAGE_SIZE)}>
-                      加载更多
+                      {t('加载更多')}
                     </button>
                   )}
-                  {assetScanTruncated && <span>目录文件过多，部分资源未纳入搜索</span>}
+                  {assetScanTruncated && <span>{t('目录文件过多，部分资源未纳入搜索')}</span>}
                 </div>
               )}
               <button
@@ -2299,8 +2307,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-indigo-500/15 text-indigo-300">
                   <Icon icon="solar:gallery-bold" width="14" height="14" />
                 </span>
-                <span className="text-xs text-canvas-text">引用资产</span>
-                <span className="ml-auto text-[10px] text-canvas-text-muted">全局资产</span>
+                <span className="text-xs text-canvas-text">{t('引用资产')}</span>
+                <span className="ml-auto text-[10px] text-canvas-text-muted">{t('全局资产')}</span>
               </button>
               </>
             )}
@@ -2325,7 +2333,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 className="asset-picker"
                 role="dialog"
                 aria-modal="true"
-                aria-label="选择全局资产"
+                aria-label={t('选择全局资产')}
                 tabIndex={-1}
                 initial={{ opacity: 0, scale: 0.96, y: 12 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2339,7 +2347,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                       <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                     </svg>
                     <input
-                      type="text" placeholder={assetCreativeKind ? '搜索名称、简介…' : '搜索名称或标签…'} aria-label="搜索全局资产"
+                      type="text" placeholder={assetCreativeKind ? t('搜索名称、简介…') : t('搜索名称或标签…')} aria-label={t('搜索全局资产')}
                       value={assetSearch} onChange={(e) => setAssetSearch(e.target.value)}
                     />
                   </div>
@@ -2349,7 +2357,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
                 <div className="asset-picker-body">
                   <div className="asset-picker-sidebar">
-                    <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">正在打开分类…</p>}>
+                    <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">{t('正在打开分类…')}</p>}>
                     <AssetFolderNavigation
                       readOnly compact={false} folders={assetFolderEntries} selection={assetFolderSelection}
                       totalCount={assetList.length} globalCount={selectAssetFolderFiles(assetList, { kind: 'global' }).length}
@@ -2366,8 +2374,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                   </div>
                   <div className="asset-picker-content">
                 {!assetCreativeKind && (assetLoadError || assetScanTruncated) && <div role="status" className="flex flex-wrap items-center gap-2 p-2 text-xs text-canvas-text-secondary">
-                  <span>{assetLoadError ? '部分目录读取失败' : '目录文件较多，当前仅显示已扫描的文件'}</span>
-                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={assetLoading} onClick={() => setAssetLoadRevision((revision) => revision + 1)}>重新读取</button>
+                  <span>{assetLoadError ? t('部分目录读取失败') : t('目录文件较多，当前仅显示已扫描的文件')}</span>
+                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={assetLoading} onClick={() => setAssetLoadRevision((revision) => revision + 1)}>{t('重新读取')}</button>
                 </div>}
                 {/* 标签筛选 */}
                 {!assetCreativeKind && assetTagList.length > 0 && (
@@ -2378,7 +2386,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                         className={`asset-picker-tag ${activeAssetTag === null ? 'active' : ''} ${assetTagsExpanded || visibleAssetTagCount > 0 ? '' : 'assets-filter-item-hidden'}`}
                         aria-pressed={activeAssetTag === null}
                         onClick={() => setActiveAssetTag(null)}
-                      >全部</button>
+                      >{t('全部')}</button>
                       {assetTagList.map(([tag, count], index) => (
                         <button
                           key={tag}
@@ -2392,8 +2400,8 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                     </div>
                     {assetTagsOverflow && (
                       <button type="button" className="assets-filter-more" aria-controls={assetTagListId}
-                        aria-expanded={assetTagsExpanded} aria-label={assetTagsExpanded ? '收起标签' : '展开更多标签'}
-                        title={assetTagsExpanded ? '收起标签' : '更多标签'} onClick={() => setAssetTagsExpanded((expanded) => !expanded)}>
+                        aria-expanded={assetTagsExpanded} aria-label={assetTagsExpanded ? t('收起标签') : t('展开更多标签')}
+                        title={assetTagsExpanded ? t('收起标签') : t('更多标签')} onClick={() => setAssetTagsExpanded((expanded) => !expanded)}>
                         <Icon icon={assetTagsExpanded ? 'lucide:chevron-up' : 'lucide:ellipsis'} aria-hidden="true" />
                       </button>
                     )}
@@ -2402,14 +2410,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
 
                 <div key={assetCreativeKind ?? JSON.stringify(assetFolderSelection)} className="asset-picker-grid">
                   {assetCreativeKind ? (
-                    globalDramaAssetsLoading ? <div role="status" className="asset-picker-empty">正在加载创作资产…</div>
+                    globalDramaAssetsLoading ? <div role="status" className="asset-picker-empty">{t('正在加载创作资产…')}</div>
                       : globalDramaAssetsError ? <div role="alert" className="asset-picker-empty">
-                        <p>创作资产加载失败，请重试</p>
+                        <p>{t('创作资产加载失败，请重试')}</p>
                         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => {
                           void useAppStore.getState().loadGlobalDramaAssets().catch(() => {});
-                        }}>重试加载</button>
+                        }}>{t('重试加载')}</button>
                       </div>
-                        : creativePickerItems.length === 0 ? <div className="asset-picker-empty">{assetSearch ? '没有匹配的创作资产' : '暂无可引用的创作资产'}</div>
+                        : creativePickerItems.length === 0 ? <div className="asset-picker-empty">{assetSearch ? t('没有匹配的创作资产') : t('暂无可引用的创作资产')}</div>
                           : visibleCreativePickerItems.map((item) => {
                             const candidate = buildDramaPickerItem(item);
                             return <button key={candidate.key} type="button" className="asset-picker-card" disabled={candidate.disabled}
@@ -2425,9 +2433,9 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                             </button>;
                           })
                   ) : assetLoading ? (
-                    <div className="asset-picker-empty">加载中…</div>
+                    <div className="asset-picker-empty">{t('加载中…')}</div>
                   ) : filteredAssets.length === 0 ? (
-                    <div className="asset-picker-empty">{assetSearch || activeAssetTag ? '没有匹配的文件' : '暂无文件'}</div>
+                    <div className="asset-picker-empty">{assetSearch || activeAssetTag ? t('没有匹配的文件') : t('暂无文件')}</div>
                   ) : (
                     <>
                       {visibleAssets.map((file) => (
@@ -2454,7 +2462,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                     </>
                   )}
                   {assetVisible < assetPickerResultCount && (
-                    <div ref={assetSentinelRef} className="asset-picker-sentinel">加载更多…</div>
+                    <div ref={assetSentinelRef} className="asset-picker-sentinel">{t('加载更多…')}</div>
                   )}
                 </div>
                   </div>

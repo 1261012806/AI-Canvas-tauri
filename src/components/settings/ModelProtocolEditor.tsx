@@ -383,7 +383,7 @@ function JsonDraftField({
           updateDraft(event.target.value);
         }}
       />
-      {error ? <small id={errorId} role="alert">{error}</small> : null}
+      {error ? <small id={errorId} role="alert">{t(error)}</small> : null}
     </label>
   );
   return variables ? <div className={PROTOCOL_JSON_EDITOR_LAYOUT}>
@@ -1924,7 +1924,7 @@ export default function ModelProtocolEditor({
                 />
                 {previewState.error ? (
                   <small id={previewVariablesErrorId} role="alert" className="text-[var(--danger-light)]">
-                    {previewState.error}
+                    {t(previewState.error)}
                   </small>
                 ) : null}
               </div>
@@ -1971,7 +1971,7 @@ export default function ModelProtocolEditor({
                   />
                   {responsePreviewState.error ? (
                     <small id={responseSampleErrorId} role="alert">
-                      {responsePreviewState.error}
+                      {t(responsePreviewState.error)}
                     </small>
                   ) : null}
                 </div>
@@ -1998,7 +1998,7 @@ export default function ModelProtocolEditor({
       {error ? (
         <div className="provider-protocol-error" role="alert">
           <Icon icon="mdi:alert-circle-outline" width="14" />
-          <span>{error}</span>
+          <span>{t(error ?? '')}</span>
         </div>
       ) : null}
     </section>

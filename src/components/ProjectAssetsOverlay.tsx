@@ -21,6 +21,7 @@ import ViewportImage from './shared/ViewportImage';
 import ResourceVideoPreview from './shared/ResourceVideoPreview';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import { formatSize } from '../utils/assetFormat';
+import { useT } from '../i18n';
 
 const TABS: Array<{ key: FileCategory; label: string }> = [
   { key: 'image', label: CATEGORY_LABELS.image },
@@ -66,6 +67,7 @@ export default function ProjectAssetsOverlay({
   isOpen: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const { projects, currentProjectId, nodes } = useAppStore(useShallow((state) => ({
     projects: state.projects,
     currentProjectId: state.currentProjectId,
@@ -178,13 +180,13 @@ export default function ProjectAssetsOverlay({
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold leading-4">
-            {series?.name ?? '项目资产'}
+            {series?.name ?? t('项目资产')}
           </p>
           <p className="truncate text-[10px] leading-4 text-canvas-text-muted">
-            {totalCount > 0 ? `共 ${totalCount} 个文件` : '暂无资产'}
+            {totalCount > 0 ? t('共 {count} 个文件', { count: totalCount }) : t('暂无资产')}
           </p>
         </div>
-        <PopupCloseButton ariaLabel="关闭项目资产" onClick={onClose} />
+        <PopupCloseButton ariaLabel={t('关闭项目资产')} onClick={onClose} />
       </header>
 
       {/* Tabs */}
@@ -200,7 +202,7 @@ export default function ProjectAssetsOverlay({
                 : 'text-canvas-text-muted hover:text-canvas-text-secondary'
             }`}
           >
-            {tab.label}
+            {t(tab.label)}
             {activeTab === tab.key && (
               <span className="absolute bottom-0 left-1/2 h-0.5 w-6 -translate-x-1/2 rounded-full bg-indigo-400" />
             )}
@@ -213,12 +215,12 @@ export default function ProjectAssetsOverlay({
         {loading ? (
           <div className="flex h-full items-center justify-center text-[11px] text-canvas-text-muted">
             <Icon icon="lucide:loader-2" className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
-            加载中…
+            {t('加载中…')}
           </div>
         ) : totalCount === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-[11px] text-canvas-text-muted">
             <Icon icon="lucide:inbox" className="h-8 w-8 opacity-40" />
-            <p>暂无{CATEGORY_LABELS[activeTab]}资产</p>
+            <p>{t('暂无{category}资产', { category: t(CATEGORY_LABELS[activeTab]) })}</p>
           </div>
         ) : (
           <div className="flex flex-col gap-4">

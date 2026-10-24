@@ -401,7 +401,7 @@ export default function ProviderConnectionDialog({
 
   const handleFetchModels = async () => {
     if (!definition || missingCredentials) return;
-    if (workflowOnlyConnection) { setCatalogStatus('warning'); setCatalogMessage('当前只配置工作流连接，可直接保存；获取模型目录需要模型 API Key'); return; }
+    if (workflowOnlyConnection) { setCatalogStatus('warning'); setCatalogMessage(t('当前只配置工作流连接，可直接保存；获取模型目录需要模型 API Key')); return; }
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -475,7 +475,7 @@ export default function ProviderConnectionDialog({
   const handleTestConnection = async () => {
     if (!definition || missingCredentials) return;
     if (definition.id === 'runninghub-model' && !apiKey.trim() && !workflowApiKey.trim()) {
-      setCatalogStatus('warning'); setCatalogMessage('当前站点尚未配置密钥，请填写或切换到已配置的站点'); return;
+      setCatalogStatus('warning'); setCatalogMessage(t('当前站点尚未配置密钥，请填写或切换到已配置的站点')); return;
     }
     if (definition.id === 'cccapi' || definition.id === 'toapis') {
       // 用当前 Key 的模型目录验证连接，同时刷新对应分组或站点的可选模型。
@@ -490,7 +490,7 @@ export default function ProviderConnectionDialog({
       for (const [id, key, label] of [['runninghub-model', apiKey.trim(), '模型'], ['runninghub', workflowApiKey.trim(), '工作流']] as const) {
         if (!key) continue;
         const result = await testProviderConnection(id, key, baseUrl.trim() || undefined);
-        checks.push(`${label}连接：${result.success ? `验证成功${result.balance ? `（${result.balance}）` : ''}` : result.error || '验证失败'}`);
+        checks.push(t('{label}连接：{result}', { label: t(label), result: result.success ? t('验证成功') + (result.balance ? ` (${result.balance})` : '') : result.error || t('验证失败') }));
         passed &&= result.success;
       }
       setCatalogStatus(passed ? 'ready' : 'error'); setCatalogMessage(checks.join('；')); return;
@@ -965,7 +965,7 @@ export default function ProviderConnectionDialog({
           <footer className="provider-dialog-footer">
             <span>
               {isWebSearchProvider
-                ? `当前使用 ${definition.name}`
+                ? t('当前使用 {name}', { name: definition.name })
                 : isWorkflowApi ? t('将配置 {count} 个工作流', { count: workflowDrafts.length }) : selectedModels.length > 0
                   ? t('将启用 {count} 个模型', { count: selectedModels.length })
                   : t('至少选择一个模型')}

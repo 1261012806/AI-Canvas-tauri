@@ -90,7 +90,6 @@ export default function ComfyManagementWindow() {
   useEffect(() => {
     let active = true;
     aliveRef.current = true;
-    document.title = 'ComfyUI · 设置、管理与运行控制台';
     void refreshSnapshot(() => active, false).catch((error: unknown) => {
       if (active && aliveRef.current) setFeedback({ text: error instanceof Error ? error.message : String(error), error: true });
     }).finally(() => {
@@ -100,6 +99,10 @@ export default function ComfyManagementWindow() {
     });
     return () => { active = false; aliveRef.current = false; themeCleanup.current(); };
   }, [refreshSnapshot]);
+
+  useEffect(() => {
+    document.title = t('ComfyUI · 设置、管理与运行控制台');
+  }, [t]);
 
   // 原生管理写入开始时就撤销旧 scanId；操作失败也不能继续展示可替换的旧扫描。
   const withInvalidatedModelScan = <T,>(operation: () => Promise<T>): Promise<T> => {

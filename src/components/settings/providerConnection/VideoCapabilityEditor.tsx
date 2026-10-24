@@ -1,3 +1,4 @@
+import { useT } from '../../../i18n';
 /**
  * settings/providerConnection/VideoCapabilityEditor — 视频模型的固定能力编辑器。
  *
@@ -63,6 +64,7 @@ export default function VideoCapabilityEditor({
   onApplyH3Template,
   onClose,
 }: VideoCapabilityEditorProps) {
+  const t = useT();
   const [customRatio, setCustomRatio] = useState('');
   const durationInputId = useId();
   const [customResolution, setCustomResolution] = useState('');
@@ -205,13 +207,13 @@ export default function VideoCapabilityEditor({
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold text-canvas-text">
             <Icon icon="lucide:video" width="17" className="text-indigo-300" />
-            视频参数能力
+            {t("视频参数能力")}
           </div>
           <p className="mt-1 text-[11px] leading-5 text-canvas-text-secondary">
-            {model.name} · 勾选模型实际支持的值，视频节点只会展示这些选项。
+            {model.name} {t("· 勾选模型实际支持的值，视频节点只会展示这些选项。")}
           </p>
         </div>
-        <PopupCloseButton aria-label="关闭视频参数能力" onClick={onClose} />
+        <PopupCloseButton aria-label={t("关闭视频参数能力")} onClick={onClose} />
       </div>
 
       <div className="space-y-4">
@@ -219,7 +221,7 @@ export default function VideoCapabilityEditor({
           <section className="ui-card min-w-0 p-2">
             <div className="flex flex-wrap items-end gap-2">
               <label className="min-w-0 flex-1 space-y-1 text-[10px] text-canvas-text-secondary">
-                <span className="font-medium text-canvas-text">Seedance 快速适配</span>
+                <span className="font-medium text-canvas-text">{t("Seedance 快速适配")}</span>
                 <Select
                   fixedMenu
                   className="w-full"
@@ -243,18 +245,18 @@ export default function VideoCapabilityEditor({
                   onApplySeedanceTemplate(seedanceModel, transport);
                 }}
               >
-                应用模板
+                {t("应用模板")}
               </button>
             </div>
             <p className="mt-1 text-[10px] leading-4 text-canvas-text-muted">
-              会同时覆盖当前模型的视频能力与提交/轮询协议。不会根据模型名称自动猜测；应用后仍可继续手动调整。
+              {t("会同时覆盖当前模型的视频能力与提交/轮询协议。不会根据模型名称自动猜测；应用后仍可继续手动调整。")}
             </p>
           </section>
 
           <section className="ui-card min-w-0 p-2">
             <div className="flex flex-wrap items-end gap-2">
               <label className="min-w-0 flex-1 space-y-1 text-[10px] text-canvas-text-secondary">
-                <span className="font-medium text-canvas-text">MiniMax H3 快速适配</span>
+                <span className="font-medium text-canvas-text">{t("MiniMax H3 快速适配")}</span>
                 <Select
                   fixedMenu
                   className="w-full"
@@ -278,20 +280,20 @@ export default function VideoCapabilityEditor({
                   onApplyH3Template(h3Model, transport);
                 }}
               >
-                应用模板
+                {t("应用模板")}
               </button>
             </div>
             <p className="mt-1 text-[10px] leading-4 text-canvas-text-muted">
-              支持 MiniMax 官方、APIMart 和 AI Ping。Context-IR 与 Regeneration 不属于普通视频生成模板。
+              {t("支持 MiniMax 官方、APIMart 和 AI Ping。Context-IR 与 Regeneration 不属于普通视频生成模板。")}
             </p>
           </section>
         </div>
 
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="text-xs font-medium text-canvas-text">画面比例（可多选）</span>
+            <span className="text-xs font-medium text-canvas-text">{t("画面比例（可多选）")}</span>
             <label className="flex items-center gap-2 text-[10px] text-canvas-text-secondary">
-              默认
+              {t("默认")}
               <Select fixedMenu
                 className="min-w-0" size="sm"
                 value={capability.defaultRatio ?? ''}
@@ -300,7 +302,7 @@ export default function VideoCapabilityEditor({
                   defaultRatio: selectedOptionValue || undefined,
                 })}
               >
-                <option value="">模型默认（未声明）</option>
+                <option value="">{t("模型默认（未声明）")}</option>
                 {capability.ratios?.map((value) => <option key={value}>{value}</option>)}
               </Select>
             </label>
@@ -308,23 +310,23 @@ export default function VideoCapabilityEditor({
           <div className="flex flex-wrap gap-1.5">
             {ratioOptions.map((value) => (
               <button key={value} type="button" aria-pressed={capability.ratios?.includes(value)} className={optionClass(capability.ratios?.includes(value) ?? false)} onClick={() => toggleStringOption('ratios', 'defaultRatio', value)}>
-                {value === 'adaptive' ? '自适应' : value}
+                {value === 'adaptive' ? t('自适应') : value}
               </button>
             ))}
             <span className="flex min-h-7 overflow-hidden rounded-md border border-dashed border-canvas-border focus-within:border-indigo-400/60">
-              <input className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customRatio} placeholder="自定义" onChange={(event) => setCustomRatio(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addStringOption('ratios', 'defaultRatio', customRatio, () => setCustomRatio('')); }} />
-              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label="添加自定义比例" onClick={() => addStringOption('ratios', 'defaultRatio', customRatio, () => setCustomRatio(''))}>+</button>
+              <input className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customRatio} placeholder={t("自定义")} onChange={(event) => setCustomRatio(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addStringOption('ratios', 'defaultRatio', customRatio, () => setCustomRatio('')); }} />
+              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label={t("添加自定义比例")} onClick={() => addStringOption('ratios', 'defaultRatio', customRatio, () => setCustomRatio(''))}>+</button>
             </span>
           </div>
         </section>
 
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="text-xs font-medium text-canvas-text">分辨率（可多选）</span>
+            <span className="text-xs font-medium text-canvas-text">{t("分辨率（可多选）")}</span>
             <label className="flex items-center gap-2 text-[10px] text-canvas-text-secondary">
-              默认
+              {t("默认")}
               <Select fixedMenu className="min-w-0" size="sm" value={capability.defaultResolution ?? ''} onChange={(selectedOptionValue) => commit({ ...capability, defaultResolution: selectedOptionValue || undefined })}>
-                <option value="">模型默认（未声明）</option>
+                <option value="">{t("模型默认（未声明）")}</option>
                 {capability.resolutions?.map((value) => <option key={value}>{value}</option>)}
               </Select>
             </label>
@@ -334,20 +336,20 @@ export default function VideoCapabilityEditor({
               <button key={value} type="button" aria-pressed={capability.resolutions?.includes(value)} className={optionClass(capability.resolutions?.includes(value) ?? false)} onClick={() => toggleStringOption('resolutions', 'defaultResolution', value)}>{value}</button>
             ))}
             <span className="flex min-h-7 overflow-hidden rounded-md border border-dashed border-canvas-border focus-within:border-indigo-400/60">
-              <input className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customResolution} placeholder="自定义" onChange={(event) => setCustomResolution(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addStringOption('resolutions', 'defaultResolution', customResolution, () => setCustomResolution('')); }} />
-              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label="添加自定义分辨率" onClick={() => addStringOption('resolutions', 'defaultResolution', customResolution, () => setCustomResolution(''))}>+</button>
+              <input className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customResolution} placeholder={t("自定义")} onChange={(event) => setCustomResolution(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addStringOption('resolutions', 'defaultResolution', customResolution, () => setCustomResolution('')); }} />
+              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label={t("添加自定义分辨率")} onClick={() => addStringOption('resolutions', 'defaultResolution', customResolution, () => setCustomResolution(''))}>+</button>
             </span>
           </div>
-          <p className="mt-1.5 text-[10px] text-canvas-text-muted">同时提供 480p/1080p 等接口档位和 480/832 等长边像素；请按厂商文档勾选。</p>
+          <p className="mt-1.5 text-[10px] text-canvas-text-muted">{t("同时提供 480p/1080p 等接口档位和 480/832 等长边像素；请按厂商文档勾选。")}</p>
         </section>
 
         <section>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="text-xs font-medium text-canvas-text">帧率（可多选）</span>
+            <span className="text-xs font-medium text-canvas-text">{t("帧率（可多选）")}</span>
             <label className="flex items-center gap-2 text-[10px] text-canvas-text-secondary">
-              默认
+              {t("默认")}
               <Select fixedMenu className="min-w-0" size="sm" value={capability.defaultFrameRate ?? ''} onChange={(selectedOptionValue) => commit({ ...capability, defaultFrameRate: selectedOptionValue ? Number(selectedOptionValue) : undefined })}>
-                <option value="">模型默认（未声明）</option>
+                <option value="">{t("模型默认（未声明）")}</option>
                 {capability.frameRates?.map((value) => <option key={value} value={value}>{value} FPS</option>)}
               </Select>
             </label>
@@ -357,18 +359,18 @@ export default function VideoCapabilityEditor({
               <button key={value} type="button" aria-pressed={capability.frameRates?.includes(value)} className={optionClass(capability.frameRates?.includes(value) ?? false)} onClick={() => toggleFrameRate(value)}>{value} FPS</button>
             ))}
             <span className="flex min-h-7 overflow-hidden rounded-md border border-dashed border-canvas-border focus-within:border-indigo-400/60">
-              <input type="number" min="1" max="240" className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customFrameRate} placeholder="自定义" onChange={(event) => setCustomFrameRate(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { const value = Number(customFrameRate); if (Number.isInteger(value) && value > 0 && value <= 240) { if (!capability.frameRates?.includes(value)) toggleFrameRate(value); setCustomFrameRate(''); } } }} />
-              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label="添加自定义帧率" onClick={() => { const value = Number(customFrameRate); if (Number.isInteger(value) && value > 0 && value <= 240) { if (!capability.frameRates?.includes(value)) toggleFrameRate(value); setCustomFrameRate(''); } }}>+</button>
+              <input type="number" min="1" max="240" className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customFrameRate} placeholder={t("自定义")} onChange={(event) => setCustomFrameRate(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { const value = Number(customFrameRate); if (Number.isInteger(value) && value > 0 && value <= 240) { if (!capability.frameRates?.includes(value)) toggleFrameRate(value); setCustomFrameRate(''); } } }} />
+              <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label={t("添加自定义帧率")} onClick={() => { const value = Number(customFrameRate); if (Number.isInteger(value) && value > 0 && value <= 240) { if (!capability.frameRates?.includes(value)) toggleFrameRate(value); setCustomFrameRate(''); } }}>+</button>
             </span>
           </div>
         </section>
 
         <section className="rounded-lg border border-canvas-border bg-canvas-card p-3">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-xs font-medium text-canvas-text">生成时长</span>
-            <div className="ui-segmented border border-canvas-border" role="group" aria-label="时长模式">
-              <button type="button" aria-pressed={!discreteDurations} className={`ui-segmented__item ${!discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: editorMinDuration, maxDuration: editorMaxDuration })}>连续范围</button>
-              <button type="button" aria-pressed={!!discreteDurations} className={`ui-segmented__item ${discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: [capability.defaultDuration ?? 5] })}>固定档位</button>
+            <span className="text-xs font-medium text-canvas-text">{t("生成时长")}</span>
+            <div className="ui-segmented border border-canvas-border" role="group" aria-label={t("时长模式")}>
+              <button type="button" aria-pressed={!discreteDurations} className={`ui-segmented__item ${!discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: undefined, minDuration: editorMinDuration, maxDuration: editorMaxDuration })}>{t("连续范围")}</button>
+              <button type="button" aria-pressed={!!discreteDurations} className={`ui-segmented__item ${discreteDurations ? 'is-active' : ''}`} onClick={() => commit({ ...capability, durations: [capability.defaultDuration ?? 5] })}>{t("固定档位")}</button>
             </div>
           </div>
           {discreteDurations ? (
@@ -377,13 +379,13 @@ export default function VideoCapabilityEditor({
                 <button key={value} type="button" aria-pressed={discreteDurations.includes(value)} className={optionClass(discreteDurations.includes(value))} onClick={() => toggleDuration(value)}>{value}s</button>
               ))}
               <span className="flex min-h-7 overflow-hidden rounded-md border border-dashed border-canvas-border focus-within:border-indigo-400/60">
-                <input type="number" min={VIDEO_DURATION_RANGE_MIN} max={VIDEO_DURATION_RANGE_MAX} className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customDuration} placeholder="自定义秒" onChange={(event) => setCustomDuration(event.target.value)} />
-                <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label="添加自定义时长" onClick={() => { const value = Number(customDuration); if (Number.isInteger(value) && value >= VIDEO_DURATION_RANGE_MIN && value <= VIDEO_DURATION_RANGE_MAX) { if (!discreteDurations.includes(value)) toggleDuration(value); setCustomDuration(''); } }}>+</button>
+                <input type="number" min={VIDEO_DURATION_RANGE_MIN} max={VIDEO_DURATION_RANGE_MAX} className="w-20 bg-transparent px-2 text-[11px] text-canvas-text outline-none" value={customDuration} placeholder={t("自定义秒")} onChange={(event) => setCustomDuration(event.target.value)} />
+                <button type="button" className="border-l border-canvas-border px-2 text-indigo-300" aria-label={t("添加自定义时长")} onClick={() => { const value = Number(customDuration); if (Number.isInteger(value) && value >= VIDEO_DURATION_RANGE_MIN && value <= VIDEO_DURATION_RANGE_MAX) { if (!discreteDurations.includes(value)) toggleDuration(value); setCustomDuration(''); } }}>+</button>
               </span>
               <label className="ml-auto flex items-center gap-2 text-[10px] text-canvas-text-secondary">
-                默认
+                {t("默认")}
                 <Select fixedMenu className="min-w-0" size="sm" value={capability.defaultDuration ?? ''} onChange={(selectedOptionValue) => commit({ ...capability, defaultDuration: selectedOptionValue ? Number(selectedOptionValue) : undefined })}>
-                  <option value="">模型默认（未声明）</option>
+                  <option value="">{t("模型默认（未声明）")}</option>
                   {discreteDurations.map((value) => <option key={value} value={value}>{value}s</option>)}
                 </Select>
               </label>
@@ -392,7 +394,7 @@ export default function VideoCapabilityEditor({
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-canvas-text">
                 <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-                  <label htmlFor={`${durationInputId}-min`}>最短</label>
+                  <label htmlFor={`${durationInputId}-min`}>{t("最短")}</label>
                   <NumberStepper
                     id={`${durationInputId}-min`}
                     size="sm"
@@ -401,13 +403,13 @@ export default function VideoCapabilityEditor({
                     min={VIDEO_DURATION_RANGE_MIN}
                     max={editorMaxDuration}
                     step={1}
-                    aria-label="最短生成时长（秒）"
+                    aria-label={t("最短生成时长（秒）")}
                     className={editorMinDuration < 100 ? '[&_.ui-stepper__input]:max-w-[2ch]' : undefined}
                     onChange={(value) => changeDurationEndpoint('min', String(value))}
                   />
                 </div>
                 <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-                  <label htmlFor={`${durationInputId}-max`}>最长</label>
+                  <label htmlFor={`${durationInputId}-max`}>{t("最长")}</label>
                   <NumberStepper
                     id={`${durationInputId}-max`}
                     size="sm"
@@ -416,7 +418,7 @@ export default function VideoCapabilityEditor({
                     min={editorMinDuration}
                     max={VIDEO_DURATION_RANGE_MAX}
                     step={1}
-                    aria-label="最长生成时长（秒）"
+                    aria-label={t("最长生成时长（秒）")}
                     className={editorMaxDuration < 100 ? '[&_.ui-stepper__input]:max-w-[2ch]' : undefined}
                     onChange={(value) => changeDurationEndpoint('max', String(value))}
                   />
@@ -424,7 +426,7 @@ export default function VideoCapabilityEditor({
               </div>
               {capability.minDuration === undefined && capability.maxDuration === undefined && (
                 <p className="mb-2 text-[10px] text-canvas-text-muted">
-                  当前未声明时长范围；拖动或修改端点后才会写入限制。
+                  {t("当前未声明时长范围；拖动或修改端点后才会写入限制。")}
                 </p>
               )}
               <div className="relative h-8">
@@ -443,7 +445,7 @@ export default function VideoCapabilityEditor({
                   max={sliderMaxDuration}
                   step="1"
                   value={editorMinDuration}
-                  aria-label="最短生成时长"
+                  aria-label={t("最短生成时长")}
                   className={`ui-slider pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 [--range-track-background:transparent] focus-visible:z-30 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto ${minimumThumbOnTop ? 'z-20' : 'z-10'}`}
                   onPointerDown={() => setDurationDragScale({ min: sliderMinDuration, max: sliderMaxDuration })}
                   onPointerUp={() => setDurationDragScale(undefined)}
@@ -457,7 +459,7 @@ export default function VideoCapabilityEditor({
                   max={sliderMaxDuration}
                   step="1"
                   value={editorMaxDuration}
-                  aria-label="最长生成时长"
+                  aria-label={t("最长生成时长")}
                   className={`ui-slider pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 [--range-track-background:transparent] focus-visible:z-30 [&::-moz-range-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:pointer-events-auto ${minimumThumbOnTop ? 'z-10' : 'z-20'}`}
                   onPointerDown={() => setDurationDragScale({ min: sliderMinDuration, max: sliderMaxDuration })}
                   onPointerUp={() => setDurationDragScale(undefined)}
@@ -471,7 +473,7 @@ export default function VideoCapabilityEditor({
                   .map((value) => <span key={value}>{value}s</span>)}
               </div>
               <label className="mt-3 flex items-center justify-end gap-2 text-[10px] text-canvas-text-secondary">
-                默认时长
+                {t("默认时长")}
                 <Select fixedMenu
                   className="min-w-0" size="sm"
                   value={capability.defaultDuration ?? ''}
@@ -480,7 +482,7 @@ export default function VideoCapabilityEditor({
                     defaultDuration: selectedOptionValue ? Number(selectedOptionValue) : undefined,
                   })}
                 >
-                  <option value="">模型默认（未声明）</option>
+                  <option value="">{t("模型默认（未声明）")}</option>
                   {Array.from(
                     { length: editorMaxDuration - editorMinDuration + 1 },
                     (_, index) => editorMinDuration + index,
@@ -493,47 +495,46 @@ export default function VideoCapabilityEditor({
 
         <section className="ui-card space-y-2 p-3">
           <label className="ui-field">
-            <span className="ui-label">生成音轨能力</span>
+            <span className="ui-label">{t("生成音轨能力")}</span>
             <Select
               fixedMenu
               className="w-full"
               size="sm"
               name="video-audio-capability"
-              aria-label="生成音轨能力"
+              aria-label={t("生成音轨能力")}
               value={capability.supportsAudio === undefined ? '' : capability.supportsAudio ? 'supported' : 'unsupported'}
               onChange={(value) => commit({
                 ...capability,
                 supportsAudio: value === '' ? undefined : value === 'supported',
               })}
             >
-              <option value="">未声明（接口默认）</option>
-              <option value="supported">支持（可切换有声/无声）</option>
-              <option value="unsupported">不支持生成音轨</option>
+              <option value="">{t("未声明（接口默认）")}</option>
+              <option value="supported">{t("支持（可切换有声/无声）")}</option>
+              <option value="unsupported">{t("不支持生成音轨")}</option>
             </Select>
           </label>
           <p className="ui-hint text-[10px] leading-4">
-            未确认或接口不提供音频开关时保持未声明；参考音频不受此项影响。
-            声明支持时，请在调用协议中映射音频开关。
+            {t("未确认或接口不提供音频开关时保持未声明；参考音频不受此项影响。 声明支持时，请在调用协议中映射音频开关。")}
           </p>
         </section>
 
         <section className="rounded-lg border border-canvas-border bg-black/10 p-3">
           <div className="mb-3">
-            <span className="text-xs font-medium text-canvas-text">提交前输入校验</span>
+            <span className="text-xs font-medium text-canvas-text">{t("提交前输入校验")}</span>
             <p className="mt-1 text-[10px] leading-4 text-canvas-text-muted">
-              留空表示不限制；不符合时会在创建远端任务前拦截，避免无效请求产生费用。
+              {t("留空表示不限制；不符合时会在创建远端任务前拦截，避免无效请求产生费用。")}
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-              <span>提示词最少字符</span>
+              <span>{t("提示词最少字符")}</span>
               <input
                 type="number"
                 min="0"
                 step="1"
                 className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                 value={inputConstraints.promptMinCharacters ?? ''}
-                placeholder="不限"
+                placeholder={t("不限")}
                 onChange={(event) => commitInputConstraints({
                   ...inputConstraints,
                   promptMinCharacters: optionalNumber(event.target.value, { integer: true }),
@@ -541,7 +542,7 @@ export default function VideoCapabilityEditor({
               />
             </label>
             <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-              <span>Base64 解码后总上限（MiB）</span>
+              <span>{t("Base64 解码后总上限（MiB）")}</span>
               <input
                 type="number"
                 min="0"
@@ -550,7 +551,7 @@ export default function VideoCapabilityEditor({
                 value={inputConstraints.maxBase64DecodedBytes === undefined
                   ? ''
                   : Number((inputConstraints.maxBase64DecodedBytes / (1024 * 1024)).toFixed(2))}
-                placeholder="不限"
+                placeholder={t("不限")}
                 onChange={(event) => commitInputConstraints({
                   ...inputConstraints,
                   maxBase64DecodedBytes: optionalNumber(event.target.value, {
@@ -561,14 +562,14 @@ export default function VideoCapabilityEditor({
               />
             </label>
             <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-              <span>参考视频最小宽度（px）</span>
+              <span>{t("参考视频最小宽度（px）")}</span>
               <input
                 type="number"
                 min="0"
                 step="1"
                 className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                 value={inputConstraints.referenceVideo?.width?.min ?? ''}
-                placeholder="不限"
+                placeholder={t("不限")}
                 onChange={(event) => commitInputConstraints({
                   ...inputConstraints,
                   referenceVideo: {
@@ -583,14 +584,14 @@ export default function VideoCapabilityEditor({
             </label>
             <div className="grid grid-cols-2 gap-2">
               <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-                <span>视频最短（秒）</span>
+                <span>{t("视频最短（秒）")}</span>
                 <input
                   type="number"
                   min="0"
                   step="0.1"
                   className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                   value={inputConstraints.referenceVideo?.durationSeconds?.min ?? ''}
-                  placeholder="不限"
+                  placeholder={t("不限")}
                   onChange={(event) => commitInputConstraints({
                     ...inputConstraints,
                     referenceVideo: {
@@ -604,14 +605,14 @@ export default function VideoCapabilityEditor({
                 />
               </label>
               <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-                <span>视频最长（秒）</span>
+                <span>{t("视频最长（秒）")}</span>
                 <input
                   type="number"
                   min="0"
                   step="0.1"
                   className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                   value={inputConstraints.referenceVideo?.durationSeconds?.max ?? ''}
-                  placeholder="不限"
+                  placeholder={t("不限")}
                   onChange={(event) => commitInputConstraints({
                     ...inputConstraints,
                     referenceVideo: {
@@ -627,14 +628,14 @@ export default function VideoCapabilityEditor({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-                <span>音频最短（秒）</span>
+                <span>{t("音频最短（秒）")}</span>
                 <input
                   type="number"
                   min="0"
                   step="0.1"
                   className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                   value={inputConstraints.referenceAudio?.durationSeconds?.min ?? ''}
-                  placeholder="不限"
+                  placeholder={t("不限")}
                   onChange={(event) => commitInputConstraints({
                     ...inputConstraints,
                     referenceAudio: {
@@ -648,14 +649,14 @@ export default function VideoCapabilityEditor({
                 />
               </label>
               <label className="space-y-1 text-[10px] text-canvas-text-secondary">
-                <span>音频最长（秒）</span>
+                <span>{t("音频最长（秒）")}</span>
                 <input
                   type="number"
                   min="0"
                   step="0.1"
                   className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-indigo-400/60"
                   value={inputConstraints.referenceAudio?.durationSeconds?.max ?? ''}
-                  placeholder="不限"
+                  placeholder={t("不限")}
                   onChange={(event) => commitInputConstraints({
                     ...inputConstraints,
                     referenceAudio: {
@@ -687,7 +688,7 @@ export default function VideoCapabilityEditor({
                     },
                   })}
                 />
-                视频最长严格小于
+                {t("视频最长严格小于")}
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -706,7 +707,7 @@ export default function VideoCapabilityEditor({
                     },
                   })}
                 />
-                音频最长严格小于
+                {t("音频最长严格小于")}
               </label>
             </div>
           </div>
@@ -714,7 +715,7 @@ export default function VideoCapabilityEditor({
       </div>
 
       <div className="mt-4 flex justify-end">
-        <button type="button" className="text-[11px] text-canvas-text-secondary hover:text-canvas-text" onClick={() => onChange(undefined)}>清除自定义限制，恢复通用默认</button>
+        <button type="button" className="text-[11px] text-canvas-text-secondary hover:text-canvas-text" onClick={() => onChange(undefined)}>{t("清除自定义限制，恢复通用默认")}</button>
       </div>
     </div>
   );

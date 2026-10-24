@@ -9,6 +9,7 @@ const driver = vi.hoisted(() => ({
 }));
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
+    useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
   useCallback: <T,>(callback: T) => callback,
   useState: <T,>(initial: T) => {
     const index = driver.stateIndex++;

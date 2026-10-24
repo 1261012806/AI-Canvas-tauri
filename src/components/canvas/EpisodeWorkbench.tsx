@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { CheckCircle2, LayoutGrid, ListVideo, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 import { episodeWorkbenchSummary, shotVideoNodes } from '../../utils/episodeLayout';
 import { checkVideoServices, inspectVideoNode } from '../../services/videoBatchPlanning';
 import { expandShotlistRowMentions } from '../../services/shotlistPromptService';
@@ -40,7 +40,7 @@ function EpisodeWorkbench() {
   const notify = (error: unknown) => useAppStore.getState().showToast(error instanceof Error ? error.message : t('操作失败'), 'error');
 
   useEffect(() => {
-    if (projectId) void loadBatches(projectId).catch(() => useAppStore.getState().showToast('无法读取视频队列记录', 'error'));
+    if (projectId) void loadBatches(projectId).catch(() => useAppStore.getState().showToast(translate('无法读取视频队列记录'), 'error'));
     return () => { inspectController.current?.abort(); };
   }, [projectId, loadBatches]);
 

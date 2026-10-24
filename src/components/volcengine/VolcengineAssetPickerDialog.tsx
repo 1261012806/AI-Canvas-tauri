@@ -1,3 +1,5 @@
+import { useT } from '../../i18n';
+import { getVolcengineAssetStatusLabel } from './volcengineAssetLabels';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore } from '../../store/useAppStore';
@@ -33,6 +35,7 @@ export default function VolcengineAssetPickerDialog({
   allowedAssetTypes?: Array<'Image' | 'Video' | 'Audio'>;
   maxSelections?: number;
 }) {
+  const t = useT();
   const provider = useAppStore((state) => state.config.providers.volcengine
     || Object.values(state.config.providers).find((item) => item.catalogId === 'volcengine'));
   const library = provider?.assetLibrary;
@@ -101,7 +104,7 @@ export default function VolcengineAssetPickerDialog({
     const sameType = [...selected.values()].filter((item) => (item.assetType?.toLowerCase() || 'image') === type);
     const index = sameType.findIndex((item) => item.id === asset.id);
     if (index < 0) return undefined;
-    return `${type === 'image' ? '图片' : type === 'video' ? '视频' : '音频'}${index + 1}`;
+    return t('{kind}{index}', { kind: t(type === 'image' ? '图片' : type === 'video' ? '视频' : '音频'), index: index + 1 });
   };
   const groupedAssets = useMemo(() => {
     const result = new Map<string, VolcengineAsset[]>();
@@ -134,26 +137,26 @@ export default function VolcengineAssetPickerDialog({
   };
   const close = () => { setSelected(new Map()); onClose(); };
 
-  return <ModalOverlay isOpen={isOpen} onClose={close} ariaLabel="选择火山方舟素材" className="h-[min(82vh,44rem)] w-[min(92vw,58rem)]" closeOnBackdrop={false}>
+  return <ModalOverlay isOpen={isOpen} onClose={close} ariaLabel={t('选择火山方舟素材')} className="h-[min(82vh,44rem)] w-[min(92vw,58rem)]" closeOnBackdrop={false}>
     <div className="flex items-center justify-between border-b border-canvas-border px-2.5 py-2">
-      <div><h2 className="ui-title">选择火山方舟素材</h2><p className="mt-1 text-xs text-canvas-text-muted">项目：{projectName} · 仅 Active 素材可用于 Seedance 2.0/2.5</p></div>
-      <PopupCloseButton onClick={close} ariaLabel="关闭" />
+      <div><h2 className="ui-title">{t('选择火山方舟素材')}</h2><p className="mt-1 text-xs text-canvas-text-muted">{t('项目：{name} · 仅 Active 素材可用于 Seedance 2.0/2.5', { name: projectName })}</p></div>
+      <PopupCloseButton onClick={close} ariaLabel={t('关闭')} />
     </div>
     <div className="flex min-h-0 flex-1 flex-col p-4">
       <div className="flex gap-2">
-        <Select className="max-w-56" value={selectedGroup} onChange={(value) => { setSelectedGroup(value); setPage(1); }} options={[{ value: '', label: '全部素材组' }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} fixedMenu />
-        <input className="ui-input min-w-0 flex-1" placeholder="按素材名称搜索" value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
-        <button type="button" className="ui-btn ui-btn--ghost" disabled={busy} onClick={() => void load()}><Icon icon="mdi:refresh" />刷新</button>
+        <Select className="max-w-56" value={selectedGroup} onChange={(value) => { setSelectedGroup(value); setPage(1); }} options={[{ value: '', label: t('全部素材组') }, ...groups.map((group) => ({ value: group.id, label: group.name }))]} fixedMenu />
+        <input className="ui-input min-w-0 flex-1" placeholder={t('按素材名称搜索')} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
+        <button type="button" className="ui-btn ui-btn--ghost" disabled={busy} onClick={() => void load()}><Icon icon="mdi:refresh" />{t('刷新')}</button>
       </div>
-      {message && <div className="ui-alert ui-alert--warning mt-3"><Icon icon="mdi:alert-outline" width="18" /><span>{message}</span></div>}
+      {message && <div className="ui-alert ui-alert--warning mt-3"><Icon icon="mdi:alert-outline" width="18" /><span>{t(message)}</span></div>}
       <div className="mt-3 min-h-0 flex-1 space-y-4 overflow-auto pr-1">
-        {groupedAssets.map(([groupId, items]) => <section key={groupId}><div className="mb-2 flex items-center gap-2 text-xs"><Icon icon="mdi:folder-outline" /><strong>{groupsById.get(groupId)?.name || '未命名素材组'}</strong><span className="text-canvas-text-muted">{items.length}</span></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{items.map((asset) => {
+        {groupedAssets.map(([groupId, items]) => <section key={groupId}><div className="mb-2 flex items-center gap-2 text-xs"><Icon icon="mdi:folder-outline" /><strong>{groupsById.get(groupId)?.name || t('未命名素材组')}</strong><span className="text-canvas-text-muted">{items.length}</span></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{items.map((asset) => {
           const active = asset.status === 'Active'; const exists = existingIds.has(asset.id); const checked = selected.has(asset.id) || exists; const mediaType = asset.assetType?.toLowerCase();
-          return <button key={asset.id} type="button" disabled={!active || exists} onClick={() => toggle(asset)} className={`overflow-hidden rounded-lg border text-left transition-colors ${checked ? 'border-brand bg-brand/10' : 'border-canvas-border bg-canvas-surface'} ${active && !exists ? 'hover:border-canvas-text-muted' : 'cursor-not-allowed opacity-50'}`}><div className="aspect-video overflow-hidden bg-canvas-bg">{mediaType === 'image' && asset.thumbnailUrl ? <ViewportImage src={asset.thumbnailUrl} alt={asset.name} className="h-full w-full object-cover" draggable={false} /> : mediaType === 'video' && asset.thumbnailUrl ? <VideoThumbnail src={asset.thumbnailUrl} name={asset.name} alt="" className="block h-full w-full object-cover" /> : <span className="flex h-full items-center justify-center text-canvas-text-muted"><Icon icon={mediaType === 'audio' ? 'mdi:music-note-outline' : mediaType === 'video' ? 'mdi:video-outline' : 'mdi:image-outline'} width="28" /></span>}</div><div className="flex items-center gap-2 p-2"><span className="min-w-0 flex-1 truncate text-xs">{selectedNumber(asset) || (exists ? '已添加' : asset.name)}</span><span className={active ? 'text-[10px] text-emerald-400' : 'text-[10px] text-canvas-text-muted'}>{exists ? '已添加' : asset.status}</span>{checked && <Icon icon="mdi:check-circle" className="text-brand" />}</div></button>;
+          return <button key={asset.id} type="button" disabled={!active || exists} onClick={() => toggle(asset)} className={`overflow-hidden rounded-lg border text-left transition-colors ${checked ? 'border-brand bg-brand/10' : 'border-canvas-border bg-canvas-surface'} ${active && !exists ? 'hover:border-canvas-text-muted' : 'cursor-not-allowed opacity-50'}`}><div className="aspect-video overflow-hidden bg-canvas-bg">{mediaType === 'image' && asset.thumbnailUrl ? <ViewportImage src={asset.thumbnailUrl} alt={asset.name} className="h-full w-full object-cover" draggable={false} /> : mediaType === 'video' && asset.thumbnailUrl ? <VideoThumbnail src={asset.thumbnailUrl} name={asset.name} alt="" className="block h-full w-full object-cover" /> : <span className="flex h-full items-center justify-center text-canvas-text-muted"><Icon icon={mediaType === 'audio' ? 'mdi:music-note-outline' : mediaType === 'video' ? 'mdi:video-outline' : 'mdi:image-outline'} width="28" /></span>}</div><div className="flex items-center gap-2 p-2"><span className="min-w-0 flex-1 truncate text-xs">{selectedNumber(asset) || (exists ? t('已添加') : asset.name)}</span><span className={active ? 'text-[10px] text-emerald-400' : 'text-[10px] text-canvas-text-muted'}>{exists ? t('已添加') : getVolcengineAssetStatusLabel(asset.status)}</span>{checked && <Icon icon="mdi:check-circle" className="text-brand" />}</div></button>;
         })}</div></section>)}
-        {!busy && assets.length === 0 && !message && <div className="ui-empty"><Icon icon="mdi:account-box-outline" width="30" className="ui-empty__icon" /><p className="ui-empty__title">没有可选素材</p></div>}
+        {!busy && assets.length === 0 && !message && <div className="ui-empty"><Icon icon="mdi:account-box-outline" width="30" className="ui-empty__icon" /><p className="ui-empty__title">{t('没有可选素材')}</p></div>}
       </div>
-      <div className="mt-3 flex items-center justify-between border-t border-canvas-border pt-3"><span className="text-xs text-canvas-text-muted">第 {page} / {pages} 页 · 已选择 {selected.size} 个{maxSelections === 1 ? '（仅可绑定一个）' : ''}</span><div className="flex gap-2"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page <= 1 || busy} onClick={() => setPage((value) => value - 1)}>上一页</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page >= pages || busy} onClick={() => setPage((value) => value + 1)}>下一页</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={close}>取消</button><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={selected.size === 0} onClick={confirm}>{maxSelections === 1 ? '绑定此素材' : '添加所选素材'}</button></div></div>
+      <div className="mt-3 flex items-center justify-between border-t border-canvas-border pt-3"><span className="text-xs text-canvas-text-muted">{t('第 {page} / {pages} 页 · 已选择 {count} 个', { page, pages, count: selected.size })}{maxSelections === 1 ? t('（仅可绑定一个）') : ''}</span><div className="flex gap-2"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page <= 1 || busy} onClick={() => setPage((value) => value - 1)}>{t('上一页')}</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={page >= pages || busy} onClick={() => setPage((value) => value + 1)}>{t('下一页')}</button><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={close}>{t('取消')}</button><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={selected.size === 0} onClick={confirm}>{t(maxSelections === 1 ? '绑定此素材' : '添加所选素材')}</button></div></div>
     </div>
   </ModalOverlay>;
 }

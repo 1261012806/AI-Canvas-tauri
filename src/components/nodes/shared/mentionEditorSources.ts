@@ -3,6 +3,7 @@
  * 收集画布上可被引用的生成节点（含上游连线输出）与工作流 IO 节点，
  * 解析出带缩略图、输出类型与自引用标记的提及条目，供提示词编辑器联想补全。
  */
+import { t } from '../../../i18n';
 import type { AppState } from '../../../store/useAppStore';
 import type { BaseNodeData, NodeType, StoryboardCellOverride, WorkflowIONodeType } from '../../../types';
 import { bestNodeThumb } from './mentionEditorDom';
@@ -44,7 +45,7 @@ export function filterWorkflowMentions(items: WorkflowMentionItem[], filter: Wor
 }
 
 export function workflowMentionFilterChips(items: WorkflowMentionItem[]): Array<{ id: WorkflowMentionFilter; label: string; count: number }> {
-  return WORKFLOW_FILTER_LABELS.map((filter) => ({ ...filter, count: filterWorkflowMentions(items, filter.id).length }));
+  return WORKFLOW_FILTER_LABELS.map((filter) => ({ ...filter, label: t(filter.label), count: filterWorkflowMentions(items, filter.id).length }));
 }
 
 /** 每个查询词可匹配不同字段，兼容全角字符与节点编号。 */

@@ -15,7 +15,7 @@ import type {
 } from '../../types';
 import type { CanvasRadialMenuPosition } from '../../hooks/useCanvasLongPressRadialMenu';
 import PopupCloseButton from '../shared/PopupCloseButton';
-import { useT } from '../../i18n';
+import { t, useT } from '../../i18n';
 
 const SLOT_COUNT = 6;
 const MENU_VIEWPORT_PADDING = 122;
@@ -87,14 +87,14 @@ function clampMenuPosition(position: CanvasRadialMenuPosition): CanvasRadialMenu
 async function openExternalUrl(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('仅支持 http/https 网页地址');
+    throw new Error(t('仅支持 http/https 网页地址'));
   }
   try {
     const { open } = await import('@tauri-apps/plugin-shell');
     await open(parsed.toString());
   } catch {
     const opened = window.open(parsed.toString(), '_blank', 'noopener,noreferrer');
-    if (!opened) throw new Error('无法打开网页');
+    if (!opened) throw new Error(t('无法打开网页'));
   }
 }
 

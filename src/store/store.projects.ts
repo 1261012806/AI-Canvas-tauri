@@ -1,4 +1,5 @@
-﻿/**
+import { t } from '../i18n';
+/**
  * Project slice — multi-project management, save/load/init via IndexedDB
  */
 import type { Node, Edge } from '@xyflow/react';
@@ -387,8 +388,8 @@ function noteSaveFailure(
   };
   set({ autoSaveFailure: next });
   if (shouldNotify) {
-    const prefix = count > 1 ? `自动保存已连续失败 ${count} 次` : '自动保存失败';
-    get().showToast(`${prefix}：${params.reason}。请手动保存 (Ctrl+S) 或导出项目备份`, 'error');
+    const prefix = count > 1 ? t('自动保存已连续失败 {count} 次', { count }) : t('自动保存失败');
+    get().showToast(t('{prefix}：{reason}。请手动保存 (Ctrl+S) 或导出项目备份', { prefix, reason: params.reason }), 'error');
   }
   return next;
 }
@@ -1128,12 +1129,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     try {
       const result = await exportProjectArchive(ownerId);
       if (!result) return false;
-      const episodes = result.episodeCount > 0 ? `${result.episodeCount} 个分集、` : '';
-      get().showToast(`已导出「${project.name}」，含 ${episodes}${result.assetCount} 个素材`);
+      const episodes = result.episodeCount > 0 ? t('{count} 个分集、', { count: result.episodeCount }) : '';
+      get().showToast(t('已导出「{name}」，含 {episodes}{count} 个素材', { name: project.name, episodes, count: result.assetCount }));
       return true;
     } catch (error) {
       console.error('[项目导出] 失败:', error);
-      get().showToast(error instanceof Error ? `项目导出失败：${error.message}` : '项目导出失败', 'error');
+      get().showToast(error instanceof Error ? t('项目导出失败：{reason}', { reason: error.message }) : '项目导出失败', 'error');
       return false;
     }
   },
@@ -1174,12 +1175,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       };
       fileService.registerProjectFolders([copy, ...result.episodes]);
       set((current) => ({ projects: [...current.projects, copy, ...result.episodes] }));
-      const episodes = result.episodes.length > 0 ? `，含 ${result.episodes.length} 个分集` : '';
-      get().showToast(`已复制为「${result.projectName}」${episodes}`);
+      const episodes = result.episodes.length > 0 ? t('，含 {count} 个分集', { count: result.episodes.length }) : '';
+      get().showToast(t('已复制为「{name}」{episodes}', { name: result.projectName, episodes }));
       return result.projectId;
     } catch (error) {
       console.error('[项目复制] 失败:', error);
-      get().showToast(error instanceof Error ? `项目复制失败：${error.message}` : '项目复制失败', 'error');
+      get().showToast(error instanceof Error ? t('项目复制失败：{reason}', { reason: error.message }) : '项目复制失败', 'error');
       return undefined;
     }
   },
@@ -1190,7 +1191,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       result = await importProjectArchive();
     } catch (error) {
       console.error('[项目导入] 失败:', error);
-      get().showToast(error instanceof Error ? `项目导入失败：${error.message}` : '项目导入失败', 'error');
+      get().showToast(error instanceof Error ? t('项目导入失败：{reason}', { reason: error.message }) : '项目导入失败', 'error');
       return undefined;
     }
     if (!result) return undefined;
@@ -1215,12 +1216,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     } catch {
       // 导入已经落盘，打开失败不能把它误报成导入失败。
     }
-    const episodes = result.episodes.length > 0 ? `${result.episodes.length} 个分集、` : '';
+    const episodes = result.episodes.length > 0 ? t('{count} 个分集、', { count: result.episodes.length }) : '';
     const notices = [
-      `已导入「${result.projectName}」，含 ${episodes}${result.assetCount} 个素材`,
-      ...(result.missingAssetCount > 0 ? [`${result.missingAssetCount} 个素材未找到`] : []),
-      ...result.warnings,
-      ...(!opened ? ['自动打开失败，请从项目库重新打开'] : []),
+      t('已导入「{name}」，含 {episodes}{count} 个素材', { name: result.projectName, episodes, count: result.assetCount }),
+      ...(result.missingAssetCount > 0 ? [t('{count} 个素材未找到', { count: result.missingAssetCount })] : []),
+      ...result.warnings.map((warning) => t(warning)),
+      ...(!opened ? [t('自动打开失败，请从项目库重新打开')] : []),
     ];
     // 旧包缺失分集与素材的提示保留在同一条反馈，避免成功提示覆盖原因。
     get().showToast(notices.join('；'), notices.length > 1 ? 'info' : undefined);
@@ -1542,7 +1543,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       console.error('Save failed:', error);
       // 手动保存本来就每次都给反馈，交给 toast 自己说，不走去重逻辑
       const failure = await noteSaveError(set, get, error, false);
-      get().showToast(`保存失败：${failure.reason}`, 'error');
+      get().showToast(t('保存失败：{reason}', { reason: failure.reason }), 'error');
       return undefined;
     }
   },

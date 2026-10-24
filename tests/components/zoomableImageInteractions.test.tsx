@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const gesture = vi.hoisted(() => ({ scale: 1, zoomTo: vi.fn(), reset: vi.fn() }));
 
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   useCallback: <T,>(callback: T) => callback,

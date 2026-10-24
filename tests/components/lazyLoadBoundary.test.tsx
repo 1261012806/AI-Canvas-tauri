@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import LazyLoadBoundary from '../../src/components/shared/LazyLoadBoundary';
+import { LazyLoadBoundary } from '../../src/components/shared/LazyLoadBoundary';
 
 describe('LazyLoadBoundary recovery', () => {
   it('keeps the plain button and its action when an effect fails', () => {

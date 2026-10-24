@@ -9,6 +9,7 @@ import type {
   AgentStep,
   AgentTask,
 } from '../../types/agent';
+import { t } from '../../i18n';
 
 export type AgentRationaleKind = 'analysis' | 'decision' | 'action' | 'observation' | 'control';
 export type AgentRationaleTone = 'active' | 'success' | 'warning' | 'error' | 'muted';
@@ -40,7 +41,7 @@ function findStep(task: AgentTask, event: AgentEvent): AgentStep | undefined {
 }
 
 function toolTitle(task: AgentTask, event: AgentEvent): string {
-  return findStep(task, event)?.title || event.data?.toolId || '工具操作';
+  return findStep(task, event)?.title || event.data?.toolId || t('工具操作');
 }
 
 function formatDuration(durationMs: number | undefined): string | undefined {
@@ -53,7 +54,7 @@ function toolMeta(event: AgentEvent): string | undefined {
   const parts: string[] = [];
   const duration = formatDuration(event.data?.durationMs);
   if (duration) parts.push(duration);
-  if ((event.data?.retryCount ?? 0) > 0) parts.push(`重试 ${event.data?.retryCount} 次`);
+  if ((event.data?.retryCount ?? 0) > 0) parts.push(t('重试 {count} 次', { count: event.data?.retryCount ?? 0 }));
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
@@ -61,23 +62,23 @@ function policyDetail(
   decision: AgentEventData['decision'],
   effect: AgentApprovalKind | 'read' | undefined,
 ): string {
-  if (decision === 'deny') return '本地权限策略拒绝了本次操作。';
+  if (decision === 'deny') return t('本地权限策略拒绝了本次操作。');
   if (decision === 'require_approval') {
     switch (effect) {
-      case 'canvas_write': return '画布修改需要根据当前协作模式由用户确认。';
-      case 'media_generation': return '当前协作模式下，付费媒体生成需要用户确认。';
-      case 'file_write': return '当前协作模式下，本地文件写入需要用户确认。';
-      case 'permanent_delete': return '永久删除始终需要用户二次确认。';
-      case 'memory_write': return '项目记忆必须由用户确认后保存。';
-      case 'config_write': return '厂商配置写入必须由用户确认。';
-      case 'asset_write': return '资产库写入必须由用户确认。';
-      case 'external_write': return '当前协作模式下，外部 MCP 操作需要用户确认。';
-      default: return '此操作执行前需要用户确认。';
+      case 'canvas_write': return t('画布修改需要根据当前协作模式由用户确认。');
+      case 'media_generation': return t('当前协作模式下，付费媒体生成需要用户确认。');
+      case 'file_write': return t('当前协作模式下，本地文件写入需要用户确认。');
+      case 'permanent_delete': return t('永久删除始终需要用户二次确认。');
+      case 'memory_write': return t('项目记忆必须由用户确认后保存。');
+      case 'config_write': return t('厂商配置写入必须由用户确认。');
+      case 'asset_write': return t('资产库写入必须由用户确认。');
+      case 'external_write': return t('当前协作模式下，外部 MCP 操作需要用户确认。');
+      default: return t('此操作执行前需要用户确认。');
     }
   }
-  if (effect === 'read') return '只读操作符合当前权限，可自动执行。';
-  if (effect === 'canvas_write') return '本地策略允许当前模式执行本次画布修改。';
-  return '本地权限策略允许执行本次操作。';
+  if (effect === 'read') return t('只读操作符合当前权限，可自动执行。');
+  if (effect === 'canvas_write') return t('本地策略允许当前模式执行本次画布修改。');
+  return t('本地权限策略允许执行本次操作。');
 }
 
 function eventToEntry(
@@ -91,41 +92,44 @@ function eventToEntry(
 
   switch (event.type) {
     case 'task_queued':
-      return { ...base, kind: 'control', tone: 'muted', title: '任务已进入执行队列' };
+      return { ...base, kind: 'control', tone: 'muted', title: t('任务已进入执行队列') };
     case 'model_round_start':
       return {
         ...base,
         kind: 'analysis',
         tone: 'active',
-        title: `第 ${modelRound} 轮：分析任务`,
-        detail: '结合任务目标和已有观察，选择下一步可验证操作。',
+        title: t('第 {round} 轮：分析任务', { round: modelRound }),
+        detail: t('结合任务目标和已有观察，选择下一步可验证操作。'),
       };
     case 'model_round_end':
       return {
         ...base,
         kind: 'analysis',
         tone: 'muted',
-        title: `第 ${modelRound} 轮：分析完成`,
+        title: t('第 {round} 轮：分析完成', { round: modelRound }),
         meta: toolMeta(event),
       };
     case 'interjection_applied':
-      return { ...base, kind: 'control', tone: 'active', title: '已纳入用户补充要求' };
+      return { ...base, kind: 'control', tone: 'active', title: t('已纳入用户补充要求') };
     case 'tool_proposed':
       return {
         ...base,
         kind: 'action',
         tone: 'active',
-        title: `提出工具：${title}`,
+        title: t('提出工具：{title}', { title }),
         detail: step?.toolCall?.inputSummary,
       };
     case 'policy_decision': {
       const decision = event.data?.decision;
-      const prefix = decision === 'deny' ? '已阻止' : decision === 'require_approval' ? '等待确认' : '允许执行';
       return {
         ...base,
         kind: 'decision',
         tone: decision === 'deny' ? 'error' : decision === 'require_approval' ? 'warning' : 'success',
-        title: `${prefix}：${title}`,
+        title: decision === 'deny'
+          ? t('已阻止：{title}', { title })
+          : decision === 'require_approval'
+            ? t('等待确认：{title}', { title })
+            : t('允许执行：{title}', { title }),
         detail: policyDetail(decision, event.data?.effect),
       };
     }
@@ -134,14 +138,14 @@ function eventToEntry(
         ...base,
         kind: 'decision',
         tone: event.data?.approved ? 'success' : 'warning',
-        title: event.data?.approved ? '用户已批准操作' : '用户未批准操作',
+        title: event.data?.approved ? t('用户已批准操作') : t('用户未批准操作'),
       };
     case 'tool_start':
       return {
         ...base,
         kind: 'action',
         tone: 'active',
-        title: `开始执行：${title}`,
+        title: t('开始执行：{title}', { title }),
         detail: step?.toolCall?.inputSummary,
       };
     case 'tool_end': {
@@ -150,7 +154,7 @@ function eventToEntry(
         ...base,
         kind: 'observation',
         tone: succeeded ? 'success' : 'error',
-        title: succeeded ? `执行完成：${title}` : `执行失败：${title}`,
+        title: succeeded ? t('执行完成：{title}', { title }) : t('执行失败：{title}', { title }),
         detail: step?.outputSummary || step?.toolCall?.resultSummary || step?.errorMessage,
         meta: toolMeta(event),
       };
@@ -160,11 +164,11 @@ function eventToEntry(
         ...base,
         kind: 'control',
         tone: 'success',
-        title: '已记录画布回退点',
-        detail: '本次画布修改可从任务时间线回退。',
+        title: t('已记录画布回退点'),
+        detail: t('本次画布修改可从任务时间线回退。'),
       };
     case 'canvas_rewind':
-      return { ...base, kind: 'control', tone: 'success', title: '已回退任务画布修改' };
+      return { ...base, kind: 'control', tone: 'success', title: t('已回退任务画布修改') };
     case 'task_status': {
       const status = event.data?.status;
       if (!status || !(status in TASK_STATUS_LABELS)) return null;
@@ -179,7 +183,7 @@ function eventToEntry(
         ...base,
         kind: 'control',
         tone,
-        title: TASK_STATUS_LABELS[status as keyof typeof TASK_STATUS_LABELS],
+        title: t(TASK_STATUS_LABELS[status as keyof typeof TASK_STATUS_LABELS]),
       };
     }
     default:

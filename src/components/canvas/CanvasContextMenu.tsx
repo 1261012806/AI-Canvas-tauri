@@ -162,7 +162,7 @@ function GridPicker({
               key={index}
               type="button"
               className={`h-4 w-4 rounded-[3px] border cursor-pointer ${active ? 'border-brand bg-brand/50' : 'border-canvas-text-muted/50 bg-canvas-surface hover:border-brand'}`}
-              aria-label={`${cellRows} 行 ${cellCols} 列`}
+              aria-label={t('{rows} 行 {cols} 列', { rows: cellRows, cols: cellCols })}
               onMouseEnter={() => setHover({ rows: cellRows, cols: cellCols })}
               onFocus={() => setHover({ rows: cellRows, cols: cellCols })}
               onClick={() => onCreate(cellRows, cellCols)}

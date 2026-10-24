@@ -3,6 +3,7 @@
  * 通过 createPortal 渲染到 document.body，避免被节点裁剪
  */
 import { lazy, Suspense, useEffect } from 'react';
+import { useT } from '../../i18n';
 import { motion } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '../../store/useAppStore';
@@ -34,9 +35,7 @@ const MODEL_MAP: Record<'upscale' | 'matting' | 'asr', ModelInfo> = {
   asr: {
     title: '语音识别模型未安装',
     description:
-      '首次使用语音转文本需要下载 SenseVoice Small 语音识别模型（约 230MB，int8 量化）。'
-      + '模型保存在本地，之后无需重复下载，也不需要联网或配置 API Key。'
-      + '模型来自阿里 FunASR 团队，已按其开源协议保留署名。',
+      '首次使用语音转文本需要下载 SenseVoice Small 语音识别模型（约 230MB，int8 量化）。模型保存在本地，之后无需重复下载，也不需要联网或配置 API Key。模型来自阿里 FunASR 团队，已按其开源协议保留署名。',
     loadingText: '正在下载语音识别模型...',
   },
 };
@@ -60,6 +59,7 @@ export default function ModelDownloadDialog({
   onConfirm,
   onCancel,
 }: ModelDownloadDialogProps) {
+  const t = useT();
   const info = MODEL_MAP[type];
   const mascotVisible = useAppStore((s) => s.config.mascotVisible);
 
@@ -92,8 +92,8 @@ export default function ModelDownloadDialog({
                 </svg>
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-canvas-text mb-1">{info.title}</h3>
-                <p className="text-xs text-canvas-text-secondary leading-relaxed">{info.description}</p>
+                <h3 className="text-sm font-semibold text-canvas-text mb-1">{t(info.title)}</h3>
+                <p className="text-xs text-canvas-text-secondary leading-relaxed">{t(info.description)}</p>
               </div>
             </div>
             <div className="flex justify-end gap-2">
@@ -101,13 +101,13 @@ export default function ModelDownloadDialog({
                 className="px-3 py-2 text-xs rounded-lg bg-canvas-hover text-canvas-text-secondary hover:bg-canvas-border transition-colors"
                 onClick={onCancel}
               >
-                取消
+                {t('取消')}
               </button>
               <button
                 className="px-3 py-2 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium"
                 onClick={onConfirm}
               >
-                下载模型
+                {t('下载模型')}
               </button>
             </div>
           </div>
@@ -139,14 +139,14 @@ export default function ModelDownloadDialog({
             <DownloadProgress
               downloadedBytes={progress?.transferredBytes ?? 0}
               totalBytes={progress?.totalBytes ?? undefined}
-              label={downloadLabel ?? info.loadingText}
+              label={downloadLabel ?? t(info.loadingText)}
               className="text-left"
             />
             <button
               className="mt-4 px-3 py-2 text-xs rounded-lg bg-canvas-hover text-canvas-text-secondary hover:bg-canvas-border transition-colors"
               onClick={onCancel}
             >
-              取消下载
+              {t('取消下载')}
             </button>
           </div>
         </motion.div>

@@ -4,6 +4,7 @@
  */
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useAppStore } from '../store/useAppStore';
+import { useT } from '../i18n';
 
 function LogoSpinner({ still }: { still: boolean }) {
   return (
@@ -40,6 +41,7 @@ function LogoSpinner({ still }: { still: boolean }) {
 }
 
 export default function ProjectSwitchOverlay() {
+  const t = useT();
   const switchingProjectName = useAppStore((state) => state.switchingProjectName);
   const reduceMotion = useReducedMotion();
 
@@ -65,7 +67,7 @@ export default function ProjectSwitchOverlay() {
             <LogoSpinner still={Boolean(reduceMotion)} />
           </motion.div>
           <p className="text-sm tracking-wide" style={{ color: 'var(--theme-text-secondary)' }}>
-            {switchingProjectName ? `正在打开「${switchingProjectName}」` : '正在打开画布'}
+            {switchingProjectName ? t('正在打开「{name}」', { name: switchingProjectName }) : t('正在打开画布')}
           </p>
         </motion.div>
       )}

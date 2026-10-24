@@ -11,7 +11,7 @@ import { useAppStore } from '../../store/useAppStore';
 import type { ComfyMemoryPolicy, ComfyServer } from '../../types';
 import AnimatedButton from '../shared/AnimatedButton';
 import Select from '../shared/Select';
-import { useT } from '../../i18n';
+import { t, useT } from '../../i18n';
 import {
   getComfyInstallation,
   openComfyManagementWindow,
@@ -52,7 +52,7 @@ async function syncInstallationMirror(path: string): Promise<void> {
   try {
     await state.saveConfig({ silent: true, throwOnError: true });
   } catch {
-    throw new Error('ComfyUI 目录已由应用记住，但配置镜像保存失败，请重试');
+    throw new Error(t('ComfyUI 目录已由应用记住，但配置镜像保存失败，请重试'));
   }
 }
 

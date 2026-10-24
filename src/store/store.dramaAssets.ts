@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * 项目级短剧资产库（人物 / 场景 / 道具）
  */
@@ -888,7 +889,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     get().bindDramaAssetImage(kind, id, nodeId);
     get().setAssetsPanelOpen(false);
     get().setSelectedNodeIds([nodeId]);
-    get().showToast(`已创建「${label}」图像节点，可直接生成`);
+    get().showToast(t('已创建「{name}」图像节点，可直接生成', { name: label }));
 
     return nodeId;
   },

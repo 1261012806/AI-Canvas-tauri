@@ -4,7 +4,7 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useAppStore, type AppState } from '../../store/useAppStore';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 
 type ReferenceTokenKind = 'node' | 'model' | 'skill' | 'drama' | 'slash';
 
@@ -99,11 +99,11 @@ function parseReferenceTokens(
     const label = kind === 'node'
       ? match[2]
       : kind === 'model'
-        ? match[4] || '模型'
+        ? match[4] || translate('模型')
       : kind === 'skill'
         ? decodeLabel(match[6]) || 'Skill'
       : kind === 'drama'
-        ? match[8] || '资产'
+        ? match[8] || translate('资产')
         : raw.slice(1);
     const id = kind === 'node'
       ? match[1]

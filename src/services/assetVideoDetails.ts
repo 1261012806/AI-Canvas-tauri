@@ -1,3 +1,4 @@
+import { getLocale, t } from '../i18n';
 import { findVideoHistoryByReferences, type HistoryRecord } from './indexedDbService';
 
 /** 完整路径或媒体地址的只读查询；不根据同名文件推断来源。 */
@@ -20,10 +21,10 @@ export function describeAssetVideoHistory(history: HistoryRecord): Array<{ label
   for (const [key, label] of VIDEO_PARAMETERS) {
     const value = history.params?.[key];
     if (typeof value === 'string' && value.trim() || typeof value === 'number' && Number.isFinite(value) || typeof value === 'boolean') {
-      rows.push({ label, value: typeof value === 'boolean' ? value ? '是' : '否'
-        : (key === 'duration' || key === 'seedanceDuration') && typeof value === 'number' ? `${value} 秒` : String(value) });
+      rows.push({ label, value: typeof value === 'boolean' ? value ? t('是') : t('否')
+        : (key === 'duration' || key === 'seedanceDuration') && typeof value === 'number' ? t('{seconds} 秒', { seconds: value }) : String(value) });
     }
   }
-  if (Number.isFinite(history.timestamp) && history.timestamp > 0) rows.push({ label: '生成时间', value: new Date(history.timestamp).toLocaleString() });
+  if (Number.isFinite(history.timestamp) && history.timestamp > 0) rows.push({ label: '生成时间', value: new Date(history.timestamp).toLocaleString(getLocale()) });
   return rows;
 }

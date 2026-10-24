@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import MentionPicker from './shared/MentionPicker';
 import { buildWorkflowChipEl } from './nodes/shared/mentionEditorDom';
+import { useT } from '../i18n';
 
 const DEMO_VALUE = '夜色中的机械猫，霓虹反光';
 const DEMO_TABS = [{ id: 'nodes', label: '工作流节点' }];
@@ -24,6 +25,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export default function HelpMentionDemo() {
+  const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
   const chipHostRef = useRef<HTMLSpanElement>(null);
   const [playbackKey, setPlaybackKey] = useState(0);
@@ -113,7 +115,7 @@ export default function HelpMentionDemo() {
   return (
     <section
       ref={rootRef}
-      aria-label="@ 工作流节点操作演示"
+      aria-label={t('@ 工作流节点操作演示')}
       className="help-dialog__demo relative mt-4 overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg/60 px-3 py-3"
     >
       <div
@@ -121,11 +123,11 @@ export default function HelpMentionDemo() {
         aria-hidden="true"
       />
       <div className="relative mb-3 flex items-center justify-between gap-3">
-        <span className="text-[11px] font-medium text-canvas-text-secondary">@ 节点演示</span>
+        <span className="text-[11px] font-medium text-canvas-text-secondary">{t('@ 节点演示')}</span>
         <button
           type="button"
-          aria-label="重新播放 @ 节点演示"
-          data-tooltip="重新播放"
+          aria-label={t('重新播放 @ 节点演示')}
+          data-tooltip={t('重新播放')}
           onClick={replay}
           className="flex h-7 w-7 items-center justify-center rounded-lg text-canvas-text-muted transition-colors hover:bg-canvas-hover hover:text-canvas-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50"
         >
@@ -138,8 +140,8 @@ export default function HelpMentionDemo() {
         <div className="pointer-events-none absolute inset-x-0 top-0 flex h-[160px] justify-center">
           <div data-demo-picker className="pointer-events-auto w-full max-w-[280px] self-end">
             <MentionPicker
-              ariaLabel="工作流输入节点"
-              tabs={DEMO_TABS}
+              ariaLabel={t('工作流输入节点')}
+              tabs={DEMO_TABS.map((tab) => ({ ...tab, label: t(tab.label) }))}
               activeTab="nodes"
               onTabChange={() => {}}
               activeKey={activeKey}
@@ -148,14 +150,14 @@ export default function HelpMentionDemo() {
                   key: 'wf:6',
                   label: '正向提示词',
                   icon: 'mdi:text-box-outline',
-                  badge: '工作流',
+                  badge: t('工作流'),
                   onSelect: replay,
                 },
                 {
                   key: 'wf:12',
                   label: '参考图输入',
                   icon: 'mdi:image-outline',
-                  badge: '工作流',
+                  badge: t('工作流'),
                   onSelect: replay,
                 },
               ]}
@@ -167,10 +169,10 @@ export default function HelpMentionDemo() {
           >
             <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-400">
               <Icon icon="lucide:check-circle-2" width="15" height="15" aria-hidden="true" />
-              提示词已写入 #6 正向提示词节点
+              {t('提示词已写入 #{id} {name}节点', { id: 6, name: '正向提示词' })}
             </span>
             <span className="text-[11px] leading-5 text-canvas-text-secondary">
-              在“工作流管理”里点节点徽章把它设为 ★ 默认节点，下次不 @ 也会自动注入。
+              {t('在“工作流管理”里点节点徽章把它设为 ★ 默认节点，下次不 @ 也会自动注入。')}
             </span>
           </div>
         </div>
@@ -188,7 +190,7 @@ export default function HelpMentionDemo() {
       </div>
 
       <p className="relative mt-3 text-pretty text-[11px] leading-5 text-canvas-text-secondary">
-        {STEP_HINTS[step]}
+        {t(STEP_HINTS[step])}
       </p>
     </section>
   );

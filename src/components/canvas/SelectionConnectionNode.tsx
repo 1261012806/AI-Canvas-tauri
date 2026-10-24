@@ -4,6 +4,7 @@ import GooeyBtn from '../nodes/shared/GooeyBtn';
 import { useAppStore } from '../../store/useAppStore';
 import { isBatchConnectableNode } from '../../store/store.nodes';
 import { getNodeBounds } from '../../utils/nodeBounds.js';
+import { t, useT } from '../../i18n';
 
 interface DragSession {
   sourceIds: string[];
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export default function SelectionConnectionHandle({ rootRef, onBlankDrop }: Props) {
+  useT();
   const nodes = useAppStore((state) => state.nodes);
   const selectedNodeIds = useAppStore((state) => state.selectedNodeIds);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
@@ -77,7 +79,7 @@ export default function SelectionConnectionHandle({ rootRef, onBlankDrop }: Prop
       const targetId = targetElement?.dataset.id;
       if (targetId) {
         const added = connectSelectedNodes(session.sourceIds, targetId, session.projectId);
-        showToast(added > 0 ? `已连接 ${added} 个节点` : '未新增连接', added > 0 ? 'success' : 'info');
+        showToast(added > 0 ? t('已连接 {count} 个节点', { count: added }) : t('未新增连接'), added > 0 ? 'success' : 'info');
       } else {
         const canvas = rootRef.current?.getBoundingClientRect();
         if (canvas && canvas.left <= event.clientX && canvas.right >= event.clientX
@@ -117,8 +119,8 @@ export default function SelectionConnectionHandle({ rootRef, onBlankDrop }: Prop
           <GooeyBtn
             className="canvas-selection-connect-gooey"
             hue={170}
-            ariaLabel={`连接 ${selected.length} 个选中节点`}
-            title={`连接 ${selected.length} 个选中节点`}
+            ariaLabel={t('连接 {count} 个选中节点', { count: selected.length })}
+            title={t('连接 {count} 个选中节点', { count: selected.length })}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               event.preventDefault();

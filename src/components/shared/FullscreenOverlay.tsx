@@ -104,7 +104,7 @@ export default function FullscreenOverlay({
           {hidePanel ? (
             <>
               <PopupCloseButton
-                ariaLabel="关闭"
+                ariaLabel={t('关闭')}
                 onClick={onClose}
                 className="fullscreen-close--absolute"
               />
@@ -127,14 +127,14 @@ export default function FullscreenOverlay({
                     <div className="fullscreen-header-extra">{headerContent}</div>
                   )}
                   <PopupCloseButton
-                    ariaLabel="关闭"
+                    ariaLabel={t('关闭')}
                     onClick={onClose}
                   />
                 </div>
               )}
               {hideHeader && (
                 <PopupCloseButton
-                  ariaLabel="关闭"
+                  ariaLabel={t('关闭')}
                   onClick={onClose}
                   className="fullscreen-close--absolute"
                 />

@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useEffect, useRef, useState, useCallback, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useT } from '../../i18n';
 import { calcAnchoredPosition } from '../../utils/popupPosition';
 
 export interface ModelPickerItem {
@@ -62,7 +63,8 @@ function focusModelMenuControl(menu: HTMLElement | null, control?: HTMLButtonEle
 
 /** 公共菜单不读取配置、凭据或默认偏好；折叠与选择均由调用方控制。 */
 export function ModelMenu({ groups, value, onChange, expandedGroupIds, onGroupToggle,
-  emptyText = '暂无可用模型', onClose }: ModelMenuProps) {
+  emptyText, onClose }: ModelMenuProps) {
+  const t = useT();
   const menuRef = useRef<HTMLDivElement>(null);
   const focusGroupRef = useRef<string | null>(null);
   const initialFocusRef = useRef(false);
@@ -133,9 +135,9 @@ export function ModelMenu({ groups, value, onChange, expandedGroupIds, onGroupTo
     }
   };
 
-  return <div ref={menuRef} className="ui-model-menu" role="menu" aria-label="模型与工作流" tabIndex={-1}
+  return <div ref={menuRef} className="ui-model-menu" role="menu" aria-label={t('模型与工作流')} tabIndex={-1}
     data-ui-select-portal="" onKeyDown={handleKeyDown}>
-    {visibleGroups.length === 0 ? <p className="ui-model-menu__empty" role="status">{emptyText}</p>
+    {visibleGroups.length === 0 ? <p className="ui-model-menu__empty" role="status">{emptyText ?? t('暂无可用模型')}</p>
       : visibleGroups.map((group, groupIndex) => {
         const expanded = !group.disabled && expandedGroupIds.includes(group.id);
         const headerId = `${menuId}-group-${groupIndex}`;
@@ -192,8 +194,10 @@ export interface ModelPickerProps {
 }
 
 /** 表单入口与视口内 Portal；模型目录、连接状态和选择副作用始终留在宿主。 */
-export default function ModelPicker({ groups, value, onChange, placeholder = '选择模型', emptyText,
+export default function ModelPicker({ groups, value, onChange, placeholder: customPlaceholder, emptyText,
   disabled = false, name, 'aria-label': ariaLabel, className = '', defaultExpandedGroupIds = [], clearLabel }: ModelPickerProps) {
+  const t = useT();
+  const placeholder = customPlaceholder ?? t('选择模型');
   const [open, setOpen] = useState(false);
   if (disabled && open) setOpen(false);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(() => new Set(defaultExpandedGroupIds));

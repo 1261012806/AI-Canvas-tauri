@@ -10,6 +10,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect, type SetStateAction } from 'react';
 import type { ToolbarLayout, ToolbarButtonDef } from '../types';
 import { useAppStore } from '../store/useAppStore';
+import { t as translate, useT } from '../i18n';
 import { isSettingsClosing, registerSettingsProducer } from '../services/configPersistenceQueue';
 import {
   getButtonRegistry,
@@ -64,14 +65,15 @@ export interface UseToolbarEditReturn {
 }
 
 export function useToolbarEdit({ nodeType }: UseToolbarEditOptions): UseToolbarEditReturn {
+  const t = useT();
   const savedLayout = useAppStore((s) => s.toolbarLayouts[nodeType]);
   const setToolbarLayout = useAppStore((s) => s.setToolbarLayout);
   const installedPlugins = useAppStore((s) => s.installedPlugins);
 
   const registry = useMemo(() => [
-    ...getButtonRegistry(nodeType),
+    ...getButtonRegistry(nodeType).map((button) => ({ ...button, label: t(button.label) })),
     ...getPluginToolbarButtonRegistry(installedPlugins, nodeType),
-  ], [installedPlugins, nodeType]);
+  ], [installedPlugins, nodeType, t]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [dirtyLayout, setDirtyLayoutState] = useState<ToolbarLayout | null>(null);
@@ -148,8 +150,8 @@ export function useToolbarEdit({ nodeType }: UseToolbarEditOptions): UseToolbarE
       if (!await pendingSave.current) {
         if (mounted.current && !isSettingsClosing() && useAppStore.getState().toolbarSaveErrors?.[nodeType] === 'conflict') {
           const { ask } = await import('@tauri-apps/plugin-dialog');
-          const reload = await ask('其他窗口已修改此工具栏。重新加载会放弃本次布局编辑，是否继续？', {
-            title: '工具栏设置冲突', kind: 'warning', okLabel: '重新加载', cancelLabel: '保留编辑',
+          const reload = await ask(translate('其他窗口已修改此工具栏。重新加载会放弃本次布局编辑，是否继续？'), {
+            title: translate('工具栏设置冲突'), kind: 'warning', okLabel: translate('重新加载'), cancelLabel: translate('保留编辑'),
           }).catch(() => false);
           if (reload && mounted.current && await useAppStore.getState().reloadToolbarLayout(nodeType) && mounted.current) {
             editBaseline.current = structuredClone(useAppStore.getState().toolbarLayouts[nodeType] ?? null);

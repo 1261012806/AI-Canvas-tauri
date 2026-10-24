@@ -3,6 +3,7 @@
  * 与 CropEditor 镜像对称：CropEditor 往内裁，ExpandEditor 往外扩。
  * 选择目标画幅 → 原图居中放入更大的目标画布 → 四周透明留白交给 AI 补全。
  */
+import { useT } from '../../../../i18n';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import FullscreenOverlay from '../../../shared/FullscreenOverlay';
@@ -79,6 +80,7 @@ function nearestSize(ratio: number): string {
    ExpandEditor
    ════════════════════════════════════════════ */
 export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: ExpandEditorProps) {
+  const t = useT();
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const operationEpochRef = useRef(0);
@@ -311,7 +313,7 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
     <FullscreenOverlay
       isOpen={isOpen}
       onClose={handleClose}
-      data-tooltip="扩图"
+      data-tooltip={t('扩图')}
       hidePanel
       className="crop-overlay expand-overlay"
     >
@@ -332,27 +334,27 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
               className={`crop-aspect-btn${aspect === opt.key ? ' active' : ''}`}
               onClick={() => handleAspectChange(opt.key)}
             >
-              {opt.label}
+              {t(opt.label)}
             </button>
           ))}
           <div className="crop-aspect-spacer" />
           <AnimatedButton
             className="crop-action-btn confirm"
-            data-tooltip="开始扩图"
-            aria-label="开始扩图"
+            data-tooltip={t('开始扩图')}
+            aria-label={t('开始扩图')}
             disabled={busy || !activePreviewSource || readySourceUrl !== imageUrl}
             onClick={handleConfirm}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
               <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
             </svg>
-            <span>扩图</span>
+            <span>{t('扩图')}</span>
           </AnimatedButton>
           <AnimatedButton
             type="button"
             className="crop-aspect-btn crop-aspect-close crop-toolbar-close act-cancel"
-            data-tooltip="关闭 (Esc)"
-            aria-label="关闭"
+            data-tooltip={t('关闭 (Esc)')}
+            aria-label={t('关闭')}
             onClick={handleClose}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -371,7 +373,7 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
               <img
                 ref={imgRef}
                 src={activePreviewSource.src}
-                alt="原图"
+                alt={t('原图')}
                 className="expand-src-img"
                 draggable={false}
                 onLoad={() => setReadySourceUrl(imageUrl)}
@@ -397,7 +399,7 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
         {/* ── 底部：外扩量 + 补充描述 + 模型 ── */}
         <div className="expand-controls">
           <div className="expand-control-row">
-            <span className="expand-label">外扩量</span>
+            <span className="expand-label">{t('外扩量')}</span>
             <input
               type="range"
               className="fa-slider expand-slider"
@@ -412,13 +414,13 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
           <input
             type="text"
             className="expand-prompt-input"
-            placeholder="补充描述（可选）：希望补全区域出现什么…"
+            placeholder={t('补充描述（可选）：希望补全区域出现什么…')}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
           {(failure || budgetError) && (
             <p className="m-0 text-xs leading-relaxed text-red-300" role="alert">
-              {failure || budgetError}
+              {t(failure || budgetError || '')}
             </p>
           )}
           <ModelSelector
@@ -426,7 +428,10 @@ export default function ExpandEditor({ isOpen, imageUrl, onClose, onGenerate }: 
             selectedModel={selectedModel}
             selectedProvider={selectedProvider}
             onSelect={handleSelectModel}
-            groups={EXPAND_MODEL_GROUPS}
+            groups={EXPAND_MODEL_GROUPS.map((group) => ({ ...group,
+              description: group.description ? t(group.description) : group.description,
+              models: group.models.map((model) => ({ ...model, description: model.description ? t(model.description) : model.description })),
+            }))}
             defaultExpandedGroupIds={['apimart']}
           />
         </div>

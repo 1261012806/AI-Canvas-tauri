@@ -105,8 +105,8 @@ export default function AgentTaskCenter({
               )}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium text-canvas-text">
-                  {task.expertRole
-                    ? AGENT_EXPERT_ROLE_LABELS[task.expertRole] ?? task.goal
+                  {task.expertRole && AGENT_EXPERT_ROLE_LABELS[task.expertRole]
+                    ? t(AGENT_EXPERT_ROLE_LABELS[task.expertRole])
                     : task.goal}
                 </p>
                 <p className="mt-0.5 truncate text-[11px] text-canvas-text-muted">

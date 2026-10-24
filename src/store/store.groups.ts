@@ -1,4 +1,5 @@
-﻿/**
+import { t } from '../i18n';
+/**
  * Group slice — visual node grouping on canvas
  */
 import type { StateCreator } from 'zustand';
@@ -201,7 +202,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     }
     get().commitToHistory();
     set({ nodes: result.nodes });
-    get().showToast(`已统一 ${result.groupIds.length} 个镜头组布局，可撤销${result.skipped ? `；跳过 ${result.skipped} 个折叠或嵌套组` : ''}`);
+    get().showToast(t('已统一 {count} 个镜头组布局，可撤销{skipped}', { count: result.groupIds.length, skipped: result.skipped ? t('；跳过 {count} 个折叠或嵌套组', { count: result.skipped }) : '' }));
     return result.groupIds;
   },
 
@@ -313,7 +314,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
 
     void ensureGroupFolder(get().currentProjectId, newGroup.name);
 
-    get().showToast(`已创建「${newGroup.name}」（${candidateIds.length} 个节点）`);
+    get().showToast(t('已创建「{name}」（{count} 个节点）', { name: newGroup.name, count: candidateIds.length }));
   },
 
   ungroupSelectedNodes: () => {
@@ -384,7 +385,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
 
     retireFolders(get().currentProjectId, dissolvedNames);
     const dissolvedGroupNames = groups.filter((g) => affectedGroupIds.has(g.id)).map((g) => g.name);
-    get().showToast(`已解散分组「${dissolvedGroupNames.join('、')}」`);
+    get().showToast(t('已解散分组「{name}」', { name: dissolvedGroupNames.join('、') }));
   },
 
   createEmptyGroup: (position) => {
@@ -413,7 +414,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     }));
 
     void ensureGroupFolder(get().currentProjectId, groupName);
-    get().showToast(`已创建「${groupName}」`);
+    get().showToast(t('已创建「{name}」', { name: groupName }));
   },
 
   toggleGroupCollapsed: (groupId) => {

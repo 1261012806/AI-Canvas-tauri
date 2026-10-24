@@ -3,6 +3,7 @@
  * 把画布节点与工作流 IO 节点渲染成可插入提示词的「芯片」（chip）DOM 片段，
  * 用零宽空格（ZWSP）作分隔占位，配合 mentionEditorSources 提供可点选的提及候选。
  */
+import { t } from '../../../i18n';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { WorkflowIONodeType, StoryboardCellOverride } from '../../../types';
 import type { MediaReferenceKind } from '../../../types/aiTypes';
@@ -284,7 +285,7 @@ export function buildChipEl(
   const meta = metaMap.get(nodeId);
   const nodeType = meta?.type || 'ai-text';
   const isShot = !!parseShotlistRowMentionId(nodeId);
-  const displayLabel = isShot ? meta?.label || `${label}（镜头已失效）` : label;
+  const displayLabel = isShot ? meta?.label || t('{label}（镜头已失效）', { label }) : label;
   const span = buildReferenceChipEl(document, {
     label: displayLabel,
     kind: (CHIP_STYLE[nodeType] || CHIP_STYLE['ai-text']).replace('chip-', '') as 'text' | 'image' | 'video' | 'audio' | 'markdown',
@@ -304,7 +305,7 @@ export function syncShotlistReferenceChips(root: HTMLElement, metaMap: Map<strin
   for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-ref-id*="/shot/"]'))) {
     const id = chip.getAttribute('data-ref-id') || '';
     if (!parseShotlistRowMentionId(id)) continue;
-    const label = metaMap.get(id)?.label || `${chip.getAttribute('data-ref-label') || '镜头'}（镜头已失效）`;
+    const label = metaMap.get(id)?.label || t('{label}（镜头已失效）', { label: chip.getAttribute('data-ref-label') || t('镜头') });
     const visible = chip.querySelector<HTMLElement>('.prompt-chip-id');
     if (visible && visible.textContent !== label) visible.textContent = label;
     if (chip.title !== label) chip.title = label;
@@ -467,6 +468,29 @@ export function buildSkillChipEl(skillId: string, skillName: string): HTMLSpanEl
   return span;
 }
 
+function comfyRefmodChipTitle(label: string, isLab: boolean, strength: number, translate: typeof t = t): string {
+  return translate('{label} · ComfyUI 角色 · {strength}（双击设置）', {
+    label,
+    strength: isLab ? translate('强度沿用 Combine') : translate('强度 {value}', { value: strength }),
+  });
+}
+
+/** 语言切换只更新已有芯片的显示和辅助标签，保留正文、引用身份和光标。 */
+export function syncMentionChipLocale(root: HTMLElement, metaMap: Map<string, NodeMeta>, translate: typeof t): void {
+  syncShotlistReferenceChips(root, metaMap);
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-refmod-raw]'))) {
+    try {
+      const mention = parseComfyRefmodMentions(chip.getAttribute('data-refmod-raw') || '').mentions[0];
+      if (!mention) continue;
+      const title = comfyRefmodChipTitle(mention.label, mention.selection.loaderType === 'refmods-lab', mention.selection.strength, translate);
+      if (chip.title !== title) chip.title = title;
+      if (chip.getAttribute('aria-label') !== title) chip.setAttribute('aria-label', title);
+    } catch {
+      // 损坏的引用保留原始正文，交给已有引用校验处理。
+    }
+  }
+}
+
 /** RefMod 只引用模型文件，不参加图片/音频素材编号。 */
 export function buildComfyRefmodChipEl(raw: string, thumbnailUrl?: string): HTMLSpanElement {
   const parsed = parseComfyRefmodMentions(raw);
@@ -478,7 +502,7 @@ export function buildComfyRefmodChipEl(raw: string, thumbnailUrl?: string): HTML
     iconText: '人' });
   span.setAttribute('data-refmod-raw', buildComfyRefmodMention(mention.selection, mention.label));
   span.setAttribute('data-refmod-label', mention.label);
-  span.title = `${mention.label} · ComfyUI 角色 · ${isLab ? '强度沿用 Combine' : `强度 ${mention.selection.strength}`}（双击设置）`;
+  span.title = comfyRefmodChipTitle(mention.label, isLab, mention.selection.strength);
   span.setAttribute('aria-label', span.title);
   return span;
 }

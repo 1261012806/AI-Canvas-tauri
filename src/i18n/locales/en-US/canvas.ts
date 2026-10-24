@@ -327,6 +327,19 @@ const canvas = {
   '选中节点未属于任何分组': 'The selected node does not belong to any group',
   '分组名称已存在': 'The group name already exists',
   '分组文件归档未完成，原文件已保留，请重试': 'Group file archiving did not finish; the original files are kept. Please try again',
+
+  "已连接 {count} 个节点": "Connected {count} nodes",
+  "未新增连接": "No new connections",
+  "连接 {count} 个选中节点": "Connect {count} selected nodes",
+  "{rows} 行 {cols} 列": "{rows} rows × {cols} columns",
+
+  "{count} 个{type}": "{count} {type} nodes",
+  "新增 {target}": "Added {target}",
+  "删除 {target}": "Deleted {target}",
+  "替换 {target}": "Replaced {target}",
+  "新增 {count} 条连线": "Added {count} connections",
+  "删除 {count} 条连线": "Deleted {count} connections",
+  "编辑 {target}": "Edited {target}",
 };
 
 export default canvas;

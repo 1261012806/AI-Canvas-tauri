@@ -4,6 +4,7 @@
  * 使用 framer-motion 驱动面板进出场动画
  */
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { t as translate, useT } from '../../../i18n';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
@@ -89,7 +90,7 @@ function deserializeToEditor(root: HTMLElement, text: string) {
     if (match.index > lastIdx) {
       root.appendChild(document.createTextNode(text.slice(lastIdx, match.index)));
     }
-    root.appendChild(buildPillEl('提示词'));
+    root.appendChild(buildPillEl(translate('提示词')));
     lastIdx = regex.lastIndex;
   }
   if (lastIdx < text.length) {
@@ -128,6 +129,7 @@ const panelVariants = {
 };
 
 export default function PresetManager() {
+  const t = useT();
   // 首次打开后保留面板，只订阅用到的字段，避免无关 Store 变更带来重渲染。
   const {
     userPresets,
@@ -202,8 +204,8 @@ export default function PresetManager() {
 
   // 高级模式的结构错误实时算，编辑器里已经列出来了，这里只用来锁保存
   const advancedError = useMemo(
-    () => (presetMode === 'advanced' ? validatePresetAdvancedConfig(advancedConfig)[0] : undefined),
-    [advancedConfig, presetMode],
+    () => (presetMode === 'advanced' ? validatePresetAdvancedConfig(advancedConfig, t)[0] : undefined),
+    [advancedConfig, presetMode, t],
   );
 
   // Load selected preset
@@ -303,9 +305,9 @@ export default function PresetManager() {
     try {
       await addUserPreset(newPreset);
       setSelectedId(newId);
-    } catch (error) { showToast(error instanceof Error ? error.message : '新建快捷指令失败', 'error'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : t('新建快捷指令失败'), 'error'); }
     finally { setSaving(false); }
-  }, [activeTab, activeFolderId, addUserPreset, saving, folderBusy, showToast]);
+  }, [activeTab, activeFolderId, addUserPreset, saving, folderBusy, showToast, t]);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -320,11 +322,11 @@ export default function PresetManager() {
           setSelectedId(remaining[0]?.id ?? null);
           setActiveFolderId(remaining[0]?.folderId || UNGROUPED_PRESET_FOLDER_ID);
         }
-        showToast('快捷指令已删除');
-      } catch (error) { showToast(error instanceof Error ? error.message : '删除快捷指令失败', 'error'); }
+        showToast(t('快捷指令已删除'));
+      } catch (error) { showToast(error instanceof Error ? error.message : t('删除快捷指令失败'), 'error'); }
       finally { setSaving(false); }
     },
-    [deleteUserPreset, selectedId, userPresets, activeTab, showToast, saving, folderBusy],
+    [deleteUserPreset, selectedId, userPresets, activeTab, showToast, saving, folderBusy, t],
   );
 
   const handleSave = useCallback(async () => {
@@ -356,11 +358,11 @@ export default function PresetManager() {
         mode: presetMode,
         advanced: advancedConfig,
       });
-      showToast('快捷指令已保存');
+      showToast(t('快捷指令已保存'));
       setActiveFolderId(savedFolderId || UNGROUPED_PRESET_FOLDER_ID);
-    } catch (error) { showToast(error instanceof Error ? error.message : '保存失败，编辑内容已保留', 'error'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : t('保存失败，编辑内容已保留'), 'error'); }
     finally { setSaving(false); }
-  }, [selectedId, name, description, template, triggerMode, folderId, activeTab, presetFolders, thumbnail, presetModel, presetProvider, presetImageSize, presetAspectRatio, modelOverrideActive, sizeOverrideActive, presetMode, advancedConfig, updateUserPreset, showToast, saving, folderBusy]);
+  }, [selectedId, name, description, template, triggerMode, folderId, activeTab, presetFolders, thumbnail, presetModel, presetProvider, presetImageSize, presetAspectRatio, modelOverrideActive, sizeOverrideActive, presetMode, advancedConfig, updateUserPreset, showToast, saving, folderBusy, t]);
 
   const handleFolderSave = async () => {
     if (!folderEditor || folderBusy || saving) return;
@@ -372,7 +374,7 @@ export default function PresetManager() {
         setActiveFolderId(folder.id);
       }
       setFolderEditor(null);
-    } catch (error) { showToast(error instanceof Error ? error.message : '文件夹保存失败', 'error'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : t('文件夹保存失败'), 'error'); }
     finally { setFolderBusy(false); }
   };
 
@@ -384,8 +386,8 @@ export default function PresetManager() {
       if (folderId === folderToDelete) setFolderId('');
       setActiveFolderId(UNGROUPED_PRESET_FOLDER_ID);
       setFolderToDelete(null);
-      showToast('文件夹已移除，快捷指令保留并直接显示');
-    } catch (error) { showToast(error instanceof Error ? error.message : '移除文件夹失败', 'error'); }
+      showToast(t('文件夹已移除，快捷指令保留并直接显示'));
+    } catch (error) { showToast(error instanceof Error ? error.message : t('移除文件夹失败'), 'error'); }
     finally { setFolderBusy(false); }
   };
 
@@ -417,6 +419,12 @@ export default function PresetManager() {
     }
   }, []);
 
+  useEffect(() => {
+    editorRef.current?.querySelectorAll<HTMLElement>('[data-preset-placeholder="user-input"]').forEach((pill) => {
+      pill.textContent = t('提示词');
+    });
+  }, [t]);
+
   const handleInsertPlaceholder = useCallback(() => {
     if (!editorRef.current) return;
     editorRef.current.focus();
@@ -424,14 +432,14 @@ export default function PresetManager() {
     if (!sel || !sel.rangeCount) return;
     const range = sel.getRangeAt(0);
     range.deleteContents();
-    const pill = buildPillEl('提示词');
+    const pill = buildPillEl(t('提示词'));
     range.insertNode(pill);
     range.setStartAfter(pill);
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
     handleEditorInput();
-  }, [handleEditorInput]);
+  }, [handleEditorInput, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -489,9 +497,9 @@ export default function PresetManager() {
         {/* Header */}
         <div className="preset-manager-title-row">
           <div className="preset-manager-title-group">
-            <div className="preset-modal-title">快捷指令</div>
+            <div className="preset-modal-title">{t('快捷指令')}</div>
             <div className="preset-modal-desc">
-              管理 {PRESET_NODE_TYPE_LABELS[activeTab].replace('预设', '快捷指令')} 的提示词模板
+              {t('管理{type}快捷指令的提示词模板', { type: t(PRESET_NODE_TYPE_LABELS[activeTab].replace('预设', '')) })}
             </div>
           </div>
           <PopupCloseButton onClick={() => setPresetManagerOpen(false)} />
@@ -549,7 +557,7 @@ export default function PresetManager() {
                   </>
                 )}
               </svg>
-              <span>{PRESET_NODE_TYPE_LABELS[nt]}</span>
+              <span>{t(PRESET_NODE_TYPE_LABELS[nt])}</span>
             </motion.button>
           ))}
         </div>
@@ -558,26 +566,26 @@ export default function PresetManager() {
         <div className="preset-manager-shell">
           <div className="preset-manager-sidebar">
             <AnimatedButton type="button" className="preset-manager-new-btn" onClick={handleNew} disabled={saving || folderBusy}>
-              新建
+              {t('新建')}
             </AnimatedButton>
             <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ui-btn--block" disabled={saving || folderBusy}
               onClick={() => { setFolderToDelete(null); setFolderEditor({ name: '' }); }}>
-              <Icon icon="mdi:folder-plus-outline" width={16} /> 新建文件夹
+              <Icon icon="mdi:folder-plus-outline" width={16} /> {t('新建文件夹')}
             </button>
             {folderEditor && <form className="space-y-2 rounded border border-canvas-border p-2" onSubmit={(event) => { event.preventDefault(); void handleFolderSave(); }}>
-              <input className="ui-input ui-input--sm w-full" aria-label="文件夹名称" placeholder="文件夹名称" maxLength={80}
+              <input className="ui-input ui-input--sm w-full" aria-label={t('文件夹名称')} placeholder={t('文件夹名称')} maxLength={80}
                 autoFocus value={folderEditor.name} disabled={saving || folderBusy}
                 onChange={(event) => setFolderEditor({ ...folderEditor, name: event.target.value })} />
               <div className="flex justify-end gap-1">
-                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={saving || folderBusy} onClick={() => setFolderEditor(null)}>取消</button>
-                <button type="submit" className="ui-btn ui-btn--primary ui-btn--sm" disabled={saving || folderBusy || !folderEditor.name.trim()}>保存</button>
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={saving || folderBusy} onClick={() => setFolderEditor(null)}>{t('取消')}</button>
+                <button type="submit" className="ui-btn ui-btn--primary ui-btn--sm" disabled={saving || folderBusy || !folderEditor.name.trim()}>{t('保存')}</button>
               </div>
             </form>}
-            {folderToDelete && <div className="space-y-2 rounded border border-canvas-border p-2" role="group" aria-label="移除文件夹确认">
-              <p className="m-0 text-xs text-canvas-text-secondary">移除文件夹后，指令会直接显示，内容保留。</p>
+            {folderToDelete && <div className="space-y-2 rounded border border-canvas-border p-2" role="group" aria-label={t('移除文件夹确认')}>
+              <p className="m-0 text-xs text-canvas-text-secondary">{t('移除文件夹后，指令会直接显示，内容保留。')}</p>
               <div className="flex justify-end gap-1">
-                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={saving || folderBusy} onClick={() => setFolderToDelete(null)}>取消</button>
-                <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={saving || folderBusy} onClick={handleFolderDelete}>移除</button>
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={saving || folderBusy} onClick={() => setFolderToDelete(null)}>{t('取消')}</button>
+                <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={saving || folderBusy} onClick={handleFolderDelete}>{t('移除')}</button>
               </div>
             </div>}
             <div className="preset-manager-list">
@@ -594,11 +602,11 @@ export default function PresetManager() {
                         <span className="min-w-0 flex-1 truncate" title={group.name}>{group.name}</span>
                         <span className="ui-menu__shortcut">{group.presets.length}</span>
                       </button>
-                        <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" aria-label={`重命名文件夹 ${group.name}`}
+                        <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" aria-label={t('重命名文件夹 {name}', { name: group.name })}
                           disabled={saving || folderBusy} onClick={() => { setFolderToDelete(null); setFolderEditor({ id: group.id, name: group.name }); }}>
                           <Icon icon="mdi:pencil-outline" width={14} />
                         </button>
-                        <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost ui-icon-btn--danger" aria-label={`移除文件夹 ${group.name}`}
+                        <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost ui-icon-btn--danger" aria-label={t('移除文件夹 {name}', { name: group.name })}
                           disabled={saving || folderBusy} onClick={() => { setFolderEditor(null); setFolderToDelete(group.id); }}>
                           <Icon icon="mdi:folder-remove-outline" width={14} />
                         </button>
@@ -627,9 +635,9 @@ export default function PresetManager() {
                         >
                           <label
                             className="preset-manager-list-thumb"
-                            data-tooltip="上传缩略图"
+                            data-tooltip={t('上传缩略图')}
                             data-tooltip-source="native-title"
-                            data-native-title="上传缩略图"
+                            data-native-title={t('上传缩略图')}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {preset.thumbnail ? (
@@ -667,7 +675,7 @@ export default function PresetManager() {
                             type="button"
                             className="preset-manager-list-delete"
                             disabled={saving || folderBusy}
-                            aria-label={`删除 ${preset.name}`}
+                            aria-label={t('删除 {name}', { name: preset.name })}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleDelete(preset.id);
@@ -677,14 +685,14 @@ export default function PresetManager() {
                           </AnimatedButton>
                         </div>
                       ))}
-                      {group.presets.length === 0 && <div className="p-2 text-xs text-canvas-text-muted">此文件夹暂无快捷指令</div>}
+                      {group.presets.length === 0 && <div className="p-2 text-xs text-canvas-text-muted">{t('此文件夹暂无快捷指令')}</div>}
                     </div>}
                   </section>
                 );
               })}
               {filteredPresets.length === 0 && (
                 <div className="preset-manager-list-empty">
-                  暂无快捷指令，点击「新建」创建
+                  {t('暂无快捷指令，点击「新建」创建')}
                 </div>
               )}
             </div>
@@ -695,49 +703,49 @@ export default function PresetManager() {
             {selectedId ? (
               <fieldset className="preset-manager-detail m-0 min-w-0 border-0 p-0" disabled={saving || folderBusy}>
                 <label className="preset-manager-field">
-                  <span className="preset-manager-label">名字</span>
+                  <span className="preset-manager-label">{t('名字')}</span>
                   <input
                     className="preset-manager-input"
                     type="text"
-                    placeholder="快捷指令名称"
+                    placeholder={t('快捷指令名称')}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                   />
                 </label>
                 {folderGroups.length > 1 && <label className="preset-manager-field">
-                  <span className="preset-manager-label">所属文件夹</span>
+                  <span className="preset-manager-label">{t('所属文件夹')}</span>
                   <Select fixedMenu className="w-full" value={folderId} onChange={setFolderId}>
-                    <option value="">无文件夹</option>
+                    <option value="">{t('无文件夹')}</option>
                     {presetFolders.filter((folder) => folder.nodeType === activeTab).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
                   </Select>
                 </label>}
                 <label className="preset-manager-field">
-                  <span className="preset-manager-label">说明</span>
+                  <span className="preset-manager-label">{t('说明')}</span>
                   <input
                     className="preset-manager-input"
                     type="text"
-                    placeholder="说明这个快捷指令适合什么场景"
+                    placeholder={t('说明这个快捷指令适合什么场景')}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
                 </label>
                 <div className="preset-manager-mode-picker">
                   <div>
-                    <span className="preset-manager-label">配置模式</span>
+                    <span className="preset-manager-label">{t('配置模式')}</span>
                     <span className="preset-manager-mode-help">
                       {presetMode === 'basic'
-                        ? '适合快速保存单次提示词操作'
-                        : '使用参数和步骤定义顺序生成链'}
+                        ? t('适合快速保存单次提示词操作')
+                        : t('使用参数和步骤定义顺序生成链')}
                     </span>
                   </div>
-                  <div className="preset-manager-mode-segment" role="group" aria-label="配置模式">
+                  <div className="preset-manager-mode-segment" role="group" aria-label={t('配置模式')}>
                     <button
                       type="button"
                       className={presetMode === 'basic' ? 'is-active' : ''}
                       aria-pressed={presetMode === 'basic'}
                       onClick={() => handlePresetModeChange('basic')}
                     >
-                      基础
+                      {t('基础')}
                     </button>
                     <button
                       type="button"
@@ -745,20 +753,20 @@ export default function PresetManager() {
                       aria-pressed={presetMode === 'advanced'}
                       onClick={() => handlePresetModeChange('advanced')}
                     >
-                      高级
+                      {t('高级')}
                     </button>
                   </div>
                 </div>
                 {presetMode === 'basic' ? (
                   <>
                 <div className="preset-manager-template-tools">
-                  <span className="preset-manager-label">提示词模板</span>
+                  <span className="preset-manager-label">{t('提示词模板')}</span>
                   <AnimatedButton
                     type="button"
                     className="preset-modal-btn-secondary preset-manager-insert-btn"
                     onClick={handleInsertPlaceholder}
                   >
-                    点击插入提示词栏内容
+                    {t('点击插入提示词栏内容')}
                   </AnimatedButton>
                 </div>
                 <div className="preset-manager-editor-wrap">
@@ -773,14 +781,14 @@ export default function PresetManager() {
                   />
                   {!template && (
                     <div className="preset-manager-editor-placeholder" aria-hidden="true">
-                      例如：生成全身三视图，包含正视图、45度侧视图、后视图，背景简洁
-                      人物参考{' '}
+                      {t('例如：生成全身三视图，包含正视图、45度侧视图、后视图，背景简洁')}
+                      {t('人物参考')}{' '}
                       <span
                         className="preset-placeholder-pill"
                         contentEditable={false}
                         data-preset-placeholder="user-input"
                       >
-                        提示词
+                        {t('提示词')}
                       </span>
                     </div>
                   )}
@@ -788,9 +796,9 @@ export default function PresetManager() {
 
                 {/* 模型选择（可选） */}
                 <div className="preset-manager-section">
-                  <span className="preset-manager-section-title">模型</span>
+                  <span className="preset-manager-section-title">{t('模型')}</span>
                   <span className="preset-manager-section-desc">
-                    {modelOverrideActive ? '已指定模型，生图时覆盖节点设置' : '未指定则使用节点当前模型'}
+                    {t(modelOverrideActive ? '已指定模型，生图时覆盖节点设置' : '未指定则使用节点当前模型')}
                   </span>
                   {modelOverrideActive ? (
                     <>
@@ -805,7 +813,7 @@ export default function PresetManager() {
                         className="preset-manager-section-toggle"
                         onClick={() => { setModelOverrideActive(false); setPresetModel(''); setPresetProvider(''); }}
                       >
-                        取消指定
+                        {t('取消指定')}
                       </button>
                     </>
                   ) : (
@@ -814,7 +822,7 @@ export default function PresetManager() {
                       className="preset-manager-section-toggle"
                       onClick={() => setModelOverrideActive(true)}
                     >
-                      + 指定模型
+                      {t('+ 指定模型')}
                     </button>
                   )}
                 </div>
@@ -822,9 +830,9 @@ export default function PresetManager() {
                 {/* 尺寸选择（仅图片预设显示） */}
                 {showSizeSelector && (
                   <div className="preset-manager-section">
-                    <span className="preset-manager-section-title">尺寸</span>
+                    <span className="preset-manager-section-title">{t('尺寸')}</span>
                     <span className="preset-manager-section-desc">
-                      {sizeOverrideActive ? '已指定尺寸，生图时覆盖节点设置' : '未指定则使用节点当前画质和比例'}
+                      {t(sizeOverrideActive ? '已指定尺寸，生图时覆盖节点设置' : '未指定则使用节点当前画质和比例')}
                     </span>
                     {sizeOverrideActive ? (
                       <>
@@ -840,7 +848,7 @@ export default function PresetManager() {
                           className="preset-manager-section-toggle"
                           onClick={() => { setSizeOverrideActive(false); setPresetImageSize(''); setPresetAspectRatio(''); }}
                         >
-                          取消指定
+                          {t('取消指定')}
                         </button>
                       </>
                     ) : (
@@ -849,7 +857,7 @@ export default function PresetManager() {
                         className="preset-manager-section-toggle"
                         onClick={() => setSizeOverrideActive(true)}
                       >
-                        + 指定尺寸
+                        {t('+ 指定尺寸')}
                       </button>
                     )}
                   </div>
@@ -865,7 +873,7 @@ export default function PresetManager() {
               </fieldset>
             ) : (
               <div className="preset-manager-detail-empty">
-                选择一个快捷指令或新建一个
+                {t('选择一个快捷指令或新建一个')}
               </div>
             )}
           </div>
@@ -874,8 +882,8 @@ export default function PresetManager() {
         {/* Footer */}
         <div className="preset-modal-actions">
           {presetMode === 'basic' ? (
-            <div className="preset-manager-trigger-modes" role="group" aria-label="快捷指令触发方式">
-              <span className="preset-manager-trigger-mode-label">模式：</span>
+            <div className="preset-manager-trigger-modes" role="group" aria-label={t('快捷指令触发方式')}>
+              <span className="preset-manager-trigger-mode-label">{t('模式：')}</span>
               <AnimatedButton
                 type="button"
                 className={`preset-manager-trigger-mode${triggerMode === 'direct' ? ' is-active' : ''}`}
@@ -884,7 +892,7 @@ export default function PresetManager() {
                 disabled={saving || folderBusy}
                 onClick={() => setTriggerMode('direct')}
               >
-                直接触发
+                {t('直接触发')}
               </AnimatedButton>
               <AnimatedButton
                 type="button"
@@ -894,13 +902,13 @@ export default function PresetManager() {
                 disabled={saving || folderBusy}
                 onClick={() => setTriggerMode('insertPrompt')}
               >
-                加入提示词
+                {t('加入提示词')}
               </AnimatedButton>
             </div>
           ) : (
             <div className="preset-manager-sequence-mode">
               <span className="preset-manager-sequence-dot" aria-hidden="true" />
-              <span>按步骤顺序自动执行，失败时停止</span>
+              <span>{t('按步骤顺序自动执行，失败时停止')}</span>
             </div>
           )}
           <AnimatedButton
@@ -910,7 +918,7 @@ export default function PresetManager() {
             disabled={saving || folderBusy || !selectedId || !name.trim() || !!advancedError}
             title={advancedError}
           >
-            保存
+            {t('保存')}
           </AnimatedButton>
         </div>
       </motion.div>

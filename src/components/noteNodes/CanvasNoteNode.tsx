@@ -24,6 +24,7 @@ import ResizeHandle from '../nodes/shared/ResizeHandle';
 import CanvasNoteShape from './CanvasNoteShape';
 import CanvasNoteText from './CanvasNoteText';
 import CanvasNoteImage from './CanvasNoteImage';
+import { useT } from '../../i18n';
 
 const CropEditor = lazy(() => import('../nodes/shared/image/CropEditor'));
 const selectZoom = (state: ReactFlowState) => state.transform[2];
@@ -35,6 +36,7 @@ interface CanvasNoteNodeProps {
 }
 
 function CanvasNoteNode({ id, data, selected = false }: CanvasNoteNodeProps) {
+  const t = useT();
   const note = data.note;
   const updateCanvasNote = useAppStore((state) => state.updateCanvasNote);
   const updateCanvasNoteTransient = useAppStore((state) => state.updateCanvasNoteTransient);
@@ -161,9 +163,9 @@ function CanvasNoteNode({ id, data, selected = false }: CanvasNoteNodeProps) {
       setCropOpen(false);
     } catch (error) {
       console.error('[画布笔记] 图片裁剪保存失败:', error);
-      showToast('图片裁剪保存失败', 'error');
+      showToast(t('图片裁剪保存失败'), 'error');
     }
-  }, [commitToHistory, currentProjectId, data.label, id, note, showToast, updateCanvasNoteTransient, updateNodeDataTransient]);
+  }, [commitToHistory, currentProjectId, data.label, id, note, showToast, t, updateCanvasNoteTransient, updateNodeDataTransient]);
 
   if (!note) return null;
 
@@ -200,7 +202,7 @@ function CanvasNoteNode({ id, data, selected = false }: CanvasNoteNodeProps) {
         className={`canvas-note-node canvas-note-node--${note.kind} ${selected ? 'is-selected' : ''}`}
         style={rootStyle}
         role="group"
-        aria-label={kindLabel}
+        aria-label={t(kindLabel)}
         data-canvas-note-id={id}
         data-note-kind={note.kind}
       >
@@ -215,7 +217,7 @@ function CanvasNoteNode({ id, data, selected = false }: CanvasNoteNodeProps) {
           <svg
             className="canvas-note-point-handles nodrag nopan"
             viewBox={`0 0 ${Math.max(1, note.width)} ${Math.max(1, note.height)}`}
-            aria-label="拖动线条端点"
+            aria-label={t('拖动线条端点')}
           >
             {curveHandle && (
               <g>
@@ -234,7 +236,7 @@ function CanvasNoteNode({ id, data, selected = false }: CanvasNoteNodeProps) {
                   onPointerDown={handleCurvePointerDown}
                   onDoubleClick={handleCurveReset}
                 >
-                  <title>拖动调节曲率，双击恢复默认</title>
+                  <title>{t('拖动调节曲率，双击恢复默认')}</title>
                 </circle>
               </g>
             )}

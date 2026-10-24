@@ -14,6 +14,7 @@ import type { CanvasEdgeVisualProps } from '../../types/canvasEdges';
 import { canAnimateCanvasEdgeFlow } from '../../utils/canvasRenderProjection';
 import { getCanvasEdgePath } from '../../utils/canvasEdgePath';
 import scissorsIcon from '../../assets/scissors.svg';
+import { t } from '../../i18n';
 
 const SMOOTHSTEP_TYPE = 'smoothstep';
 const FLOW_EFFECT_MARGIN = 256;
@@ -103,8 +104,8 @@ export const CanvasEdgeHover = memo(function CanvasEdgeHover({
               pointerEvents: 'all',
               transform: `translate(-50%, -50%) translate(${deleteButtonPosition.x}px, ${deleteButtonPosition.y}px)`,
             }}
-            aria-label="删除连线"
-            data-tooltip="删除连线"
+              aria-label={t('删除连线')}
+              data-tooltip={t('删除连线')}
             onMouseEnter={clearTimers}
             onMouseLeave={scheduleHide}
             onClick={handleDelete}

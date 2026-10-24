@@ -3,6 +3,7 @@
  *
  * 拖拽实现：Pointer Events 手动拖拽（不用 HTML5 DnD，避免 React Flow nodrag 冲突）
  */
+import { useT } from '../../../../i18n';
 import { memo, useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { Icon } from '@iconify/react';
 import { useReactFlow } from '@xyflow/react';
@@ -90,6 +91,7 @@ function BankItem({ icon, label, isPreset, onClick }: {
 
 // ── Zone 名称编辑 ──
 function ZoneNameEditor({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -100,7 +102,7 @@ function ZoneNameEditor({ name, onRename }: { name: string; onRename: (name: str
 
   if (!editing) {
     return (
-      <span className="toolbar-edit-zone-name" onClick={(e) => { e.stopPropagation(); setEditing(true); }} data-tooltip="点击编辑分区名">
+      <span className="toolbar-edit-zone-name" onClick={(e) => { e.stopPropagation(); setEditing(true); }} data-tooltip={t('点击编辑分区名')}>
         {name}
         <Icon icon="mdi:pencil" width={10} height={10} style={{ marginLeft: 4, opacity: 0.5 }} />
       </span>
@@ -124,6 +126,7 @@ function ZoneNameEditor({ name, onRename }: { name: string; onRename: (name: str
 
 // ── 主组件 ──
 function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], nodeType }: ToolbarEditorProps) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const ghostElRef = useRef<HTMLDivElement | null>(null);
@@ -363,14 +366,14 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
     const walk = (items: typeof cmds) => {
       for (const item of items) {
         if (item.promptTemplate) {
-          flat.push({ id: item.id, title: item.title, icon: item.icon, description: item.description });
+          flat.push({ id: item.id, title: t(item.title), icon: item.icon, description: t(item.description) });
         }
         if (item.children) walk(item.children);
       }
     };
     walk(cmds);
     return flat;
-  }, [nodeType]);
+  }, [nodeType, t]);
 
   const matchingUserPresets = useMemo(
     () => userPresets.filter((p) => p.nodeType === nodeType),
@@ -637,8 +640,8 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
       {/* ── 按钮库面板 ── */}
       <div className="toolbar-edit-bank nodrag">
         <div className="toolbar-edit-bank-header">
-          <span>按钮库</span>
-          <span className="toolbar-edit-bank-hint">点击添加按钮到下方 Toolbar</span>
+          <span>{t('按钮库')}</span>
+          <span className="toolbar-edit-bank-hint">{t('点击添加按钮到下方 Toolbar')}</span>
         </div>
         <div className="toolbar-edit-bank-list nodrag">
           {bankButtons.map((def) => (
@@ -658,13 +661,13 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
           })}
         </div>
         <div className="toolbar-edit-bank-actions">
-          <button type="button" className="toolbar-edit-action-btn nodrag" onClick={edit.resetLayout} data-tooltip="恢复为默认按钮布局">
+          <button type="button" className="toolbar-edit-action-btn nodrag" onClick={edit.resetLayout} data-tooltip={t('恢复为默认按钮布局')}>
             <Icon icon="mdi:restore" width={14} height={14} />
-            <span>恢复默认</span>
+            <span>{t('恢复默认')}</span>
           </button>
           <button type="button" className="toolbar-edit-action-btn toolbar-edit-action-btn--done nodrag" onClick={handleExitEdit}>
             <Icon icon="mdi:check" width={14} height={14} />
-            <span>完成</span>
+            <span>{t('完成')}</span>
           </button>
         </div>
       </div>
@@ -683,13 +686,13 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
               <span
                 className="toolbar-edit-btn-grip nodrag toolbar-edit-zone-grip"
                 onPointerDown={(e) => handleZoneDragStart(e, zoneIndex)}
-                data-tooltip="拖拽调整分区顺序"
+                data-tooltip={t('拖拽调整分区顺序')}
               >
                 <Icon icon="mdi:drag-vertical" width={12} height={12} />
               </span>
               <ZoneNameEditor name={zone.name} onRename={(n) => edit.renameZone(zone.id, n)} />
               {zone.buttonKeys.length === 0 && zones.length > 1 && (
-                <button type="button" className="toolbar-edit-zone-del nodrag" onClick={() => edit.removeZone(zone.id)} data-tooltip="删除此分区">
+                <button type="button" className="toolbar-edit-zone-del nodrag" onClick={() => edit.removeZone(zone.id)} data-tooltip={t('删除此分区')}>
                   <Icon icon="mdi:close" width={12} height={12} />
                 </button>
               )}
@@ -709,7 +712,7 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
                     {isInsertBefore && <div className="toolbar-edit-insert-indicator" />}
                     <div
                       className="toolbar-edit-btn nodrag"
-                      data-tooltip={`${resolvedDef.label} · 拖拽排序 / 点 × 移除`}
+                      data-tooltip={t('{label} · 拖拽排序 / 点 × 移除', { label: resolvedDef.label })}
                       onPointerDown={(e) => handlePointerDown(e, zone.id, idx)}
                     >
                       <span className="toolbar-edit-btn-grip nodrag">
@@ -721,7 +724,7 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
                         type="button"
                         className="toolbar-edit-btn-remove nodrag"
                         onClick={(e) => { e.stopPropagation(); edit.removeButton(zone.id, key); }}
-                        data-tooltip="移除此按钮"
+                        data-tooltip={t('移除此按钮')}
                       >
                         <Icon icon="mdi:close" width={12} height={12} />
                       </button>
@@ -733,29 +736,29 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
                 <div className="toolbar-edit-insert-indicator toolbar-edit-insert-indicator--end" />
               )}
               {zone.buttonKeys.length === 0 && dragTarget?.zoneId !== zone.id && (
-                <div className="toolbar-edit-zone-empty">拖拽按钮到此处或点击上方按钮添加</div>
+                <div className="toolbar-edit-zone-empty">{t('拖拽按钮到此处或点击上方按钮添加')}</div>
               )}
             </div>
             {zones.indexOf(zone) < zones.length - 1 && <div className="toolbar-edit-zone-divider" />}
           </div>
         ))}
 
-        <button type="button" className="toolbar-edit-add-zone nodrag" onClick={edit.addZone} data-tooltip="新建分区">
+        <button type="button" className="toolbar-edit-add-zone nodrag" onClick={edit.addZone} data-tooltip={t('新建分区')}>
           <Icon icon="mdi:plus" width={14} height={14} />
-          <span>新建分区</span>
+          <span>{t('新建分区')}</span>
         </button>
       </div>
 
       {/* 右侧：快捷指令面板 */}
       {(presetNodeType || allSlashCommands.length > 0 || matchingUserPresets.length > 0) && (
         <div className="toolbar-edit-commands nodrag">
-          <div className="toolbar-edit-commands-header">快捷指令</div>
+          <div className="toolbar-edit-commands-header">{t('快捷指令')}</div>
           <div className="toolbar-edit-commands-list nodrag nowheel">
             {!hasAvailableCommands && (
               <p className="m-0 p-2 text-xs text-canvas-text-muted" role="status">
                 {allSlashCommands.length === 0 && matchingUserPresets.length === 0
-                  ? '暂无快捷指令，可在下方管理中添加'
-                  : '快捷指令已全部添加'}
+                  ? t('暂无快捷指令，可在下方管理中添加')
+                  : t('快捷指令已全部添加')}
               </p>
             )}
             {allSlashCommands.map((cmd) => {
@@ -796,7 +799,7 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
               onClick={(e) => { e.stopPropagation(); setPresetManagerOpen(true, presetNodeType); }}
             >
               <Icon icon="mdi:pencil-outline" width={14} height={14} />
-              管理快捷指令
+              {t('管理快捷指令')}
             </button>
           )}
         </div>

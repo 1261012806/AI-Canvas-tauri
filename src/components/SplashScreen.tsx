@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef } from 'react';
 import gsap from 'gsap';
+import { useT } from '../i18n';
 
 interface SplashScreenProps {
   onComplete: () => void;
@@ -91,6 +92,7 @@ function CosmicParticles() {
 }
 
 export default function SplashScreen({ onComplete, ready = true, label = 'AI Canvas 正在启动' }: SplashScreenProps) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const onCompleteRef = useRef(onComplete);
   const readyRef = useRef(ready);
@@ -299,7 +301,7 @@ export default function SplashScreen({ onComplete, ready = true, label = 'AI Can
       data-tauri-drag-region
       ref={containerRef}
       role="status"
-      aria-label={label}
+      aria-label={t(label)}
       aria-busy={!ready}
       className="fixed inset-0 z-[9999] select-none overflow-hidden flex items-center justify-center bg-black rounded-[16px]"
     >

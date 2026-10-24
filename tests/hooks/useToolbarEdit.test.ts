@@ -34,6 +34,7 @@ vi.mock('react', () => {
   },
   useCallback: <T>(fn: T, deps: readonly unknown[]) => memo(() => fn, deps),
   useMemo: memo,
+  useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
   useEffect: (fn: () => void | (() => void), deps?: readonly unknown[]) => {
     const index = harness.effectCursor++;
     const previous = harness.effects[index];

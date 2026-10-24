@@ -1,4 +1,5 @@
-﻿/**
+﻿import { t as translate, useT } from '../i18n';
+/**
  * AssetsPanel 资产管理面板 — 浏览项目文件 + 全局资产库（永久），支持：
  *  · 添加本地文件（拷贝到全局 {baseDataDir}/file）/ 文件夹（递归引用，不拷贝）
  *  · 搜索（名称 + 标签）、分类与标签筛选
@@ -129,6 +130,7 @@ const panelVariants = {
 };
 
 export default function AssetsPanel() {
+  useT();
   const reduceMotion = useReducedMotion();
   const macWindowControls = isTauriEnv() && typeof navigator !== 'undefined'
     && /Macintosh|Mac OS X/.test(navigator.userAgent);
@@ -607,12 +609,12 @@ export default function AssetsPanel() {
         const sources = await readClipboardFolders();
         for (const [index, source] of sources.entries()) {
           if (controller.signal.aborted) throw new Error('复制已取消；已复制内容保留在目标目录');
-          setFolderProgress(`正在粘贴文件夹 ${index + 1}/${sources.length}…`);
+          setFolderProgress(translate('正在粘贴文件夹 {index}/{total}…', { index: index + 1, total: sources.length }));
           await copyAssetFolder(source, directory, { signal: controller.signal, onProgress: ({ transferredBytes, totalBytes }) => {
-            if (!controller.signal.aborted) setFolderProgress(`正在粘贴文件夹 ${index + 1}/${sources.length} · ${totalBytes ? Math.min(100, Math.round(transferredBytes / totalBytes * 100)) : 100}%`);
+            if (!controller.signal.aborted) setFolderProgress(translate('正在粘贴文件夹 {index}/{total} · {progress}%', { index: index + 1, total: sources.length, progress: totalBytes ? Math.min(100, Math.round(transferredBytes / totalBytes * 100)) : 100 }));
           } });
         }
-        if (!controller.signal.aborted) toast(`已粘贴 ${sources.length} 个文件夹`);
+        if (!controller.signal.aborted) toast(translate('已粘贴 {count} 个文件夹', { count: sources.length }));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '目录操作失败，请检查权限';
@@ -709,17 +711,17 @@ export default function AssetsPanel() {
     const controller = new AbortController();
     folderOperationRef.current = controller; setBusy(true);
     const moving = internal?.category === 'image' && (internal.source === 'global' || internal.source === 'folder');
-    setFolderProgress(moving ? '正在移动图片…' : `正在导入 ${paths.length} 个文件…`);
+    setFolderProgress(moving ? '正在移动图片…' : translate('正在导入 {count} 个文件…', { count: paths.length }));
     try {
       const options = { signal: controller.signal, onProgress: ({ transferredBytes, totalBytes }: { transferredBytes: number; totalBytes: number | null }) => {
-        if (!controller.signal.aborted) setFolderProgress(`${moving ? '正在移动' : '正在导入'} · ${totalBytes ? Math.min(100, Math.round(transferredBytes / totalBytes * 100)) : 100}%`);
+        if (!controller.signal.aborted) setFolderProgress(translate('{action} · {progress}%', { action: moving ? translate('正在移动') : translate('正在导入'), progress: totalBytes ? Math.min(100, Math.round(transferredBytes / totalBytes * 100)) : 100 }));
       } };
       if (moving) {
         const result = await useAppStore.getState().moveGlobalAssetToFolder(internal, selection, options);
         toast(result.moved ? '图片已移动到文件夹' : '图片已在此文件夹内');
       } else {
         const count = await importAssetFilesToFolder(paths, selection, useAppStore.getState().config.assetFolders ?? [], options);
-        toast(`已导入 ${count} 个文件，外部原文件保留`);
+        toast(translate('已导入 {count} 个文件，外部原文件保留', { count }));
       }
     } catch {
       if (useAppStore.getState().assetsPanelOpen) toast(controller.signal.aborted
@@ -970,7 +972,7 @@ export default function AssetsPanel() {
     [activeTab, projectFiles, permanentFiles, folderSelection]);
   const selectedFolder = folderSelection.kind === 'folder' ? externalFolders.find((folder) =>
     folder.rootPath === folderSelection.rootPath && folder.relativePath === folderSelection.relativePath) : undefined;
-  const folderLabel = folderSelection.kind === 'all' ? '全部资产' : folderSelection.kind === 'global' ? '导入文件'
+  const folderLabel = folderSelection.kind === 'all' ? translate('全部资产') : folderSelection.kind === 'global' ? translate('导入文件')
     : `${shortFolderName(folderSelection.rootPath)}${folderSelection.relativePath ? ` / ${folderSelection.relativePath.replace(/\//g, ' / ')}` : ''}`;
   const handleSelectFolder = useCallback((selection: AssetFolderSelection) => {
     setGlobalCreativeKind(null);
@@ -1113,10 +1115,10 @@ export default function AssetsPanel() {
           if (!isCurrent()) return;
           // 用户主动清空的提示词不能回退到历史；长文本只截取预览，完整内容仍在详情中。
           const prompt = (details?.record?.prompt ?? history?.prompt ?? '').replace(/\s+/g, ' ').trim();
-          const text = !prompt ? '暂无提示词' : prompt.length > 240 ? `${prompt.slice(0, 240)}…（点击查看完整提示词）` : prompt;
+          const text = !prompt ? translate('暂无提示词') : prompt.length > 240 ? translate('{prompt}…（点击查看完整提示词）', { prompt: prompt.slice(0, 240) }) : prompt;
           setHoverDetails({ key, scope: hoverScope, text });
         } catch {
-          if (isCurrent()) setHoverDetails({ key, scope: hoverScope, text: '读取失败，请重试' });
+          if (isCurrent()) setHoverDetails({ key, scope: hoverScope, text: translate('读取失败，请重试') });
         }
       })();
     }, 400);
@@ -1125,7 +1127,7 @@ export default function AssetsPanel() {
   const cardTooltip = (file: AssetFileEntry): string | undefined => {
     const current = hoverDetails?.key === assetKey(file) && hoverDetails.scope === hoverScope ? hoverDetails : null;
     if (current?.text === '') return undefined;
-    return `${cardDragHint(file)}\n提示词：${current?.text ?? '正在读取…'}\n标签：\n${file.tags?.length ? file.tags.join('、') : '暂无标签'}`;
+    return translate('{hint}\n提示词：{prompt}\n标签：\n{tags}', { hint: cardDragHint(file), prompt: current ? current.text : translate('正在读取…'), tags: file.tags?.length ? file.tags.join(', ') : translate('暂无标签') });
   };
   const cardDragHint = (file: AssetFileEntry): string => {
     const dragHint = !isDraggableEntry(file) || file.availability === 'offline' ? '此素材暂不支持拖拽'
@@ -1133,7 +1135,7 @@ export default function AssetsPanel() {
         : isDrawer ? '拖拽到画布可添加节点；' : '拖出弹窗到画布可添加节点；';
     const folderHint = activeTab === 'permanent' && file.category === 'image' && isLocalAssetFile(file)
       && (file.source === 'global' || file.source === 'folder') ? '拖到左侧文件夹可移动。' : '';
-    return [folderHint, dragHint].filter(Boolean).join('\n');
+    return [folderHint, dragHint].filter(Boolean).map((hint) => translate(hint)).join('\n');
   };
   useEffect(() => {
     fileScopeRef.current = assetsPanelOpen ? previewScope : null;
@@ -1275,7 +1277,7 @@ export default function AssetsPanel() {
     try {
       const target: AssetFolderSelection = folderSelection.kind === 'all' ? { kind: 'global' } : folderSelection;
       const n = await addAssetFilesToGlobal(target, useAppStore.getState().config.assetFolders ?? []);
-      if (n > 0) { toast(`已添加 ${n} 个文件`); if (activeTab === 'permanent') await loadFiles(); }
+      if (n > 0) { toast(translate('已添加 {count} 个文件', { count: n })); if (activeTab === 'permanent') await loadFiles(); }
     } catch { toast('添加失败'); } finally { setBusy(false); }
   }, [activeTab, folderSelection, loadFiles, toast]);
 
@@ -1287,7 +1289,7 @@ export default function AssetsPanel() {
       if (path && !folders.includes(path)) {
         updateConfig({ assetFolders: [...folders, path] });
         await saveConfig();
-        toast(`已添加文件夹: ${shortFolderName(path)}`);
+        toast(translate('已添加文件夹：{name}', { name: shortFolderName(path) }));
       }
     } catch { toast('添加失败'); } finally { setBusy(false); }
   }, [folders, updateConfig, saveConfig, toast]);
@@ -1302,7 +1304,7 @@ export default function AssetsPanel() {
   // ── 全局资产 / 删除 ──
   const handleSavePermanent = useCallback(async (file: AssetFileEntry) => {
     const dest = await saveAssetToPermanent(file);
-    toast(dest ? `已保存: ${file.name}` : '保存失败');
+    toast(dest ? translate('已保存：{name}', { name: file.name }) : '保存失败');
     if (dest && activeTab === 'permanent') await loadFiles();
   }, [activeTab, loadFiles, toast]);
 
@@ -1375,7 +1377,7 @@ export default function AssetsPanel() {
               data-resource-video-boundary
               className={isPage ? 'assets-library-page flex h-full min-h-0 w-full flex-col overflow-hidden bg-canvas-bg pb-3' : `assets-panel glass-panel ui-dialog-surface${isDrawer ? ' assets-panel--drawer' : ''}`}
               role={isPage ? 'main' : isDrawer ? 'region' : 'dialog'}
-              aria-label={isPage ? '资源库' : isDrawer ? '资产库快捷面板' : '资产管理'}
+              aria-label={isPage ? translate('资源库') : isDrawer ? translate('资产库快捷面板') : translate('资产管理')}
               aria-modal={isDrawer || isPage ? undefined : true}
               variants={isPage ? {
                 hidden: { opacity: 0 },
@@ -1392,17 +1394,17 @@ export default function AssetsPanel() {
               {/* Header */}
               <div data-tauri-drag-region={isPage ? true : undefined} className={isPage ? `relative flex h-11 shrink-0 items-center gap-3 pr-3 ${macWindowControls ? 'pl-28' : 'pl-3'}` : 'assets-panel-header px-2.5 py-2'}>
                 {isPage && <button type="button" autoFocus className="ui-btn ui-btn--ghost ui-btn--sm" onClick={handleClose}>
-                  <Icon icon="mdi:arrow-left" width="16" aria-hidden="true" /> 返回启动页
+                  <Icon icon="mdi:arrow-left" width="16" aria-hidden="true" /> {translate("返回启动页")}
                 </button>}
                 <h2 className="assets-panel-title">
-                  {isPage ? '资源库' : isDrawer ? '资产库' : '资产管理'}
+                  {isPage ? translate('资源库') : isDrawer ? translate('资产库') : translate('资产管理')}
                   {!isDrawer && !isPage && <span className="assets-panel-subtitle">
-                    {visibleTab === 'drama' ? '管理人物、场景和道具简介与绑图' : visibleTab === 'ark' ? '管理火山方舟虚拟人像素材' : visibleTab === 'refmods' ? '引用 ComfyUI 中的 H3 角色参考包' : isNodeList ? '查看当前画布中的全部节点' : '拖拽卡片到画布即可添加节点'}
+                    {visibleTab === 'drama' ? translate('管理人物、场景和道具简介与绑图') : visibleTab === 'ark' ? translate('管理火山方舟虚拟人像素材') : visibleTab === 'refmods' ? translate('引用 ComfyUI 中的 H3 角色参考包') : isNodeList ? translate('查看当前画布中的全部节点') : translate('拖拽卡片到画布即可添加节点')}
                   </span>}
                 </h2>
                 {isDrawer ? (
-                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={handleClose} aria-label="收起资产库">
-                    收起 <kbd>Tab</kbd>
+                  <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={handleClose} aria-label={translate("收起资产库")}>
+                    {translate("收起")} <kbd>Tab</kbd>
                   </button>
                 ) : !isPage && <PopupCloseButton onClick={handleClose} />}
               </div>
@@ -1411,17 +1413,17 @@ export default function AssetsPanel() {
               <div className="assets-tabs">
                 <Tabs<TabKey>
                   items={[
-                    { value: 'project', label: '项目文件', count: projectFiles.length },
-                    { value: 'permanent', label: '全局资产', count: permanentFiles.length },
-                    { value: 'drama', label: '创作资产', count: dramaAssetCount },
-                    { value: 'ark', label: '方舟素材库', count: arkAssetCount },
-                    { value: 'refmods', label: 'ComfyUI 角色', count: refmodCount },
-                    { value: 'nodes', label: '节点列表', count: canvasNodeCount },
+                    { value: 'project', label: translate('项目文件'), count: projectFiles.length },
+                    { value: 'permanent', label: translate('全局资产'), count: permanentFiles.length },
+                    { value: 'drama', label: translate('创作资产'), count: dramaAssetCount },
+                    { value: 'ark', label: translate('方舟素材库'), count: arkAssetCount },
+                    { value: 'refmods', label: translate('ComfyUI 角色'), count: refmodCount },
+                    { value: 'nodes', label: translate('节点列表'), count: canvasNodeCount },
                   ] satisfies TabItem<TabKey>[]}
                   value={visibleTab}
                   onChange={switchTab}
                   size={isDrawer ? 'sm' : 'md'}
-                  aria-label="资产类型"
+                  aria-label={translate("资产类型")}
                 />
 
                 {/* Toolbar: 搜索 + 添加 */}
@@ -1434,7 +1436,7 @@ export default function AssetsPanel() {
                     onChange={(value) => setSelectedProjectId(value || null)}
                     options={listTopLevelProjects(projects).map((p) => ({
                       value: p.id,
-                      label: currentProjectId && p.id === seriesOwnerId(projects, currentProjectId) ? `${p.name}（当前）` : p.name,
+                      label: currentProjectId && p.id === seriesOwnerId(projects, currentProjectId) ? translate('{name}（当前）', { name: p.name }) : p.name,
                     }))}
                   />
                 )}
@@ -1444,34 +1446,34 @@ export default function AssetsPanel() {
                   </svg>
                   <input
                     className="ui-input ui-input--sm"
-                    type="text" placeholder={isNodeList ? '搜索节点名称、类型或编号…' : '搜索名称或标签…'}
+                    type="text" placeholder={isNodeList ? translate('搜索节点名称、类型或编号…') : translate('搜索名称或标签…')}
                     value={isNodeList ? nodeSearch : search}
                     onChange={(e) => { (isNodeList ? setNodeSearch : setSearch)(e.target.value); setVisibleCount(PAGE_SIZE); }}
                   />
                   {(isNodeList ? nodeSearch : search) && (
-                    <button type="button" className="assets-search-clear" onClick={() => { (isNodeList ? setNodeSearch : setSearch)(''); setVisibleCount(PAGE_SIZE); }} aria-label="清空">
+                    <button type="button" className="assets-search-clear" onClick={() => { (isNodeList ? setNodeSearch : setSearch)(''); setVisibleCount(PAGE_SIZE); }} aria-label={translate("清空")}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                         <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
                     </button>
                   )}
                 </div>
-                {!isDrawer && !isNodeList && <div className="assets-column-stepper" role="group" aria-label="瀑布流列数">
+                {!isDrawer && !isNodeList && <div className="assets-column-stepper" role="group" aria-label={translate("瀑布流列数")}>
                   <Icon icon="lucide:columns-3" className="assets-column-stepper-icon" aria-hidden="true" />
                   <button
                     type="button"
                     className="ui-icon-btn ui-icon-btn--sm"
-                    aria-label="减少瀑布流列数"
+                    aria-label={translate("减少瀑布流列数")}
                     disabled={waterfallColumns <= MIN_WATERFALL_COLUMNS}
                     onClick={() => adjustWaterfallColumns(-1)}
                   >
                     <Icon icon="lucide:minus" aria-hidden="true" />
                   </button>
-                  <output aria-label={`当前 ${waterfallColumns} 列`}>{waterfallColumns}</output>
+                  <output aria-label={translate('当前 {count} 列', { count: waterfallColumns })}>{waterfallColumns}</output>
                   <button
                     type="button"
                     className="ui-icon-btn ui-icon-btn--sm"
-                    aria-label="增加瀑布流列数"
+                    aria-label={translate("增加瀑布流列数")}
                     disabled={waterfallColumns >= MAX_WATERFALL_COLUMNS}
                     onClick={() => adjustWaterfallColumns(1)}
                   >
@@ -1479,11 +1481,11 @@ export default function AssetsPanel() {
                   </button>
                 </div>}
                 {!isDrawer && (visibleTab === 'project' || visibleTab === 'permanent') && <button type="button" className="ui-btn ui-btn--sm shrink-0"
-                  disabled={!isTauriEnv() || !batchImages.length || busy || loading} title="批量反推当前筛选图片的提示词和标签"
+                  disabled={!isTauriEnv() || !batchImages.length || busy || loading} title={translate("批量反推当前筛选图片的提示词和标签")}
                   onClick={() => {
                     dismissHover(); setAddMenuOpen(false); setFileMenu(null);
                     setBatchReverse({ scope: previewScope, entries: batchImages.map((file) => ({ file: { ...file }, projectId: projectIdForFile(file) })) });
-                  }}><Icon icon="lucide:sparkles" aria-hidden="true" />批量反推</button>}
+                  }}><Icon icon="lucide:sparkles" aria-hidden="true" />{translate("批量反推")}</button>}
                 {visibleTab === 'permanent' && (
                   <div className="assets-add-wrap" ref={addWrapRef}>
                     <motion.button
@@ -1494,7 +1496,7 @@ export default function AssetsPanel() {
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                         <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                       </svg>
-                      添加
+                      {translate("添加")}
                     </motion.button>
                     <AnimatePresence>
                       {addMenuOpen && (
@@ -1505,8 +1507,8 @@ export default function AssetsPanel() {
                           exit={{ opacity: 0, y: -6, scale: 0.96, transition: fadeFast }}
                           transition={springSmooth}
                         >
-                          <button type="button" onClick={handleAddFiles}>📄 添加文件</button>
-                          <button type="button" onClick={handleAddFolder}>📁 添加文件夹</button>
+                          <button type="button" onClick={handleAddFiles}>{translate("📄 添加文件")}</button>
+                          <button type="button" onClick={handleAddFolder}>{translate("📁 添加文件夹")}</button>
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -1520,11 +1522,11 @@ export default function AssetsPanel() {
                   {filteredNodes.length === 0 ? (
                     <div className="assets-empty">
                       <Icon icon="lucide:workflow" width="32" height="32" aria-hidden="true" />
-                      <span>{nodeSearch.trim() ? '没有匹配的节点' : '当前画布暂无节点'}</span>
+                      <span>{nodeSearch.trim() ? translate('没有匹配的节点') : translate('当前画布暂无节点')}</span>
                     </div>
                   ) : (
                     <>
-                      <ul className="assets-node-grid" aria-label="当前画布节点">
+                      <ul className="assets-node-grid" aria-label={translate("当前画布节点")}>
                         {filteredNodes.slice(0, visibleCount).map((node) => (
                           <li key={node.id} data-node-id={node.id} className="ui-card assets-node-card min-w-0 p-3">
                             <div className="flex items-center gap-2">
@@ -1534,12 +1536,12 @@ export default function AssetsPanel() {
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-xs font-medium text-canvas-text" title={node.label}>{node.label}</p>
                                 <p className="truncate text-[11px] text-canvas-text-muted">
-                                  {node.displayId !== undefined && <span>#{node.displayId} · </span>}{node.config.label}
+                                  {node.displayId !== undefined && <span>#{node.displayId} · </span>}{translate(node.config.label)}
                                 </p>
                               </div>
                               <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm shrink-0"
-                                aria-label={`查看节点 ${node.label}`} onClick={() => handleLocateNode(node.id)}>
-                                查看节点
+                                aria-label={translate('查看节点 {name}', { name: node.label })} onClick={() => handleLocateNode(node.id)}>
+                                {translate("查看节点")}
                               </button>
                             </div>
                             <CanvasNodeCardContent nodeId={node.id} data={node.data} projectId={currentProjectId} connectable={isDrawer}
@@ -1551,7 +1553,7 @@ export default function AssetsPanel() {
                       </ul>
                       {visibleCount < filteredNodes.length && (
                         <div ref={sentinelRef} className="assets-load-sentinel">
-                          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}>加载更多节点</button>
+                          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}>{translate("加载更多节点")}</button>
                         </div>
                       )}
                     </>
@@ -1561,14 +1563,14 @@ export default function AssetsPanel() {
                 <Suspense
                   fallback={(
                     <div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">
-                      正在加载短剧资产...
+                      {translate("正在加载短剧资产...")}
                     </div>
                   )}
                 >
                   <DramaAssetsPanel compact={isDrawer} />
                 </Suspense>
               ) : visibleTab === 'ark' ? (
-                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">正在加载方舟素材库...</div>}>
+                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">{translate("正在加载方舟素材库...")}</div>}>
                   <VolcengineAssetLibraryPanel
                     compact={isDrawer}
                     onCountChange={setArkAssetCount}
@@ -1576,7 +1578,7 @@ export default function AssetsPanel() {
                   />
                 </Suspense>
               ) : visibleTab === 'refmods' ? (
-                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">正在加载角色参考包...</div>}>
+                <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-canvas-text-muted">{translate("正在加载角色参考包...")}</div>}>
                   <RefModAssetsPanel compact={isDrawer} onCountChange={setRefmodCount} />
                 </Suspense>
               ) : (
@@ -1598,32 +1600,32 @@ export default function AssetsPanel() {
                       }}
                     />
                   )}
-                  {isGlobalCreative && globalCreativeKind ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">正在打开全局创作资产…</p>}>
+                  {isGlobalCreative && globalCreativeKind ? <Suspense fallback={<p role="status" className="p-3 text-xs text-canvas-text-muted">{translate("正在打开全局创作资产…")}</p>}>
                     <GlobalCreativeAssetsPanel key={globalCreativeKind} kind={globalCreativeKind} compact={isDrawer} />
                   </Suspense> : <div className="assets-file-content">
                     {folderProgress && <div role="status" className="flex items-center gap-2 p-2 text-xs text-canvas-text-secondary">
-                      <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" /><span className="flex-1">{folderProgress}</span>
-                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => folderOperationRef.current?.abort()}>取消操作</button>
+                      <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" /><span className="flex-1">{translate(folderProgress)}</span>
+                      <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => folderOperationRef.current?.abort()}>{translate("取消操作")}</button>
                     </div>}
                     <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-2 text-xs text-canvas-text-secondary">
-                      <span className="min-w-0 truncate" title={activeTab === 'permanent' ? folderLabel : '项目文件'}>
-                        {activeTab === 'permanent' ? folderLabel : '项目文件'}
+                      <span className="min-w-0 truncate" title={activeTab === 'permanent' ? folderLabel : translate('项目文件')}>
+                        {activeTab === 'permanent' ? folderLabel : translate('项目文件')}
                       </span>
                       <div className="flex shrink-0 items-center gap-1">
-                        <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS} size="sm" className="w-[86px]"
-                          aria-label="排序方式" onChange={(value) => changeFileSort(value, value === 'usedAt' ? 'desc' : sortOrder)} />
+                        <Select<AssetSortBy> value={sortBy} options={FILE_SORT_OPTIONS.map((option) => ({ ...option, label: translate(option.label) }))} size="sm" className="w-[86px]"
+                          aria-label={translate("排序方式")} onChange={(value) => changeFileSort(value, value === 'usedAt' ? 'desc' : sortOrder)} />
                         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm"
-                          aria-label={sortOrder === 'asc' ? '切换为降序' : '切换为升序'}
-                          title={sortOrder === 'asc' ? '当前升序，点击切换为降序' : '当前降序，点击切换为升序'}
+                          aria-label={sortOrder === 'asc' ? translate('切换为降序') : translate('切换为升序')}
+                          title={sortOrder === 'asc' ? translate('当前升序，点击切换为降序') : translate('当前降序，点击切换为升序')}
                           onClick={() => changeFileSort(sortBy, sortOrder === 'asc' ? 'desc' : 'asc')}>
                           <Icon icon={sortOrder === 'asc' ? 'lucide:arrow-up-narrow-wide' : 'lucide:arrow-down-wide-narrow'} width={14} aria-hidden="true" />
-                          {sortOrder === 'asc' ? '升序' : '降序'}
+                          {sortOrder === 'asc' ? translate('升序') : translate('降序')}
                         </button>
                       </div>
-                      <span className="ml-auto shrink-0 text-canvas-text-muted">{files.length} 个文件</span>
+                      <span className="ml-auto shrink-0 text-canvas-text-muted">{translate('{count} 个文件', { count: files.length })}</span>
                     </div>
                     {activeTab === 'permanent' && folderScanTruncated && (
-                      <p role="status" className="px-3 pt-2 text-xs text-canvas-text-muted">已达到扫描上限，当前仅显示已扫描的目录和文件。可单独添加子文件夹继续浏览。</p>
+                      <p role="status" className="px-3 pt-2 text-xs text-canvas-text-muted">{translate("已达到扫描上限，当前仅显示已扫描的目录和文件。可单独添加子文件夹继续浏览。")}</p>
                     )}
 
               {/* 分类 + 标签筛选 */}
@@ -1637,7 +1639,7 @@ export default function AssetsPanel() {
                     className={`assets-cat-chip ${activeCategory === null ? 'active' : ''} ${filterRowExpanded || visibleFilterItemCount > 0 ? '' : 'assets-filter-item-hidden'}`}
                     onClick={() => { setActiveCategory(null); setVisibleCount(PAGE_SIZE); }}
                   >
-                    全部<span className="assets-cat-count">{files.length}</span>
+                    {translate("全部")}<span className="assets-cat-count">{files.length}</span>
                   </button>
                   {listedCategories.map((cat, index) => (
                     <button
@@ -1645,7 +1647,7 @@ export default function AssetsPanel() {
                       className={`assets-cat-chip ${activeCategory === cat ? 'active' : ''} ${filterRowExpanded || index + 1 < visibleFilterItemCount ? '' : 'assets-filter-item-hidden'}`}
                       onClick={() => { setActiveCategory(cat); setVisibleCount(PAGE_SIZE); }}
                     >
-                      {CATEGORY_ICONS[cat]} {CATEGORY_LABELS[cat]}
+                      {CATEGORY_ICONS[cat]} {translate(CATEGORY_LABELS[cat])}
                       <span className="assets-cat-count">{categoryCounts[cat]}</span>
                     </button>
                   ))}
@@ -1671,8 +1673,8 @@ export default function AssetsPanel() {
                     className="assets-filter-more"
                     aria-controls="assets-filter-list"
                     aria-expanded={filterRowExpanded}
-                    aria-label={filterRowExpanded ? '收起标签' : '展开更多标签'}
-                    title={filterRowExpanded ? '收起标签' : '更多标签'}
+                    aria-label={filterRowExpanded ? translate('收起标签') : translate('展开更多标签')}
+                    title={filterRowExpanded ? translate('收起标签') : translate('更多标签')}
                     onClick={() => setFilterRowExpanded((expanded) => !expanded)}
                   >
                     <Icon icon={filterRowExpanded ? 'lucide:chevron-up' : 'lucide:ellipsis'} aria-hidden="true" />
@@ -1685,16 +1687,16 @@ export default function AssetsPanel() {
                 <div className="assets-file-scroll" key={JSON.stringify([activeTab, activeTab === 'permanent' ? folderSelection : null, sortBy, sortOrder])}>
                   {!loading && loadError && (
                     <div className="ui-alert ui-alert--warning m-2" role="alert">
-                      <span className="min-w-0 flex-1">{loadError}</span>
+                      <span className="min-w-0 flex-1">{translate(loadError)}</span>
                       <button type="button" className="ui-btn ui-btn--secondary shrink-0"
-                        onClick={() => { void loadFiles().then(loadTags); }}>重试加载</button>
+                        onClick={() => { void loadFiles().then(loadTags); }}>{translate("重试加载")}</button>
                     </div>
                   )}
                   <div className="assets-file-waterfall" data-columns={waterfallColumns}>
                     {loading && filteredFiles.length === 0 ? (
                       <div className="assets-empty">
                         <motion.div className="assets-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.6, ease: 'linear' }} />
-                        <span>加载中...</span>
+                        <span>{translate("加载中...")}</span>
                       </div>
                     ) : filteredFiles.length === 0 && !loadError ? (
                       <div className="assets-empty">
@@ -1702,13 +1704,13 @@ export default function AssetsPanel() {
                           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                           <polyline points="14 2 14 8 20 8" /><line x1="9" y1="15" x2="15" y2="15" />
                         </svg>
-                        <span>{activeTab === 'permanent' && selectedFolder?.availability === 'offline' ? '文件夹无法访问，请检查位置或权限'
-                          : activeTab === 'permanent' && selectedFolder?.availability === 'unscanned' ? '此文件夹尚未扫描，可单独添加此目录继续浏览'
-                          : search || activeCategory || activeTag ? '没有匹配的文件' : activeTab === 'project' ? '暂无项目文件'
+                        <span>{activeTab === 'permanent' && selectedFolder?.availability === 'offline' ? translate('文件夹无法访问，请检查位置或权限')
+                          : activeTab === 'permanent' && selectedFolder?.availability === 'unscanned' ? translate('此文件夹尚未扫描，可单独添加此目录继续浏览')
+                          : search || activeCategory || activeTag ? translate('没有匹配的文件') : activeTab === 'project' ? translate('暂无项目文件')
                             : selectedFolder ? externalFolders.some((folder) => folder.rootPath === selectedFolder.rootPath
                               && folder.parentRelativePath === selectedFolder.relativePath)
-                              ? '此文件夹没有本层文件，请选择子文件夹浏览' : '此文件夹为空'
-                              : '暂无文件，点击「添加」导入'}</span>
+                              ? translate('此文件夹没有本层文件，请选择子文件夹浏览') : translate('此文件夹为空')
+                              : translate('暂无文件，点击「添加」导入')}</span>
                       </div>
                     ) : (
                       <>
@@ -1762,9 +1764,9 @@ export default function AssetsPanel() {
                           ))}
                         </div>
                         {visibleCount < filteredFiles.length && (
-                          <div ref={sentinelRef} className="assets-load-sentinel">加载更多…</div>
+                          <div ref={sentinelRef} className="assets-load-sentinel">{translate("加载更多…")}</div>
                         )}
-                        {loading && <div className="assets-load-sentinel" role="status" aria-live="polite">正在继续加载资源…</div>}
+                        {loading && <div className="assets-load-sentinel" role="status" aria-live="polite">{translate("正在继续加载资源…")}</div>}
                       </>
                     )}
                   </div>
@@ -1784,7 +1786,7 @@ export default function AssetsPanel() {
                     exit={{ opacity: 0, y: -8, scale: 0.92, transition: fadeFast }}
                     transition={springSmooth}
                   >
-                    {toastMsg}
+                    {translate(toastMsg)}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1843,13 +1845,13 @@ export default function AssetsPanel() {
           setCreativeFile({ file: { ...target.file }, kind, scope: target.scope });
         } : undefined}
         onReveal={() => performFileAction('reveal')} onDelete={() => performFileAction('delete')} onClose={closeFileMenu} />}
-    {assetsPanelOpen && creativeFile?.scope === previewScope && <Suspense fallback={<p role="status">正在打开创作资产…</p>}>
+    {assetsPanelOpen && creativeFile?.scope === previewScope && <Suspense fallback={<p role="status">{translate("正在打开创作资产…")}</p>}>
       <GlobalCreativeAssetFileDialog key={`${creativeFile.kind}:${creativeFile.file.assetId ?? creativeFile.file.path}`} file={creativeFile.file} kind={creativeFile.kind}
         onClose={() => setCreativeFile(null)} onSaved={() => {
           switchTab('permanent'); setGlobalCreativeKind(creativeFile.kind); setCreativeFile(null); toast('已添加到全局创作资产');
         }} />
     </Suspense>}
-    {assetsPanelOpen && textPreview?.scope === previewScope && <Suspense fallback={<p role="status">正在打开文档…</p>}>
+    {assetsPanelOpen && textPreview?.scope === previewScope && <Suspense fallback={<p role="status">{translate("正在打开文档…")}</p>}>
       <AssetTextPreview key={textPreview.scope} file={textPreview.file} projectId={projectIdForFile(textPreview.file)}
         onClose={() => setTextPreview(null)} onSaved={(next) => {
           if (fileScopeRef.current !== previewScope || !useAppStore.getState().assetsPanelOpen
@@ -1908,6 +1910,7 @@ function AssetCard({
   onToggleEdit, onTagDraftChange, onAddTag, onRemoveTag, onSave, onDelete, onContextMenu, onMenuKeyDown,
   videoExpanded = false, videoPresentation, videoProjectId, onVideoExpandedChange, onImagePreview, onTextPreview,
 }: AssetCardProps) {
+  useT();
   const tags = file.tags ?? [];
   return (
     <div
@@ -1943,7 +1946,7 @@ function AssetCard({
         onImagePreview={onImagePreview}
         onTextPreview={onTextPreview}
         showNativeTooltip={false}
-        badge={file.source === 'folder' ? '外部' : undefined}
+        badge={file.source === 'folder' ? translate('外部') : undefined}
       >
         <CardActions isProject={isProject} onSave={onSave} onDelete={onDelete} onToggleEdit={onToggleEdit} />
       </AssetThumb>
@@ -1953,13 +1956,13 @@ function AssetCard({
           {tags.map((t) => (
             <span key={t} className="assets-card-tag">
               {t}
-              {editing && <button type="button" onClick={() => onRemoveTag(t)} aria-label="移除标签">×</button>}
+              {editing && <button type="button" onClick={() => onRemoveTag(t)} aria-label={translate("移除标签")}>×</button>}
             </span>
           ))}
           {editing && (
             <input
               className="assets-tag-input" autoFocus value={tagDraft}
-              placeholder="加标签…"
+              placeholder={translate("加标签…")}
               onChange={(e) => onTagDraftChange(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAddTag(tagDraft); } }}
               onBlur={() => { if (tagDraft.trim()) onAddTag(tagDraft); }}
@@ -1974,6 +1977,7 @@ function AssetCard({
 function CardActions({ isProject, onSave, onDelete, onToggleEdit }: {
   isProject: boolean; onSave: () => void; onDelete: () => void; onToggleEdit: () => void;
 }) {
+  useT();
   return (
     <div className="assets-card-actions">
       <button type="button" className="assets-card-action-btn" onClick={onToggleEdit}>

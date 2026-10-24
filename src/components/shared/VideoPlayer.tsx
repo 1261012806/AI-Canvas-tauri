@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type VideoHTMLAttributes } from 'react';
 import { Icon } from '@iconify/react';
 import { releaseViewportVideoElement } from './viewportVideoResource';
+import { useT } from '../../i18n';
 
 export interface VideoPlayerMetadata { width: number; height: number; duration: number }
 export interface VideoPlayerProps {
@@ -51,6 +52,7 @@ function seekPreview(video: HTMLVideoElement | null, time: number) {
 }
 
 function VideoSeekPreview({ src, time }: { src: string; time: number }) {
+  const t = useT();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => { seekPreview(videoRef.current, time); }, [time, src]);
@@ -60,7 +62,7 @@ function VideoSeekPreview({ src, time }: { src: string; time: number }) {
     return () => releaseViewportVideoElement(video);
   }, [src]);
   return <div className="ui-video-player__seek-preview" aria-hidden="true">
-    {failed ? <span className="text-xs text-canvas-text-muted">预览不可用</span>
+    {failed ? <span className="text-xs text-canvas-text-muted">{t('预览不可用')}</span>
       : <video ref={videoRef} src={src} muted playsInline preload="metadata" tabIndex={-1} onLoadedMetadata={(event) => seekPreview(event.currentTarget, time)} onError={() => setFailed(true)} />}
     <span className="ui-video-player__seek-time">{timeLabel(time)}</span>
   </div>;
@@ -68,6 +70,7 @@ function VideoSeekPreview({ src, time }: { src: string; time: number }) {
 
 /** UI Kit 视频播放器：调用方提供可播放地址，不依赖 Store、文件服务或生成历史。 */
 export default function VideoPlayer({ src, poster, name, autoPlay = false, unavailable = false, className = '', compact = false, active = true, durationHint = 0, mediaRef, crossOrigin, onLoadedMetadata, onPlay, onPause, onVolumeChange, onPosterError, onRequestPlayback, onFullscreen, onMetadata, onError, onEnded, onEscape }: VideoPlayerProps) {
+  const t = useT();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bindVideo = useCallback((video: HTMLVideoElement | null) => {
     videoRef.current = video;
@@ -272,10 +275,10 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   }, [menu]);
 
   return (
-    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} tabIndex={compact ? 0 : undefined} aria-label={`${name} 视频播放器`}>
+    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} tabIndex={compact ? 0 : undefined} aria-label={t('{name} 视频播放器', { name })}>
         <div className="ui-video-player__view">
         {src && active ? <>
-          <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="metadata" aria-label={`${name} 视频播放`}
+          <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="metadata" aria-label={t('{name} 视频播放', { name })}
             onLoadedMetadata={(event) => {
               const video = event.currentTarget;
               setDimensions({ src, width: video.videoWidth, height: video.videoHeight, duration: video.duration });
@@ -302,14 +305,14 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
               setPlaying(false); setFailed({ src, code, message: videoErrorMessage(code) }); setBlocked(true); onError?.();
             }} />
           {(blocked || failure) && <button type="button" className="ui-btn ui-video-player__retry max-w-[calc(100%_-_1rem)]" onClick={play}
-            aria-label={failure ? `${failure.message}，重试播放` : '点击播放'}
-            title={failure?.code === 3 || failure?.code === 4 ? '建议使用 H.264 编码的 MP4；点击重试播放' : undefined}>
-            <span className="whitespace-normal">{failure?.message ?? '点击播放'}</span>
+            aria-label={failure ? t('{reason}，重试播放', { reason: t(failure.message) }) : t('点击播放')}
+            title={failure?.code === 3 || failure?.code === 4 ? t('建议使用 H.264 编码的 MP4；点击重试播放') : undefined}>
+            <span className="whitespace-normal">{failure ? t(failure.message) : t('点击播放')}</span>
           </button>}
         </> : src && poster ? <img src={poster} alt="" draggable={false} onError={onPosterError} />
-          : <p role="status" className="text-xs text-canvas-text-muted">{unavailable ? '视频不可用' : src && !active ? '点击播放' : '加载视频…'}</p>}
+          : <p role="status" className="text-xs text-canvas-text-muted">{unavailable ? t('视频不可用') : src && !active ? t('点击播放') : t('加载视频…')}</p>}
         </div>
-        <div ref={controlsRef} className={`ui-video-player__controls nodrag nopan ${compact ? 'p-2' : 'p-3'}`} aria-label="视频播放控件"
+        <div ref={controlsRef} className={`ui-video-player__controls nodrag nopan ${compact ? 'p-2' : 'p-3'}`} aria-label={t('视频播放控件')}
           onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
           <div ref={progressRef} className="ui-video-player__progress" style={{ '--video-buffered': `${buffered}%` } as CSSProperties}
             onPointerMove={(event) => {
@@ -321,7 +324,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
           <div className="ui-video-player__progress-track" aria-hidden="true"><span className="ui-video-player__progress-empty" /><span className="ui-video-player__progress-buffer" /><span className="ui-video-player__progress-played" /></div>
           {duration > 0 && <span className="ui-video-player__progress-marker" aria-hidden="true" />}
           <input ref={progressInputRef} type="range" data-native-range className="ui-video-player__range-hit" min={0} max={duration || 1} step={0.01} defaultValue={0} disabled={!duration || !active}
-            aria-label="播放进度" aria-valuetext={`${timeLabel(time)} / ${timeLabel(duration)}`}
+            aria-label={t('播放进度')} aria-valuetext={`${timeLabel(time)} / ${timeLabel(duration)}`}
             onPointerDown={(event) => {
               if (event.button !== 0 || event.currentTarget.disabled || scrubPointerRef.current) return;
               scrubPointerRef.current = { pointerId: event.pointerId, value: Number(event.currentTarget.value) };
@@ -345,34 +348,34 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
           </div>
           <div className="ui-video-player__control-row">
             <div className="ui-video-player__control-left">
-              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={active && playing ? '暂停视频' : '播放视频'} disabled={!src}
+              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={active && playing ? t('暂停视频') : t('播放视频')} disabled={!src}
                 onClick={() => { if (!videoRef.current || videoRef.current.paused) play(); else videoRef.current.pause(); }}><Icon icon={active && playing ? 'lucide:pause' : 'lucide:play'} className="ui-video-player__play-icon" aria-hidden="true" /></button>
               <div className="ui-video-player__control-anchor">
                 <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__speed-trigger" data-video-speed-trigger
-                  aria-label="播放速度" aria-haspopup="dialog" aria-expanded={menu === 'speed'} disabled={!src || !active} onClick={() => setMenu(menu === 'speed' ? null : 'speed')}>{rate}×</button>
-                {menu === 'speed' && <div ref={popupRef} className="ui-menu ui-menu--up ui-video-player__speed-popover p-3" role="dialog" aria-label="播放速度设置">
-                  <h2 className="pb-3 text-sm font-semibold text-canvas-text">播放速度</h2>
+                  aria-label={t('播放速度')} aria-haspopup="dialog" aria-expanded={menu === 'speed'} disabled={!src || !active} onClick={() => setMenu(menu === 'speed' ? null : 'speed')}>{rate}×</button>
+                {menu === 'speed' && <div ref={popupRef} className="ui-menu ui-menu--up ui-video-player__speed-popover p-3" role="dialog" aria-label={t('播放速度设置')}>
+                  <h2 className="pb-3 text-sm font-semibold text-canvas-text">{t('播放速度')}</h2>
                   <div className="ui-video-player__speed-options">{[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((value) => <button type="button" key={value}
-                    className={`ui-btn ui-btn--ghost ui-video-player__speed-option${rate === value ? ' is-selected' : ''}`} aria-label={`${value} 倍速`} aria-pressed={rate === value}
+                    className={`ui-btn ui-btn--ghost ui-video-player__speed-option${rate === value ? ' is-selected' : ''}`} aria-label={t('{rate} 倍速', { rate: value })} aria-pressed={rate === value}
                     onClick={() => { if (videoRef.current) videoRef.current.playbackRate = value; }}>{value}</button>)}</div>
                   <div className="ui-video-player__value-track" style={{ '--video-value': `${(rate - 0.25) / 1.75 * 100}%` } as CSSProperties}><span aria-hidden="true" className="ui-video-player__value-fill" /><span aria-hidden="true" className="ui-video-player__value-marker" />
-                    <input className="ui-video-player__range-hit" type="range" data-native-range min={0.25} max={2} step={0.25} value={rate} aria-label="调整播放速度"
+                    <input className="ui-video-player__range-hit" type="range" data-native-range min={0.25} max={2} step={0.25} value={rate} aria-label={t('调整播放速度')}
                       onChange={(event) => { if (videoRef.current) videoRef.current.playbackRate = Number(event.currentTarget.value); }} />
                   </div>
                 </div>}
               </div>
               <div className="ui-video-player__volume">
-                <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={silent ? '取消静音' : '静音视频'} disabled={!src}
+                <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={silent ? t('取消静音') : t('静音视频')} disabled={!src}
                   onClick={() => changeAudio(silent && !volume ? 1 : volume, !silent)}><Icon icon={silent ? 'lucide:volume-x' : 'lucide:volume-2'} aria-hidden="true" /></button>
-                <input className="ui-slider ui-video-player__volume-track" type="range" min={0} max={1} step={0.01} value={silent ? 0 : volume} aria-label="视频音量" disabled={!src}
+                <input className="ui-slider ui-video-player__volume-track" type="range" min={0} max={1} step={0.01} value={silent ? 0 : volume} aria-label={t('视频音量')} disabled={!src}
                   style={{ '--range-progress': `${silent ? 0 : volume * 100}%` } as CSSProperties}
                   onChange={(event) => { const nextVolume = Number(event.currentTarget.value); changeAudio(nextVolume, nextVolume === 0); }} />
               </div>
             </div>
             <div className="ui-video-player__time-format ui-video-player__control-anchor">
               <time className="text-sm font-medium tabular-nums text-canvas-text">{remainingTime ? `-${timeLabel(duration - time)}` : timeLabel(time)} / {timeLabel(duration)}</time>
-              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__time-trigger" data-video-time-trigger aria-label="时间显示格式" aria-haspopup="menu" aria-expanded={menu === 'time'} onClick={() => setMenu(menu === 'time' ? null : 'time')}><Icon icon="lucide:chevron-down" aria-hidden="true" /></button>
-              {menu === 'time' && <div ref={popupRef} className="ui-menu ui-menu--up ui-video-player__time-popover" role="menu" aria-label="时间显示格式选项"
+              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__time-trigger" data-video-time-trigger aria-label={t('时间显示格式')} aria-haspopup="menu" aria-expanded={menu === 'time'} onClick={() => setMenu(menu === 'time' ? null : 'time')}><Icon icon="lucide:chevron-down" aria-hidden="true" /></button>
+              {menu === 'time' && <div ref={popupRef} className="ui-menu ui-menu--up ui-video-player__time-popover" role="menu" aria-label={t('时间显示格式选项')}
                 onKeyDown={(event) => {
                   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
                   const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'));
@@ -381,12 +384,12 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
                   event.preventDefault(); event.stopPropagation(); options[next]?.focus();
                 }}>
                 {[false, true].map((value) => <button type="button" key={String(value)} className={`ui-menu__item${remainingTime === value ? ' is-active' : ''}`} role="menuitemradio" aria-checked={remainingTime === value}
-                  onClick={() => { setRemainingTime(value); setMenu(null); controlsRef.current?.querySelector<HTMLButtonElement>('[data-video-time-trigger]')?.focus(); }}>{value ? '剩余时间 / 总时长' : '已播放 / 总时长'}</button>)}
+                  onClick={() => { setRemainingTime(value); setMenu(null); controlsRef.current?.querySelector<HTMLButtonElement>('[data-video-time-trigger]')?.focus(); }}>{value ? t('剩余时间 / 总时长') : t('已播放 / 总时长')}</button>)}
               </div>}
             </div>
-            <div className="flex justify-end"><button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__fullscreen-control" aria-label="全屏播放视频" onClick={fullscreen}><Icon icon="lucide:expand" aria-hidden="true" /></button></div>
+            <div className="flex justify-end"><button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__fullscreen-control" aria-label={t('全屏播放视频')} onClick={fullscreen}><Icon icon="lucide:expand" aria-hidden="true" /></button></div>
           </div>
-          {fullscreenError && <p role="status" className="pt-2 text-xs text-canvas-text-secondary">此窗口暂不支持播放器全屏</p>}
+          {fullscreenError && <p role="status" className="pt-2 text-xs text-canvas-text-secondary">{t('此窗口暂不支持播放器全屏')}</p>}
         </div>
       </div>
   );

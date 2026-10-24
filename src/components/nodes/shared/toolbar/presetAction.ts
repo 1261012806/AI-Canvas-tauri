@@ -3,6 +3,7 @@
  */
 import type { NodeType, UserPreset, BaseNodeData, GeneralModelCategory, ImagePostProcess } from '../../../../types';
 import { CATEGORY_TO_NODE_TYPES } from '../../../../types';
+import { t } from '../../../../i18n';
 import type { Node, Edge } from '@xyflow/react';
 import { getSlashCommands, fillTemplate } from '../slashCommands';
 import { generateId, useAppStore } from '../../../../store/useAppStore';
@@ -80,7 +81,7 @@ export function resolvePresetDef(
     return null;
   };
   const builtin = walk(commands);
-  if (builtin) return { label: builtin.title, icon: builtin.icon };
+  if (builtin) return { label: t(builtin.title), icon: builtin.icon };
 
   const preset = userPresets.find((p) => p.id === key && p.nodeType === nodeType);
   if (preset) return { label: preset.name, icon: preset.icon || 'mdi:star' };

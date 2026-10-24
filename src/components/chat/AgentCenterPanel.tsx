@@ -312,7 +312,7 @@ export default function AgentCenterPanel({ onClose, allowInstall = false }: Agen
   const removePackage = async (installation: AgentPackageInstallation) => {
     if (!allowInstall || busyKey) return;
     const name = installation.manifest.name || installation.source.displayName;
-    if (!(await confirmAction(t('确定从软件中移除智能体「{name}」？外部文件不会被删除。', { name }), { title: '移除智能体' }))) return;
+    if (!(await confirmAction(t('确定从软件中移除智能体「{name}」？外部文件不会被删除。', { name }), { title: t('移除智能体') }))) return;
     setBusyKey(`remove:${installation.id}`);
     setLocalError('');
     try {

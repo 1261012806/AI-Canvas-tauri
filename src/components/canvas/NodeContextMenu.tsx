@@ -36,6 +36,7 @@ function PluginToolsSubmenu({ tools, onSelect }: {
   tools: AvailableNodePluginTool[];
   onSelect: (pluginId: string, toolId: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -95,14 +96,14 @@ function PluginToolsSubmenu({ tools, onSelect }: {
           }
         }}
       >
-        <span>插件工具</span><span className="menu-arrow" aria-hidden="true">›</span>
+        <span>{t('插件工具')}</span><span className="menu-arrow" aria-hidden="true">›</span>
       </button>
       {open && createPortal(
         <div
           ref={submenuRef}
           id={id}
           role="menu"
-          aria-label="插件工具"
+          aria-label={t('插件工具')}
           className="canvas-ctx-menu submenu max-h-[calc(100vh-16px)] max-w-[calc(100vw-16px)] overflow-y-auto"
           style={{ left: position.left, top: position.top }}
           onMouseEnter={cancelClose}

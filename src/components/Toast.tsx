@@ -19,11 +19,12 @@ export default function Toast() {
   );
   // 记住被复制的是哪条消息，换消息后对勾自然失效，不用额外重置
   const [copiedMessage, setCopiedMessage] = useState('');
-  const copied = copiedMessage !== '' && copiedMessage === toast.message;
+  const message = t(toast.message);
+  const copied = copiedMessage !== '' && copiedMessage === message;
 
   const handleCopy = useCallback(async () => {
-    if (await copyText(toast.message)) setCopiedMessage(toast.message);
-  }, [toast.message]);
+    if (await copyText(message)) setCopiedMessage(message);
+  }, [message]);
 
   return createPortal(
     <AnimatePresence>
@@ -61,7 +62,7 @@ export default function Toast() {
               />
             </motion.span>
             <span className="min-w-0 break-words text-[13px] font-medium leading-5 text-canvas-text">
-              {toast.message}
+              {message}
             </span>
             <button
               type="button"

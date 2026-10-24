@@ -848,7 +848,7 @@ export default function CharacterLibraryPanel() {
                           <span className="character-voice-chip-copy">
                             <strong>{voiceClipTitle(clip)}</strong>
                             <span>
-                              {CHARACTER_VOICE_KIND_LABELS[clip.kind]} · {formatVoiceDuration(clip.durationSec)}
+                              {t(CHARACTER_VOICE_KIND_LABELS[clip.kind])} · {formatVoiceDuration(clip.durationSec)}
                             </span>
                           </span>
                           <span className="character-voice-chip-actions">
@@ -1160,7 +1160,7 @@ export default function CharacterLibraryPanel() {
                       const category = CHARACTER_ACTION_CATEGORIES.find((item) => item.id === action.category);
                       const categoryLabel = action.category === 'custom' && action.customCategory
                         ? action.customCategory
-                        : category?.label ?? '自定义';
+                        : t(category?.label ?? '自定义');
                       return (
                         <article key={action.id} className="character-action-card flex min-w-0 flex-col rounded-xl border border-canvas-border bg-canvas-card p-3 shadow-sm">
                           <div className="flex items-start gap-2">
@@ -1170,7 +1170,7 @@ export default function CharacterLibraryPanel() {
                             <div className="min-w-0 flex-1">
                               <h3 className="truncate text-xs font-semibold">{action.name}</h3>
                               <span className="mt-1 inline-flex rounded-md border border-canvas-border px-1.5 py-0.5 text-[10px] text-canvas-text-secondary">
-                                {t(categoryLabel)}
+                                {categoryLabel}
                               </span>
                             </div>
                             <button
@@ -1325,14 +1325,14 @@ export default function CharacterLibraryPanel() {
                                                 expanded={videoPreview.expandedId === `node:${node.id}`}
                                                 onExpandedChange={(expanded) => videoPreview.setExpanded(expanded ? `node:${node.id}` : null)} />
                                             ) : (
-                                              <button type="button" className="size-full" onClick={() => void handleBindActionNode(node.id)} aria-label={`${label}：添加素材`}>
+                                              <button type="button" className="size-full" onClick={() => void handleBindActionNode(node.id)} aria-label={t('{label}：添加素材', { label })}>
                                                 <ViewportImage src={previewUrl} alt="" className="size-full object-cover" draggable={false} />
                                               </button>
                                             )}
                                           </div>
                                           <button type="button" className="block w-full truncate px-2 py-1.5 text-left text-[10px] text-canvas-text-secondary hover:text-canvas-text"
-                                            aria-label={`${label}：添加素材`} onClick={() => void handleBindActionNode(node.id)}>
-                                            {node.data.videoUrl ? `添加：${label}` : label}
+                                            aria-label={t('{label}：添加素材', { label })} onClick={() => void handleBindActionNode(node.id)}>
+                                            {node.data.videoUrl ? t('添加：{label}', { label }) : label}
                                           </button>
                                         </div>
                                       );

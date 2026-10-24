@@ -1,6 +1,7 @@
 import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { renderMarkdown } from '../../utils/renderMarkdown';
+import { useT } from '../../i18n';
 
 export interface MarkdownEditorProps {
   value: string;
@@ -30,7 +31,9 @@ const FORMAT_TOOLS = [
 ];
 
 /** UI Kit 受控编辑器：不读取文件、不访问 Store，保存策略由宿主决定。 */
-export default function MarkdownEditor({ value, onChange, markdown = true, initialMode = 'split', label = '文档内容', readOnly = false, onSave, onBlur, status, renderPreview }: MarkdownEditorProps) {
+export default function MarkdownEditor({ value, onChange, markdown = true, initialMode = 'split', label: customLabel, readOnly = false, onSave, onBlur, status, renderPreview }: MarkdownEditorProps) {
+  const t = useT();
+  const label = customLabel ?? t('文档内容');
   const [mode, setMode] = useState(initialMode);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -83,14 +86,14 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
     const from = textarea.current?.selectionEnd ?? 0;
     let index = value.indexOf(query, from);
     if (index < 0) index = value.indexOf(query);
-    setNotice(index < 0 ? '未找到匹配内容' : '已定位匹配内容');
+    setNotice(index < 0 ? t('未找到匹配内容') : t('已定位匹配内容'));
     if (index >= 0) select(index, index + query.length);
   };
   const replace = (all: boolean) => {
     if (!query) return;
     if (all) {
       const parts = value.split(query);
-      change(parts.join(replacement)); setNotice(`已替换 ${parts.length - 1} 处`);
+      change(parts.join(replacement)); setNotice(t('已替换 {count} 处', { count: parts.length - 1 }));
     } else {
       const start = textarea.current?.selectionStart ?? 0;
       const end = textarea.current?.selectionEnd ?? 0;
@@ -109,9 +112,9 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
         event.preventDefault(); event.stopPropagation(); undo(key === 'y' || event.shiftKey ? 1 : -1);
       } else if (markdown && !readOnly && event.target === textarea.current && ['b', 'i', 'k'].includes(key)) {
         event.preventDefault(); event.stopPropagation();
-        if (key === 'b') insert('**', '**', '粗体');
-        if (key === 'i') insert('*', '*', '斜体');
-        if (key === 'k') insert('[', '](https://)', '链接文字');
+        if (key === 'b') insert('**', '**', t('粗体'));
+        if (key === 'i') insert('*', '*', t('斜体'));
+        if (key === 'k') insert('[', '](https://)', t('链接文字'));
       }
     } else if (event.key === 'Tab' && !event.shiftKey && event.target === textarea.current && !readOnly) {
       event.preventDefault(); insert('  ');
@@ -119,49 +122,49 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
   };
   const format = (icon: string) => {
     if (icon === 'lucide:heading-2') prefixLines('## ');
-    if (icon === 'lucide:bold') insert('**', '**', '粗体');
-    if (icon === 'lucide:italic') insert('*', '*', '斜体');
-    if (icon === 'lucide:strikethrough') insert('~~', '~~', '文字');
+    if (icon === 'lucide:bold') insert('**', '**', t('粗体'));
+    if (icon === 'lucide:italic') insert('*', '*', t('斜体'));
+    if (icon === 'lucide:strikethrough') insert('~~', '~~', t('文字'));
     if (icon === 'lucide:quote') prefixLines('> ');
     if (icon === 'lucide:list') prefixLines('- ');
     if (icon === 'lucide:list-checks') prefixLines('- [ ] ');
-    if (icon === 'lucide:link') insert('[', '](https://)', '链接文字');
-    if (icon === 'lucide:code') insert('\n```\n', '\n```\n', '代码');
-    if (icon === 'lucide:table') insert('\n| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |\n');
+    if (icon === 'lucide:link') insert('[', '](https://)', t('链接文字'));
+    if (icon === 'lucide:code') insert('\n```\n', '\n```\n', t('代码'));
+    if (icon === 'lucide:table') insert(t('\n| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |\n'));
   };
   return <div className="ui-markdown-editor nodrag nowheel" onKeyDown={keyDown}>
-    <div className="ui-markdown-editor__toolbar" role="toolbar" aria-label="文档编辑工具">
-      <div className="flex items-center gap-1" role="group" aria-label="显示方式">
+    <div className="ui-markdown-editor__toolbar" role="toolbar" aria-label={t('文档编辑工具')}>
+      <div className="flex items-center gap-1" role="group" aria-label={t('显示方式')}>
         {(['source', 'preview', ...(markdown ? ['split'] as const : [])] as const).map((item) => <button key={item} type="button"
           className={`ui-btn ui-btn--sm ui-btn--ghost${mode === item ? ' is-active' : ''}`} aria-pressed={mode === item} onClick={() => setMode(item)}>
-          {{ source: '编辑', preview: '预览', split: '分栏' }[item]}</button>)}
+          {t({ source: '编辑', preview: '预览', split: '分栏' }[item])}</button>)}
       </div>
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label="撤销" title="撤销（Ctrl+Z）" disabled={readOnly || history.index === 0} onClick={() => undo(-1)}><Icon icon="lucide:undo-2" /></button>
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label="重做" title="重做（Ctrl+Shift+Z）" disabled={readOnly || history.index === history.values.length - 1} onClick={() => undo(1)}><Icon icon="lucide:redo-2" /></button>
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={t('撤销')} title={t('撤销（Ctrl+Z）')} disabled={readOnly || history.index === 0} onClick={() => undo(-1)}><Icon icon="lucide:undo-2" /></button>
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={t('重做')} title={t('重做（Ctrl+Shift+Z）')} disabled={readOnly || history.index === history.values.length - 1} onClick={() => undo(1)}><Icon icon="lucide:redo-2" /></button>
       {markdown && FORMAT_TOOLS.map((tool) => <button key={tool.icon} type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={readOnly}
-        aria-label={tool.label} title={tool.label} onMouseDown={(event) => event.preventDefault()} onClick={() => format(tool.icon)}><Icon icon={tool.icon} /></button>)}
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-expanded={findOpen} onClick={() => findOpen ? setFindOpen(false) : openFind()}><Icon icon="lucide:search" />查找替换</button>
-      {onSave && <button type="button" className="ui-btn ui-btn--sm ui-btn--primary ml-auto" disabled={readOnly} onClick={onSave}><Icon icon="lucide:save" />保存</button>}
+        aria-label={t(tool.label)} title={t(tool.label)} onMouseDown={(event) => event.preventDefault()} onClick={() => format(tool.icon)}><Icon icon={tool.icon} /></button>)}
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-expanded={findOpen} onClick={() => findOpen ? setFindOpen(false) : openFind()}><Icon icon="lucide:search" />{t('查找替换')}</button>
+      {onSave && <button type="button" className="ui-btn ui-btn--sm ui-btn--primary ml-auto" disabled={readOnly} onClick={onSave}><Icon icon="lucide:save" />{t('保存')}</button>}
     </div>
-    {findOpen && <div className="ui-markdown-editor__toolbar" role="search" aria-label="查找替换">
-      <input ref={findInput} className="ui-input ui-input--sm min-w-0 flex-1" aria-label="查找内容" placeholder="查找内容" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+    {findOpen && <div className="ui-markdown-editor__toolbar" role="search" aria-label={t('查找替换')}>
+      <input ref={findInput} className="ui-input ui-input--sm min-w-0 flex-1" aria-label={t('查找内容')} placeholder={t('查找内容')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
         if (event.key === 'Enter') { event.preventDefault(); find(); }
       }} />
-      <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={find}>下一个</button>
-      {!readOnly && <><input className="ui-input ui-input--sm min-w-0 flex-1" aria-label="替换为" placeholder="替换为" value={replacement} onChange={(event) => setReplacement(event.target.value)} />
-        <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={() => replace(false)}>替换</button>
-        <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={() => replace(true)}>全部替换</button></>}
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label="关闭查找" onClick={() => setFindOpen(false)}><Icon icon="lucide:x" /></button>
+      <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={find}>{t('下一个')}</button>
+      {!readOnly && <><input className="ui-input ui-input--sm min-w-0 flex-1" aria-label={t('替换为')} placeholder={t('替换为')} value={replacement} onChange={(event) => setReplacement(event.target.value)} />
+        <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={() => replace(false)}>{t('替换')}</button>
+        <button type="button" className="ui-btn ui-btn--sm" disabled={!query} onClick={() => replace(true)}>{t('全部替换')}</button></>}
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={t('关闭查找')} onClick={() => setFindOpen(false)}><Icon icon="lucide:x" /></button>
       {notice && <span role="status" className="text-xs text-canvas-text-secondary">{notice}</span>}
     </div>}
     <div className={`ui-markdown-editor__body${mode === 'split' && markdown ? ' is-split' : ''}`}>
       {mode !== 'preview' && <textarea ref={textarea} className="ui-markdown-editor__source text-selection-source" aria-label={label} value={value} readOnly={readOnly}
-        onChange={(event) => change(event.target.value)} onBlur={onBlur} spellCheck={false} placeholder={markdown ? '# 开始写作' : '输入文本…'} />}
-      {mode !== 'source' && (renderPreview ? <div className={`ui-markdown-editor__preview${markdown ? ' markdown-rendered' : ''}`} aria-label={markdown ? 'Markdown 预览' : '正文预览'} tabIndex={0}>{renderPreview(deferred, markdown)}</div>
-        : markdown ? <div className="ui-markdown-editor__preview markdown-rendered" aria-label="Markdown 预览" tabIndex={0} dangerouslySetInnerHTML={{ __html: html || '<p>暂无内容</p>' }} />
-        : <pre className="ui-markdown-editor__preview" tabIndex={0}>{value || '暂无内容'}</pre>)}
+        onChange={(event) => change(event.target.value)} onBlur={onBlur} spellCheck={false} placeholder={markdown ? t('# 开始写作') : t('输入文本…')} />}
+      {mode !== 'source' && (renderPreview ? <div className={`ui-markdown-editor__preview${markdown ? ' markdown-rendered' : ''}`} aria-label={markdown ? t('Markdown 预览') : t('正文预览')} tabIndex={0}>{renderPreview(deferred, markdown)}</div>
+        : markdown ? <div className="ui-markdown-editor__preview markdown-rendered" aria-label={t('Markdown 预览')} tabIndex={0} dangerouslySetInnerHTML={{ __html: html || `<p>${t('暂无内容')}</p>` }} />
+        : <pre className="ui-markdown-editor__preview" tabIndex={0}>{value || t('暂无内容')}</pre>)}
     </div>
-    <footer className="ui-markdown-editor__status"><span>{value.length.toLocaleString()} 字符 · {value.split('\n').length.toLocaleString()} 行</span><span role="status">{status}</span></footer>
+    <footer className="ui-markdown-editor__status"><span>{t('{characters} 字符 · {lines} 行', { characters: value.length.toLocaleString(), lines: value.split('\n').length.toLocaleString() })}</span><span role="status">{status}</span></footer>
   </div>;
 }

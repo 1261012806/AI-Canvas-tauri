@@ -907,7 +907,7 @@ export default function PromptPanel({
       onClick={handleSubmitClick}
     >
       {isGenerating && !performanceMode ? (
-        <LazyLoadBoundary label="生成按钮动画" errorFallback={generatingFallback}>
+        <LazyLoadBoundary label={t('生成按钮动画')} errorFallback={generatingFallback}>
           <Suspense fallback={generatingFallback}>
             <ThinkingOrb state="composing" size={20} aria-label={t('生成中')} />
           </Suspense>
@@ -949,7 +949,7 @@ export default function PromptPanel({
         />
       </div>
       {runninghubModel && onRunninghubModelParametersChange && <details className="ui-card m-2 p-2">
-        <summary className="cursor-pointer text-xs">模型参数 · {runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length} 项需填写</summary>
+        <summary className="cursor-pointer text-xs">{t('模型参数 · {count} 项需填写', { count: runninghubModel.parameters.filter((field) => field.required && !field.binding && field.defaultValue === undefined).length })}</summary>
         <div className="mt-2 max-h-80 overflow-y-auto"><RunningHubModelParameterFields model={runninghubModel} values={runninghubModelParameters} onChange={onRunninghubModelParametersChange} disabled={isGenerating} /></div>
       </details>}
       <div className="ui-ai-input__footer prompt-footer">
@@ -1197,7 +1197,7 @@ export default function PromptPanel({
             {polishButton && (
               <div className="prompt-polish-entry">
                 {performanceMode || reduceMotion ? polishButton : (
-                  <LazyLoadBoundary label="润色按钮特效" errorFallback={polishButton}>
+                  <LazyLoadBoundary label={t('润色按钮特效')} errorFallback={polishButton}>
                     <Suspense fallback={polishButton}>
                       <MetalFx className="prompt-polish-metal" variant="button"
                         preset={appearanceMode === 'light' ? 'silver' : 'chromatic'} theme={appearanceMode}
@@ -1224,7 +1224,7 @@ export default function PromptPanel({
                 >
                   {!performanceMode && (
                     <span className="prompt-stop-orb" aria-hidden="true">
-                      <LazyLoadBoundary label="停止按钮动画" errorFallback={generatingFallback}>
+                      <LazyLoadBoundary label={t('停止按钮动画')} errorFallback={generatingFallback}>
                         <Suspense fallback={generatingFallback}>
                           <ThinkingOrb state="composing" size={20} />
                         </Suspense>
@@ -1243,7 +1243,7 @@ export default function PromptPanel({
                 onContextMenu={openShortcutMenu}
               >
                 {performanceMode || reduceMotion ? submitButton : (
-                  <LazyLoadBoundary label="生成按钮特效" errorFallback={submitButton}>
+                  <LazyLoadBoundary label={t('生成按钮特效')} errorFallback={submitButton}>
                     <Suspense fallback={submitButton}>
                       <MetalFx
                         className="ui-ai-input__send-metal prompt-send-metal"

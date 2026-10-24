@@ -5,6 +5,7 @@
  * License: public/licenses/XiaoLuo-Panorama-LICENSE.txt
  */
 
+import { useT } from '../../../../i18n';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
@@ -110,6 +111,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
   className = '',
   style,
 }) => {
+  const t = useT();
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [snapshotting, setSnapshotting] = useState(false);
@@ -348,7 +350,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
       } catch {
         if (!mountedRef.current) return;
         captureBusyRef.current = false;
-        setError('截图失败，请关闭查看器后重新打开再试');
+        setError(t('截图失败，请关闭查看器后重新打开再试'));
         setSnapshotting(false);
       }
     }, 450);
@@ -452,11 +454,11 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
                 ? "bg-[var(--brand)] text-white"
                 : "text-[var(--theme-text-secondary)]  hover:bg-[var(--theme-surface)] "
             }`}
-            title="自由漫游模式: 使用 WASD 键或方向键走动"
+            title={t('自由漫游模式: 使用 WASD 键或方向键走动')}
             aria-pressed={isWalking}
           >
             <Footprints className="w-4 h-4" />
-            <span className="hidden sm:inline">{isWalking ? '正在漫游' : 'WASD 漫游'}</span>
+            <span className="hidden sm:inline">{t(isWalking ? '正在漫游' : 'WASD 漫游')}</span>
           </button>
 
           <button
@@ -469,11 +471,11 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
                 ? "bg-[var(--brand)] text-white"
                 : "text-[var(--theme-text-secondary)]  hover:bg-[var(--theme-surface)] "
             }`}
-            title="镜头微调与高级参数"
+            title={t('镜头微调与高级参数')}
             aria-pressed={showProTools}
           >
             <Sliders className="w-4 h-4" />
-            <span className="hidden sm:inline">视觉矫正</span>
+            <span className="hidden sm:inline">{t('视觉矫正')}</span>
           </button>
         </div>
 
@@ -487,7 +489,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               snapshotting || loading ? 'opacity-50 cursor-not-allowed' : ''
             }`}
             aria-pressed={captureMode === 'ratio' ? showCaptureTools : undefined}
-            title={captureMode === 'ratio' ? '按比例截取当前视角' : '捕获当前视角截图'}
+            title={t(captureMode === 'ratio' ? '按比例截取当前视角' : '捕获当前视角截图')}
           >
             {snapshotting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
           </button>
@@ -495,7 +497,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
           <button
             onClick={downloadOriginal}
             className="xiaoluo-panorama-toolbar-icon-button p-2.5 hover:bg-[var(--theme-surface)]  text-[var(--theme-text-secondary)]  rounded-full transition-all active:scale-95 md:block hidden"
-            title="下载原始等距柱状全景大图"
+            title={t('下载原始等距柱状全景大图')}
           >
             <Download className="w-4 h-4" />
           </button>
@@ -503,7 +505,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
           <button
             onClick={toggleFullscreen}
             className="xiaoluo-panorama-toolbar-icon-button p-2.5 hover:bg-[var(--theme-surface)]  text-[var(--theme-text-secondary)]  rounded-full transition-all active:scale-95 md:block hidden"
-            title={isFullscreen ? "退出全屏" : "全屏模式"}
+            title={t(isFullscreen ? '退出全屏' : '全屏模式')}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
@@ -514,7 +516,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
           className="xiaoluo-panorama-exit flex items-center gap-1.5 px-2.5 sm:px-4 py-2 bg-[var(--theme-surface)]  hover:bg-[var(--theme-surface)]  text-white  rounded-full transition-all active:scale-95 font-bold text-xs"
         >
           <X className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{closeText || '关闭'}</span>
+          <span className="hidden sm:inline">{closeText || t('关闭')}</span>
         </button>
         </div>
 
@@ -523,7 +525,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
           <button
             onClick={() => setFov(Math.min(150, fov + 5))}
             className="text-[var(--theme-text-secondary)]  hover:text-[var(--theme-text)]  transition-colors"
-            title="缩小"
+            title={t('缩小')}
           >
             <Minus className="xiaoluo-panorama-zoom-icon-default w-3.5 h-3.5" />
             <ZoomOut className="xiaoluo-panorama-zoom-icon-compact w-3.5 h-3.5" />
@@ -532,15 +534,15 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
             type="button"
             className="xiaoluo-panorama-zoom-value font-mono min-w-[34px] text-center"
             onClick={() => setFov(110)}
-            title="重置缩放"
-            aria-label="重置缩放"
+            title={t('重置缩放')}
+            aria-label={t('重置缩放')}
           >
             {Math.round((110 / fov) * 100)}%
           </button>
           <button
             onClick={() => setFov(Math.max(40, fov - 5))}
             className="text-[var(--theme-text-secondary)]  hover:text-[var(--theme-text)]  transition-colors"
-            title="放大"
+            title={t('放大')}
           >
             <Plus className="xiaoluo-panorama-zoom-icon-default w-3.5 h-3.5" />
             <ZoomIn className="xiaoluo-panorama-zoom-icon-compact w-3.5 h-3.5" />
@@ -581,14 +583,14 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
               className="xiaoluo-panorama-capture-panel"
               role="dialog"
-              aria-label="截图比例"
+              aria-label={t('截图比例')}
             >
               <div className="xiaoluo-panorama-capture-header">
-                <span>截图比例</span>
+                <span>{t('截图比例')}</span>
                 <PopupCloseButton
                   onClick={() => setShowCaptureTools(false)}
-                  title="关闭比例截图"
-                  ariaLabel="关闭比例截图"
+                  title={t('关闭比例截图')}
+                  ariaLabel={t('关闭比例截图')}
                 />
               </div>
 
@@ -608,7 +610,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
                         className={`xiaoluo-panorama-ratio-mark ${option.value === null ? 'is-auto' : ''}`}
                         style={{ aspectRatio: option.value ?? undefined }}
                       />
-                      <span>{option.label}</span>
+                      <span>{t(option.label)}</span>
                       {selected && <Check className="xiaoluo-panorama-ratio-check" />}
                     </button>
                   );
@@ -624,7 +626,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
                   onClick={() => takeSnapshot('viewport', captureRatio)}
                 >
                   {snapshotting ? <Loader2 className="animate-spin" /> : <Camera />}
-                  <span>截图</span>
+                  <span>{t('截图')}</span>
                 </button>
               </div>
             </motion.div>
@@ -644,12 +646,12 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-2">
                 <Sliders className="w-4 h-4 text-[var(--brand)]" />
-                <h4 className="xiaoluo-panorama-pro-title text-[var(--theme-text)]  font-black text-xs uppercase tracking-wider">高级相机参数</h4>
+                <h4 className="xiaoluo-panorama-pro-title text-[var(--theme-text)]  font-black text-xs uppercase tracking-wider">{t('高级相机参数')}</h4>
               </div>
               <button
                 onClick={resetProTools}
                 className="xiaoluo-panorama-pro-reset p-1.5 hover:bg-[var(--theme-surface)]  rounded-full text-[var(--theme-text-secondary)]  hover:text-[var(--theme-text-secondary)]  transition-all"
-                title="重置全部微调"
+                title={t('重置全部微调')}
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
@@ -659,8 +661,8 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               {/* Shift Lens Mode Toggle */}
               <div className="xiaoluo-panorama-shift-card flex items-center justify-between p-3.5 bg-[var(--theme-surface)]  rounded-2xl border border-[var(--theme-border)] ">
                 <div className="flex flex-col gap-0.5">
-                  <span className="xiaoluo-panorama-shift-title text-[var(--theme-text)]  font-black text-xs">移轴模式 (Shift Lens)</span>
-                  <span className="xiaoluo-panorama-shift-description text-[9px] text-[var(--theme-text-secondary)] ">锁定水平视线，矫正建筑垂直畸变</span>
+                  <span className="xiaoluo-panorama-shift-title text-[var(--theme-text)]  font-black text-xs">{t('移轴模式 (Shift Lens)')}</span>
+                  <span className="xiaoluo-panorama-shift-description text-[9px] text-[var(--theme-text-secondary)] ">{t('锁定水平视线，矫正建筑垂直畸变')}</span>
                 </div>
                 <button
                   onClick={toggleShiftMode}
@@ -678,7 +680,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               {/* FOV Slider */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="xiaoluo-panorama-pro-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">镜头焦距 (FOV)</label>
+                  <label className="xiaoluo-panorama-pro-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">{t('镜头焦距 (FOV)')}</label>
                   <span className="xiaoluo-panorama-pro-value text-xs font-mono text-[var(--brand)] font-bold">{fov}°</span>
                 </div>
                 <input
@@ -692,12 +694,12 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               <div className="xiaoluo-panorama-pro-section space-y-4 pt-3 border-t border-[var(--theme-border)] ">
                 <div className="flex items-center gap-1.5 mb-1">
                   <ChevronRight className="xiaoluo-panorama-pro-section-icon w-3 h-3 text-[var(--theme-text-secondary)]" />
-                  <label className="xiaoluo-panorama-pro-section-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">空间位移补偿 (Offset)</label>
+                  <label className="xiaoluo-panorama-pro-section-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">{t('空间位移补偿 (Offset)')}</label>
                 </div>
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="xiaoluo-panorama-pro-label text-[10px] font-bold text-[var(--theme-text-secondary)] ">水平偏移 (X-Pivot)</label>
+                    <label className="xiaoluo-panorama-pro-label text-[10px] font-bold text-[var(--theme-text-secondary)] ">{t('水平偏移 (X-Pivot)')}</label>
                     <span className="xiaoluo-panorama-pro-muted-value text-[10px] font-mono text-[var(--theme-text-secondary)]">{horizontalOffset}px</span>
                   </div>
                   <input
@@ -709,7 +711,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="xiaoluo-panorama-pro-label text-[10px] font-bold text-[var(--theme-text-secondary)] ">垂直偏移 (Y-Pivot)</label>
+                    <label className="xiaoluo-panorama-pro-label text-[10px] font-bold text-[var(--theme-text-secondary)] ">{t('垂直偏移 (Y-Pivot)')}</label>
                     <span className="xiaoluo-panorama-pro-muted-value text-[10px] font-mono text-[var(--theme-text-secondary)]">{verticalOffset}px</span>
                   </div>
                   <input
@@ -723,7 +725,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
               {/* Perspective Correction */}
               <div className="xiaoluo-panorama-pro-section space-y-2 pt-3 border-t border-[var(--theme-border)] ">
                 <div className="flex items-center justify-between">
-                  <label className="xiaoluo-panorama-pro-section-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">视线畸变拉伸 (Perspective)</label>
+                  <label className="xiaoluo-panorama-pro-section-label text-[10px] font-black text-[var(--theme-text-secondary)] uppercase tracking-wider">{t('视线畸变拉伸 (Perspective)')}</label>
                   <span className="xiaoluo-panorama-pro-value text-xs font-mono text-[var(--brand)] font-bold">{perspectiveCorrection}°</span>
                 </div>
                 <input
@@ -742,10 +744,10 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
                 className="xiaoluo-panorama-arch-capture w-full py-2.5 bg-[var(--brand)] hover:bg-[var(--brand)] text-white shadow-lg shadow-none  rounded-2xl text-xs font-black transition-all active:scale-95 flex items-center justify-center gap-2"
               >
                 <Camera className="w-3.5 h-3.5" />
-                <span>移轴平面截图 (Arch-Capture)</span>
+                <span>{t('移轴平面截图 (Arch-Capture)')}</span>
               </button>
               <p className="xiaoluo-panorama-pro-hint text-[8px] text-[var(--theme-text-secondary)] text-center leading-normal">
-                自动对齐地平线，输出透视正确的 2D 空间构图图片
+                {t('自动对齐地平线，输出透视正确的 2D 空间构图图片')}
               </p>
             </div>
           </motion.div>
@@ -763,7 +765,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
         onLoad={() => setLoading(false)}
         onError={(message) => {
           console.error('Pannellum error:', message);
-          setError(message || '加载全景图时出错');
+          setError(message || t('加载全景图时出错'));
           setLoading(false);
         }}
         onViewChange={handleViewChange}
@@ -799,7 +801,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
             <Sliders className="xiaoluo-panorama-loading-icon w-5 h-5 text-[var(--brand)] absolute animate-pulse" />
           </div>
           <div className="text-center">
-            <p className="text-[var(--theme-text)]  text-sm font-black">正在载入球面全景空间...</p>
+            <p className="text-[var(--theme-text)]  text-sm font-black">{t('正在载入球面全景空间...')}</p>
             <p className="text-[9px] text-[var(--theme-text-secondary)] font-bold uppercase tracking-widest mt-0.5">Initializing Equirectangular Space</p>
           </div>
         </div>
@@ -812,15 +814,15 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
             <div className="w-16 h-16 bg-[var(--danger-bg)] rounded-full flex items-center justify-center mx-auto mb-5">
               <X className="w-8 h-8 text-[var(--danger)]" />
             </div>
-            <h4 className="text-[var(--theme-text)]  text-lg font-black mb-1.5">全景初始化失败</h4>
+            <h4 className="text-[var(--theme-text)]  text-lg font-black mb-1.5">{t('全景初始化失败')}</h4>
             <p className="text-[var(--theme-text-secondary)]  text-xs mb-6 leading-relaxed">
-              由于网络资源受限或全景文件格式不合规，导致无法正常解析。请尝试切换其他场景。
+              {t('由于网络资源受限或全景文件格式不合规，导致无法正常解析。请尝试切换其他场景。')}
             </p>
             <button
               onClick={onClose}
               className="w-full py-3.5 bg-[var(--theme-surface)] text-white rounded-2xl text-xs font-black hover:bg-[var(--theme-surface)] transition-all active:scale-95"
             >
-              返回控制台
+              {t('返回控制台')}
             </button>
           </div>
         </div>

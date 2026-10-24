@@ -1,6 +1,7 @@
 ﻿/**
  * TextNodeToolbar 文本节点浮动工具栏 + 编辑态支持
  */
+import { useT } from '../../../i18n';
 import { memo, useState, useCallback } from 'react';
 import { Icon } from '@iconify/react';
 import type { BaseNodeData, NodeType } from '../../../types';
@@ -29,6 +30,7 @@ interface TextNodeToolbarProps {
 }
 
 function TextNodeToolbar({ nodeId, data, onCopy, onClearEmptyLines, onShowPrompt, onFullscreen }: TextNodeToolbarProps) {
+  const t = useT();
   const nodeType = 'ai-text';
   const edit = useToolbarEdit({ nodeType });
   const registry = edit.registry;
@@ -104,8 +106,8 @@ function TextNodeToolbar({ nodeId, data, onCopy, onClearEmptyLines, onShowPrompt
         <AnimatedButton
           key={key}
           className="ftb-btn icon-only act-copy rounded-[6px]"
-          data-tooltip="已复制"
-          aria-label="复制"
+          data-tooltip={t('已复制')}
+          aria-label={t('复制')}
           onClick={clickHandler}
         >
           <Icon icon="mdi:check" width={12} height={12} />

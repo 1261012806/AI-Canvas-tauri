@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /** 用户代码插件：安装记录、启停与 IndexedDB 持久化。 */
 import { invoke } from '@tauri-apps/api/core';
 import type { StateCreator } from 'zustand';
@@ -216,7 +217,7 @@ export const createPluginSlice: StateCreator<AppState, [], [], PluginSlice> = (s
           plugin,
         ].sort((left, right) => left.manifest.name.localeCompare(right.manifest.name)),
       }));
-      get().showToast(previous ? `已更新插件「${manifest.name}」` : `已安装插件「${manifest.name}」`);
+      get().showToast(previous ? t('已更新插件「{name}」', { name: manifest.name }) : t('已安装插件「{name}」', { name: manifest.name }));
       return plugin;
     } catch (error) {
       if (isPluginRegistryCorruption(error)) {

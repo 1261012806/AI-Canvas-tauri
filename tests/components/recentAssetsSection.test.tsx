@@ -9,6 +9,10 @@ const driver = vi.hoisted(() => ({
   effectIndex: 0, effects: [] as Array<{ deps: readonly unknown[]; cleanup?: () => void }>,
   pending: [] as Array<() => void>, dirty: false, load: vi.fn(), mark: vi.fn(), open: vi.fn(),
 }));
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => {
   const memo = <T,>(factory: () => T, deps: readonly unknown[]) => {
     const index = driver.memoIndex++; const previous = driver.memos[index];

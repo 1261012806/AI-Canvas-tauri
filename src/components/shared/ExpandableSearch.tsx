@@ -1,5 +1,6 @@
 import { Icon } from '@iconify/react';
 import { useId, useLayoutEffect, useRef, type KeyboardEventHandler } from 'react';
+import { useT } from '../../i18n';
 
 /** 受控展开搜索：只管理焦点和外观，查询来源与结果由调用方提供。 */
 export interface ExpandableSearchProps {
@@ -23,8 +24,8 @@ export default function ExpandableSearch({
   onExpandedChange,
   value,
   onChange,
-  placeholder = '节点编号、文件名、角色、场景或道具',
-  label = '搜索资源',
+  placeholder: customPlaceholder,
+  label: customLabel,
   onKeyDown,
   listId,
   activeDescendant,
@@ -32,6 +33,9 @@ export default function ExpandableSearch({
   disabled = false,
   className = '',
 }: ExpandableSearchProps) {
+  const t = useT();
+  const placeholder = customPlaceholder ?? t('节点编号、文件名、角色、场景或道具');
+  const label = customLabel ?? t('搜索资源');
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -95,8 +99,8 @@ export default function ExpandableSearch({
         ref={triggerRef}
         type="button"
         className="ui-icon-btn ui-icon-btn--ghost ui-expandable-search__trigger"
-        aria-label={expanded ? '收起搜索' : label}
-        title={expanded ? '收起搜索 · Esc' : label}
+        aria-label={expanded ? t('收起搜索') : label}
+        title={expanded ? t('收起搜索 · Esc') : label}
         aria-controls={inputId}
         aria-expanded={expanded}
         disabled={disabled}

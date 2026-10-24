@@ -13,7 +13,7 @@ import PopupCloseButton from '../../../shared/PopupCloseButton';
 import FullscreenOverlay from '../../../shared/FullscreenOverlay';
 import ZoomableImage from '../../../shared/ZoomableImage';
 import ViewportImage from '../../../shared/ViewportImage';
-import { useT } from '../../../../i18n';
+import { getLocale, useT } from '../../../../i18n';
 import { localMediaUrlToPath } from '../../../../utils/mediaUrl';
 import {
   cancelCanvasDerivation,
@@ -37,12 +37,12 @@ interface PreviewImage {
   alt: string;
 }
 
-const DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+const DATE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   month: 'numeric',
   day: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
-});
+};
 
 function getRemoteSource(entry: HistoryRecord): string {
   return entry.mediaUrl || entry.output || '';
@@ -132,6 +132,8 @@ export default function ImageGenerationHistoryDialog({
   onClose,
 }: ImageGenerationHistoryDialogProps) {
   const t = useT();
+  const locale = getLocale();
+  const dateFormatter = useMemo(() => new Intl.DateTimeFormat(locale, DATE_FORMAT_OPTIONS), [locale]);
   const currentProjectId = useAppStore((state) => state.currentProjectId);
   const currentImageUrl = useAppStore((state) => {
     const data = state.nodes.find((node) => node.id === nodeId)?.data;
@@ -341,7 +343,7 @@ export default function ImageGenerationHistoryDialog({
                           <span className="truncate">{[entry.provider, entry.model].filter(Boolean).join(' / ') || t('未记录模型')}</span>
                         </span>
                         <time className="ml-auto shrink-0 text-canvas-text-muted" dateTime={new Date(entry.timestamp).toISOString()}>
-                          {DATE_FORMATTER.format(entry.timestamp)}
+                          {dateFormatter.format(entry.timestamp)}
                         </time>
                       </div>
                       <p className="ui-scroll min-h-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-canvas-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canvas-border"

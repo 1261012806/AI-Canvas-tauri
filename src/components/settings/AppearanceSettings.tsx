@@ -17,7 +17,7 @@ import NumberStepper from '../shared/NumberStepper';
 import CanvasImageBackground from '../backgrounds/CanvasImageBackground';
 import AppearanceLayoutPreview, { type AppearanceLayoutTarget } from './AppearanceLayoutPreview';
 import AppearanceComponentPreview from './AppearanceComponentPreview';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 import mercuryImg from '../../assets/images/bg/1_mercury.png';
 import venusImg from '../../assets/images/bg/2_venus.png';
 import earthImg from '../../assets/images/bg/3_earth.png';
@@ -42,7 +42,7 @@ async function uploadThemeImage(file: File): Promise<string> {
   const declaredType = file.type.split(';')[0].trim().toLowerCase();
   const mimeType = (!declaredType || declaredType === 'application/octet-stream') && /\.svg$/i.test(file.name)
     ? 'image/svg+xml' : declaredType;
-  if (!['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(mimeType)) throw new Error('请选择 PNG、JPG、WebP 或 SVG 图片');
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(mimeType)) throw new Error(translate('请选择 PNG、JPG、WebP 或 SVG 图片'));
   return storeThemeImage(file.type === mimeType ? file : new Blob([file], { type: mimeType }));
 }
 
@@ -155,6 +155,7 @@ function PresetSingleNodePreview({
   index: number;
   realNodes: Node<BaseNodeData>[];
 }) {
+  const t = useT();
   const themeResolved = resolveAppearanceTheme(theme);
   const isDark = themeResolved.mode === 'dark';
   const hasReal = realNodes.length > 0;
@@ -174,11 +175,11 @@ function PresetSingleNodePreview({
   if (pickedReal) {
     const data = (pickedReal.data || {}) as BaseNodeData;
     const config = getNodeTypeConfig(pickedReal.type || 'ai-image');
-    label = data.label || config.label || '节点';
+    label = data.label || tt(config.label || '节点');
     icon = config.icon || 'mdi:cube-outline';
     iconColor = themeResolved.ui.accent;
     displayId = data.displayId;
-    badgeText = data.model ? data.model.split('/').pop() || 'AI' : (config.label || '节点');
+    badgeText = data.model ? data.model.split('/').pop() || 'AI' : t(config.label || '节点');
 
     const rawOutput = data.output;
     const outputStr = typeof rawOutput === 'string' ? rawOutput : '';
@@ -203,10 +204,10 @@ function PresetSingleNodePreview({
     }
   } else {
     const template = BLANK_NODE_TEMPLATES[seed % BLANK_NODE_TEMPLATES.length];
-    label = template.label;
+    label = t(template.label);
     icon = template.icon;
     iconColor = template.iconColor;
-    badgeText = template.badge || '空白';
+    badgeText = t(template.badge || '空白');
     kind = template.kind;
   }
 
@@ -319,7 +320,7 @@ function PresetSingleNodePreview({
                   color: themeResolved.ui.text,
                 }}
               >
-                <span className="truncate opacity-75">{promptText || '输入提示词生成图像…'}</span>
+                <span className="truncate opacity-75">{promptText || t('输入提示词生成图像…')}</span>
                 <span className="text-[8px] font-mono opacity-50 shrink-0 ml-1">1:1</span>
               </div>
               <div
@@ -332,7 +333,7 @@ function PresetSingleNodePreview({
                 }}
               >
                 <Icon icon="mdi:image-outline" width="13" height="13" style={{ opacity: 0.6 }} />
-                <span className="text-[8px] opacity-75">等待生成图像</span>
+                <span className="text-[8px] opacity-75">{t('等待生成图像')}</span>
               </div>
             </div>
           )
@@ -371,7 +372,7 @@ function PresetSingleNodePreview({
                   color: themeResolved.ui.text,
                 }}
               >
-                <span className="truncate opacity-75">{promptText || '输入视频运镜描述…'}</span>
+                <span className="truncate opacity-75">{promptText || t('输入视频运镜描述…')}</span>
                 <span className="text-[8px] font-mono opacity-50 shrink-0 ml-1">5s</span>
               </div>
               <div
@@ -384,7 +385,7 @@ function PresetSingleNodePreview({
                 }}
               >
                 <Icon icon="mdi:video-outline" width="13" height="13" style={{ opacity: 0.6 }} />
-                <span className="text-[8px] opacity-75">等待生成视频</span>
+                <span className="text-[8px] opacity-75">{t('等待生成视频')}</span>
               </div>
             </div>
           )
@@ -402,7 +403,7 @@ function PresetSingleNodePreview({
                 color: themeResolved.ui.text,
               }}
             >
-              <span className="truncate opacity-75">{promptText || '输入文本提示词…'}</span>
+              <span className="truncate opacity-75">{promptText || t('输入文本提示词…')}</span>
               <span className="text-[8px] font-mono opacity-50 shrink-0 ml-1">Text</span>
             </div>
             <div className="space-y-1 px-0.5 py-0.5">
@@ -508,7 +509,7 @@ function BackgroundImageControls({ label, image, onChange, preview }: {
 
   return (
     <div className="ui-stack">
-      {preview ?? <div className="ui-card h-20 bg-no-repeat" role="img" aria-label={`${label}图片预览`} style={imagePreviewStyle(image.imageDataUrl, image.imageFit)}>
+      {preview ?? <div className="ui-card h-20 bg-no-repeat" role="img" aria-label={t('{label}图片预览', { label })} style={imagePreviewStyle(image.imageDataUrl, image.imageFit)}>
         {!image.imageDataUrl && <span className="flex h-full items-center justify-center ui-hint">{t('未选图片')}</span>}
       </div>}
       <div className="ui-row ui-row--tight">
@@ -517,14 +518,14 @@ function BackgroundImageControls({ label, image, onChange, preview }: {
         </button>
         {image.imageDataUrl && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={loading}
           onClick={() => onChange({ ...image, kind: 'color', imageDataUrl: undefined })}>{t('移除图片')}</button>}
-        <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg" className="hidden" aria-label={`${label}上传图片`}
+        <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg" className="hidden" aria-label={t('{label}上传图片', { label })}
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.currentTarget.value = '';
             if (file) void upload(file);
           }} />
       </div>
-      <Select aria-label={`${label}图片铺放方式`} value={image.imageFit}
+      <Select aria-label={t('{label}图片铺放方式', { label })} value={image.imageFit}
         onChange={(value) => onChange({ ...image, imageFit: value as AppearanceBackgroundImage['imageFit'] })}>
         <option value="cover">{t('覆盖填满')}</option>
         <option value="contain">{t('完整显示')}</option>
@@ -665,7 +666,7 @@ function ColorCardInput({
       <div className={`flex items-center gap-2 ${swatches ? 'min-w-min flex-1 flex-wrap' : 'justify-between'}`}>
         <span className={`text-xs font-semibold text-canvas-text ${stacked || swatches ? 'shrink-0 whitespace-nowrap' : ''}`}>{label}</span>
         {swatches && <QuickSwatches colors={swatches} value={value} onChange={onChange} title={label} />}
-        {onImageChange && <Select aria-label={`${label}背景类型`} value={imageConfig.kind} className="shrink-0 w-24" size="sm"
+        {onImageChange && <Select aria-label={t('{label}背景类型', { label })} value={imageConfig.kind} className="shrink-0 w-24" size="sm"
           onChange={(kind) => onImageChange({ ...imageConfig, kind: kind as AppearanceBackgroundImage['kind'] })}>
           <option value="color">{t('纯色')}</option>
           <option value="image">{t('上传图片')}</option>
@@ -685,7 +686,7 @@ function ColorCardInput({
                 }
               : { backgroundColor: safeHex }
           }
-          title={isAuto ? t('当前跟随主题，点击选择自定义颜色') : isNone ? '无颜色（点击选择颜色）' : '点击选择颜色'}
+          title={isAuto ? t('当前跟随主题，点击选择自定义颜色') : isNone ? t('无颜色（点击选择颜色）') : t('点击选择颜色')}
         >
           <input
             className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
@@ -700,7 +701,7 @@ function ColorCardInput({
             isNone || isAuto ? 'text-canvas-text-muted font-sans' : 'text-canvas-text font-mono'
           } ${followThemeVar ? 'min-w-0 flex-1' : ''}`}
           type="text"
-          value={isAuto ? '' : isNone ? '无' : value}
+          value={isAuto || isNone ? '' : value}
           onChange={(e) => {
             const raw = e.target.value;
             if (followThemeVar && (raw.trim() === '' || raw.trim().toLowerCase() === 'auto')) {
@@ -713,7 +714,7 @@ function ColorCardInput({
               onChange(raw);
             }
           }}
-          placeholder={isAuto ? t('跟随') : isNone ? '无' : '#HEX'}
+          placeholder={isAuto ? t('跟随') : isNone ? t('无') : '#HEX'}
           aria-label={t('{label}颜色值', { label })}
         />
         {followThemeVar && (
@@ -737,9 +738,9 @@ function ColorCardInput({
                 ? 'bg-brand/15 text-brand-light font-bold ring-1 ring-brand/30'
                 : 'text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover'
             }`}
-            title={isNone ? '当前已为无，点击恢复颜色' : '设为无'}
+            title={isNone ? t('当前已为无，点击恢复颜色') : t('设为无')}
           >
-            无
+            {t('无')}
           </button>
         )}
       </div>
@@ -1009,8 +1010,8 @@ export default function AppearanceSettings() {
       if (isTauriEnv()) {
         const bytes = new Uint8Array(await blob.arrayBuffer());
         const savedPath = await saveBinaryToLocalFile(bytes, fileName, [
-          { name: 'AI Canvas 主题', extensions: ['aicanvas-theme'] },
-          { name: 'JSON 文件', extensions: ['json'] },
+          { name: t('AI Canvas 主题'), extensions: ['aicanvas-theme'] },
+          { name: t('JSON 文件'), extensions: ['json'] },
         ]);
         if (savedPath) showToast(t('主题已导出'), 'success');
         return;
@@ -1511,7 +1512,7 @@ export default function AppearanceSettings() {
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden" style={{ bottom: '-40%' }}>
                       <img
                         src={solarPlanet.image}
-                        alt={solarPlanet.name}
+                        alt={t(solarPlanet.name)}
                         className="w-[180px] h-[180px] object-contain rounded-full opacity-40 filter brightness-95 pointer-events-none select-none"
                       />
                     </div>
@@ -2124,7 +2125,7 @@ export default function AppearanceSettings() {
                   return (
                     <ColorCardInput
                       key={`${active.id}:${field.key}`}
-                      label={t(`${variant.title}${field.label}`)}
+                      label={t('{variant} · {field}', { variant: t(variant.title), field: t(field.label) })}
                       value={active.ui.button[variant.key][field.key]}
                       image={imageField === 'hoverBackgroundImage' ? colors.hoverBackgroundImage ?? colors.backgroundImage : colors.backgroundImage}
                       onImageChange={imageField ? (image) => updateImage((theme) => ({

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * useCanvasContextMenu 画布右键菜单 Hook — 管理画布空白区域右键菜单的显示/隐藏、子菜单展开、节点添加操作
  */
@@ -265,7 +266,7 @@ export function useCanvasContextMenu() {
     const state = useAppStore.getState();
     if (state.selectedNodeIds.length === 0) return;
     if (state.copySelectedNodes()) {
-      useAppStore.getState().showToast(`已复制 ${state.selectedNodeIds.length} 个节点`);
+      useAppStore.getState().showToast(t('已复制 {count} 个节点', { count: state.selectedNodeIds.length }));
     }
     closeMenu();
   }, [closeMenu]);

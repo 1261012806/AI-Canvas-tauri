@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import type { AssetFileEntry } from '../../services/fileService';
@@ -19,6 +20,7 @@ export default function AssetImageBatchReverseDialog({ entries, onSaved, onClose
   onSaved: (file: AssetFileEntry, tags: string[]) => void;
   onClose: () => void;
 }) {
+  useT();
   const id = useId();
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [existingPrompts, setExistingPrompts] = useState<Set<number>>(() => new Set());
@@ -100,51 +102,51 @@ export default function AssetImageBatchReverseDialog({ entries, onSaved, onClose
     }
   };
 
-  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={false} ariaLabel="批量反推提示词和标签" zIndex={360}
+  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={false} ariaLabel={t("批量反推提示词和标签")} zIndex={360}
     className="w-full max-w-3xl [&.glass-panel]:overflow-visible">
     <div className="ui-card flex max-h-[85vh] min-h-0 flex-col gap-3 p-3 [&.ui-card]:overflow-visible">
       <header className="flex shrink-0 items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold text-canvas-text"><Icon icon="lucide:sparkles" aria-hidden="true" />批量反推提示词和标签</h2>
-        <button type="button" className="ui-close-btn" aria-label={running ? '关闭并停止批量反推' : '关闭批量反推'} onClick={close}><Icon icon="lucide:x" aria-hidden="true" /></button>
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-canvas-text"><Icon icon="lucide:sparkles" aria-hidden="true" />{t("批量反推提示词和标签")}</h2>
+        <button type="button" className="ui-close-btn" aria-label={running ? t('关闭并停止批量反推') : t('关闭批量反推')} onClick={close}><Icon icon="lucide:x" aria-hidden="true" /></button>
       </header>
-      <p className="shrink-0 text-xs leading-relaxed text-canvas-text-secondary">来自当前文件夹或筛选结果，共 {entries.length} 张图片。已有提示词的图片默认不选中，可手动勾选替换。每张生成成功后直接替换并保存提示词和标签，参考图保留；失败项保留原内容。</p>
+      <p className="shrink-0 text-xs leading-relaxed text-canvas-text-secondary">{t('来自当前文件夹或筛选结果，共 {count} 张图片。已有提示词的图片默认不选中，可手动勾选替换。每张生成成功后直接替换并保存提示词和标签，参考图保留；失败项保留原内容。', { count: entries.length })}</p>
       <fieldset disabled={running} className="flex shrink-0 flex-wrap items-end gap-3">
-        <div className="min-w-0 flex-1"><label className="mb-2 block text-xs text-canvas-text-secondary">反推模型</label>
+        <div className="min-w-0 flex-1"><label className="mb-2 block text-xs text-canvas-text-secondary">{t("反推模型")}</label>
           <ModelSelector nodeType="ai-text" selectedModel={model?.model} selectedProvider={model?.provider} onSelect={(option) => setModel({ model: option.value, provider: option.provider })} /></div>
-        <div><label className="mb-2 block text-xs text-canvas-text-secondary">同时处理</label>
-          <Select value={concurrency} onChange={setConcurrency} disabled={running} aria-label="同时处理图片数" options={[3, 4, 5].map((value) => ({ value: String(value), label: `${value} 张` }))} /></div>
+        <div><label className="mb-2 block text-xs text-canvas-text-secondary">{t("同时处理")}</label>
+          <Select value={concurrency} onChange={setConcurrency} disabled={running} aria-label={t("同时处理图片数")} options={[3, 4, 5].map((value) => ({ value: String(value), label: t('{count} 张', { count: value }) }))} /></div>
       </fieldset>
       <div className="flex shrink-0 flex-wrap items-center gap-3 text-xs text-canvas-text-secondary">
         <span className="relative"><input id={`${id}-all`} type="checkbox" className="ui-checkbox" disabled={running || checkingPrompts || promptCheckFailed} checked={entries.length > 0 && selected.size === entries.length}
-          onChange={(event) => setSelected(event.target.checked ? new Set(entries.map((_, index) => index)) : new Set())} /><label htmlFor={`${id}-all`}>全选</label></span>
-        <span role="status" aria-live="polite">已选 {selected.size} · 成功 {counts.success} · 失败 {counts.failed} · 待处理 {counts.pending}</span>
-        {checkingPrompts && <span role="status">正在识别已有提示词…</span>}
-        {promptCheckFailed && <><span role="alert">提示词信息读取失败</span><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => { setCheckingPrompts(true); setPromptCheckFailed(false); setPromptCheckRetry((current) => current + 1); }}>重新读取</button></>}
+          onChange={(event) => setSelected(event.target.checked ? new Set(entries.map((_, index) => index)) : new Set())} /><label htmlFor={`${id}-all`}>{t("全选")}</label></span>
+        <span role="status" aria-live="polite">{t('已选 {selected} · 成功 {success} · 失败 {failed} · 待处理 {pending}', { selected: selected.size, success: counts.success, failed: counts.failed, pending: counts.pending })}</span>
+        {checkingPrompts && <span role="status">{t("正在识别已有提示词…")}</span>}
+        {promptCheckFailed && <><span role="alert">{t("提示词信息读取失败")}</span><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => { setCheckingPrompts(true); setPromptCheckFailed(false); setPromptCheckRetry((current) => current + 1); }}>{t("重新读取")}</button></>}
       </div>
-      <div className="ui-progress shrink-0" role="progressbar" aria-label="批量处理进度" aria-valuemin={0} aria-valuemax={selected.size || 1} aria-valuenow={counts.success + counts.failed}>
+      <div className="ui-progress shrink-0" role="progressbar" aria-label={t("批量处理进度")} aria-valuemin={0} aria-valuemax={selected.size || 1} aria-valuenow={counts.success + counts.failed}>
         <div className="ui-progress__bar" style={{ width: `${selected.size ? (counts.success + counts.failed) / selected.size * 100 : 0}%` }} />
       </div>
-      <ul className="ui-list min-h-0 flex-1 overscroll-contain [&.ui-list]:overflow-y-auto" aria-label="待处理图片" aria-busy={checkingPrompts}>
+      <ul className="ui-list min-h-0 flex-1 overscroll-contain [&.ui-list]:overflow-y-auto" aria-label={t("待处理图片")} aria-busy={checkingPrompts}>
         {entries.slice(0, visibleCount).map(({ file }, index) => <li key={file.assetId ?? file.path} className="ui-list__item shrink-0 text-left">
           <span className="relative shrink-0"><input id={`${id}-${index}`} type="checkbox" className="ui-checkbox" disabled={running || checkingPrompts || promptCheckFailed} checked={selected.has(index)}
             onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(index); else next.delete(index); return next; })} />
-            <label htmlFor={`${id}-${index}`} aria-label={`选择 ${file.name}`} /></span>
+            <label htmlFor={`${id}-${index}`} aria-label={t('选择 {name}', { name: file.name })} /></span>
           <img src={file.assetUrl} alt="" loading="lazy" className="h-10 w-10 shrink-0 rounded object-cover" />
           <div className="min-w-0 flex-1"><p className="truncate text-xs text-canvas-text" title={file.name}>{file.name}</p>
-            {rows[index].message && <p className="truncate text-xs text-canvas-text-secondary" title={rows[index].message}>{rows[index].message}</p>}</div>
-          {existingPrompts.has(index) && <span className="ui-badge shrink-0">已有提示词</span>}
+            {rows[index].message && <p className="truncate text-xs text-canvas-text-secondary" title={t(rows[index].message ?? '')}>{t(rows[index].message ?? '')}</p>}</div>
+          {existingPrompts.has(index) && <span className="ui-badge shrink-0">{t("已有提示词")}</span>}
           <span className={`ui-badge shrink-0 ${rows[index].status === 'failed' ? 'ui-badge--danger' : rows[index].status === 'success' ? 'ui-badge--success' : 'ui-badge--primary'}`}>
-            {(rows[index].status === 'running' || rows[index].status === 'saving') && <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" />}{STATUS_LABELS[rows[index].status]}</span>
+            {(rows[index].status === 'running' || rows[index].status === 'saving') && <Icon icon="lucide:loader-circle" className="animate-spin" aria-hidden="true" />}{t(STATUS_LABELS[rows[index].status])}</span>
         </li>)}
-        {visibleCount < entries.length && <li className="ui-list__item shrink-0"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ui-btn--block" onClick={() => setVisibleCount((current) => current + 60)}>显示更多（剩余 {entries.length - visibleCount} 张）</button></li>}
+        {visibleCount < entries.length && <li className="ui-list__item shrink-0"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ui-btn--block" onClick={() => setVisibleCount((current) => current + 60)}>{t('显示更多（剩余 {count} 张）', { count: entries.length - visibleCount })}</button></li>}
       </ul>
-      {message && <p role="status" className="shrink-0 text-xs text-canvas-text-secondary">{message}</p>}
+      {message && <p role="status" className="shrink-0 text-xs text-canvas-text-secondary">{t(message)}</p>}
       <footer className="flex shrink-0 flex-wrap justify-end gap-2">
-        <button type="button" className="ui-btn ui-btn--sm" onClick={close}>{running ? '关闭并停止' : '关闭'}</button>
-        {running ? <button type="button" className="ui-btn ui-btn--sm" disabled={stopping} onClick={() => { setStopping(true); controllerRef.current?.abort(); }}>{stopping ? '正在停止…' : '停止'}</button>
-          : <><button type="button" className="ui-btn ui-btn--sm" disabled={checkingPrompts || promptCheckFailed || !failed.length || !model?.model || !model.provider} onClick={() => void start(failed)}>重试失败项（{failed.length}）</button>
+        <button type="button" className="ui-btn ui-btn--sm" onClick={close}>{running ? t('关闭并停止') : t('关闭')}</button>
+        {running ? <button type="button" className="ui-btn ui-btn--sm" disabled={stopping} onClick={() => { setStopping(true); controllerRef.current?.abort(); }}>{stopping ? t('正在停止…') : t('停止')}</button>
+          : <><button type="button" className="ui-btn ui-btn--sm" disabled={checkingPrompts || promptCheckFailed || !failed.length || !model?.model || !model.provider} onClick={() => void start(failed)}>{t('重试失败项（{count}）', { count: failed.length })}</button>
             <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={checkingPrompts || promptCheckFailed || !pending.length || !model?.model || !model.provider} onClick={() => void start(pending)}>
-              <Icon icon="lucide:sparkles" aria-hidden="true" />生成并替换（{pending.length}）</button></>}
+              <Icon icon="lucide:sparkles" aria-hidden="true" />{t('生成并替换（{count}）', { count: pending.length })}</button></>}
       </footer>
     </div>
   </ModalOverlay>;

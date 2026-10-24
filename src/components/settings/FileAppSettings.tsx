@@ -21,7 +21,7 @@ import {
   type DirectorBlenderInstallationCandidate,
 } from '../../services/directorBlenderRuntimeService';
 import AnimatedButton from '../shared/AnimatedButton';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 
 const isMacOS = typeof navigator !== 'undefined'
   && (/mac/i.test(navigator.platform || '') || /Macintosh|Mac OS X/.test(navigator.userAgent || ''));
@@ -103,7 +103,7 @@ export default function FileAppSettings({ active }: { active: boolean }) {
       .catch((error) => {
         if (cancelled) return;
         setBlenderInstallation(null);
-        setBlenderError(error instanceof Error ? error.message : 'Blender 安装检测失败');
+        setBlenderError(error instanceof Error ? error.message : translate('Blender 安装检测失败'));
       })
       .finally(() => {
         if (!cancelled) setBlenderLoading(false);
@@ -163,7 +163,7 @@ export default function FileAppSettings({ active }: { active: boolean }) {
       setBlenderInstallation(await chooseDirectorBlenderInstallation());
     } catch (error) {
       if (!(error instanceof Error && error.name === 'AbortError')) {
-        setBlenderError(error instanceof Error ? error.message : 'Blender 选择失败');
+        setBlenderError(error instanceof Error ? error.message : t('Blender 选择失败'));
       }
     } finally {
       setBlenderLoading(false);

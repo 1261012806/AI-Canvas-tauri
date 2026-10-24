@@ -14,6 +14,13 @@ import projectSettings from './projectSettings';
 import series from './series';
 import settings from './settings';
 import videoEditor from './videoEditor';
+import comfyui from './comfyui';
+import help from './help';
+import workflow from './workflow';
+import director from './director';
+import assets from './assets';
+import imageEditor from './imageEditor';
+import volcengine from './volcengine';
 
 const jaJP: Record<string, string> = {
   ...canvas,
@@ -27,6 +34,13 @@ const jaJP: Record<string, string> = {
   ...series,
   ...settings,
   ...videoEditor,
+  ...comfyui,
+  ...help,
+  ...workflow,
+  ...director,
+  ...assets,
+  ...imageEditor,
+  ...volcengine,
 };
 
 export default jaJP;

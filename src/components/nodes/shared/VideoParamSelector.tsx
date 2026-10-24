@@ -4,6 +4,7 @@
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
 import Select from '../../shared/Select';
+import { useT } from '../../../i18n';
 import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import AnimatedButton from '../../shared/AnimatedButton';
@@ -286,6 +287,7 @@ export default function VideoParamSelector({
   onChangeSeedanceDuration, onChangeGenerateAudio,
   showSeedanceRatio = true, showGenerateAudio = true, onContinuousEditEnd, extraParameters, disabled,
 }: VideoParamSelectorProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   // 正在展开的来源选择器：frame = 加参考帧，character = 加参考角色
   const [pickerFor, setPickerFor] = useState<'frame' | 'character' | null>(null);
@@ -505,15 +507,20 @@ export default function VideoParamSelector({
     ?? dreaminaCapability
     ?? workflowApiCapability
     ?? generalCapability;
-  const describeLimit = (max: number | undefined, unit: string, kind: string) => {
+  const describeLimit = (max: number | undefined, kind: 'image' | 'video' | 'audio') => {
     if (max === undefined) return '';
-    return max === 0 ? `不支持${kind}` : `最多 ${max} ${unit}${kind}`;
+    const labels = {
+      image: ['不支持参考图', '最多 {count} 张参考图'],
+      video: ['不支持参考视频', '最多 {count} 个参考视频'],
+      audio: ['不支持参考音频', '最多 {count} 个参考音频'],
+    };
+    return t(labels[kind][max === 0 ? 0 : 1], { count: max });
   };
   const referenceLimitTip = referenceLimits
     ? [
-      describeLimit(referenceLimits.maxImageReferences, '张', '参考图'),
-      describeLimit(referenceLimits.maxVideoReferences, '个', '参考视频'),
-      describeLimit(referenceLimits.maxAudioReferences, '个', '参考音频'),
+      describeLimit(referenceLimits.maxImageReferences, 'image'),
+      describeLimit(referenceLimits.maxVideoReferences, 'video'),
+      describeLimit(referenceLimits.maxAudioReferences, 'audio'),
     ].filter(Boolean).join('、')
     : '';
   const durationCandidates = [
@@ -538,20 +545,20 @@ export default function VideoParamSelector({
     && (generalCapability?.minDuration === undefined || generalCapability?.maxDuration === undefined),
   );
   const durationTooltip = apimartCapability?.durationMode === 'without-video'
-    ? '仅支持 4 / 6 / 8 / 10 秒。使用参考视频时，此时长设置不生效，由模型决定输出时长。'
+    ? t('仅支持 4 / 6 / 8 / 10 秒。使用参考视频时，此时长设置不生效，由模型决定输出时长。')
     : allowedDurations
-    ? `该模型仅支持 ${allowedDurations.join(' / ')} 秒。`
+    ? t('该模型仅支持 {durations} 秒。', { durations: allowedDurations.join(' / ') })
     : useUnboundedDurationInput
       ? generalCapability?.minDuration !== undefined
-        ? `该模型仅声明最短 ${generalCapability.minDuration} 秒；未声明最长时长。`
+        ? t('该模型仅声明最短 {duration} 秒；未声明最长时长。', { duration: generalCapability.minDuration })
         : generalCapability?.maxDuration !== undefined
-          ? `该模型仅声明最长 ${generalCapability.maxDuration} 秒；未声明最短时长。`
-          : '该模型未声明固定时长范围；输入值会在提交前由 capability 和接口校验。'
+          ? t('该模型仅声明最长 {duration} 秒；未声明最短时长。', { duration: generalCapability.maxDuration })
+          : t('该模型未声明固定时长范围；输入值会在提交前由 capability 和接口校验。')
       : automaticDurationOnly
-        ? '当前参考素材形态只允许模型自动决定时长。'
+        ? t('当前参考素材形态只允许模型自动决定时长。')
         : automaticDurationValue !== undefined
-          ? `可选“自动”，或显式指定 ${minDuration}-${maxDuration} 秒。`
-          : `整数秒，范围 ${minDuration}-${maxDuration}。值越大视频越长、耗时越高。`;
+          ? t('可选“自动”，或显式指定 {min}-{max} 秒。', { min: minDuration, max: maxDuration })
+          : t('整数秒，范围 {min}-{max}。值越大视频越长、耗时越高。', { min: minDuration, max: maxDuration });
   const requestedDuration = automaticDurationOnly
     ? automaticDurationValue
     : seedanceDuration
@@ -695,32 +702,32 @@ export default function VideoParamSelector({
 
   // ── 触发按钮文案 ──
   const durationLabelParts = [
-    showResolutionControl ? displayedResolution ?? '分辨率模型默认' : '',
+    showResolutionControl ? displayedResolution ?? t('分辨率模型默认') : '',
     showDurationControl
       ? displayedDuration === undefined
-        ? '时长模型默认'
-        : displayedDuration === automaticDurationValue ? '时长自动' : `时长${displayedDuration}s`
+        ? t('时长模型默认')
+        : displayedDuration === automaticDurationValue ? t('时长自动') : t('时长{duration}s', { duration: displayedDuration ?? '' })
       : '',
-    showRatioControl ? displayedRatio ?? '比例模型默认' : '',
-    showFrameRateControl ? displayedFrameRate === undefined ? '帧率模型默认' : `${displayedFrameRate}帧` : '',
+    showRatioControl ? displayedRatio ?? t('比例模型默认') : '',
+    showFrameRateControl ? displayedFrameRate === undefined ? t('帧率模型默认') : t('{count}帧', { count: displayedFrameRate }) : '',
     supportsAudio && generalModel
-      ? generateAudio === undefined ? '音频模型默认' : generateAudio ? '有声视频' : '无声视频'
+      ? generateAudio === undefined ? t('音频模型默认') : generateAudio ? t('有声视频') : t('无声视频')
       : '',
   ].filter(Boolean);
   const durationTriggerLabel = durationLabelParts.length > 0
     ? durationLabelParts.join(' · ')
     : supportsAudio
       ? generalModel && generateAudio === undefined
-        ? '音频模型默认'
-        : displayedGenerateAudio ? '有声视频' : '无声视频'
-      : '模型默认参数';
+        ? t('音频模型默认')
+        : displayedGenerateAudio ? t('有声视频') : t('无声视频')
+      : t('模型默认参数');
   const triggerLabel = needsParameterSettings
-    ? '参数'
+    ? t('参数')
     : usesDurationControls
       ? durationTriggerLabel
       : showGenericRatio
-        ? `${genericRatio} · ${legacyVideoResolution} · 时长${displayedDuration}s`
-        : `时长${displayedDuration}s · 帧率${legacyVideoFps} · 分辨率${legacyVideoResolution}`;
+        ? t('{ratio} · {resolution} · 时长{duration}s', { ratio: genericRatio, resolution: legacyVideoResolution, duration: displayedDuration ?? '' })
+        : t('时长{duration}s · 帧率{fps} · 分辨率{resolution}', { duration: displayedDuration ?? '', fps: legacyVideoFps, resolution: legacyVideoResolution });
 
   return (<>
     <div className="ui-schema-renderer" data-ui-schema-placement="videoParams" ref={ref}>
@@ -729,7 +736,7 @@ export default function VideoParamSelector({
           type="button"
           className="img-pill-btn ui-schema-menu-trigger"
           title={triggerLabel}
-          aria-label={needsParameterSettings && settingsModel ? `${settingsModel.name} · 参数` : undefined}
+          aria-label={needsParameterSettings && settingsModel ? t('{name} · 参数', { name: settingsModel.name }) : undefined}
           onClick={(e) => {
             e.stopPropagation();
             if (needsParameterSettings && settingsConnectionId && settingsModel) {
@@ -756,19 +763,19 @@ export default function VideoParamSelector({
               <div className="img-rp-quality-area mb-2">
                 <div className="img-rp-section-label rh-video-ref-head">
                   <span>
-                    参考帧
-                    <span className="rh-tip" data-tooltip={`可选：指定某张图作为视频的首帧或尾帧，其余作为中间参考帧。不添加时按连线顺序交给模型。${referenceLimitTip ? `
-该模型：${referenceLimitTip}（连线带入的素材一并计数）。` : ''}`}>!</span>
+                    {t('参考帧')}
+                    <span className="rh-tip" data-tooltip={`${t('可选：指定某张图作为视频的首帧或尾帧，其余作为中间参考帧。不添加时按连线顺序交给模型。')}${referenceLimitTip ? `
+${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: referenceLimitTip })}` : ''}`}>!</span>
                   </span>
                   <button type="button" className="rh-video-ref-add" onClick={() => setPickerFor(pickerFor === 'frame' ? null : 'frame')}>
-                    {pickerFor === 'frame' ? '取消' : '＋ 添加'}
+                    {t(pickerFor === 'frame' ? '取消' : '＋ 添加')}
                   </button>
                 </div>
                 {frameReferences.length > 0 && (
                   <div className="rh-video-frame-list">
                     {frameReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || '参考帧'} title={item.label} loading="lazy" />
+                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考帧')} title={item.label} loading="lazy" />
                         <div className="img-rp-quality-segmented rh-video-frame-seg">
                           {FRAME_ROLE_OPTIONS.map((option) => (
                             <AnimatedButton
@@ -777,11 +784,11 @@ export default function VideoParamSelector({
                               className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${item.role === option.value ? 'active' : ''}`}
                               onClick={() => setFrameRole(item.id, option.value)}
                             >
-                              {option.label}
+                              {t(option.label)}
                             </AnimatedButton>
                           ))}
                         </div>
-                        <button type="button" className="rh-video-ref-remove" aria-label={`移除 ${item.label || '参考帧'}`} onClick={() => removeReference(item.id)}>✕</button>
+                        <button type="button" className="rh-video-ref-remove" aria-label={t('移除 {name}', { name: item.label || t('参考帧') })} onClick={() => removeReference(item.id)}>✕</button>
                       </div>
                     ))}
                   </div>
@@ -789,23 +796,23 @@ export default function VideoParamSelector({
 
                 <div className="img-rp-section-label rh-video-ref-head mt-2">
                   <span>
-                    参考角色
-                    <span className="rh-tip" data-tooltip="可选：从角色库或连线节点挑选角色形象，作为参考图提交。从角色库添加时，若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。">!</span>
+                    {t('参考角色')}
+                    <span className="rh-tip" data-tooltip={t('可选：从角色库或连线节点挑选角色形象，作为参考图提交。从角色库添加时，若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。')}>!</span>
                   </span>
                   <button type="button" className="rh-video-ref-add" onClick={() => setPickerFor(pickerFor === 'character' ? null : 'character')}>
-                    {pickerFor === 'character' ? '取消' : '＋ 添加'}
+                    {t(pickerFor === 'character' ? '取消' : '＋ 添加')}
                   </button>
                 </div>
                 {characterReferences.length > 0 && (
                   <div className="rh-video-frame-list">
                     {characterReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || '参考角色'} title={item.label} loading="lazy" />
-                        <span className="rh-video-ref-name">{item.label || '参考角色'}</span>
+                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考角色')} title={item.label} loading="lazy" />
+                        <span className="rh-video-ref-name">{item.label || t('参考角色')}</span>
                         {references.some((reference) => reference.id === `${item.id}:voice` && reference.mediaKind === 'audio') && (
-                          <span className="shrink-0 text-[10px] text-canvas-text-muted">含主音色</span>
+                          <span className="shrink-0 text-[10px] text-canvas-text-muted">{t('含主音色')}</span>
                         )}
-                        <button type="button" className="rh-video-ref-remove" aria-label={`移除 ${item.label || '参考角色'}`} onClick={() => removeReference(item.id)}>✕</button>
+                        <button type="button" className="rh-video-ref-remove" aria-label={t('移除 {name}', { name: item.label || t('参考角色') })} onClick={() => removeReference(item.id)}>✕</button>
                       </div>
                     ))}
                   </div>
@@ -816,7 +823,7 @@ export default function VideoParamSelector({
                   const pickerCharacters = pickerFor === 'character' ? characterOptions : [];
                   return (
                   <div className="rh-video-ref-picker">
-                    {connectedImageNodes.length > 0 && <div className="rh-video-ref-picker-label">连线节点</div>}
+                    {connectedImageNodes.length > 0 && <div className="rh-video-ref-picker-label">{t('连线节点')}</div>}
                     {connectedImageNodes.map((node) => {
                       const data = node.data as BaseNodeData;
                       return (
@@ -827,11 +834,11 @@ export default function VideoParamSelector({
                           onClick={() => addReference(pickerFor, { id: node.id, label: data.label || '参考图', url: data.imageUrl as string })}
                         >
                           <img className="rh-video-frame-thumb" src={data.imageUrl} alt="" loading="lazy" />
-                          <span className="rh-video-ref-name">{data.label || '参考图'}</span>
+                          <span className="rh-video-ref-name">{data.label || t('参考图')}</span>
                         </button>
                       );
                     })}
-                    {pickerCharacters.length > 0 && <div className="rh-video-ref-picker-label">角色库</div>}
+                    {pickerCharacters.length > 0 && <div className="rh-video-ref-picker-label">{t('角色库')}</div>}
                     {pickerCharacters.map((option) => (
                       <button
                         key={option.id}
@@ -846,8 +853,8 @@ export default function VideoParamSelector({
                     {connectedImageNodes.length === 0 && pickerCharacters.length === 0 && (
                       <div className="rh-video-ref-empty">
                         {pickerFor === 'frame'
-                          ? '还没有可选的图片：先给视频节点连一个图片节点'
-                          : '还没有可选的角色：先连一个图片节点，或在角色库里添加角色'}
+                          ? t('还没有可选的图片：先给视频节点连一个图片节点')
+                          : t('还没有可选的角色：先连一个图片节点，或在角色库里添加角色')}
                       </div>
                     )}
                   </div>
@@ -861,8 +868,8 @@ export default function VideoParamSelector({
                 {/* Seedance 分辨率 */}
                 {showResolutionControl && <div className="img-rp-quality-area mb-2">
                   <div className="img-rp-section-label">
-                    分辨率
-                    <span className="rh-tip" data-tooltip="只展示模型 capability 声明支持的分辨率档位；更高分辨率通常耗时更长。">!</span>
+                    {t('分辨率')}
+                    <span className="rh-tip" data-tooltip={t('只展示模型 capability 声明支持的分辨率档位；更高分辨率通常耗时更长。')}>!</span>
                   </div>
                   <div className="img-rp-quality-segmented rh-video-resolution-seg">
                     {generalModel && generalCapability?.defaultResolution === undefined && (
@@ -871,7 +878,7 @@ export default function VideoParamSelector({
                         className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${displayedResolution === undefined ? 'active' : ''}`}
                         onClick={() => onChangeSeedanceResolution?.(undefined)}
                       >
-                        模型默认
+                        {t('模型默认')}
                       </AnimatedButton>
                     )}
                     {seedanceResolutions.map((opt) => (
@@ -890,8 +897,8 @@ export default function VideoParamSelector({
                 {showRatioControl && (
                   <div className="img-rp-quality-area mb-2">
                     <div className="img-rp-section-label">
-                      宽高比
-                      <span className="rh-tip" data-tooltip="决定输出视频的画面形状：16:9 横屏、9:16 竖屏，自适应 = 由模型智能决定。">!</span>
+                      {t('宽高比')}
+                      <span className="rh-tip" data-tooltip={t('决定输出视频的画面形状：16:9 横屏、9:16 竖屏，自适应 = 由模型智能决定。')}>!</span>
                     </div>
                     <div className="img-rp-quality-segmented rh-video-resolution-seg">
                       {generalModel && generalCapability?.defaultRatio === undefined && (
@@ -900,7 +907,7 @@ export default function VideoParamSelector({
                           className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${displayedRatio === undefined ? 'active' : ''}`}
                           onClick={() => onChangeSeedanceRatio?.(undefined)}
                         >
-                          模型默认
+                          {t('模型默认')}
                         </AnimatedButton>
                       )}
                       {seedanceRatios.map((opt) => (
@@ -910,7 +917,7 @@ export default function VideoParamSelector({
                           className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${displayedRatio === opt.value ? 'active' : ''}`}
                           onClick={() => onChangeSeedanceRatio?.(opt.value)}
                         >
-                          {opt.label}
+                          {opt.value === 'adaptive' ? t('自适应') : opt.label}
                         </AnimatedButton>
                       ))}
                     </div>
@@ -920,8 +927,8 @@ export default function VideoParamSelector({
                 {showFrameRateControl && (
                   <div className="img-rp-quality-area mb-2">
                     <div className="img-rp-section-label">
-                      帧率
-                      <span className="rh-tip" data-tooltip="仅展示该模型配置中声明支持的帧率；帧率越高运动越顺滑，但生成成本通常也更高。">!</span>
+                      {t('帧率')}
+                      <span className="rh-tip" data-tooltip={t('仅展示该模型配置中声明支持的帧率；帧率越高运动越顺滑，但生成成本通常也更高。')}>!</span>
                     </div>
                     <div className="img-rp-quality-segmented rh-video-resolution-seg">
                       {generalCapability?.defaultFrameRate === undefined && (
@@ -930,7 +937,7 @@ export default function VideoParamSelector({
                           className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${displayedFrameRate === undefined ? 'active' : ''}`}
                           onClick={() => onChangeFps?.(undefined)}
                         >
-                          模型默认
+                          {t('模型默认')}
                         </AnimatedButton>
                       )}
                       {configuredFrameRates?.map((value) => (
@@ -940,7 +947,7 @@ export default function VideoParamSelector({
                           className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${displayedFrameRate === value ? 'active' : ''}`}
                           onClick={() => onChangeFps?.(value)}
                         >
-                          {value}帧
+                          {t('{count}帧', { count: value })}
                         </AnimatedButton>
                       ))}
                     </div>
@@ -949,13 +956,13 @@ export default function VideoParamSelector({
 
                 {/* Seedance 时长 */}
                 {apimartCapability?.durationMode === 'automatic' && (
-                  <div className="text-xs text-canvas-text-secondary">时长由模型自动决定，可在提示词中描述节奏。</div>
+                  <div className="text-xs text-canvas-text-secondary">{t('时长由模型自动决定，可在提示词中描述节奏。')}</div>
                 )}
                 {(showDurationControl || (showGenerateAudio && supportsAudio)) && (
                 <div className="rh-v5-meta-panel">
                   {showDurationControl && <div className="rh-vram-adv-row">
                     <div className="rh-vram-adv-label">
-                      <span>生成时长（秒）</span>
+                      <span>{t('生成时长（秒）')}</span>
                       <span className="rh-tip" data-tooltip={durationTooltip}>!</span>
                     </div>
                     {generalModel
@@ -971,12 +978,12 @@ export default function VideoParamSelector({
                             : 'border-canvas-border text-canvas-text-secondary hover:border-blue-400/40 hover:text-canvas-text'
                         }`}
                       >
-                        模型默认
+                        {t('模型默认')}
                       </button>
                     )}
                     {generalModel && displayedDuration === undefined && (
                       <div className="mb-2 text-[10px] text-canvas-text-muted">
-                        当前未指定时长；选择或输入数值后才会显式提交。
+                        {t('当前未指定时长；选择或输入数值后才会显式提交。')}
                       </div>
                     )}
                     {automaticDurationValue !== undefined && (
@@ -990,7 +997,7 @@ export default function VideoParamSelector({
                             : 'border-canvas-border text-canvas-text-secondary hover:border-blue-400/40 hover:text-canvas-text'
                         }`}
                       >
-                        自动
+                        {t('自动')}
                       </button>
                     )}
                     {!automaticDurationOnly && (allowedDurations ? (
@@ -1015,12 +1022,12 @@ export default function VideoParamSelector({
                       <input
                         type="number"
                         className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-blue-400/60"
-                        aria-label="生成时长（秒）"
+                        aria-label={t('生成时长（秒）')}
                         min={generalCapability?.minDuration}
                         max={generalCapability?.maxDuration}
                         step={1}
                         value={displayedDuration ?? ''}
-                        placeholder="模型默认"
+                        placeholder={t('模型默认')}
                         onChange={(event) => onChangeSeedanceDuration?.(
                           event.target.value ? Number(event.target.value) : undefined,
                         )}
@@ -1063,23 +1070,23 @@ export default function VideoParamSelector({
                   <div className="rh-vram-adv-row">
                     <div className="rh-vram-adv-label" style={{ justifyContent: 'space-between', width: '100%' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>生成有声视频</span>
+                        <span>{t('生成有声视频')}</span>
                         <span className="rh-tip" data-tooltip={generalModel
-                          ? '模型默认表示不发送音频开关；也可以显式要求生成音频或不生成音频。'
-                          : '开启后由当前原生视频模型同时生成音频。'}>!</span>
+                          ? t('模型默认表示不发送音频开关；也可以显式要求生成音频或不生成音频。')
+                          : t('开启后由当前原生视频模型同时生成音频。')}>!</span>
                       </div>
                       {generalModel ? (
                         <Select fixedMenu disabled={disabled}
                           className="min-w-0" size="sm"
-                          aria-label="视频音频策略"
+                          aria-label={t('视频音频策略')}
                           value={generateAudio === undefined ? 'default' : generateAudio ? 'on' : 'off'}
                           onChange={(selectedOptionValue) => onChangeGenerateAudio?.(
                             selectedOptionValue === 'default' ? undefined : selectedOptionValue === 'on',
                           )}
                         >
-                          <option value="default">模型默认</option>
-                          <option value="on">生成音频</option>
-                          <option value="off">不生成音频</option>
+                          <option value="default">{t('模型默认')}</option>
+                          <option value="on">{t('生成音频')}</option>
+                          <option value="off">{t('不生成音频')}</option>
                         </Select>
                       ) : (
                         <label className="rh-toggle-switch">
@@ -1104,8 +1111,8 @@ export default function VideoParamSelector({
                 {showGenericRatio && (
                   <div className="img-rp-quality-area mb-2">
                     <div className="img-rp-section-label">
-                      画面比例
-                      <span className="rh-tip" data-tooltip="决定输出视频的画面形状：16:9 横屏、9:16 竖屏。分辨率为长边，短边按比例换算后注入工作流的 width/height。">!</span>
+                      {t('画面比例')}
+                      <span className="rh-tip" data-tooltip={t('决定输出视频的画面形状：16:9 横屏、9:16 竖屏。分辨率为长边，短边按比例换算后注入工作流的 width/height。')}>!</span>
                     </div>
                     <div className="img-rp-quality-segmented rh-video-resolution-seg">
                       {genericRatios.map((opt) => (
@@ -1125,8 +1132,8 @@ export default function VideoParamSelector({
                 {/* ComfyUI / RunningHub 分辨率 */}
                 <div className="img-rp-quality-area mb-2" data-ui-schema-field="rhVideoResolution" data-ui-schema-type="segmented" data-ui-schema-value-type="number" data-ui-schema-default="832">
                   <div className="img-rp-section-label">
-                    分辨率（长边）
-                    <span className="rh-tip" data-tooltip="画面长边像素，短边由上方比例换算。分辨率越高细节越清晰、边缘更稳定，显存占用与生成耗时也明显增加。最后一格可以填预设以外的值，例如 384。">!</span>
+                    {t('分辨率（长边）')}
+                    <span className="rh-tip" data-tooltip={t('画面长边像素，短边由上方比例换算。分辨率越高细节越清晰、边缘更稳定，显存占用与生成耗时也明显增加。最后一格可以填预设以外的值，例如 384。')}>!</span>
                   </div>
                   <div className="img-rp-quality-segmented rh-video-resolution-seg rh-res-seg-with-custom">
                     {COMBO_RESOLUTIONS.map((res) => (
@@ -1144,8 +1151,8 @@ export default function VideoParamSelector({
                     <input
                       type="number"
                       className="rh-res-custom-input"
-                      aria-label="自定义长边像素"
-                      placeholder="自定义"
+                      aria-label={t('自定义长边像素')}
+                      placeholder={t('自定义')}
                       min={MIN_CUSTOM_RESOLUTION}
                       max={MAX_CUSTOM_RESOLUTION}
                       step={8}
@@ -1173,8 +1180,8 @@ export default function VideoParamSelector({
                 <div className="rh-v5-meta-panel">
                   <div className="rh-vram-adv-row">
                     <div className="rh-vram-adv-label">
-                      <span>帧率</span>
-                      <span className="rh-tip" data-tooltip="帧率越高运动更顺滑、动作更连贯。但生成更慢、成本更高。常用 24 帧。">!</span>
+                      <span>{t('帧率')}</span>
+                      <span className="rh-tip" data-tooltip={t('帧率越高运动更顺滑、动作更连贯。但生成更慢、成本更高。常用 24 帧。')}>!</span>
                     </div>
                     <div className="img-rp-quality-segmented rh-adv-seg rh-v5-fps-seg">
                       {COMBO_FPS_OPTIONS.map((opt) => (
@@ -1192,7 +1199,7 @@ export default function VideoParamSelector({
                             onChangeFps?.(opt.value);
                           }}
                         >
-                          {opt.label}
+                          {t('{count}帧', { count: opt.value })}
                         </AnimatedButton>
                       ))}
                     </div>
@@ -1200,8 +1207,8 @@ export default function VideoParamSelector({
 
                   <div className="rh-vram-adv-row" data-ui-schema-field="videoDuration" data-ui-schema-type="slider">
                     <div className="rh-vram-adv-label">
-                      <span>生成时长（秒）</span>
-                      <span className="rh-tip" data-tooltip={`整数秒，范围 ${minDuration}-${maxDuration}。提交时会根据帧率自动换算为模型需要的总帧数。`}>!</span>
+                      <span>{t('生成时长（秒）')}</span>
+                      <span className="rh-tip" data-tooltip={t('整数秒，范围 {min}-{max}。提交时会根据帧率自动换算为模型需要的总帧数。', { min: minDuration, max: maxDuration })}>!</span>
                     </div>
                     <div className="rh-duration-slider">
                       <div className="rh-duration-track">

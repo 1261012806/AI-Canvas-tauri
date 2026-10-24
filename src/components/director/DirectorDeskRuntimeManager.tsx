@@ -3,6 +3,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { t } from '../../i18n';
 import { useAppStore } from '../../store/useAppStore';
 import {
   cancelDirectorDeskInstall,
@@ -185,8 +186,8 @@ function DirectorDeskRuntimeRequestController({
       const selected = await openDialog({
         multiple: false,
         directory: false,
-        title: `选择 director-desk-v${version}.tar.gz`,
-        filters: [{ name: '3D 导演台安装包（.tar.gz）', extensions: ['gz'] }],
+        title: t('选择 director-desk-v{version}.tar.gz', { version }),
+        filters: [{ name: t('3D 导演台安装包（.tar.gz）'), extensions: ['gz'] }],
       });
       if (typeof selected === 'string') {
         await startInstall(selected);

@@ -14,6 +14,7 @@
  */
 import { confirm as tauriConfirm } from '@tauri-apps/plugin-dialog';
 import { isTauriEnv } from './fileService';
+import { t } from '../i18n';
 
 export interface ConfirmActionOptions {
   title?: string;
@@ -26,11 +27,11 @@ export async function confirmAction(
   message: string,
   options: ConfirmActionOptions = {},
 ): Promise<boolean> {
-  if (!isTauriEnv()) return window.confirm(message);
-  return tauriConfirm(message, {
-    title: options.title ?? '请确认',
+  if (!isTauriEnv()) return window.confirm(t(message));
+  return tauriConfirm(t(message), {
+    title: t(options.title ?? '请确认'),
     kind: options.kind ?? 'warning',
-    okLabel: options.okLabel ?? '确定',
-    cancelLabel: options.cancelLabel ?? '取消',
+    okLabel: t(options.okLabel ?? '确定'),
+    cancelLabel: t(options.cancelLabel ?? '取消'),
   });
 }

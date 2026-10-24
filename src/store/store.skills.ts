@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Skill slice — uploaded read-only prompt skills.
  */
@@ -57,7 +58,7 @@ export const createSkillSlice: StateCreator<AppState, [], [], SkillSlice> = (set
 
     set((state) => ({ userSkills: [...state.userSkills, skill] }));
     await fileService.saveSkill({ ...skill }).catch((e) => console.warn('[保存 Skill] 持久化失败:', e));
-    get().showToast(`已上传 Skill「${skill.name}」`);
+    get().showToast(t('已上传 Skill「{name}」', { name: skill.name }));
     return skill;
   },
 

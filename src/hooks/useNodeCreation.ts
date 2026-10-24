@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * useNodeCreation — 节点创建 Hook
  * 封装所有节点创建方法（文本/图片/视频/音频）、文件拖放（浏览器 + Tauri 原生）
@@ -450,7 +451,7 @@ export function useNodeCreation() {
           }
         }
 
-        if (count > 0) store.showToast(`已拖入 ${count} 个源节点`);
+        if (count > 0) store.showToast(t('已拖入 {count} 个源节点', { count }));
       };
 
       type RawPaths = { paths: string[]; position: { x: number; y: number } };

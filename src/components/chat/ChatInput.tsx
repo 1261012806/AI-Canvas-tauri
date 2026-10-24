@@ -26,7 +26,7 @@ import type { GeneralModelConfig, ModelGroup, ModelOption, PromptSubmitShortcut 
 import type { SkillPickerOption } from '../../types/agentPackage';
 import type { ContextUsageStat } from '../../services/chat/contextManager';
 import { useAppStore } from '../../store/useAppStore';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 import { projectSkillPickerOptions } from '../../services/chat/skillCatalog';
 import {
   type MediaModelOption,
@@ -80,7 +80,7 @@ const CHAT_REFERENCE_PRESENTATION = {
     return buildReferenceChipEl(document, {
       label: reference.label,
       kind: reference.kind === 'image' ? 'image' : 'text',
-      iconText: reference.kind === 'image' ? '图' : 'M',
+      iconText: reference.kind === 'image' ? 'I' : 'M',
     });
   },
   synchronize: (root: HTMLDivElement) => syncMediaReferenceLabels(root, getNodeMetaMap(useAppStore.getState().nodes)),
@@ -252,7 +252,7 @@ export default function ChatInput({
   const hasGlobalAssetReference = inputValue.includes('@drama{global/');
   useEffect(() => {
     if (modelMenuOpen || hasGlobalAssetReference) void useAppStore.getState().loadGlobalDramaAssets()
-      .catch(() => useAppStore.getState().showToast('全局创作资产加载失败，请重试', 'error'));
+      .catch(() => useAppStore.getState().showToast(translate('全局创作资产加载失败，请重试'), 'error'));
   }, [modelMenuOpen, hasGlobalAssetReference]);
   const userSkills = useAppStore((state) => state.userSkills);
   const agentPackageSkills = useAppStore((state) => state.agentPackageSkills);
@@ -917,7 +917,7 @@ export default function ChatInput({
               setShortcutMenuAnchor(event.currentTarget);
             }}>
               {performanceMode || reduceMotion ? sendButton : (
-                <LazyLoadBoundary label="助手发送按钮特效" errorFallback={sendButton}>
+                <LazyLoadBoundary label={t('助手发送按钮特效')} errorFallback={sendButton}>
                   <Suspense fallback={sendButton}>
                     <MetalFx className="ui-ai-input__send-metal" variant="circle"
                       preset={appearanceMode === 'light' ? 'silver' : 'chromatic'} theme={appearanceMode}

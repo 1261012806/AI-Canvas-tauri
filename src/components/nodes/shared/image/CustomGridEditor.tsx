@@ -2,6 +2,7 @@
  * CustomGridEditor — 自定义宫格裁切编辑器
  * 在全屏 overlay 上拖拽添加横向/竖向分割线，根据线的分布生成 storyboard 节点
  */
+import { useT } from '../../../../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import FullscreenOverlay from '../../../shared/FullscreenOverlay';
@@ -37,6 +38,7 @@ export default function CustomGridEditor({
   onClose,
   onConfirm,
 }: CustomGridEditorProps) {
+  const t = useT();
   const imgRef = useRef<HTMLImageElement>(null);
   /** 标记刚完成一次拖拽，阻止后续 click 意外新建线 */
   const justDraggedRef = useRef(false);
@@ -143,13 +145,13 @@ export default function CustomGridEditor({
   }, [hLines, vLines, onConfirm]);
 
   const hasLines = hLines.length > 0 || vLines.length > 0;
-  const hintText = `点击图像添加${mode === 'h' ? '横向' : '竖向'}分割线 · 拖拽调整 · 点 × 删除`;
+  const hintText = t('点击图像添加{direction}分割线 · 拖拽调整 · 点 × 删除', { direction: t(mode === 'h' ? '横向' : '竖向') });
 
   return (
     <FullscreenOverlay
       isOpen={isOpen}
       onClose={handleClose}
-      data-tooltip="自定义宫格裁切"
+      data-tooltip={t('自定义宫格裁切')}
       hidePanel
       className="customgrid-overlay"
     >
@@ -165,8 +167,8 @@ export default function CustomGridEditor({
           <AnimatedButton
             type="button"
             className="customgrid-btn act-cancel"
-            data-tooltip="关闭 (Esc)"
-            aria-label="关闭"
+            data-tooltip={t('关闭 (Esc)')}
+            aria-label={t('关闭')}
             onClick={handleClose}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -181,14 +183,14 @@ export default function CustomGridEditor({
               className={`customgrid-btn${mode === 'h' ? ' active' : ''}`}
               onClick={() => setMode('h')}
             >
-              横线
+              {t('横线')}
             </button>
             <button
               type="button"
               className={`customgrid-btn${mode === 'v' ? ' active' : ''}`}
               onClick={() => setMode('v')}
             >
-              竖线
+              {t('竖线')}
             </button>
           </div>
 
@@ -199,14 +201,14 @@ export default function CustomGridEditor({
           <div className="customgrid-bar-spacer" />
 
           <button type="button" className="customgrid-btn" onClick={handleClearAll} disabled={!hasLines}>
-            清除全部
+            {t('清除全部')}
           </button>
 
-          <AnimatedButton className="customgrid-btn act-confirm" data-tooltip="确认裁切" aria-label="确认裁切" onClick={handleConfirm}>
+          <AnimatedButton className="customgrid-btn act-confirm" data-tooltip={t('确认裁切')} aria-label={t('确认裁切')} onClick={handleConfirm}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
               <path d="M3 17l5-5 3 3 8-8" />
             </svg>
-            <span>确认</span>
+            <span>{t('确认')}</span>
           </AnimatedButton>
         </div>
 
@@ -234,7 +236,7 @@ export default function CustomGridEditor({
                   className="customgrid-line-del"
                   onPointerDown={(ev) => ev.stopPropagation()}
                   onClick={(ev) => { ev.stopPropagation(); deleteLine(line.id, 'h'); }}
-                  aria-label="删除横线"
+                  aria-label={t('删除横线')}
                 />
               </div>
             ))}
@@ -252,7 +254,7 @@ export default function CustomGridEditor({
                   className="customgrid-line-del"
                   onPointerDown={(ev) => ev.stopPropagation()}
                   onClick={(ev) => { ev.stopPropagation(); deleteLine(line.id, 'v'); }}
-                  aria-label="删除竖线"
+                  aria-label={t('删除竖线')}
                 />
               </div>
             ))}

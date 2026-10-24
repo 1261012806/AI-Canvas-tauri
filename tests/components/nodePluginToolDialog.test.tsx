@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useMemo: <T,>(factory: () => T) => factory(),
+  useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
+  useCallback: <T,>(callback: T) => callback,
   useEffect: (effect: () => void | (() => void)) => { hooks.effects.push(effect); },
   useRef: <T,>(value: T) => {
     const index = hooks.index++;

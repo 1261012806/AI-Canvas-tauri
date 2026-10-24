@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { t } from '../../../i18n';
 import { Icon } from '@iconify/react';
 import type {
   CharacterReferenceImage,
@@ -84,7 +85,7 @@ export function renderPromptWithChips(
   options: PromptChipRenderOptions = {},
 ): ReactNode {
   if (!prompt || !prompt.trim()) {
-    return options.emptyText ?? '暂无生成信息';
+    return options.emptyText ?? t('暂无生成信息');
   }
 
   const regex = promptChipPattern();
@@ -160,10 +161,10 @@ export function renderPromptWithChips(
       lastIndex = regex.lastIndex;
     } else if (match[2] !== undefined) {
       const dramaId = match[2];
-      const dramaName = match[3] || '资产';
+      const dramaName = match[3] || t('资产');
       let kind = 'character';
       let thumb: string | undefined;
-      let icon = '人';
+      let icon = t('人');
 
       if (dramaAssets) {
         const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId } = parseDramaMentionId(dramaId);
@@ -175,10 +176,10 @@ export function renderPromptWithChips(
           const media = resolveDramaActionMediaRef(found, actionId, actionMediaId);
           kind = media?.kind === 'video' ? 'action-video' : 'action-image';
           thumb = media && media.kind !== 'video' ? media.url : undefined;
-          icon = '动';
+          icon = t('动');
         } else if (found) {
           kind = found.kind;
-          icon = kind === 'character' ? '人' : kind === 'scene' ? '场' : '道';
+          icon = kind === 'character' ? t('人') : kind === 'scene' ? t('场') : t('道');
           const picked = referenceImageId && found.kind === 'character'
             ? found.referenceImages?.find((img: CharacterReferenceImage) => img.id === referenceImageId)
             : undefined;
@@ -218,7 +219,7 @@ export function renderPromptWithChips(
       lastIndex = regex.lastIndex;
     } else if (match[4] !== undefined) {
       const nodeId = match[4];
-      const label = match[5] || '生成图像';
+      const label = match[5] || t('生成图像');
       const shot = parseShotlistRowMentionId(nodeId);
       const meta = metaMap.get(nodeId);
       const node = nodes?.find((n) => n.id === (shot?.nodeId || (nodeId.includes('/cell/') ? nodeId.split('/')[0] : nodeId)));
@@ -229,7 +230,7 @@ export function renderPromptWithChips(
       const isMedia = nodeType === 'ai-image' || nodeType === 'ai-video' || nodeType === 'ai-storyboard';
       const showThumbnail = !iconPath && isMedia && !!thumbUrl;
       const displayId = shot ? undefined : meta?.displayId ?? (node?.data?.displayId as number | undefined);
-      const liveLabel = shot ? meta?.label || (options.fallbackToTokenLabel ? label : `${label}（镜头已失效）`) : label;
+      const liveLabel = shot ? meta?.label || (options.fallbackToTokenLabel ? label : t('{label}（镜头已失效）', { label })) : label;
       const displayLabel = displayId != null ? `#${displayId}` : liveLabel;
       const title = displayId != null ? `${label} (#${displayId})` : liveLabel;
       const referenceLabel = referenceLabels[currentIdx];
@@ -287,14 +288,14 @@ export function renderPromptWithChips(
       );
       lastIndex = regex.lastIndex;
     } else if (match[11] !== undefined) {
-      const label = match[12] || '模型';
+      const label = match[12] || t('模型');
       elements.push(<span key={`model-${match.index}`} className="prompt-chip prompt-chip-node chip-text cursor-pointer"
         data-model-ref-id={match[11]} data-model-ref-label={label} title={label} role="button" tabIndex={0}>
         <span className="prompt-chip-icon" aria-hidden="true"><Icon icon="lucide:box" width={12} height={12} /></span><span className="prompt-chip-id">{label}</span>
       </span>);
       lastIndex = regex.lastIndex;
     } else if (match[13] !== undefined) {
-      let label = match[14] || '助手参考图';
+      let label = match[14] || t('助手参考图');
       try { label = decodeURIComponent(label); } catch { /* 保留原值 */ }
       elements.push(<span key={`chat-image-${match.index}`} className="prompt-chip prompt-chip-node chip-image cursor-pointer"
         data-chat-image-file-name={match[13]} data-chat-image-label={label} title={label} role="button" tabIndex={0}>
@@ -307,13 +308,13 @@ export function renderPromptWithChips(
         const mention = parseComfyRefmodMentions(match[0]).mentions[0];
         if (!mention) throw new Error('引用无效');
         const ref = mention.selection;
-        const title = `${mention.label} · ComfyUI 角色 · 加载节点 #${ref.loaderNodeId} / 槽位 ${ref.slot}${ref.loaderType === 'refmods-lab' ? '' : ` · 强度 ${ref.strength}`}`;
+        const title = t('{label} · ComfyUI 角色 · 加载节点 #{node} / 槽位 {slot}{strength}', { label: mention.label, node: ref.loaderNodeId, slot: ref.slot, strength: ref.loaderType === 'refmods-lab' ? '' : t(' · 强度 {value}', { value: ref.strength }) });
         elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title={title}>
           <span className="prompt-chip-icon" aria-hidden="true">R</span>
           <span className="prompt-chip-id">{mention.label}</span>
         </span>);
       } catch {
-        elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title="请在本地 ComfyUI 视频节点中重新选择角色引用">ComfyUI 角色（引用无效）</span>);
+        elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title={t('请在本地 ComfyUI 视频节点中重新选择角色引用')}>{t('ComfyUI 角色（引用无效）')}</span>);
       }
       lastIndex = regex.lastIndex;
     }

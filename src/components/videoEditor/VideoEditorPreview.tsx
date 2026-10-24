@@ -85,6 +85,7 @@ interface OverlayMediaProps {
  * 静音可避免多轨预览时重复出声，也允许 WebView 自动跟播。
  */
 function OverlayMedia({ clip, playhead, playing, muted, volume, canvasDisplayScale }: OverlayMediaProps) {
+  const t = useT();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const url = resolveClipUrl(clip);
@@ -132,7 +133,7 @@ function OverlayMedia({ clip, playhead, playing, muted, volume, canvasDisplaySca
   }
 
   if (!url || failed) {
-    return <div className="video-editor-stage-empty">素材无法预览</div>;
+    return <div className="video-editor-stage-empty">{t('素材无法预览')}</div>;
   }
 
   if (clip.kind === 'image') {

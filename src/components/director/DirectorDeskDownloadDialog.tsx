@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import ModalOverlay from '../shared/ModalOverlay';
 import DownloadProgress from '../shared/DownloadProgress';
 import type { DirectorDeskInstallProgress } from '../../services/directorDeskRuntimeService';
+import { useT } from '../../i18n';
 
 export type DirectorDeskDialogPhase = 'prompt' | 'downloading' | 'error';
 
@@ -34,13 +35,14 @@ export default function DirectorDeskDownloadDialog({
   onCancel,
   onRetry,
 }: DirectorDeskDownloadDialogProps) {
+  const t = useT();
   const isDownloading = phase === 'downloading';
 
   return createPortal(
     <ModalOverlay
       isOpen
       onClose={isDownloading ? () => {} : onCancel}
-      ariaLabel="下载 3D 导演台"
+      ariaLabel={t('下载 3D 导演台')}
       className="w-[min(420px,calc(100vw-32px))]"
       closeOnBackdrop={!isDownloading}
       motionPreset="quick"
@@ -52,14 +54,14 @@ export default function DirectorDeskDownloadDialog({
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-canvas-text">
-              {phase === 'error' ? '3D 导演台安装失败' : '下载 3D 导演台'}
+              {phase === 'error' ? t('3D 导演台安装失败') : t('下载 3D 导演台')}
             </h2>
             <p className="mt-1 text-xs leading-5 text-canvas-text-secondary">
               {phase === 'prompt'
-                ? `首次使用需要下载 v${version} 运行资源，下载约 54 MB，安装后约占 82 MB。`
+                ? t('首次使用需要下载 v{version} 运行资源，下载约 54 MB，安装后约占 82 MB。', { version })
                 : phase === 'error'
-                  ? error
-                  : stageText}
+                  ? t(error ?? '')
+                  : t(stageText)}
             </p>
           </div>
         </div>
@@ -69,7 +71,7 @@ export default function DirectorDeskDownloadDialog({
             className="mb-4"
             downloadedBytes={progress?.transferredBytes ?? 0}
             totalBytes={progress?.totalBytes}
-            label={stageText}
+            label={t(stageText)}
           />
         )}
 
@@ -80,7 +82,7 @@ export default function DirectorDeskDownloadDialog({
             onClick={onCancel}
             disabled={cancelling}
           >
-            {isDownloading ? (cancelling ? '正在取消...' : '取消安装') : '取消'}
+            {isDownloading ? (cancelling ? t('正在取消...') : t('取消安装')) : t('取消')}
           </button>
           {(phase === 'prompt' || phase === 'error') && (
             <button
@@ -89,7 +91,7 @@ export default function DirectorDeskDownloadDialog({
               onClick={onSelectArchive}
             >
               <Icon icon="lucide:folder-open" width="14" height="14" />
-              选择安装包
+              {t('选择安装包')}
             </button>
           )}
           {phase === 'prompt' && (
@@ -99,7 +101,7 @@ export default function DirectorDeskDownloadDialog({
               onClick={onConfirm}
             >
               <Icon icon="lucide:download" width="14" height="14" />
-              下载并打开
+              {t('下载并打开')}
             </button>
           )}
           {phase === 'error' && (
@@ -109,7 +111,7 @@ export default function DirectorDeskDownloadDialog({
               onClick={onRetry}
             >
               <Icon icon="lucide:rotate-cw" width="14" height="14" />
-              重试
+              {t('重试')}
             </button>
           )}
         </div>

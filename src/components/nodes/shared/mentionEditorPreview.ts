@@ -1,3 +1,4 @@
+import { t } from '../../../i18n';
 import type { DramaAsset, DramaAssetLibrary } from '../../../types/dramaAssets';
 import { DRAMA_ASSET_KIND_LABEL, parseDramaMentionId } from '../../../types/dramaAssets';
 import {
@@ -41,7 +42,7 @@ export function resolveDramaMentionPreview(
 ): MentionChipPreview {
   const { assetId, referenceImageId, actionId, actionMediaId, voiceClipId, mergeAll } = parseDramaMentionId(id);
   const asset = findDramaAsset(library, assetId, globalAssets);
-  const source = assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库';
+  const source = t(assetId.startsWith('global/') ? '全局创作资产库' : '创作资产库');
   const preview: MentionChipPreview = {
     label: asset?.name || fallbackLabel,
     displayId: undefined,
@@ -50,7 +51,7 @@ export function resolveDramaMentionPreview(
     sprite: undefined,
     text: '',
     missing: !asset,
-    description: `${source} · 引用资产已不存在`,
+    description: `${source} · ${t('引用资产已不存在')}`,
   };
   if (!asset) return preview;
 
@@ -61,7 +62,7 @@ export function resolveDramaMentionPreview(
       label: voice?.label || fallbackLabel,
       text: voice?.transcript?.slice(0, 240) || '',
       missing: !voice,
-      description: `${source} · ${voice ? '角色声音' : '声音引用已失效'}`,
+      description: `${source} · ${t(voice ? '角色声音' : '声音引用已失效')}`,
     };
   }
   if (actionId !== undefined) {
@@ -74,7 +75,7 @@ export function resolveDramaMentionPreview(
       videoUrl: media?.kind === 'video' ? media.url : undefined,
       filePath: media?.kind === 'video' ? media.filePath : undefined,
       missing: !media,
-      description: `${source} · ${media ? media.kind === 'video' ? '动作视频' : media.kind === 'gif' ? '动作 GIF' : '动作图片' : '动作素材引用已失效'}`,
+      description: `${source} · ${t(media ? media.kind === 'video' ? '动作视频' : media.kind === 'gif' ? '动作 GIF' : '动作图片' : '动作素材引用已失效')}`,
     };
   }
 
@@ -89,7 +90,7 @@ export function resolveDramaMentionPreview(
       thumbnailUrls,
       text: thumbnailUrls.length ? '' : brief,
       missing: thumbnailUrls.length === 0,
-      description: `${source} · ${thumbnailUrls.length ? `全部参考图（${thumbnailUrls.length} 张）` : '全部参考图暂无可用图片'}`,
+      description: `${source} · ${thumbnailUrls.length ? t('全部参考图（{count} 张）', { count: thumbnailUrls.length }) : t('全部参考图暂无可用图片')}`,
     };
   }
 
@@ -105,7 +106,7 @@ export function resolveDramaMentionPreview(
       ...preview,
       thumbnailUrl: image?.imageUrl,
       missing: !image,
-      description: `${source} · ${image ? '指定参考图' : '参考图引用已失效'}`,
+      description: `${source} · ${t(image ? '指定参考图' : '参考图引用已失效')}`,
     };
   }
 
@@ -115,6 +116,6 @@ export function resolveDramaMentionPreview(
     thumbnailUrl: image?.imageUrl,
     text: image ? '' : brief,
     missing: false,
-    description: `${source} · ${DRAMA_ASSET_KIND_LABEL[asset.kind]}${image ? '参考图' : '简介（暂无图片）'}`,
+    description: `${source} · ${t(image ? '{kind}参考图' : '{kind}简介（暂无图片）', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) })}`,
   };
 }

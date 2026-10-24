@@ -7,6 +7,7 @@
  */
 import { getNodeTypeConfig } from '../types';
 import type { BaseNodeData, NodeGroup } from '../types';
+import { t } from '../i18n';
 
 export interface HistorySnapshotLike {
   nodes: {
@@ -26,17 +27,17 @@ export interface HistoryOperationLabel {
 }
 
 /** 节点类型 → 中文名，用于「新增生成图像」这类描述。 */
-function nodeTypeLabel(node: HistorySnapshotLike['nodes'][number]): string {
+function nodeTypeLabel(node: HistorySnapshotLike['nodes'][number], translate: typeof t): string {
   const kind = (node.data?.type as string) || node.type || '';
-  return getNodeTypeConfig(kind).label;
+  return translate(getNodeTypeConfig(kind).label);
 }
 
-function countLabel(nodes: HistorySnapshotLike['nodes']): string {
-  if (nodes.length === 1) return nodeTypeLabel(nodes[0]);
-  const kinds = new Set(nodes.map(nodeTypeLabel));
+function countLabel(nodes: HistorySnapshotLike['nodes'], translate: typeof t): string {
+  if (nodes.length === 1) return nodeTypeLabel(nodes[0], translate);
+  const kinds = new Set(nodes.map((node) => nodeTypeLabel(node, translate)));
   return kinds.size === 1
-    ? `${nodes.length} 个${[...kinds][0]}`
-    : `${nodes.length} 个节点`;
+    ? translate('{count} 个{type}', { count: nodes.length, type: [...kinds][0] })
+    : translate('{count} 个节点', { count: nodes.length });
 }
 
 /** 节点内容是否发生变化（忽略位置与尺寸，这两项另作「移动 / 调整大小」处理）。 */
@@ -61,6 +62,7 @@ function hasContentChange(before: BaseNodeData, after: BaseNodeData): boolean {
 export function describeCanvasChange(
   before: HistorySnapshotLike,
   after: HistorySnapshotLike,
+  translate: typeof t = t,
 ): HistoryOperationLabel {
   const beforeNodes = new Map(before.nodes.map((node) => [node.id, node]));
   const afterNodes = new Map(after.nodes.map((node) => [node.id, node]));
@@ -68,13 +70,13 @@ export function describeCanvasChange(
   const added = after.nodes.filter((node) => !beforeNodes.has(node.id));
   const removed = before.nodes.filter((node) => !afterNodes.has(node.id));
   if (added.length > 0 && removed.length === 0) {
-    return { title: `新增 ${countLabel(added)}`, icon: 'mdi:plus-circle-outline' };
+    return { title: translate('新增 {target}', { target: countLabel(added, translate) }), icon: 'mdi:plus-circle-outline' };
   }
   if (removed.length > 0 && added.length === 0) {
-    return { title: `删除 ${countLabel(removed)}`, icon: 'mdi:trash-can-outline' };
+    return { title: translate('删除 {target}', { target: countLabel(removed, translate) }), icon: 'mdi:trash-can-outline' };
   }
   if (added.length > 0 && removed.length > 0) {
-    return { title: `替换 ${countLabel(removed)}`, icon: 'mdi:swap-horizontal' };
+    return { title: translate('替换 {target}', { target: countLabel(removed, translate) }), icon: 'mdi:swap-horizontal' };
   }
 
   const beforeEdges = new Set(before.edges.map((edge) => edge.id));
@@ -83,23 +85,23 @@ export function describeCanvasChange(
   const removedEdges = [...beforeEdges].filter((id) => !afterEdges.has(id)).length;
   if (addedEdges > 0 && removedEdges === 0) {
     return {
-      title: addedEdges === 1 ? '连接节点' : `新增 ${addedEdges} 条连线`,
+      title: addedEdges === 1 ? translate('连接节点') : translate('新增 {count} 条连线', { count: addedEdges }),
       icon: 'mdi:vector-polyline-plus',
     };
   }
   if (removedEdges > 0 && addedEdges === 0) {
     return {
-      title: removedEdges === 1 ? '断开连线' : `删除 ${removedEdges} 条连线`,
+      title: removedEdges === 1 ? translate('断开连线') : translate('删除 {count} 条连线', { count: removedEdges }),
       icon: 'mdi:vector-polyline-remove',
     };
   }
   if (addedEdges > 0 || removedEdges > 0) {
-    return { title: '调整连线', icon: 'mdi:vector-polyline' };
+    return { title: translate('调整连线'), icon: 'mdi:vector-polyline' };
   }
 
   if (before.groups.length !== after.groups.length) {
     return {
-      title: after.groups.length > before.groups.length ? '新建分组' : '解散分组',
+      title: after.groups.length > before.groups.length ? translate('新建分组') : translate('解散分组'),
       icon: 'mdi:group',
     };
   }
@@ -110,7 +112,7 @@ export function describeCanvasChange(
       || previous.nodeIds.some((id, index) => id !== group.nodeIds[index])
       || previous.name !== group.name;
   });
-  if (groupChanged) return { title: '调整分组', icon: 'mdi:group' };
+  if (groupChanged) return { title: translate('调整分组'), icon: 'mdi:group' };
 
   const contentChanged = after.nodes.filter((node) => {
     const previous = beforeNodes.get(node.id);
@@ -118,7 +120,7 @@ export function describeCanvasChange(
   });
   if (contentChanged.length > 0) {
     return {
-      title: `编辑 ${countLabel(contentChanged)}`,
+      title: translate('编辑 {target}', { target: countLabel(contentChanged, translate) }),
       icon: 'mdi:pencil-outline',
     };
   }
@@ -132,7 +134,7 @@ export function describeCanvasChange(
       || previous.style?.height !== node.style?.height;
   });
   if (resized.length > 0) {
-    return { title: '调整节点大小', icon: 'mdi:resize' };
+    return { title: translate('调整节点大小'), icon: 'mdi:resize' };
   }
 
   const moved = after.nodes.filter((node) => {
@@ -141,8 +143,8 @@ export function describeCanvasChange(
     return previous.position.x !== node.position.x || previous.position.y !== node.position.y;
   });
   if (moved.length > 0) {
-    return { title: '移动节点位置', icon: 'mdi:cursor-move' };
+    return { title: translate('移动节点位置'), icon: 'mdi:cursor-move' };
   }
 
-  return { title: '画布修改', icon: 'mdi:circle-small' };
+  return { title: translate('画布修改'), icon: 'mdi:circle-small' };
 }

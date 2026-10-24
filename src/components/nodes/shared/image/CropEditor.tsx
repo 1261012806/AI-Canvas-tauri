@@ -2,6 +2,7 @@
  * CropEditor — 图像裁切全屏编辑器
  * 基于 react-image-crop，提供自由裁切 + 预设宽高比
  */
+import { useT } from '../../../../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import ReactCrop, {
@@ -68,6 +69,7 @@ function tracePenPath(ctx: CanvasRenderingContext2D, anchors: Anchor[]) {
    CropEditor
    ════════════════════════════════════════════ */
 export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave, operationKey }: CropEditorProps) {
+  const t = useT();
   const imgRef = useRef<HTMLImageElement>(null);
   const cropFrameRef = useRef<number | null>(null);
   const pendingCropRef = useRef<Crop | undefined>(undefined);
@@ -450,14 +452,14 @@ export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave,
             className={`crop-aspect-btn${mode === 'rect' ? ' active' : ''}`}
             onClick={() => { setMode('rect'); setFailure(null); }}
           >
-            矩形
+            {t('矩形')}
           </button>
           <button
             type="button"
             className={`crop-aspect-btn${mode === 'pen' ? ' active' : ''}`}
             onClick={() => { setMode('pen'); setFailure(null); }}
           >
-            钢笔
+            {t('钢笔')}
           </button>
         </div>
         <div className="crop-bar-divider" />
@@ -470,18 +472,18 @@ export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave,
               className={`crop-aspect-btn${aspect === opt.key ? ' active' : ''}`}
               onClick={() => handleAspectChange(opt.key)}
             >
-              {opt.label}
+              {t(opt.label)}
             </button>
           ))
         ) : (
           <>
-            <span className="crop-pen-hint">单击落点 · 拖拽出曲线 · 点首锚点闭合 · 双击切角点</span>
+            <span className="crop-pen-hint">{t('单击落点 · 拖拽出曲线 · 点首锚点闭合 · 双击切角点')}</span>
             <button
               type="button"
               className="crop-aspect-btn"
               onClick={() => { penRef.current?.reset(); setPenReady(false); }}
             >
-              清除
+              {t('清除')}
             </button>
           </>
         )}
@@ -489,26 +491,26 @@ export default function CropEditor({ isOpen, imageUrl, onClose, onStart, onSave,
         <div className="crop-aspect-spacer" />
         {failure && (
           <span className="max-w-[360px] text-xs leading-relaxed text-red-300" role="alert">
-            {failure}
+            {t(failure)}
           </span>
         )}
         <AnimatedButton
           className="crop-action-btn confirm"
-          data-tooltip="确认裁切"
-          aria-label="确认裁切"
+          data-tooltip={t('确认裁切')}
+          aria-label={t('确认裁切')}
           disabled={busy || !activePreviewSource || (mode === 'pen' ? !penReady : !completedCrop)}
           onClick={handleConfirm}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <path d="M3 17l5-5 3 3 8-8" />
           </svg>
-          <span>确认</span>
+          <span>{t('确认')}</span>
         </AnimatedButton>
         <AnimatedButton
           type="button"
           className="crop-aspect-btn crop-aspect-close crop-toolbar-close act-cancel"
-          data-tooltip="关闭 (Esc)"
-          aria-label="关闭"
+          data-tooltip={t('关闭 (Esc)')}
+          aria-label={t('关闭')}
           disabled={busy}
           onClick={handleClose}
         >

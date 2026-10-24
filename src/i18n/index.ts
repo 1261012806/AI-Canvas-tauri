@@ -2,7 +2,7 @@
  * 轻量 i18n：以中文原文为 key，缺失翻译自动回落中文。
  * 不依赖 zustand，4 个独立窗口（主窗口 / chat / assets / video-editor）共用同一份运行时状态。
  */
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import enUS from './locales/en-US/index';
 import jaJP from './locales/ja-JP';
 import koKR from './locales/ko-KR';
@@ -62,7 +62,11 @@ export function setLocale(tag?: string | null): void {
  * 占位符用 `{name}`：t('已导入 {count} 个文件', { count: 3 })
  */
 export function t(text: string, vars?: Record<string, string | number>): string {
-  const translated = DICTS[currentLocale][text] ?? text;
+  return translate(currentLocale, text, vars);
+}
+
+function translate(locale: Locale, text: string, vars?: Record<string, string | number>): string {
+  const translated = DICTS[locale][text] ?? text;
   if (!vars) return translated;
   return translated.replace(/\{(\w+)\}/g, (match, key: string) =>
     key in vars ? String(vars[key]) : match,
@@ -76,6 +80,6 @@ function subscribe(notify: () => void): () => void {
 
 /** 组件内用：语言切换时触发重渲染。 */
 export function useT(): typeof t {
-  useSyncExternalStore(subscribe, getLocale, getLocale);
-  return t;
+  const locale = useSyncExternalStore(subscribe, getLocale, getLocale);
+  return useCallback<typeof t>((text, vars) => translate(locale, text, vars), [locale]);
 }

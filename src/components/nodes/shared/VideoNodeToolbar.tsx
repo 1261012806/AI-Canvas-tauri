@@ -1,6 +1,7 @@
 ﻿/**
  * VideoNodeToolbar 视频节点浮动工具栏 + 编辑态支持
  */
+import { useT } from '../../../i18n';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import type { NodeType, BaseNodeData } from '../../../types';
@@ -41,6 +42,7 @@ interface VideoNodeToolbarProps {
 function VideoNodeToolbar({
   nodeId, onCaptureFrame, onFullscreen, onCopyFile, onReversePrompt, onShowPrompt, isReversingPrompt,
 }: VideoNodeToolbarProps) {
+  const t = useT();
   const nodeType = 'ai-video';
   const edit = useToolbarEdit({ nodeType });
   const registry = edit.registry;
@@ -145,7 +147,7 @@ function VideoNodeToolbar({
               className={`multigrid-menu nodrag${frameMenuBelow ? ' multigrid-menu--below' : ''}`}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="multigrid-menu-title">截取哪一帧</div>
+              <div className="multigrid-menu-title">{t('截取哪一帧')}</div>
               {CAPTURE_FRAME_OPTIONS.map((option) => (
                 <button
                   key={option.position}
@@ -154,7 +156,7 @@ function VideoNodeToolbar({
                   onClick={pickFrame(option.position)}
                 >
                   <Icon icon={option.icon} width={15} height={15} />
-                  <span>{option.label}</span>
+                  <span>{t(option.label)}</span>
                 </button>
               ))}
             </div>
@@ -168,7 +170,7 @@ function VideoNodeToolbar({
       <AnimatedButton
         key={key}
         className={`ftb-btn icon-only ${isPreset ? 'act-preset' : `act-${key}`}`}
-        data-tooltip={isReversing ? '反推中...' : resolvedDef.label}
+        data-tooltip={isReversing ? t('反推中...') : resolvedDef.label}
         aria-label={resolvedDef.label}
         disabled={isReversing}
         onClick={clickHandler}

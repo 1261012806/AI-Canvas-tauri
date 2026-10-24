@@ -92,12 +92,11 @@ describe('locale dictionaries', () => {
     }
   });
 
-  it('has no dictionary key that is missing from en-US', () => {
-    // en-US 是基准字典。日/韩暂缓维护，允许缺词条（回落中文），但不允许出现 en-US 没有的 key。
-    const base = new Set(Object.keys(enUS));
+  it('has the same keys in every supported dictionary', () => {
+    // 三语同步维护；新增界面词条时同时补齐英文、日文和韩文。
+    const base = Object.keys(enUS).sort();
     for (const [name, dict] of Object.entries(DICTS)) {
-      const unknown = Object.keys(dict).filter((key) => !base.has(key));
-      expect(unknown, `${name} 存在 en-US 中没有的 key`).toEqual([]);
+      expect(Object.keys(dict).sort(), `${name} 与 en-US 的 key 集合不一致`).toEqual(base);
     }
   });
 

@@ -8,6 +8,7 @@ import { useAppStore } from '../store/useAppStore';
 import HelpMentionDemo from './HelpMentionDemo';
 import ModalOverlay from './shared/ModalOverlay';
 import PopupCloseButton from './shared/PopupCloseButton';
+import { useT } from '../i18n';
 
 const HELP_CATEGORIES = [
   {
@@ -400,6 +401,7 @@ const HELP_DEMOS = {
 } satisfies Record<HelpCategoryId, HelpDemoConfig>;
 
 function HelpDemo({ categoryId }: { categoryId: HelpCategoryId }) {
+  const t = useT();
   const rootRef = useRef<HTMLElement>(null);
   const [playbackKey, setPlaybackKey] = useState(0);
   const demo = HELP_DEMOS[categoryId];
@@ -468,7 +470,7 @@ function HelpDemo({ categoryId }: { categoryId: HelpCategoryId }) {
   return (
     <section
       ref={rootRef}
-      aria-label={`${demo.caption} 操作演示`}
+      aria-label={t('{caption} 操作演示', { caption: t(demo.caption) })}
       className="help-dialog__demo relative mb-5 overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg/60 px-3 py-3"
     >
       <div
@@ -476,11 +478,11 @@ function HelpDemo({ categoryId }: { categoryId: HelpCategoryId }) {
         aria-hidden="true"
       />
       <div className="relative mb-3 flex items-center justify-between gap-3">
-        <span className="text-[11px] font-medium text-canvas-text-secondary">操作演示</span>
+        <span className="text-[11px] font-medium text-canvas-text-secondary">{t('操作演示')}</span>
         <button
           type="button"
-          aria-label="重新播放操作演示"
-          data-tooltip="重新播放"
+          aria-label={t('重新播放操作演示')}
+          data-tooltip={t('重新播放')}
           onClick={() => setPlaybackKey((key) => key + 1)}
           className="flex h-7 w-7 items-center justify-center rounded-lg text-canvas-text-muted transition-colors hover:bg-canvas-hover hover:text-canvas-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/50"
         >
@@ -496,7 +498,7 @@ function HelpDemo({ categoryId }: { categoryId: HelpCategoryId }) {
               className={`flex h-14 min-w-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border px-1.5 ${step.tone}`}
             >
               <Icon icon={step.icon} width="17" height="17" aria-hidden="true" />
-              <span className="max-w-full truncate text-[10px] font-medium text-canvas-text-secondary">{step.label}</span>
+              <span className="max-w-full truncate text-[10px] font-medium text-canvas-text-secondary">{t(step.label)}</span>
             </div>
             {index < demo.steps.length - 1 ? (
               <div
@@ -513,7 +515,7 @@ function HelpDemo({ categoryId }: { categoryId: HelpCategoryId }) {
         data-help-demo-caption
         className="relative mt-3 text-pretty text-[11px] leading-5 text-canvas-text-secondary"
       >
-        {demo.caption}
+        {t(demo.caption)}
       </p>
     </section>
   );
@@ -524,6 +526,7 @@ interface HelpCenterDialogProps {
 }
 
 export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
+  const t = useT();
   const canShowCanvasGuide = useAppStore((state) => state.currentProjectId !== null
     && state.projectLoadStatus === 'ready' && !state.settingsOpen);
   const [activeHelpCategory, setActiveHelpCategory] = useState<HelpCategoryId>('getting-started');
@@ -536,7 +539,7 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
         <ModalOverlay
           isOpen
           onClose={onClose}
-          ariaLabel="AI Canvas 使用帮助"
+          ariaLabel={t('AI Canvas 使用帮助')}
           className="help-dialog h-[min(620px,calc(100vh-24px))] w-[min(760px,calc(100vw-24px))]"
         >
           <div className="flex min-h-0 flex-1 flex-col">
@@ -546,24 +549,24 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
                   <Icon icon="mdi:book-open-page-variant-outline" width="20" height="20" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-canvas-text">使用帮助</h2>
-                  <p className="mt-0.5 truncate text-xs text-canvas-text-secondary">按场景查找常用操作和注意事项</p>
+                  <h2 className="text-sm font-semibold text-canvas-text">{t('使用帮助')}</h2>
+                  <p className="mt-0.5 truncate text-xs text-canvas-text-secondary">{t('按场景查找常用操作和注意事项')}</p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <button type="button" className="ui-btn ui-btn--sm" disabled={!canShowCanvasGuide}
-                  data-tooltip={canShowCanvasGuide ? '重新查看画布入口和文件保存位置' : '进入画布并关闭设置后可查看入口引导'}
+                  data-tooltip={canShowCanvasGuide ? t('重新查看画布入口和文件保存位置') : t('进入画布并关闭设置后可查看入口引导')}
                   onClick={() => {
                     onClose();
                     useAppStore.getState().setCanvasGuideOpen(true);
-                  }}>入口引导</button>
-                <PopupCloseButton ariaLabel="关闭帮助" onClick={() => onClose()} />
+                  }}>{t('入口引导')}</button>
+                <PopupCloseButton ariaLabel={t('关闭帮助')} onClick={() => onClose()} />
               </div>
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
               <nav
-                aria-label="帮助分类"
+                aria-label={t('帮助分类')}
                 className="help-dialog__nav flex shrink-0 gap-1 overflow-x-auto border-b border-canvas-border p-2 sm:w-48 sm:flex-col sm:overflow-y-auto sm:border-b-0 sm:border-r sm:p-3"
               >
                 {HELP_CATEGORIES.map((category) => {
@@ -587,7 +590,7 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
                         className={isActive ? 'text-indigo-400' : 'text-canvas-text-muted group-hover:text-canvas-text-secondary'}
                         aria-hidden="true"
                       />
-                      <span>{category.label}</span>
+                      <span>{t(category.label)}</span>
                     </button>
                   );
                 })}
@@ -596,8 +599,8 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
               <main className="help-dialog__main min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-4">
                 <div className="mx-auto max-w-xl">
                   <div className="mb-5">
-                    <p className="help-dialog__accent text-[11px] font-medium text-indigo-400">{selectedHelpCategory.label}</p>
-                    <h3 className="mt-1 text-lg font-semibold text-canvas-text">{selectedHelpCategory.summary}</h3>
+                    <p className="help-dialog__accent text-[11px] font-medium text-indigo-400">{t(selectedHelpCategory.label)}</p>
+                    <h3 className="mt-1 text-lg font-semibold text-canvas-text">{t(selectedHelpCategory.summary)}</h3>
                   </div>
 
                   <HelpDemo categoryId={activeHelpCategory} />
@@ -610,14 +613,14 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
                         </span>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h4 className="text-sm font-medium text-canvas-text">{item.title}</h4>
+                            <h4 className="text-sm font-medium text-canvas-text">{t(item.title)}</h4>
                             {'shortcut' in item && item.shortcut ? (
                               <kbd className="rounded-md border border-canvas-border bg-canvas-hover px-1.5 py-0.5 font-sans text-[10px] font-medium text-canvas-text-secondary">
-                                {item.shortcut}
+                                {t(item.shortcut)}
                               </kbd>
                             ) : null}
                           </div>
-                          <p className="mt-1.5 text-xs leading-5 text-canvas-text-secondary">{item.description}</p>
+                          <p className="mt-1.5 text-xs leading-5 text-canvas-text-secondary">{t(item.description)}</p>
                         </div>
                       </li>
                     ))}
@@ -627,7 +630,7 @@ export default function HelpCenterDialog({ onClose }: HelpCenterDialogProps) {
 
                   <div className="mt-5 flex items-start gap-2 border-t border-canvas-border pt-4 text-xs leading-5 text-canvas-text-muted">
                     <Icon icon="mdi:keyboard-outline" width="16" height="16" className="mt-0.5 shrink-0" aria-hidden="true" />
-                    <p>完整快捷键可在“设置 &gt; 快捷键”中查看；按 Esc 可随时关闭当前弹窗或菜单。</p>
+                    <p>{t('完整快捷键可在“设置 > 快捷键”中查看；按 Esc 可随时关闭当前弹窗或菜单。')}</p>
                   </div>
                 </div>
               </main>

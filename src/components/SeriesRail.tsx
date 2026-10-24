@@ -478,8 +478,8 @@ export default function SeriesRail() {
 
       <TextEditorDialog
         isOpen={editorDraft !== null}
-        title="剧本"
-        hint={`${series.name} · 整部剧共用`}
+        title={t('剧本')}
+        hint={t('{name} · 整部剧共用', { name: series.name })}
         draft={editorDraft ?? ''}
         onDraftChange={setEditorDraft}
         onClose={() => setEditorDraft(null)}

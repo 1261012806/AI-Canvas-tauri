@@ -1146,7 +1146,7 @@ function AINodeDialog() {
           />
         )}
         {data.status === 'loading' && !performanceMode && (
-          <LazyLoadBoundary label="生成边框特效" errorFallback={null}>
+          <LazyLoadBoundary label={t('生成边框特效')} errorFallback={null}>
             <Suspense fallback={null}>
               <BorderBeam
                 className="ai-dialog-beam"
@@ -1199,27 +1199,27 @@ function AINodeDialog() {
           {workflowApiTask && data.status !== 'loading' && <WorkflowApiTaskStatus key={`${activeNodeId}:${workflowApiTask.workflowApi?.attemptId}`} task={workflowApiTask} />}
           {(data.mediaTaskState || data.videoTaskState === 'paused') && <div className="m-2"><MediaTaskStatus nodeId={activeNodeId} /></div>}
           {cloudTask && data.status !== 'loading' && <div className="ui-card m-2 flex flex-col gap-2 p-3 text-xs">
-            <p>{cloudTask.taskId ? `任务 ${(cloudTask.taskIds?.length ? cloudTask.taskIds : [cloudTask.taskId]).join('、')} 已保留，可以继续查询。${cloudTask.runninghubSubmissionUncertain ? '另有提交状态未知，请到平台核对后再清除恢复记录。' : ''}` : '提交状态未知。请到 RunningHub 平台核对，补充任务 ID 后继续查询。'}</p>
-            {!cloudTask.taskId && <input aria-label="RunningHub 任务 ID" className="ui-input w-full" value={recoveryInput.nodeId === activeNodeId ? recoveryInput.taskId : ''} inputMode="numeric" onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: event.target.value, confirmed: false })} />}
+            <p>{cloudTask.taskId ? <>{t('任务 {ids} 已保留，可以继续查询。', { ids: (cloudTask.taskIds?.length ? cloudTask.taskIds : [cloudTask.taskId]).join('、') })}{cloudTask.runninghubSubmissionUncertain && t('另有提交状态未知，请到平台核对后再清除恢复记录。')}</> : t('提交状态未知。请到 RunningHub 平台核对，补充任务 ID 后继续查询。')}</p>
+            {!cloudTask.taskId && <input aria-label={t('RunningHub 任务 ID')} className="ui-input w-full" value={recoveryInput.nodeId === activeNodeId ? recoveryInput.taskId : ''} inputMode="numeric" onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: event.target.value, confirmed: false })} />}
             <div className="flex flex-wrap gap-2">
               <button type="button" className="ui-btn ui-btn--sm" onClick={() => {
                 if (!cloudTask.taskId) {
-                  if (recoveryInput.nodeId !== activeNodeId || !/^\d{1,30}$/.test(recoveryInput.taskId.trim())) { showToast('请填写正确的任务 ID', 'error'); return; }
+                  if (recoveryInput.nodeId !== activeNodeId || !/^\d{1,30}$/.test(recoveryInput.taskId.trim())) { showToast(t('请填写正确的任务 ID'), 'error'); return; }
                   updatePendingTask(activeNodeId, { taskId: recoveryInput.taskId.trim(), taskIds: [recoveryInput.taskId.trim()], submitted: true, runninghubRecoveryState: 'disconnected', runninghubSubmissionUncertain: false }, '');
                 }
-                void resumeRunningHubNodeTask(activeNodeId).catch((error: unknown) => showToast(error instanceof Error ? error.message : '恢复查询失败', 'error'));
-              }}>继续查询 / 保存</button>
-              {cloudTask.taskId && <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>请求远端取消</button>}
+                void resumeRunningHubNodeTask(activeNodeId).catch((error: unknown) => showToast(error instanceof Error ? error.message : t('恢复查询失败'), 'error'));
+              }}>{t('继续查询 / 保存')}</button>
+              {cloudTask.taskId && <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={() => { void onCancelGeneration(); }}>{t('请求远端取消')}</button>}
             </div>
-            <details><summary className="cursor-pointer text-canvas-text-secondary">在平台确认任务结束后解除限制</summary>
-              <label className="my-2 flex gap-2"><input type="checkbox" checked={recoveryInput.nodeId === activeNodeId && recoveryInput.confirmed} onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: '', confirmed: event.target.checked })} />我已在平台确认任务未提交或已经结束</label>
-              <button type="button" className="ui-btn ui-btn--sm" disabled={recoveryInput.nodeId !== activeNodeId || !recoveryInput.confirmed} onClick={() => { removePendingTask(activeNodeId, cloudTask.taskId); updateNodeDataTransient(activeNodeId, { status: 'idle', error: undefined, runninghubStage: undefined }); setRecoveryInput({ nodeId: '', taskId: '', confirmed: false }); }}>清除本地恢复记录</button>
+            <details><summary className="cursor-pointer text-canvas-text-secondary">{t('在平台确认任务结束后解除限制')}</summary>
+              <label className="my-2 flex gap-2"><input type="checkbox" checked={recoveryInput.nodeId === activeNodeId && recoveryInput.confirmed} onChange={(event) => setRecoveryInput({ nodeId: activeNodeId, taskId: '', confirmed: event.target.checked })} />{t('我已在平台确认任务未提交或已经结束')}</label>
+              <button type="button" className="ui-btn ui-btn--sm" disabled={recoveryInput.nodeId !== activeNodeId || !recoveryInput.confirmed} onClick={() => { removePendingTask(activeNodeId, cloudTask.taskId); updateNodeDataTransient(activeNodeId, { status: 'idle', error: undefined, runninghubStage: undefined }); setRecoveryInput({ nodeId: '', taskId: '', confirmed: false }); }}>{t('清除本地恢复记录')}</button>
             </details>
           </div>}
-          {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">全部产物 · {cloudOutputs.length}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
-            <p className="mb-1 text-canvas-text-secondary">产物 {index + 1}{output.nodeId ? ` · 节点 ${output.nodeId}` : ''}</p>
-            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={`产物 ${index + 1}`} /> : output.kind === 'video'
-              ? <ResourceVideoPreview src={output.url} name={`产物 ${index + 1}`} className="max-h-48 w-full"
+          {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">{t('全部产物 · {count}', { count: cloudOutputs.length })}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
+            <p className="mb-1 text-canvas-text-secondary">{t('产物 {index}', { index: index + 1 })}{output.nodeId ? t(' · 节点 {id}', { id: output.nodeId }) : ''}</p>
+            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={t('产物 {index}', { index: index + 1 })} /> : output.kind === 'video'
+              ? <ResourceVideoPreview src={output.url} name={t('产物 {index}', { index: index + 1 })} className="max-h-48 w-full"
                   projectId={currentProjectId ?? undefined}
                   expanded={cloudVideoPreview.expandedId === `${output.url}:${index}`}
                   onExpandedChange={(expanded) => cloudVideoPreview.setExpanded(expanded ? `${output.url}:${index}` : null)} />
@@ -1337,7 +1337,7 @@ function AINodeDialog() {
       <ModalOverlay
         isOpen={billingOpen}
         onClose={() => setBillingOpen(false)}
-        ariaLabel="火山方舟用量记录"
+        ariaLabel={t('火山方舟用量记录')}
         className="h-[min(860px,calc(100dvh-24px))] w-[min(1120px,calc(100vw-24px))]"
         zIndex={270}
         closeOnBackdrop={false}
@@ -1345,15 +1345,15 @@ function AINodeDialog() {
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-canvas-border px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <Icon icon="lucide:receipt-text" width="19" className="shrink-0 text-canvas-text-secondary" />
-            <h2 className="truncate text-base font-semibold text-canvas-text">火山方舟用量记录</h2>
+            <h2 className="truncate text-base font-semibold text-canvas-text">{t('火山方舟用量记录')}</h2>
           </div>
           <PopupCloseButton
-            ariaLabel="关闭用量记录"
-            title="关闭"
+            ariaLabel={t('关闭用量记录')}
+            title={t('关闭')}
             onClick={() => setBillingOpen(false)}
           />
         </div>
-        {billingOpen && <Suspense fallback={<div className="p-5 text-sm text-canvas-text-secondary">正在加载用量记录…</div>}><VolcengineBillingSettings /></Suspense>}
+        {billingOpen && <Suspense fallback={<div className="p-5 text-sm text-canvas-text-secondary">{t('正在加载用量记录…')}</div>}><VolcengineBillingSettings /></Suspense>}
       </ModalOverlay>
     </>,
     document.body,

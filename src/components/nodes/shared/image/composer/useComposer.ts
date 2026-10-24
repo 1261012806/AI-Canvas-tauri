@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { generateId } from '../../../../../store/useAppStore';
 import { loadSafeImage } from '../imageUtils';
+import { t } from '../../../../../i18n';
 import {
   estimateRgbaBytes,
   getComposerRetainedSourceBudgetError,
@@ -229,7 +230,7 @@ export function useComposer() {
     pushHistory();
     const copyId = newId();
     const src = layersRef.current[idx];
-    const copy = { ...src, id: copyId, name: `${src.name} 副本`, x: src.x + 24, y: src.y + 24 } as Layer;
+    const copy = { ...src, id: copyId, name: t('{name} 副本', { name: src.name }), x: src.x + 24, y: src.y + 24 } as Layer;
     const next = layersRef.current.slice();
     next.splice(idx + 1, 0, copy);
     commitLayers(next);
@@ -302,7 +303,7 @@ export function useComposer() {
   /** 居中放入一张图片图层（若超出画布按比例缩小适配） */
   const addImageLayer = useCallback(async (
     src: string,
-    label = '图片',
+    label = t('图片'),
     onLoaded?: (image: HTMLImageElement) => void,
   ) => enqueueImageOperation(async () => {
     const img = await loadImageForLayer(src);
@@ -345,7 +346,7 @@ export function useComposer() {
   }), [enqueueImageOperation, loadImageForLayer, updateLayer]);
 
   /** 浏览器 File/剪贴板用 object URL，避免把整张图片再膨胀成 Base64 字符串。 */
-  const addImageFileLayer = useCallback(async (file: File, label = file.name || '图片') => {
+  const addImageFileLayer = useCallback(async (file: File, label = file.name || t('图片')) => {
     const src = URL.createObjectURL(file);
     ownedObjectUrlsRef.current.add(src);
     pendingOwnedObjectUrlsRef.current.add(src);
@@ -360,7 +361,7 @@ export function useComposer() {
     }
   }, [addImageLayer, releaseUnreachableOwnedObjectUrls]);
 
-  const addText = useCallback((text = '双击编辑文字', label = '文字') => {
+  const addText = useCallback((text = t('双击编辑文字'), label = t('文字')) => {
     const cv = canvasRef.current;
     const id = newId();
     addLayer({
@@ -389,7 +390,7 @@ export function useComposer() {
     const id = newId();
     if (type === 'rect' || type === 'ellipse') {
       addLayer({
-        ...baseProps(id, type === 'rect' ? '矩形' : '椭圆', cx, cy),
+        ...baseProps(id, t(type === 'rect' ? '矩形' : '椭圆'), cx, cy),
         type,
         width: s,
         height: s * 0.7,
@@ -400,7 +401,7 @@ export function useComposer() {
       });
     } else {
       addLayer({
-        ...baseProps(id, type === 'line' ? '直线' : '箭头', cx - s / 2, cy),
+        ...baseProps(id, t(type === 'line' ? '直线' : '箭头'), cx - s / 2, cy),
         type,
         points: [0, 0, s, 0],
         stroke: '#ffffff',
@@ -414,7 +415,7 @@ export function useComposer() {
     if (points.length < 4) return;
     const id = newId();
     addLayer({
-      ...baseProps(id, erase ? '橡皮' : '画笔', 0, 0),
+      ...baseProps(id, t(erase ? '橡皮' : '画笔'), 0, 0),
       type: 'brush',
       points,
       stroke: brush.color,

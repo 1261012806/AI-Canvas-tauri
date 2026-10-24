@@ -5,6 +5,7 @@ import { getComfyRefmodLoaders, isComfyRefmodSlotEmpty, isComfyRefmodSlotLinked 
 import ModalOverlay from '../../shared/ModalOverlay';
 import PopupCloseButton from '../../shared/PopupCloseButton';
 import Select from '../../shared/Select';
+import { useT } from '../../../i18n';
 
 interface Props {
   workflow: WorkflowDefinition;
@@ -24,11 +25,12 @@ interface Props {
 
 /** 只编辑一个引用，目标槽位与原值仍交给 fresh prepare 最终复核。 */
 export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, initial, bindingMode = false, stepLabel, existing, manual, loading, error, refresh, onClose, onApply }: Props) {
+  const t = useT();
   const graph = useMemo(() => {
     if (!catalog) return { loaders: [], error: '' };
     try { return { loaders: getComfyRefmodLoaders(workflow, catalog).filter((loader) => loader.loaderType === asset.loaderType), error: '' }; }
-    catch (cause) { return { loaders: [], error: cause instanceof Error ? cause.message : '无法读取工作流槽位' }; }
-  }, [catalog, workflow, asset.loaderType]);
+    catch (cause) { return { loaders: [], error: cause instanceof Error ? cause.message : t('无法读取工作流槽位') }; }
+  }, [catalog, workflow, asset.loaderType, t]);
   const slots = graph.loaders.flatMap((loader) => loader.slots.map((slot) => ({
     key: `${loader.nodeId}:${slot.slot}`, loader, slot,
     linked: isComfyRefmodSlotLinked(loader, slot),
@@ -47,23 +49,23 @@ export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, i
   const original = target ? target.loader.inputs[target.slot.fileField] : undefined;
   const serverMismatch = !!catalog && (asset.serverId !== catalog.serverId || asset.endpointFingerprint !== catalog.endpointFingerprint);
   const occupiedMessage = target?.occupied ? manual.some((item) => item.loaderNodeId === target.loader.nodeId && item.slot === target.slot.slot)
-    ? '该槽位已有手工绑定，请先在 ComfyUI 角色的“已绑定”列表移除，再调整提示词引用。'
-    : '该槽位已有另一角色胶囊，请先删除冲突胶囊或选择其他槽位。' : '';
+    ? t('该槽位已有手工绑定，请先在 ComfyUI 角色的“已绑定”列表移除，再调整提示词引用。')
+    : t('该槽位已有另一角色胶囊，请先删除冲突胶囊或选择其他槽位。') : '';
   const canApply = !!catalog && !!target && !target.linked && !target.occupied && target.slot.allowedNames.includes(asset.fileName)
     && !catalog.failedLoaderTypes?.includes(asset.loaderType) && !serverMismatch && !loading && !applying;
 
-  return <ModalOverlay isOpen onClose={onClose} ariaLabel="ComfyUI 角色设置" className="w-[min(92vw,26rem)]" zIndex={10100} closeOnBackdrop={false} motionPreset="quick">
+  return <ModalOverlay isOpen onClose={onClose} ariaLabel={t('ComfyUI 角色设置')} className="w-[min(92vw,26rem)]" zIndex={10100} closeOnBackdrop={false} motionPreset="quick">
     <div className="flex items-start justify-between gap-2 border-b border-canvas-border p-3" data-reference-preview-open="">
-      <div className="min-w-0"><h3 className="ui-title">ComfyUI 角色设置</h3>{stepLabel && <p className="mt-1 text-xs text-canvas-text-muted">{stepLabel}</p>}<p className="mt-1 break-words text-xs text-canvas-text-secondary">{asset.name}</p></div>
-      <PopupCloseButton onClick={onClose} ariaLabel="关闭角色设置" />
+      <div className="min-w-0"><h3 className="ui-title">{t('ComfyUI 角色设置')}</h3>{stepLabel && <p className="mt-1 text-xs text-canvas-text-muted">{stepLabel}</p>}<p className="mt-1 break-words text-xs text-canvas-text-secondary">{asset.name}</p></div>
+      <PopupCloseButton onClick={onClose} ariaLabel={t('关闭角色设置')} />
     </div>
     <div className="space-y-3 p-3">
       <p className="break-all text-xs text-canvas-text-muted">{asset.fileName}</p>
-      <label className="ui-field"><span className="ui-label">工作流加载槽位</span>
-        <Select aria-label="RefMod 目标槽位" value={targetKey} disabled={loading || applying}
-          options={[{ value: '', label: graph.loaders.length > 1 ? '有多个加载节点，请明确选择槽位' : '请选择可用槽位' }, ...slots.map((item) => ({
+      <label className="ui-field"><span className="ui-label">{t('工作流加载槽位')}</span>
+        <Select aria-label={t('RefMod 目标槽位')} value={targetKey} disabled={loading || applying}
+          options={[{ value: '', label: graph.loaders.length > 1 ? t('有多个加载节点，请明确选择槽位') : t('请选择可用槽位') }, ...slots.map((item) => ({
             value: item.key,
-            label: `${item.loader.label} / 槽位 ${item.slot.slot}${item.linked ? ' · 上游连线' : item.occupied ? ' · 已被引用占用' : ''}`,
+            label: t('{loader} / 槽位 {slot}{state}', { loader: item.loader.label, slot: item.slot.slot, state: item.linked ? t(' · 上游连线') : item.occupied ? t(' · 已被引用占用') : '' }),
             disabled: item.linked || item.occupied || !item.slot.allowedNames.includes(asset.fileName),
           }))]}
           onChange={(key) => {
@@ -72,32 +74,32 @@ export default function ComfyRefmodMentionSettings({ workflow, catalog, asset, i
             if (next) setStrength((value) => Math.min(next.slot.strengthMax ?? 10, Math.max(next.slot.strengthMin ?? 0, value)));
           }} />
       </label>
-      {target && <p className="break-all text-xs text-canvas-text-muted">原值：{typeof original === 'string' && original ? original : '空槽'}{explicit && !isComfyRefmodSlotEmpty(target.loader, target.slot) && original !== asset.fileName ? '；本引用将替换该槽位原模型。' : ''}</p>}
-      {target?.slot.strengthField ? <label className="ui-field"><span className="ui-label">参考强度</span>
-        <input type="number" className="ui-input" aria-label="RefMod 参考强度" value={strength} disabled={applying}
+      {target && <p className="break-all text-xs text-canvas-text-muted">{t('原值：{value}', { value: typeof original === 'string' && original ? original : t('空槽') })}{explicit && !isComfyRefmodSlotEmpty(target.loader, target.slot) && original !== asset.fileName ? t('；本引用将替换该槽位原模型。') : ''}</p>}
+      {target?.slot.strengthField ? <label className="ui-field"><span className="ui-label">{t('参考强度')}</span>
+        <input type="number" className="ui-input" aria-label={t('RefMod 参考强度')} value={strength} disabled={applying}
           min={target.slot.strengthMin ?? 0} max={target.slot.strengthMax ?? 10} step={target.slot.strengthStep ?? 0.01}
           onChange={(event) => { if (event.target.value !== '') setStrength(Number(event.target.value)); }} />
-      </label> : asset.loaderType === 'refmods-lab' && <p className="text-xs text-canvas-text-muted">Lab 参考强度沿用工作流内的 Combine 设置。</p>}
-      {(issue || occupiedMessage || serverMismatch || error || graph.error) && <p className="ui-alert ui-alert--warning text-xs" role="alert">{issue || occupiedMessage || (serverMismatch ? '参考包所属服务器已改变，请删除后在当前服务器重新选择' : error || graph.error)}</p>}
-      <p className="text-xs text-canvas-text-muted">{bindingMode ? '手工绑定保存在此视频节点中，可在已绑定列表编辑或移除；只修改执行副本，连线控制的槽位请在 ComfyUI 中调整。' : '只修改本次执行副本。删除提示词中的角色胶囊即可取消引用；连线控制的槽位请在 ComfyUI 中调整。'}</p>
+      </label> : asset.loaderType === 'refmods-lab' && <p className="text-xs text-canvas-text-muted">{t('Lab 参考强度沿用工作流内的 Combine 设置。')}</p>}
+      {(issue || occupiedMessage || serverMismatch || error || graph.error) && <p className="ui-alert ui-alert--warning text-xs" role="alert">{issue || occupiedMessage || (serverMismatch ? t('参考包所属服务器已改变，请删除后在当前服务器重新选择') : error || graph.error)}</p>}
+      <p className="text-xs text-canvas-text-muted">{bindingMode ? t('手工绑定保存在此视频节点中，可在已绑定列表编辑或移除；只修改执行副本，连线控制的槽位请在 ComfyUI 中调整。') : t('只修改本次执行副本。删除提示词中的角色胶囊即可取消引用；连线控制的槽位请在 ComfyUI 中调整。')}</p>
     </div>
     <div className="flex items-center justify-end gap-2 border-t border-canvas-border p-3">
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost mr-auto" disabled={loading || applying} onClick={refresh}>{loading ? '读取中…' : '刷新目录'}</button>
-      <button type="button" className="ui-btn ui-btn--sm ui-btn--secondary" onClick={onClose}>取消</button>
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost mr-auto" disabled={loading || applying} onClick={refresh}>{loading ? t('读取中…') : t('刷新目录')}</button>
+      <button type="button" className="ui-btn ui-btn--sm ui-btn--secondary" onClick={onClose}>{t('取消')}</button>
       <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!canApply} onClick={() => {
         if (!target || !canApply) return;
         const minimum = target.slot.strengthMin ?? 0;
         const maximum = target.slot.strengthMax ?? 10;
-        if (!Number.isFinite(strength) || strength < minimum || strength > maximum) { setIssue(`强度必须在 ${minimum} 至 ${maximum} 之间`); return; }
-        if (original !== undefined && typeof original !== 'string') { setIssue('原槽位不是文件名，请在 ComfyUI 中检查'); return; }
+        if (!Number.isFinite(strength) || strength < minimum || strength > maximum) { setIssue(t('强度必须在 {min} 至 {max} 之间', { min: minimum, max: maximum })); return; }
+        if (original !== undefined && typeof original !== 'string') { setIssue(t('原槽位不是文件名，请在 ComfyUI 中检查')); return; }
         setApplying(true); setIssue('');
         void onApply({ serverId: asset.serverId, endpointFingerprint: asset.endpointFingerprint, loaderType: asset.loaderType,
           fileName: asset.fileName, strength, loaderNodeId: target.loader.nodeId, slot: target.slot.slot,
           workflowId: workflow.id, originalFileName: typeof original === 'string' ? original : '',
           ...(explicit ? { replaceExisting: true } : {}),
-        }).catch((cause) => setIssue(cause instanceof Error ? cause.message : '设置角色引用失败'))
+        }).catch((cause) => setIssue(cause instanceof Error ? cause.message : t('设置角色引用失败')))
           .finally(() => setApplying(false));
-      }}>{applying ? '校验中…' : bindingMode ? initial ? '更新绑定' : '确认槽位' : initial ? '更新引用' : '插入引用'}</button>
+      }}>{applying ? t('校验中…') : bindingMode ? initial ? t('更新绑定') : t('确认槽位') : initial ? t('更新引用') : t('插入引用')}</button>
     </div>
   </ModalOverlay>;
 }

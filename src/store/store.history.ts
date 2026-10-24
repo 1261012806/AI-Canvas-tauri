@@ -1,4 +1,5 @@
-﻿/**
+import { t } from '../i18n';
+/**
  * History slice — undo / redo with capped history stack
  */
 import type { Node, Edge } from '@xyflow/react';
@@ -377,7 +378,7 @@ export const createHistorySlice: StateCreator<AppState, [], [], HistorySlice> = 
       void Promise.all(revivedPaths.map((filePath) => fileService.isFileMissing(filePath)))
         .then((missing) => {
           const lost = missing.filter(Boolean).length;
-          if (lost > 0) get().showToast(`已撤销，但 ${lost} 个媒体文件未能还原`, 'error');
+          if (lost > 0) get().showToast(t('已撤销，但 {count} 个媒体文件未能还原', { count: lost }), 'error');
         })
         .catch(() => {});
     }

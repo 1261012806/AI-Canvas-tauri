@@ -1,4 +1,5 @@
 import Select from '../../../shared/Select';
+import { t, useT } from '../../../../i18n';
 import { Icon } from '@iconify/react';
 import { getLocale } from '../../../../i18n';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
@@ -49,7 +50,7 @@ function escapeHtmlAttribute(value: string): string {
 function createPluginUiFrameDocument(sessionSrc: string): PluginUiFrameDocument {
   const sessionUrl = new URL(sessionSrc, window.location.href);
   const sessionParameters = sessionUrl.searchParams.toString();
-  if (!sessionParameters) throw new Error('插件界面会话参数缺失');
+  if (!sessionParameters) throw new Error(t('插件界面会话参数缺失'));
 
   const bootstrapUrl = escapeHtmlAttribute(
     new URL('/plugin-ui-bootstrap.js', window.location.href).href,
@@ -62,7 +63,7 @@ function createPluginUiFrameDocument(sessionSrc: string): PluginUiFrameDocument 
   ).replace("script-src 'self' ", `script-src 'nonce-${nonce}' `);
   if (!documentHtml.includes(`nonce="${nonce}"`)
     || !documentHtml.includes(`script-src 'nonce-${nonce}' `)) {
-    throw new Error('插件界面宿主页无效');
+    throw new Error(t('插件界面宿主页无效'));
   }
 
   const objectUrl = URL.createObjectURL(new Blob([documentHtml], {
@@ -96,6 +97,7 @@ function initialPluginParameters(pluginTool: AvailableNodePluginTool): Record<st
 }
 
 export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: NodePluginToolDialogProps) {
+  useT();
   const showToast = useAppStore((state) => state.showToast);
   const config = useAppStore((state) => state.config);
   const dialog = pluginTool.tool.dialog;
@@ -148,7 +150,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
         if (cancelled) return;
         setUiLoading(false);
         setFrameSession(null);
-        setError('找不到已安装的插件');
+        setError(t('找不到已安装的插件'));
       });
       return () => {
         cancelled = true;
@@ -192,7 +194,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       if (cancelled) return;
       setUiLoading(false);
       setFrameSession(null);
-      const message = cause instanceof Error ? cause.message : '插件界面加载失败';
+      const message = cause instanceof Error ? cause.message : t('插件界面加载失败');
       setError(message);
       showToast(message, 'error');
     });
@@ -213,7 +215,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
     if (!supportsNativeWindow || !dialog.ui || windowUnavailableReason || openingWindowRef.current) return;
     const plugin = useAppStore.getState().installedPlugins.find((item) => item.id === pluginTool.pluginId);
     if (!plugin) {
-      showToast('找不到已安装的插件', 'error');
+      showToast(t('找不到已安装的插件'), 'error');
       return;
     }
     openingWindowRef.current = true;
@@ -228,7 +230,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       frameSessionRef.current = null;
       onCloseRef.current();
     } catch (cause) {
-      showToast(cause instanceof Error ? cause.message : '插件窗口打开失败', 'error');
+      showToast(cause instanceof Error ? cause.message : t('插件窗口打开失败'), 'error');
     } finally {
       openingWindowRef.current = false;
       setOpeningWindow(false);
@@ -247,7 +249,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       const value = values[field.id];
       if (field.type === 'boolean') {
         if (strict && field.required && value !== true) {
-          setError(`请勾选“${field.label}”`);
+          setError(t('请勾选“{label}”', { label: field.label }));
           return null;
         }
         parameters[field.id] = value === true;
@@ -255,14 +257,14 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       }
       const textValue = typeof value === 'string' ? value : '';
       if (strict && field.required && !textValue.trim()) {
-        setError(`请填写“${field.label}”`);
+        setError(t('请填写“{label}”', { label: field.label }));
         return null;
       }
       if (!textValue && !field.required) continue;
       if (field.type === 'number') {
         const numberValue = Number(textValue);
         if (!Number.isFinite(numberValue)) {
-          setError(`“${field.label}”必须是有效数字`);
+          setError(t('“{label}”必须是有效数字', { label: field.label }));
           return null;
         }
         parameters[field.id] = numberValue;
@@ -285,7 +287,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
       await executeNodePluginTool(pluginTool, nodeId, parameters);
       onClose();
     } catch (executionError) {
-      const message = executionError instanceof Error ? executionError.message : '插件工具执行失败';
+      const message = executionError instanceof Error ? executionError.message : t('插件工具执行失败');
       setError(message);
       showToast(message, 'error');
     } finally {
@@ -322,8 +324,8 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
               <button
                 type="button"
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent p-0 text-canvas-text-secondary transition-colors hover:text-canvas-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canvas-border disabled:cursor-not-allowed disabled:opacity-40"
-                aria-label="在独立窗口打开"
-                title={windowUnavailableReason || '在独立窗口打开（成功后关闭弹窗，未保存编辑不迁移）'}
+                aria-label={t('在独立窗口打开')}
+                title={windowUnavailableReason || t('在独立窗口打开（成功后关闭弹窗，未保存编辑不迁移）')}
                 disabled={openingWindow || Boolean(windowUnavailableReason)}
                 onClick={() => void openInWindow()}
               >
@@ -343,7 +345,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
           {uiLoading && (
             <div className="flex h-full items-center justify-center gap-2 text-xs text-canvas-text-secondary">
               <Icon icon="lucide:loader-circle" width={16} height={16} className="animate-spin" />
-              正在加载插件界面…
+              {t('正在加载插件界面…')}
             </div>
           )}
           {!uiLoading && error && (
@@ -445,7 +447,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
                         setValues((current) => ({ ...current, [field.id]: nextValue }));
                       }}
                     >
-                      <option value="">{field.placeholder || '请选择'}</option>
+                      <option value="">{field.placeholder || t('请选择')}</option>
                       {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </Select>
                   ) : field.type === 'model' ? (
@@ -460,7 +462,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
                       }}
                     >
                       <option value="">
-                        {models.length > 0 ? (field.placeholder || '选择可调用模型') : '暂无可调用模型'}
+                        {models.length > 0 ? (field.placeholder || t('选择可调用模型')) : t('暂无可调用模型')}
                       </option>
                       {models
                         .filter((model) => !field.modelCategories || field.modelCategories.includes(model.category))
@@ -487,7 +489,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
           ))}
           {dialog.fields.length === 0 && (
             <div className="rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2.5 text-xs text-canvas-text-secondary">
-              确认后将对当前节点执行此插件工具。
+              {t('确认后将对当前节点执行此插件工具。')}
             </div>
           )}
           {error && (
@@ -504,7 +506,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
             disabled={busy}
             onClick={close}
           >
-            取消
+            {t('取消')}
           </AnimatedButton>
           <AnimatedButton
             type="submit"
@@ -512,7 +514,7 @@ export default function NodePluginToolDialog({ pluginTool, nodeId, onClose }: No
             disabled={busy}
           >
             {busy && <Icon icon="lucide:loader-circle" width={14} height={14} className="animate-spin" />}
-            {busy ? '执行中…' : (dialog.submitLabel || '执行')}
+            {busy ? t('执行中…') : (dialog.submitLabel || t('执行'))}
           </AnimatedButton>
         </footer>
       </form>

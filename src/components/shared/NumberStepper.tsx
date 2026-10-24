@@ -11,6 +11,7 @@
  * 6. 等宽数字（tabular-nums）与三档尺寸（sm: 26px / md: 32px / lg: 40px）
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type WheelEvent } from 'react';
+import { useT } from '../../i18n';
 
 export interface NumberStepperProps {
   value: number;
@@ -76,6 +77,7 @@ export default function NumberStepper({
   title,
   onScrubStateChange,
 }: NumberStepperProps) {
+  const t = useT();
   const precision = getPrecision(step, precisionProp);
 
   const clamp = useCallback((v: number): number => {
@@ -299,7 +301,7 @@ export default function NumberStepper({
       style={style}
       title={title}
       role="group"
-      aria-label={ariaLabel || '数字步进微调'}
+      aria-label={ariaLabel || t('数字步进微调')}
     >
       {/* 拖拽微调与数值键入区域 */}
       <div
@@ -307,7 +309,7 @@ export default function NumberStepper({
         className="ui-stepper__drag"
         onMouseDown={handleDragMouseDown}
         onWheel={handleWheel}
-        title="双击或点击编辑，左右拖拽可平滑微调数值"
+        title={t('双击或点击编辑，左右拖拽可平滑微调数值')}
       >
         <input
           ref={inputRef}
@@ -339,7 +341,7 @@ export default function NumberStepper({
         <button
           type="button"
           className="ui-stepper__btn ui-stepper__btn--up"
-          title={`增加 ${step} (Shift+点击 +${step * shiftMultiplier})`}
+          title={t('增加 {step} (Shift+点击 +{largeStep})', { step, largeStep: step * shiftMultiplier })}
           disabled={!canIncrease}
           tabIndex={-1}
           onPointerDown={(e) => startRepeat(1, e.shiftKey)}
@@ -355,7 +357,7 @@ export default function NumberStepper({
         <button
           type="button"
           className="ui-stepper__btn ui-stepper__btn--down"
-          title={`减少 ${step} (Shift+点击 -${step * shiftMultiplier})`}
+          title={t('减少 {step} (Shift+点击 -{largeStep})', { step, largeStep: step * shiftMultiplier })}
           disabled={!canDecrease}
           tabIndex={-1}
           onPointerDown={(e) => startRepeat(-1, e.shiftKey)}

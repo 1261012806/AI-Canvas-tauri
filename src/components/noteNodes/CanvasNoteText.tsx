@@ -4,6 +4,7 @@
  * 提交文本通过 onCommit 回写到笔记数据。
  */
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useT } from '../../i18n';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import type { CanvasNoteData } from '../../types';
 
@@ -21,6 +22,7 @@ const FONT_FAMILIES = {
 } as const;
 
 function CanvasNoteText({ nodeId, note, onCommit }: CanvasNoteTextProps) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.text ?? '');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -80,7 +82,7 @@ function CanvasNoteText({ nodeId, note, onCommit }: CanvasNoteTextProps) {
         onBlur={finish}
         onKeyDown={handleKeyDown}
         onPointerDown={(event) => event.stopPropagation()}
-        aria-label="编辑画布笔记文本"
+        aria-label={t('编辑画布笔记文本')}
         spellCheck={false}
       />
     );
@@ -94,9 +96,9 @@ function CanvasNoteText({ nodeId, note, onCommit }: CanvasNoteTextProps) {
         event.stopPropagation();
         beginEditing();
       }}
-      title="双击编辑文本"
+      title={t('双击编辑文本')}
     >
-      {note.text || '双击输入文本'}
+      {note.text || t('双击输入文本')}
     </div>
   );
 }

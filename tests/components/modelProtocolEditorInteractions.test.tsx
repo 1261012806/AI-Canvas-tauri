@@ -35,6 +35,7 @@ vi.mock('react', async () => ({
   useLayoutEffect: (effect: () => void) => { driver.layoutEffects.push(effect); },
   useId: () => `protocol-test-${driver.scope!.index++}`,
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+  useCallback: <T,>(callback: T) => callback,
 }));
 vi.mock('../../src/services/ai/modelProtocolTestSession', async (original) => ({
   ...await original<typeof import('../../src/services/ai/modelProtocolTestSession')>(),

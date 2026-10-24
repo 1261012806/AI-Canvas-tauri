@@ -1,6 +1,7 @@
 ﻿/**
  * PanoramaNodeToolbar 全景图节点浮动工具栏 + 编辑态支持
  */
+import { useT } from '../../../i18n';
 import { memo, useCallback } from 'react';
 import { Icon } from '@iconify/react';
 import type { NodeType, BaseNodeData } from '../../../types';
@@ -28,6 +29,7 @@ interface PanoramaNodeToolbarProps {
 }
 
 function PanoramaNodeToolbar({ nodeId, onUpload, onToggleMode, previewMode, onScreenshot, onFullscreen }: PanoramaNodeToolbarProps) {
+  const t = useT();
   const nodeType = 'ai-panorama';
   const edit = useToolbarEdit({ nodeType });
   const registry = edit.registry;
@@ -76,8 +78,8 @@ function PanoramaNodeToolbar({ nodeId, onUpload, onToggleMode, previewMode, onSc
     if (key === 'toggleMode') {
       return (
         <AnimatedButton key={key} className="ftb-btn icon-only act-mode"
-          data-tooltip={previewMode === '360' ? '切换到图片视图' : '切换到360全景'}
-          aria-label="切换视图模式" onClick={clickHandler}>
+          data-tooltip={t(previewMode === '360' ? '切换到图片视图' : '切换到360全景')}
+          aria-label={t('切换视图模式')} onClick={clickHandler}>
           {previewMode === '360'
             ? <Icon icon="mdi:image-outline" width={14} height={14} />
             : <Icon icon="mdi:rotate-3d" width={14} height={14} />}

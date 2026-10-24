@@ -9,6 +9,7 @@ import { CATEGORY_ICONS, formatSize } from '../../utils/assetFormat';
 import ViewportImage from './ViewportImage';
 import ResourceVideoPreview from './ResourceVideoPreview';
 import { getPerformanceModeBudget, getPerformanceModeEnabled, subscribePerformanceMode } from '../../services/performanceModeRuntime';
+import { useT } from '../../i18n';
 
 interface AssetThumbProps {
   assetUrl?: string;
@@ -53,6 +54,7 @@ export function AssetTextPreview({
   showNativeTooltip = true,
   onTextPreview,
 }: AssetTextPreviewProps) {
+  const t = useT();
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -80,8 +82,8 @@ export function AssetTextPreview({
     };
   }, [filePath, size, propTextPreview, revision]);
 
-  const trigger = onTextPreview && <button type="button" className="asset-image-preview-trigger" aria-label={`查看文档 ${name}`}
-    title={showNativeTooltip ? '查看和编辑文档' : undefined} onClick={(event) => { event.stopPropagation(); onTextPreview(); }} />;
+  const trigger = onTextPreview && <button type="button" className="asset-image-preview-trigger" aria-label={t('查看文档 {name}', { name })}
+    title={showNativeTooltip ? t('查看和编辑文档') : undefined} onClick={(event) => { event.stopPropagation(); onTextPreview(); }} />;
   const effectiveText = propTextPreview !== undefined ? propTextPreview : content;
 
   if (effectiveText && effectiveText.trim().length > 0) {
@@ -125,6 +127,7 @@ export default function AssetThumb({
   showNativeTooltip = true,
   textPreview,
 }: AssetThumbProps) {
+  const t = useT();
   const performanceMode = useSyncExternalStore(subscribePerformanceMode, getPerformanceModeEnabled, getPerformanceModeEnabled);
   const previewMaxEdge = category === 'image' ? getPerformanceModeBudget(performanceMode).imagePreviewMaxEdge : 0;
   if (category === 'video') {
@@ -165,8 +168,8 @@ export default function AssetThumb({
           <button
             type="button"
             className="asset-image-preview-trigger"
-            aria-label={`查看图片 ${name}`}
-            title={showNativeTooltip ? '查看大图和生成信息' : undefined}
+            aria-label={t('查看图片 {name}', { name })}
+            title={showNativeTooltip ? t('查看大图和生成信息') : undefined}
             onClick={(event) => {
               event.stopPropagation();
               onImagePreview();

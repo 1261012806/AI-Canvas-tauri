@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DirectorPrevisScene, DirectorPrevisView } from '../../types/directorPrevis';
 import { createDirectorPrevisRenderer, type DirectorPrevisRenderer } from '../../services/directorPrevisRenderer';
+import { useT } from '../../i18n';
 
 export default function DirectorPrevisViewport({ scene, time, view, theme, onReady }: {
   scene: DirectorPrevisScene; time: number; view: DirectorPrevisView; theme: string;
   onReady: (renderer: DirectorPrevisRenderer | null) => void;
 }) {
+  const t = useT();
   const mount = useRef<HTMLDivElement>(null);
   const renderer = useRef<DirectorPrevisRenderer | null>(null);
   const latest = useRef({ time, view, onReady });
@@ -34,7 +36,7 @@ export default function DirectorPrevisViewport({ scene, time, view, theme, onRea
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg">
       <div ref={mount} className="flex h-full w-full items-center justify-center overflow-hidden" />
-      {error && <p className="ui-error absolute p-3" role="alert">{error}</p>}
+      {error && <p className="ui-error absolute p-3" role="alert">{t(error)}</p>}
     </div>
   );
 }

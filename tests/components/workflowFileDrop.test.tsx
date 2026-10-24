@@ -22,6 +22,7 @@ async function setup(platform = 'Win32') {
   let effects: Array<() => void | (() => void)> = [];
   vi.doMock('react', async () => ({
     ...await vi.importActual<typeof import('react')>('react'),
+    useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
     useCallback: <T,>(callback: T) => callback,
     useEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
     useRef: <T,>(initial: T) => {

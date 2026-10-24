@@ -199,13 +199,14 @@ function FailureReport({ failure, fallback, copyDetailsLabel, stackLabel, failed
   stackLabel: string;
   failedSuffix: string;
 }) {
+  const t = useT();
   if (!failure) return <span>{fallback}</span>;
 
   const full = `[${failure.stage}] ${failure.message}\n${failure.detail}`;
   return (
     <div className="video-editor-failure">
       <div className="video-editor-failure-line">
-        <strong>{failure.stage}{failedSuffix}</strong>{failure.message}
+        <strong>{t(failure.stage)}{failedSuffix}</strong>{failure.message}
         <button
           type="button"
           className="video-editor-failure-copy"

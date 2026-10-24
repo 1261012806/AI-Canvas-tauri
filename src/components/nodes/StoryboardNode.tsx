@@ -5,6 +5,7 @@
  * 双击进入分镜编辑：可拖拽某一格到画布，生成一个「提取分镜r-c」真实裁片图像节点，
  * 原格随即变为空占位（+）。
  */
+import { t as translate, useT } from '../../i18n';
 import { memo, lazy, Suspense, useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
@@ -33,6 +34,7 @@ const CustomGridEditor = lazy(() => import('./shared/image/CustomGridEditor'));
 const DRAG_THRESHOLD = 8;
 
 function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData; selected?: boolean }) {
+  const t = useT();
   const updateNodeDataTransient = useAppStore((s) => s.updateNodeDataTransient);
   const commitToHistory = useAppStore((s) => s.commitToHistory);
   const { screenToFlowPosition } = useReactFlow();
@@ -278,7 +280,7 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
         console.error('[Storyboard] 提取失败:', err);
         const shouldNotify = isCanvasDerivationFresh(derivation, useAppStore.getState());
         cancelCanvasDerivation(derivation);
-        if (shouldNotify) useAppStore.getState().showToast('提取分镜失败，请重试', 'error');
+        if (shouldNotify) useAppStore.getState().showToast(translate('提取分镜失败，请重试'), 'error');
       }
     },
     [id, displayImageUrl, cols, rows, isCustomGrid, hRanges, vRanges, extracted, overrides, revisionFor, screenToFlowPosition],
@@ -309,7 +311,7 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
     [editing, extracted, extractCell],
   );
 
-  const { displayLabel, handleRename } = useNodeRename(id, data, '宫格分镜');
+  const { displayLabel, handleRename } = useNodeRename(id, data, t('宫格分镜'));
 
   // 拖出中格子的裁片偏移（用于幽灵预览）
   const dragCell = drag != null ? cells[drag.idx] : null;
@@ -326,7 +328,7 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
       <div
         className={`node storyboard-node ${selected ? 'selected' : ''} ${editing ? 'editing' : ''}`}
         style={{ height: nodeHeight }}
-        data-tooltip={editing ? undefined : '双击进入编辑'}
+        data-tooltip={editing ? undefined : t('双击进入编辑')}
         onDoubleClick={toggleEditing}
       >
         <div className="storyboard-grid">
@@ -354,21 +356,21 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
               );
             })
           ) : (
-            <div className="storyboard-empty">无图像</div>
+            <div className="storyboard-empty">{t('无图像')}</div>
           )}
 
           {editing && displayImageUrl && (
             <button
               type="button"
               className="storyboard-lines-btn nodrag"
-              data-tooltip="调整分割线"
+              data-tooltip={t('调整分割线')}
               onClick={openLineEditor}
               onPointerDown={(e) => e.stopPropagation()}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M3 10h18M3 14h18M10 3v18M14 3v18" />
               </svg>
-              调线
+              {t('调线')}
             </button>
           )}
 

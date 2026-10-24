@@ -7,6 +7,10 @@ interface Harness {
   pending: Array<() => void>; stateIndex: number; refIndex: number; effectIndex: number;
 }
 const driver = vi.hoisted(() => ({ current: null as Harness | null, visible: true, present: true, reduced: false, poster: vi.fn(), convert: vi.fn() }));
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   lazy: () => 'asset-video-preview',

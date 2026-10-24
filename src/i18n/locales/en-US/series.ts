@@ -194,6 +194,14 @@ const series = {
   '字': 'chars',
   '关闭{title}': 'Close {title}',
   '原著需要保存到项目目录，请在桌面端添加': 'The original needs to be saved in the project directory; add it from the desktop app',
+
+  "创建分集": "Create episode",
+  "修改 {name} 的名称": "Rename {name}",
+  "修改分集名称": "Rename episode",
+  "{count} 字": "{count} characters",
+  "第 {number} 集": "Episode {number}",
+  "修改分集名称失败，请重试": "Could not rename the episode. Try again.",
+  "创建分集失败，请重试": "Could not create the episode. Try again.",
 };
 
 export default series;

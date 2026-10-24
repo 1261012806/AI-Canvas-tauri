@@ -1,6 +1,7 @@
 /**
  * 小逻摄影棚全屏面板，以 3D 控件编辑相机和灯光参数并生成可回填的提示词片段。
  */
+import { useT } from '../../../../i18n';
 import Select from '../../../shared/Select';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
@@ -327,6 +328,7 @@ function RangeControl({ label, value, min, max, step = 1, suffix = '', onChange 
 }
 
 function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStudioPanelProps) {
+  const t = useT();
   const [mode, setMode] = useState<CameraStudioMode>('camera');
   const [activeControl, setActiveControl] = useState<'camera' | 'lighting'>('camera');
   const [cameraState, setCameraState] = useState<CameraStudioCameraState>(() => ({ ...DEFAULT_CAMERA_STATE }));
@@ -371,21 +373,21 @@ function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStud
     <FullscreenOverlay
       isOpen={isOpen}
       onClose={onClose}
-      title="小逻摄影棚"
+      title={t('小逻摄影棚')}
       panelWidth="min(96vw, 1180px)"
       className="camera-studio-overlay"
       bodyClassName="camera-studio-body"
       unmountOnClose
       headerContent={(
-        <div className="camera-studio-mode" role="tablist" aria-label="摄影棚模式">
+        <div className="camera-studio-mode" role="tablist" aria-label={t('摄影棚模式')}>
           <button type="button" className={mode === 'camera' ? 'is-active' : ''} onClick={() => handleModeChange('camera')}>
-            <Icon icon="mdi:camera-outline" width={14} />摄影机
+            <Icon icon="mdi:camera-outline" width={14} />{t('摄影机')}
           </button>
           <button type="button" className={mode === 'lighting' ? 'is-active is-light' : ''} onClick={() => handleModeChange('lighting')}>
-            <Icon icon="mdi:lightbulb-on-outline" width={14} />打光
+            <Icon icon="mdi:lightbulb-on-outline" width={14} />{t('打光')}
           </button>
           <button type="button" className={mode === 'dual' ? 'is-active' : ''} onClick={() => handleModeChange('dual')}>
-            <Icon icon="mdi:vector-combine" width={14} />联动
+            <Icon icon="mdi:vector-combine" width={14} />{t('联动')}
           </button>
         </div>
       )}
@@ -393,9 +395,9 @@ function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStud
       <div className="camera-studio-shell">
         <section className="camera-studio-stage">
           {mode === 'dual' ? (
-            <div className="camera-studio-focus-switch" aria-label="联动控制对象">
-              <button type="button" className={activeControl === 'camera' ? 'is-active' : ''} onClick={() => setActiveControl('camera')}>摄影机</button>
-              <button type="button" className={activeControl === 'lighting' ? 'is-active is-light' : ''} onClick={() => setActiveControl('lighting')}>主光源</button>
+            <div className="camera-studio-focus-switch" aria-label={t('联动控制对象')}>
+              <button type="button" className={activeControl === 'camera' ? 'is-active' : ''} onClick={() => setActiveControl('camera')}>{t('摄影机')}</button>
+              <button type="button" className={activeControl === 'lighting' ? 'is-active is-light' : ''} onClick={() => setActiveControl('lighting')}>{t('主光源')}</button>
             </div>
           ) : null}
           <StudioViewport
@@ -413,7 +415,7 @@ function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStud
               <span>STUDIO PROMPT</span>
               <b>{mode.toUpperCase()}</b>
             </div>
-            <button type="button" onClick={handleCopy} data-tooltip={copied ? '已复制' : '复制提示词'} aria-label="复制提示词">
+            <button type="button" onClick={handleCopy} data-tooltip={t(copied ? '已复制' : '复制提示词')} aria-label={t('复制提示词')}>
               <Icon icon={copied ? 'mdi:check' : 'mdi:content-copy'} width={15} />
             </button>
             <p>{prompt}</p>
@@ -423,7 +425,7 @@ function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStud
         <aside className="camera-studio-controls">
           {showCamera ? (
             <>
-              <div className="camera-studio-section-title"><Icon icon="mdi:camera-control" width={16} /><span>摄影机参数</span></div>
+              <div className="camera-studio-section-title"><Icon icon="mdi:camera-control" width={16} /><span>{t('摄影机参数')}</span></div>
               <div className="camera-studio-presets">
                 {CAMERA_PRESETS.map((preset) => (
                   <button
@@ -431,47 +433,47 @@ function CameraStudioPanel({ isOpen, imageUrl, onClose, onGenerate }: CameraStud
                     type="button"
                     onClick={() => updateCamera({ yaw: preset.yaw, pitch: preset.pitch, roll: preset.roll ?? 0, ...(preset.lens ? { lens: preset.lens } : {}) })}
                   >
-                    {preset.label}
+                    {t(preset.label)}
                   </button>
                 ))}
               </div>
               <div className="camera-studio-range-grid">
-                <RangeControl label="水平角度" value={cameraState.yaw} min={-180} max={180} suffix="°" onChange={(yaw) => updateCamera({ yaw })} />
-                <RangeControl label="垂直角度" value={cameraState.pitch} min={-80} max={80} suffix="°" onChange={(pitch) => updateCamera({ pitch })} />
-                <RangeControl label="画面倾斜" value={cameraState.roll} min={-45} max={45} suffix="°" onChange={(roll) => updateCamera({ roll })} />
+                <RangeControl label={t('水平角度')} value={cameraState.yaw} min={-180} max={180} suffix="°" onChange={(yaw) => updateCamera({ yaw })} />
+                <RangeControl label={t('垂直角度')} value={cameraState.pitch} min={-80} max={80} suffix="°" onChange={(pitch) => updateCamera({ pitch })} />
+                <RangeControl label={t('画面倾斜')} value={cameraState.roll} min={-45} max={45} suffix="°" onChange={(roll) => updateCamera({ roll })} />
               </div>
               <div className="camera-studio-select-grid">
-                <label><span>景别</span><Select fixedMenu value={cameraState.distance} onChange={(selectedOptionValue) => updateCamera({ distance: selectedOptionValue as CameraDistance })}>{DISTANCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label>
-                <label><span>镜头</span><Select fixedMenu value={cameraState.lens} onChange={(selectedOptionValue) => updateCamera({ lens: selectedOptionValue as CameraLens })}>{LENS_OPTIONS.map((lens) => <option key={lens} value={lens}>{lens}</option>)}</Select></label>
+                <label><span>{t('景别')}</span><Select fixedMenu value={cameraState.distance} onChange={(selectedOptionValue) => updateCamera({ distance: selectedOptionValue as CameraDistance })}>{DISTANCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}</Select></label>
+                <label><span>{t('镜头')}</span><Select fixedMenu value={cameraState.lens} onChange={(selectedOptionValue) => updateCamera({ lens: selectedOptionValue as CameraLens })}>{LENS_OPTIONS.map((lens) => <option key={lens} value={lens}>{lens}</option>)}</Select></label>
               </div>
-              <label className="camera-studio-toggle"><input type="checkbox" checked={cameraState.promptEnhance} onChange={(event) => updateCamera({ promptEnhance: event.target.checked })} /><span>电影感增强</span></label>
+              <label className="camera-studio-toggle"><input type="checkbox" checked={cameraState.promptEnhance} onChange={(event) => updateCamera({ promptEnhance: event.target.checked })} /><span>{t('电影感增强')}</span></label>
             </>
           ) : (
             <>
-              <div className="camera-studio-section-title is-light"><Icon icon="mdi:lightbulb-on-outline" width={16} /><span>主光源参数</span></div>
+              <div className="camera-studio-section-title is-light"><Icon icon="mdi:lightbulb-on-outline" width={16} /><span>{t('主光源参数')}</span></div>
               <div className="camera-studio-presets is-light">
                 {LIGHT_PRESETS.map((preset) => (
-                  <button key={preset.id} type="button" onClick={() => updateLight({ yaw: preset.yaw, pitch: preset.pitch })}>{preset.label}</button>
+                  <button key={preset.id} type="button" onClick={() => updateLight({ yaw: preset.yaw, pitch: preset.pitch })}>{t(preset.label)}</button>
                 ))}
               </div>
               <div className="camera-studio-range-grid">
-                <RangeControl label="水平角度" value={lightState.yaw} min={-180} max={180} suffix="°" onChange={(yaw) => updateLight({ yaw })} />
-                <RangeControl label="垂直角度" value={lightState.pitch} min={-80} max={80} suffix="°" onChange={(pitch) => updateLight({ pitch })} />
-                <RangeControl label="光照强度" value={lightState.intensity} min={10} max={100} suffix="%" onChange={(intensity) => updateLight({ intensity })} />
+                <RangeControl label={t('水平角度')} value={lightState.yaw} min={-180} max={180} suffix="°" onChange={(yaw) => updateLight({ yaw })} />
+                <RangeControl label={t('垂直角度')} value={lightState.pitch} min={-80} max={80} suffix="°" onChange={(pitch) => updateLight({ pitch })} />
+                <RangeControl label={t('光照强度')} value={lightState.intensity} min={10} max={100} suffix="%" onChange={(intensity) => updateLight({ intensity })} />
               </div>
-              <div className="camera-studio-temperature" aria-label="色温">
-                {TEMPERATURE_OPTIONS.map((option) => <button key={option.value} type="button" className={lightState.temperature === option.value ? 'is-active' : ''} onClick={() => updateLight({ temperature: option.value })}>{option.label}</button>)}
+              <div className="camera-studio-temperature" aria-label={t('色温')}>
+                {TEMPERATURE_OPTIONS.map((option) => <button key={option.value} type="button" className={lightState.temperature === option.value ? 'is-active' : ''} onClick={() => updateLight({ temperature: option.value })}>{t(option.label)}</button>)}
               </div>
               <div className="camera-studio-toggle-row">
-                <label className="camera-studio-toggle"><input type="checkbox" checked={lightState.fillLight} onChange={(event) => updateLight({ fillLight: event.target.checked })} /><span>柔和补光</span></label>
-                <label className="camera-studio-toggle"><input type="checkbox" checked={lightState.rimLight} onChange={(event) => updateLight({ rimLight: event.target.checked })} /><span>轮廓光</span></label>
+                <label className="camera-studio-toggle"><input type="checkbox" checked={lightState.fillLight} onChange={(event) => updateLight({ fillLight: event.target.checked })} /><span>{t('柔和补光')}</span></label>
+                <label className="camera-studio-toggle"><input type="checkbox" checked={lightState.rimLight} onChange={(event) => updateLight({ rimLight: event.target.checked })} /><span>{t('轮廓光')}</span></label>
               </div>
             </>
           )}
 
           <div className="camera-studio-actions">
-            <button type="button" className="camera-studio-reset" onClick={handleReset} data-tooltip="重置参数" aria-label="重置参数"><Icon icon="mdi:restore" width={17} /></button>
-            <button type="button" className="camera-studio-generate" onClick={handleGenerate}><Icon icon="mdi:creation" width={17} />生成图片</button>
+            <button type="button" className="camera-studio-reset" onClick={handleReset} data-tooltip={t('重置参数')} aria-label={t('重置参数')}><Icon icon="mdi:restore" width={17} /></button>
+            <button type="button" className="camera-studio-generate" onClick={handleGenerate}><Icon icon="mdi:creation" width={17} />{t('生成图片')}</button>
           </div>
         </aside>
       </div>

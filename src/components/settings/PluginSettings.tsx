@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { Icon } from '@iconify/react';
 import { motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -225,8 +226,8 @@ const PLUGIN_PERMISSION_LABELS: Record<string, string> = {
 function permissionSummary(manifest: PluginManifest): string {
   return manifest.permissions
     .map((permission) => permission === 'network.request'
-      ? `${PLUGIN_PERMISSION_LABELS[permission]}：${manifest.network?.allowedOrigins.join('、') ?? '未声明'}`
-      : PLUGIN_PERMISSION_LABELS[permission] ?? permission)
+      ? `${t(PLUGIN_PERMISSION_LABELS[permission])}: ${manifest.network?.allowedOrigins.join(', ') ?? t('未声明')}`
+      : t(PLUGIN_PERMISSION_LABELS[permission] ?? permission))
     .join('；');
 }
 
@@ -254,13 +255,13 @@ async function reviewPluginInstall(
   const sourceDigest = await computeSourceDigest(source);
   if (manifest.runtime !== 'python') return sourceDigest;
   const confirmed = await confirmAction(
-    `${action}可信 Python 插件「${manifest.name}」？\n\n`
-    + `来源：${sourceLabel}\n`
-    + `代码 SHA-256：${sourceDigest}\n`
-    + `宿主代办权限：${permissionSummary(manifest) || '无'}\n\n`
-    + 'Python 插件会以你的当前系统权限运行，可以读取或修改本机文件、访问网络和环境变量，也可以启动其他程序。'
-    + '\n\n只对你信任并已审查源码的插件继续。下一步 Rust 原生确认必须显示相同的完整摘要。',
-    { title: `${action}可信 Python 插件` },
+    t('{action}可信 Python 插件「{name}」？', { action: t(action), name: manifest.name }) + '\n\n'
+    + t('来源：{source}', { source: sourceLabel }) + '\n'
+    + t('代码 SHA-256：{digest}', { digest: sourceDigest }) + '\n'
+    + t('宿主代办权限：{permissions}', { permissions: permissionSummary(manifest) || t('无') }) + '\n\n'
+    + t('Python 插件会以你的当前系统权限运行，可以读取或修改本机文件、访问网络和环境变量，也可以启动其他程序。')
+    + '\n\n' + t('只对你信任并已审查源码的插件继续。下一步 Rust 原生确认必须显示相同的完整摘要。'),
+    { title: t('{action}可信 Python 插件', { action: t(action) }) },
   );
   return confirmed ? sourceDigest : null;
 }
@@ -268,12 +269,12 @@ async function reviewPluginInstall(
 async function confirmTrustedPythonEnable(manifest: PluginManifest, sourceDigest?: string): Promise<boolean> {
   if (manifest.runtime !== 'python') return true;
   return confirmAction(
-    `启用可信 Python 插件「${manifest.name}」？\n\n`
-    + `已登记代码 SHA-256：${sourceDigest ?? '旧记录待原生迁移'}\n`
-    + `宿主代办权限：${permissionSummary(manifest) || '无'}\n\n`
-    + '启用后插件会以你的当前系统权限运行，可以读取或修改本机文件、访问网络和环境变量，也可以启动其他程序。'
-    + '\n\n继续后还必须通过 Rust 原生确认，且完整摘要应与这里一致。',
-    { title: '启用可信 Python 插件' },
+    t('启用可信 Python 插件「{name}」？', { name: manifest.name }) + '\n\n'
+    + t('已登记代码 SHA-256：{digest}', { digest: sourceDigest ?? t('旧记录待原生迁移') }) + '\n'
+    + t('宿主代办权限：{permissions}', { permissions: permissionSummary(manifest) || t('无') }) + '\n\n'
+    + t('启用后插件会以你的当前系统权限运行，可以读取或修改本机文件、访问网络和环境变量，也可以启动其他程序。')
+    + '\n\n' + t('继续后还必须通过 Rust 原生确认，且完整摘要应与这里一致。'),
+    { title: t('启用可信 Python 插件') },
   );
 }
 
@@ -294,7 +295,7 @@ async function readDirectoryEntries(entry: FileSystemDirectoryEntry): Promise<Fi
     });
     if (batch.length === 0) return entries;
     entries.push(...batch);
-    if (entries.length > MAX_DROPPED_PLUGIN_FILES) throw new Error('插件文件夹包含的文件过多');
+    if (entries.length > MAX_DROPPED_PLUGIN_FILES) throw new Error(t('插件文件夹包含的文件过多'));
   }
 }
 
@@ -304,7 +305,7 @@ async function collectDroppedEntry(
   output: PluginUploadFile[],
 ): Promise<void> {
   if (isIgnoredPluginMetadataEntry(entry.name)) return;
-  if (output.length >= MAX_DROPPED_PLUGIN_FILES) throw new Error('插件文件夹包含的文件过多');
+  if (output.length >= MAX_DROPPED_PLUGIN_FILES) throw new Error(t('插件文件夹包含的文件过多'));
   const path = `${parentPath}${entry.name}`;
   if (isFileEntry(entry)) {
     const file = await new Promise<File>((resolve, reject) => entry.file(resolve, reject));
@@ -338,7 +339,7 @@ async function resolveUiSource(
   if (!manifest.ui) return undefined;
   const target = `${prefix}${manifest.ui.entry}`;
   const found = files.find(({ path }) => path === target);
-  if (!found) throw new Error(`插件声明了自定义界面，但同级目录缺少 ${manifest.ui.entry}`);
+  if (!found) throw new Error(t('插件声明了自定义界面，但同级目录缺少 {path}', { path: manifest.ui.entry }));
   return found.file.text();
 }
 
@@ -350,13 +351,14 @@ async function resolveResourcePayloads(
   return Promise.all((manifest.resources ?? []).map(async (resource) => {
     const target = `${prefix}${resource.path}`;
     const found = files.find(({ path }) => path === target);
-    if (!found) throw new Error(`插件包缺少资源 ${resource.path}`);
-    if (found.file.size !== resource.bytes) throw new Error(`插件包资源 ${resource.path} 字节数不匹配`);
+    if (!found) throw new Error(t('插件包缺少资源 {path}', { path: resource.path }));
+    if (found.file.size !== resource.bytes) throw new Error(t('插件包资源 {path} 字节数不匹配', { path: resource.path }));
     return { id: resource.id, bytes: Array.from(new Uint8Array(await found.file.arrayBuffer())) };
   }));
 }
 
 export default function PluginSettings() {
+  useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
@@ -405,7 +407,7 @@ export default function PluginSettings() {
       if (marketplaceRequestRef.current === requestId) setMarketplaceItems(items);
     } catch (error) {
       if (marketplaceRequestRef.current === requestId) {
-        setMarketplaceError(error instanceof Error ? error.message : '插件市场加载失败');
+        setMarketplaceError(error instanceof Error ? error.message : t('插件市场加载失败'));
       }
     } finally {
       active = false;
@@ -418,7 +420,7 @@ export default function PluginSettings() {
 
   const refreshPythonStatus = useCallback(async () => {
     if (!isTauriEnv()) {
-      setPythonStatus({ available: false, error: '请在 Tauri 桌面版中检测本机 Python' });
+      setPythonStatus({ available: false, error: t('请在 Tauri 桌面版中检测本机 Python') });
       return;
     }
     setPythonChecking(true);
@@ -427,7 +429,7 @@ export default function PluginSettings() {
     } catch (error) {
       setPythonStatus({
         available: false,
-        error: error instanceof Error ? error.message : 'Python 环境检测失败',
+        error: error instanceof Error ? error.message : t('Python 环境检测失败'),
       });
     } finally {
       setPythonChecking(false);
@@ -488,7 +490,7 @@ export default function PluginSettings() {
       setRepositoryInput('');
       await refreshMarketplace(true);
     } catch (error) {
-      showToast(pluginOperationErrorMessage(error, 'GitHub 插件安装失败'), 'error');
+      showToast(pluginOperationErrorMessage(error, t('GitHub 插件安装失败')), 'error');
     } finally {
       downloading = false;
       setInstallingRepository('');
@@ -502,9 +504,9 @@ export default function PluginSettings() {
         const savedPath = await saveBinaryToLocalFile(
           new TextEncoder().encode(pluginDeveloperGuide),
           PLUGIN_GUIDE_FILE_NAME,
-          [{ name: 'Markdown 文档', extensions: ['md'] }],
+          [{ name: t('Markdown 文档'), extensions: ['md'] }],
         );
-        if (savedPath) showToast('插件开发规范已保存');
+        if (savedPath) showToast(t('插件开发规范已保存'));
         return;
       }
 
@@ -516,9 +518,9 @@ export default function PluginSettings() {
       anchor.click();
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
-      showToast('插件开发规范已下载');
+      showToast(t('插件开发规范已下载'));
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '插件开发规范下载失败', 'error');
+      showToast(error instanceof Error ? error.message : t('插件开发规范下载失败'), 'error');
     }
   };
 
@@ -528,18 +530,18 @@ export default function PluginSettings() {
     setBusy(true);
     try {
       const manifests = files.filter(({ file }) => file.name === 'manifest.json');
-      if (manifests.length !== 1) throw new Error('插件文件夹必须且只能包含一个 manifest.json');
+      if (manifests.length !== 1) throw new Error(t('插件文件夹必须且只能包含一个 manifest.json'));
       const manifestFile = manifests[0];
       const manifestText = await manifestFile.file.text();
       const manifest = parsePluginManifest(manifestText);
       const prefix = manifestFile.path.slice(0, Math.max(0, manifestFile.path.length - manifestFile.file.name.length));
       const entryFile = files.find(({ path }) => path === `${prefix}${manifest.entry}`);
-      if (!entryFile) throw new Error(`manifest.json 同级目录缺少 ${manifest.entry}`);
+      if (!entryFile) throw new Error(t('manifest.json 同级目录缺少 {path}', { path: manifest.entry }));
       const action = plugins.some((installed) => installed.id === manifest.id) ? '更新' : '安装';
       const source = await entryFile.file.text();
       const uiSource = await resolveUiSource(files, prefix, manifest);
       const resourcePayloads = await resolveResourcePayloads(files, prefix, manifest);
-      const sourceDigest = await reviewPluginInstall(manifest, source, action, '本地文件夹');
+      const sourceDigest = await reviewPluginInstall(manifest, source, action, t('本地文件夹'));
       if (!sourceDigest) return;
       await installPluginBundle(manifestText, source, {
         trustedPythonConfirmed: manifest.runtime === 'python',
@@ -548,7 +550,7 @@ export default function PluginSettings() {
         resourcePayloads,
       });
     } catch (error) {
-      showToast(pluginOperationErrorMessage(error, '插件安装失败'), 'error');
+      showToast(pluginOperationErrorMessage(error, t('插件安装失败')), 'error');
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -565,9 +567,9 @@ export default function PluginSettings() {
       const bundle = await readLocalPluginPackage(paths, requireManifest);
       if (!bundle) return;
       const { manifestText, manifest, source, uiSource, resourcePayloads } = bundle;
-      if (expectedPluginId && manifest.id !== expectedPluginId) throw new Error('本地目录的插件 ID 已变化，请重新安装');
+      if (expectedPluginId && manifest.id !== expectedPluginId) throw new Error(t('本地目录的插件 ID 已变化，请重新安装'));
       const action = plugins.some((installed) => installed.id === manifest.id) ? '更新' : '安装';
-      const sourceDigest = await reviewPluginInstall(manifest, source, action, '本地文件夹');
+      const sourceDigest = await reviewPluginInstall(manifest, source, action, t('本地文件夹'));
       if (!sourceDigest) return;
       await installPluginBundle(manifestText, source, {
         trustedPythonConfirmed: manifest.runtime === 'python',
@@ -577,7 +579,7 @@ export default function PluginSettings() {
       });
       if (bundle.directory) setLocalDirectories((previous) => ({ ...previous, [manifest.id]: bundle.directory }));
     } catch (error) {
-      showToast(pluginOperationErrorMessage(error, '插件安装失败'), 'error');
+      showToast(pluginOperationErrorMessage(error, t('插件安装失败')), 'error');
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -619,7 +621,7 @@ export default function PluginSettings() {
       if (cancelled) release();
       else unlisten = release;
     })().catch(() => {
-      if (!cancelled) showToast('拖放接收不可用，请点击选择插件文件夹', 'error');
+      if (!cancelled) showToast(t('拖放接收不可用，请点击选择插件文件夹'), 'error');
     });
     return () => {
       cancelled = true;
@@ -637,7 +639,7 @@ export default function PluginSettings() {
         installFromPaths: (paths) => installFromPathsRef.current(paths, true),
       });
     } catch (error) {
-      showToast(pluginOperationErrorMessage(error, '无法选择插件文件夹'), 'error');
+      showToast(pluginOperationErrorMessage(error, t('无法选择插件文件夹')), 'error');
     }
   };
 
@@ -655,7 +657,7 @@ export default function PluginSettings() {
     try {
       await repairPluginRegistry();
     } catch (error) {
-      showToast(pluginOperationErrorMessage(error, '插件信任注册表修复失败'), 'error');
+      showToast(pluginOperationErrorMessage(error, t('插件信任注册表修复失败')), 'error');
     } finally {
       setRegistryRepairing(false);
     }
@@ -672,7 +674,7 @@ export default function PluginSettings() {
       if (files.length === 0) return;
       await installFiles(files);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法读取插件文件夹', 'error');
+      showToast(error instanceof Error ? error.message : t('无法读取插件文件夹'), 'error');
     }
   };
 
@@ -681,9 +683,9 @@ export default function PluginSettings() {
       <section className="rounded-xl border border-canvas-border bg-canvas-card p-3">
         <div>
           <div>
-            <h3 className="text-sm font-medium text-canvas-text">用户插件</h3>
+            <h3 className="text-sm font-medium text-canvas-text">{t("用户插件")}</h3>
             <p className="mt-1 text-[11px] leading-5 text-canvas-text-muted">
-              JavaScript 插件使用 QuickJS 沙箱；可信 Python 插件使用本机 Python 和已安装依赖，并拥有当前用户的本机权限。
+              {t("JavaScript 插件使用 QuickJS 沙箱；可信 Python 插件使用本机 Python 和已安装依赖，并拥有当前用户的本机权限。")}
             </p>
           </div>
           <motion.div
@@ -710,7 +712,7 @@ export default function PluginSettings() {
             whileTap={busy ? undefined : { scale: 0.995 }}
           >
             <span className="ui-dropzone__title">
-              {busy ? '正在校验并安装插件…' : '把插件文件夹拖到这里'}
+              {busy ? t('正在校验并安装插件…') : t('把插件文件夹拖到这里')}
             </span>
             <span className="ui-dropzone__icon" aria-hidden="true">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -720,7 +722,7 @@ export default function PluginSettings() {
               </svg>
             </span>
             <span className="ui-dropzone__hint">
-              支持 manifest.json + main.js 或 main.py，点击这里也可以选择。
+              {t("支持 manifest.json + main.js 或 main.py，点击这里也可以选择。")}
             </span>
           </motion.div>
           <input
@@ -741,14 +743,14 @@ export default function PluginSettings() {
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-xs font-medium text-canvas-text">
               <Icon icon="lucide:terminal-square" width={14} height={14} className={pythonStatus?.available ? 'text-emerald-400' : 'text-amber-400'} />
-              本机 Python
+              {t("本机 Python")}
             </div>
             <div className="mt-0.5 break-words text-[11px] text-canvas-text-muted">
               {pythonChecking
-                ? '正在检测 Python 3…'
+                ? t('正在检测 Python 3…')
                 : pythonStatus?.available
-                  ? `可用：${pythonStatus.command} · Python ${pythonStatus.version}`
-                  : pythonStatus?.error || '尚未检测'}
+                  ? t('可用：{command} · Python {version}', { command: pythonStatus.command, version: pythonStatus.version })
+                  : pythonStatus?.error || t('尚未检测')}
             </div>
           </div>
           <AnimatedButton
@@ -757,17 +759,17 @@ export default function PluginSettings() {
             className="shrink-0 rounded-md px-2.5 py-1.5 text-xs text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-50"
             onClick={() => void refreshPythonStatus()}
           >
-            重新检测
+            {t("重新检测")}
           </AnimatedButton>
         </div>
         <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-xs font-medium text-canvas-text">
               <Icon icon="lucide:book-open-text" width={14} height={14} className="text-indigo-400" />
-              插件开发规范
+              {t("插件开发规范")}
             </div>
             <div className="mt-0.5 text-[11px] text-canvas-text-muted">
-              查看 Manifest、节点输入输出、权限和沙箱规则
+              {t("查看 Manifest、节点输入输出、权限和沙箱规则")}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -776,32 +778,32 @@ export default function PluginSettings() {
               className="rounded-md px-2.5 py-1.5 text-xs text-indigo-400 hover:bg-indigo-500/10"
               onClick={() => setGuideOpen(true)}
             >
-              查看规范
+              {t("查看规范")}
             </AnimatedButton>
             <AnimatedButton
               type="button"
               scale={1.02}
               tapScale={0.97}
-              aria-label="下载插件开发规范 Markdown"
+              aria-label={t("下载插件开发规范 Markdown")}
               className="inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-canvas-border bg-canvas-card px-2.5 text-[11px] font-medium text-canvas-text-secondary transition-colors duration-150 hover:border-indigo-400/35 hover:bg-indigo-500/10 hover:text-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/45"
               onClick={() => void downloadDeveloperGuide()}
             >
               <Icon icon="lucide:download" width={14} height={14} className="shrink-0" />
-              下载
+              {t("下载")}
             </AnimatedButton>
           </div>
         </div>
         <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2">
           <div className="min-w-0">
-            <div className="text-xs font-medium text-canvas-text">开发者示例</div>
-            <div className="mt-0.5 text-[11px] text-canvas-text-muted">安装文本工具和一个可调用模型的自定义写作节点</div>
+            <div className="text-xs font-medium text-canvas-text">{t("开发者示例")}</div>
+            <div className="mt-0.5 text-[11px] text-canvas-text-muted">{t("安装文本工具和一个可调用模型的自定义写作节点")}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <AnimatedButton
               type="button"
               className="rounded-md px-2.5 py-1.5 text-xs text-indigo-400 hover:bg-indigo-500/10"
               onClick={() => void installPluginBundle(EXAMPLE_MANIFEST, EXAMPLE_SOURCE).catch((error) => {
-                showToast(pluginOperationErrorMessage(error, '示例插件安装失败'), 'error');
+                showToast(pluginOperationErrorMessage(error, t('示例插件安装失败')), 'error');
               })}
             >
               JavaScript
@@ -815,7 +817,7 @@ export default function PluginSettings() {
                   manifest,
                   PYTHON_EXAMPLE_SOURCE,
                   '安装',
-                  '应用内置开发者示例',
+                  t('应用内置开发者示例'),
                 );
                 if (!sourceDigest) return;
                 await installPluginBundle(PYTHON_EXAMPLE_MANIFEST, PYTHON_EXAMPLE_SOURCE, {
@@ -823,7 +825,7 @@ export default function PluginSettings() {
                   expectedSourceDigest: sourceDigest,
                 });
               })().catch((error) => {
-                showToast(pluginOperationErrorMessage(error, 'Python 示例安装失败'), 'error');
+                showToast(pluginOperationErrorMessage(error, t('Python 示例安装失败')), 'error');
               })}
             >
               Python
@@ -837,15 +839,15 @@ export default function PluginSettings() {
           <div>
             <div className="flex items-center gap-1.5 text-sm font-medium text-canvas-text">
               <Icon icon="lucide:store" width={16} height={16} className="text-indigo-400" />
-              插件市场
+              {t("插件市场")}
             </div>
             <p className="mt-1 text-[11px] leading-5 text-canvas-text-muted">
-              从已登记的 GitHub Release 安装插件，并检查已安装 GitHub 插件的新版本。
+              {t("从已登记的 GitHub Release 安装插件，并检查已安装 GitHub 插件的新版本。")}
             </p>
           </div>
           <AnimatedButton
             type="button"
-            aria-label="刷新插件市场"
+            aria-label={t("刷新插件市场")}
             disabled={marketplaceLoading}
             className="rounded-md p-1.5 text-canvas-text-muted hover:bg-indigo-500/10 hover:text-indigo-400 disabled:opacity-50"
             onClick={() => void refreshMarketplace(true)}
@@ -859,10 +861,10 @@ export default function PluginSettings() {
             <DownloadProgress
               downloadedBytes={marketplaceProgress?.currentFileDownloadedBytes ?? 0}
               totalBytes={marketplaceProgress?.currentFileTotalBytes}
-              label={marketplaceProgress ? `当前文件 · ${marketplaceProgress.fileName}` : '正在连接插件市场…'}
+              label={marketplaceProgress ? t('当前文件 · {name}', { name: marketplaceProgress.fileName }) : t('正在连接插件市场…')}
             />
             {marketplaceProgress && (
-              <p className="text-xs text-canvas-text-muted tabular-nums">本次累计已下载 {formatSize(marketplaceProgress.downloadedBytes)}</p>
+              <p className="text-xs text-canvas-text-muted tabular-nums">{t("本次累计已下载")} {formatSize(marketplaceProgress.downloadedBytes)}</p>
             )}
           </div>
         )}
@@ -874,8 +876,8 @@ export default function PluginSettings() {
             onKeyDown={(event) => {
               if (event.key === 'Enter') void installGithubPlugin(repositoryInput);
             }}
-            placeholder="GitHub 仓库地址，例如 owner/my-plugin"
-            aria-label="GitHub 插件仓库地址"
+            placeholder={t("GitHub 仓库地址，例如 owner/my-plugin")}
+            aria-label={t("GitHub 插件仓库地址")}
             className="min-w-0 flex-1 rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2 text-xs text-canvas-text outline-none placeholder:text-canvas-text-muted focus:border-indigo-400/50"
           />
           <AnimatedButton
@@ -884,7 +886,7 @@ export default function PluginSettings() {
             className="shrink-0 rounded-lg bg-indigo-500/15 px-3 text-xs font-medium text-indigo-400 hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void installGithubPlugin(repositoryInput)}
           >
-            {installingRepository === repositoryInput ? '读取中…' : '从仓库安装'}
+            {installingRepository === repositoryInput ? t('读取中…') : t('从仓库安装')}
           </AnimatedButton>
         </div>
 
@@ -892,7 +894,7 @@ export default function PluginSettings() {
           <DownloadProgress
             downloadedBytes={repositoryProgress.downloadedBytes}
             totalBytes={repositoryProgress.totalBytes}
-            label={`当前文件 · ${repositoryProgress.fileName}`}
+            label={t('当前文件 · {name}', { name: repositoryProgress.fileName })}
             className="mt-3"
           />
         )}
@@ -903,8 +905,8 @@ export default function PluginSettings() {
             <input
               value={marketplaceQuery}
               onChange={(event) => setMarketplaceQuery(event.target.value)}
-              placeholder="搜索插件、作者或关键词"
-              aria-label="搜索插件市场"
+              placeholder={t("搜索插件、作者或关键词")}
+              aria-label={t("搜索插件市场")}
               className="w-full rounded-lg border border-canvas-border bg-canvas-surface py-2 pl-8 pr-3 text-xs text-canvas-text outline-none placeholder:text-canvas-text-muted focus:border-indigo-400/50"
             />
           </div>
@@ -913,7 +915,7 @@ export default function PluginSettings() {
         <div className="mt-3 space-y-2">
           {marketplaceLoading && marketplaceItems.length === 0 && (
             <div className="rounded-lg border border-dashed border-canvas-border px-3 py-6 text-center text-xs text-canvas-text-muted">
-              正在读取 GitHub 插件列表…
+              {t("正在读取 GitHub 插件列表…")}
             </div>
           )}
           {marketplaceError && (
@@ -923,7 +925,7 @@ export default function PluginSettings() {
           )}
           {!marketplaceLoading && !marketplaceError && marketplaceItems.length === 0 && (
             <div className="rounded-lg border border-dashed border-canvas-border px-3 py-6 text-center text-xs text-canvas-text-muted">
-              市场暂未收录插件，可先粘贴 GitHub 仓库地址安装。
+              {t("市场暂未收录插件，可先粘贴 GitHub 仓库地址安装。")}
             </div>
           )}
           {visibleMarketplaceItems.map((item) => {
@@ -951,16 +953,16 @@ export default function PluginSettings() {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="truncate text-sm font-medium text-canvas-text">{item.manifest.name}</span>
                       <span className="rounded bg-canvas-card px-1.5 py-0.5 text-[10px] text-canvas-text-muted">v{item.manifest.version}</span>
-                      {item.featured && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-400">推荐</span>}
-                      {item.manifest.runtime === 'python' && <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-400">可信本机代码</span>}
-                      {updateAvailable && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-400">可更新</span>}
+                      {item.featured && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-400">{t("推荐")}</span>}
+                      {item.manifest.runtime === 'python' && <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-400">{t("可信本机代码")}</span>}
+                      {updateAvailable && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-400">{t("可更新")}</span>}
                     </div>
                     <p className="mt-1 text-[11px] leading-4 text-canvas-text-secondary">
-                      {item.manifest.description || '未提供说明'}
+                      {item.manifest.description || t('未提供说明')}
                     </p>
                     <details className="mt-2 text-[11px] text-canvas-text-secondary">
                       <summary className="w-fit cursor-pointer select-none rounded hover:text-canvas-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canvas-text-muted">
-                        详细信息
+                        {t("详细信息")}
                       </summary>
                       <a
                         href={item.directory ? `${item.repository}/tree/${encodeURIComponent(item.releaseTag)}/${item.directory}` : item.repository}
@@ -971,7 +973,7 @@ export default function PluginSettings() {
                         {item.repository.replace('https://github.com/', '')}{item.directory ? ` / ${item.directory}` : ''}
                       </a>
                       <div className="mt-1 break-words text-[10px] text-canvas-text-muted">
-                        {CATEGORY_LABELS[item.manifest.category]} · 权限：{item.manifest.permissions.join('、')}
+                        {t(CATEGORY_LABELS[item.manifest.category])} {t("· 权限：")}{item.manifest.permissions.join('、')}
                       </div>
                     </details>
                   </div>
@@ -982,19 +984,19 @@ export default function PluginSettings() {
                     onClick={() => void installGithubPlugin(item.repository, item)}
                   >
                     {installingRepository === itemKey
-                      ? '安装中…'
+                      ? t('安装中…')
                       : updateAvailable
-                        ? '更新'
+                        ? t('更新')
                         : installed
-                          ? '已安装'
-                          : '安装'}
+                          ? t('已安装')
+                          : t('安装')}
                   </AnimatedButton>
                 </div>
               </article>
             );
           })}
           {!marketplaceLoading && marketplaceItems.length > 0 && visibleMarketplaceItems.length === 0 && (
-            <div className="py-4 text-center text-xs text-canvas-text-muted">没有匹配的插件</div>
+            <div className="py-4 text-center text-xs text-canvas-text-muted">{t("没有匹配的插件")}</div>
           )}
         </div>
       </section>
@@ -1004,9 +1006,9 @@ export default function PluginSettings() {
           <div className="flex items-start gap-3">
             <Icon icon="lucide:shield-alert" width={18} height={18} className="mt-0.5 shrink-0 text-amber-400" />
             <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-canvas-text">插件信任注册表需要修复</div>
+              <div className="text-xs font-medium text-canvas-text">{t("插件信任注册表需要修复")}</div>
               <p className="mt-1 text-[11px] leading-5 text-canvas-text-muted">
-                原生注册表已损坏，当前插件已失败关闭。修复会停止全部插件调用并清理原生私有快照，安装记录会保留为停用状态。
+                {t("原生注册表已损坏，当前插件已失败关闭。修复会停止全部插件调用并清理原生私有快照，安装记录会保留为停用状态。")}
               </p>
             </div>
             <AnimatedButton
@@ -1015,7 +1017,7 @@ export default function PluginSettings() {
               className="shrink-0 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/15 disabled:opacity-50"
               onClick={() => void handleRegistryRepair()}
             >
-              {registryRepairing ? '修复中…' : '修复注册表'}
+              {registryRepairing ? t('修复中…') : t('修复注册表')}
             </AnimatedButton>
           </div>
         </section>
@@ -1029,9 +1031,9 @@ export default function PluginSettings() {
           const outputFields = [...new Set(plugin.manifest.contributes.nodeTools.flatMap((tool) => tool.output.fields))];
           const placementLabels = [...new Set([
             ...plugin.manifest.contributes.nodeTools.flatMap((tool) => tool.nodeTypes.flatMap((nodeType) => (
-              tool.placements.map((placement) => `${pluginNodeTypeLabel(nodeType)}节点${placement === 'node-context-menu' ? '右键菜单' : '工具栏'}`)
+              tool.placements.map((placement) => t('{node}节点{placement}', { node: t(pluginNodeTypeLabel(nodeType)), placement: placement === 'node-context-menu' ? t('右键菜单') : t('工具栏') }))
             ))),
-            ...(customNodes.length ? ['节点选择器'] : []),
+            ...(customNodes.length ? [t('节点选择器')] : []),
           ])].join('、');
           return (
             <article key={plugin.id} className="rounded-xl border border-canvas-border bg-canvas-card p-3">
@@ -1044,14 +1046,14 @@ export default function PluginSettings() {
                     <h4 className="truncate text-sm font-medium text-canvas-text">{plugin.manifest.name}</h4>
                     <span className="rounded bg-canvas-surface px-1.5 py-0.5 text-[10px] text-canvas-text-muted">v{plugin.manifest.version}</span>
                     <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] text-indigo-400">
-                      {CATEGORY_LABELS[plugin.manifest.category]}
+                      {t(CATEGORY_LABELS[plugin.manifest.category])}
                     </span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${plugin.manifest.runtime === 'python' ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-                      {plugin.manifest.runtime === 'python' ? 'Python · 可信本机代码' : 'JavaScript · 沙箱'}
+                      {plugin.manifest.runtime === 'python' ? t('Python · 可信本机代码') : t('JavaScript · 沙箱')}
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] leading-4 text-canvas-text-secondary">
-                    {plugin.manifest.description || '未提供说明'}
+                    {plugin.manifest.description || t('未提供说明')}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {nodeTypes.map((nodeType) => (
@@ -1067,14 +1069,14 @@ export default function PluginSettings() {
                   </div>
                   <details className="mt-2 text-[11px] text-canvas-text-secondary">
                     <summary className="w-fit cursor-pointer select-none rounded hover:text-canvas-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canvas-text-muted">
-                      详细信息
+                      {t("详细信息")}
                     </summary>
                     <div className="mt-1 break-words text-[10px] leading-4 text-canvas-text-muted">
-                      API v{plugin.manifest.apiVersion} · {plugin.manifest.entry} · 入口：{placementLabels || '未声明'}<br />
-                      工具 {plugin.manifest.contributes.nodeTools.length} 个 · 自定义节点 {customNodes.length} 个<br />
-                      读取：{inputFields.join('、') || '无'} · 写入：{outputFields.join('、') || '无'}<br />
-                      权限：{plugin.manifest.permissions.join('、')}<br />
-                      代码 SHA-256：<span className="break-all font-mono" title={plugin.sourceDigest}>{plugin.sourceDigest ?? '待原生迁移'}</span>
+                      API v{plugin.manifest.apiVersion} · {plugin.manifest.entry} {t("· 入口：")}{placementLabels || t('未声明')}<br />
+                      {t('{tools} 个工具 · {nodes} 个自定义节点', { tools: plugin.manifest.contributes.nodeTools.length, nodes: customNodes.length })}<br />
+                      {t("读取：")}{inputFields.join('、') || t('无')} {t("· 写入：")}{outputFields.join('、') || t('无')}<br />
+                      {t("权限：")}{plugin.manifest.permissions.join('、')}<br />
+                      {t("代码 SHA-256：")}<span className="break-all font-mono" title={plugin.sourceDigest}>{plugin.sourceDigest ?? t('待原生迁移')}</span>
                     </div>
                   </details>
                 </div>
@@ -1083,12 +1085,12 @@ export default function PluginSettings() {
                     <AnimatedButton
                       type="button"
                       disabled={busy}
-                      aria-label={`重新载入 ${plugin.manifest.name}`}
+                      aria-label={t('重新载入 {name}', { name: plugin.manifest.name })}
                       className="ui-btn ui-btn--sm"
                       onClick={() => void installFromPaths([localDirectories[plugin.id]], true, plugin.id)}
                     >
                       <Icon icon="lucide:refresh-cw" width={14} height={14} />
-                      重新载入
+                      {t("重新载入")}
                     </AnimatedButton>
                   )}
                   <AnimatedButton
@@ -1097,20 +1099,20 @@ export default function PluginSettings() {
                     aria-checked={plugin.enabled}
                     className={`rounded-md px-2 py-1 text-[11px] ${plugin.enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-canvas-surface text-canvas-text-muted'}`}
                     onClick={() => void togglePlugin(plugin).catch((error) => {
-                      showToast(error instanceof Error ? error.message : '插件状态保存失败', 'error');
+                      showToast(error instanceof Error ? error.message : t('插件状态保存失败'), 'error');
                     })}
                   >
-                    {plugin.enabled ? '已启用' : '已停用'}
+                    {plugin.enabled ? t('已启用') : t('已停用')}
                   </AnimatedButton>
                   <AnimatedButton
                     type="button"
-                    aria-label={`卸载 ${plugin.manifest.name}`}
+                    aria-label={t('卸载 {name}', { name: plugin.manifest.name })}
                     className="rounded-md p-1.5 text-canvas-text-muted hover:bg-red-500/10 hover:text-red-400"
                     onClick={() => {
-                      void confirmAction(`确定卸载插件「${plugin.manifest.name}」吗？`, { title: '卸载插件' }).then((confirmed) => {
+                      void confirmAction(t('确定卸载插件「{name}」吗？', { name: plugin.manifest.name }), { title: t('卸载插件') }).then((confirmed) => {
                         if (!confirmed) return;
                         void deletePlugin(plugin.id).catch((error) => {
-                          showToast(error instanceof Error ? error.message : '插件卸载失败', 'error');
+                          showToast(error instanceof Error ? error.message : t('插件卸载失败'), 'error');
                         });
                       });
                     }}
@@ -1124,7 +1126,7 @@ export default function PluginSettings() {
         })}
         {plugins.length === 0 && (
           <div className="rounded-xl border border-dashed border-canvas-border p-8 text-center text-xs text-canvas-text-muted">
-            还没有安装插件
+            {t("还没有安装插件")}
           </div>
         )}
       </section>
@@ -1132,7 +1134,7 @@ export default function PluginSettings() {
       <ModalOverlay
         isOpen={guideOpen}
         onClose={() => setGuideOpen(false)}
-        ariaLabel="AI Canvas 插件开发规范"
+        ariaLabel={t("AI Canvas 插件开发规范")}
         className="h-[min(780px,calc(100vh-40px))] w-[min(920px,calc(100vw-40px))] border-canvas-border"
         motionPreset="quick"
       >
@@ -1141,8 +1143,8 @@ export default function PluginSettings() {
             <Icon icon="lucide:book-open-text" width={18} height={18} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-canvas-text">AI Canvas 插件开发规范</h2>
-            <p className="mt-0.5 text-[11px] text-canvas-text-muted">Plugin API 1 / 2 · 与当前插件运行时同步</p>
+            <h2 className="text-sm font-semibold text-canvas-text">{t("AI Canvas 插件开发规范")}</h2>
+            <p className="mt-0.5 text-[11px] text-canvas-text-muted">{t("Plugin API 1 / 2 · 与当前插件运行时同步")}</p>
           </div>
           <AnimatedButton
             type="button"
@@ -1152,10 +1154,10 @@ export default function PluginSettings() {
             onClick={() => void downloadDeveloperGuide()}
           >
             <Icon icon="lucide:download" width={14} height={14} className="shrink-0" />
-            <span className="hidden sm:inline">下载 Markdown</span>
-            <span className="sm:hidden">下载</span>
+            <span className="hidden sm:inline">{t("下载 Markdown")}</span>
+            <span className="sm:hidden">{t("下载")}</span>
           </AnimatedButton>
-          <PopupCloseButton ariaLabel="关闭插件开发规范" onClick={() => setGuideOpen(false)} />
+          <PopupCloseButton ariaLabel={t("关闭插件开发规范")} onClick={() => setGuideOpen(false)} />
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 text-[12px] leading-6 text-canvas-text-secondary sm:px-7 sm:py-6">
           <ChatMarkdown value={pluginDeveloperGuide} />

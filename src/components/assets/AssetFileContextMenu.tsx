@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
@@ -22,6 +23,7 @@ export interface AssetFileContextMenuProps {
 /** 资产文件菜单只管理交互；路径、提示词查询及删除由资产面板编排。 */
 export default function AssetFileContextMenu({ name, x, y, canFileActions, canCopyPrompt,
   confirmDelete = false, onCopy, onCopyPrompt, onReveal, onDelete, onClose, onCreateCreativeAsset }: AssetFileContextMenuProps) {
+  useT();
   const menuRef = useRef<HTMLDivElement>(null);
   const [confirming, setConfirming] = useState(confirmDelete);
   const [pending, setPending] = useState(false);
@@ -78,42 +80,42 @@ export default function AssetFileContextMenu({ name, x, y, canFileActions, canCo
     finally { pendingRef.current = false; if (mountedRef.current) setPending(false); }
   };
 
-  if (confirming) return <ModalOverlay isOpen onClose={close} ariaLabel="移入回收站" zIndex={360}
+  if (confirming) return <ModalOverlay isOpen onClose={close} ariaLabel={t("移入回收站")} zIndex={360}
     motionPreset="quick" closeOnBackdrop={!pending} className="w-[min(420px,calc(100vw-24px))] p-3 gap-3">
-    <h3 className="text-sm font-semibold text-canvas-text">移入系统回收站？</h3>
+    <h3 className="text-sm font-semibold text-canvas-text">{t("移入系统回收站？")}</h3>
     <p className="text-sm text-canvas-text break-words">{name}</p>
-    <p className="text-xs text-canvas-text-secondary leading-relaxed">这会移除磁盘原文件，可能影响画布中的引用。提示词、参考图关联和生成历史将保留，可从系统回收站恢复文件。</p>
-    {error && <p role="alert" className="ui-alert ui-alert--danger">{error}</p>}
+    <p className="text-xs text-canvas-text-secondary leading-relaxed">{t("这会移除磁盘原文件，可能影响画布中的引用。提示词、参考图关联和生成历史将保留，可从系统回收站恢复文件。")}</p>
+    {error && <p role="alert" className="ui-alert ui-alert--danger">{t(error)}</p>}
     <div className="flex justify-end gap-2">
-      <button type="button" className="ui-btn ui-btn--ghost" disabled={pending} onClick={close}>取消</button>
-      <button type="button" className="ui-btn ui-btn--danger" disabled={pending} onClick={() => void run(onDelete)}>{pending ? '正在移入…' : '移入回收站'}</button>
+      <button type="button" className="ui-btn ui-btn--ghost" disabled={pending} onClick={close}>{t("取消")}</button>
+      <button type="button" className="ui-btn ui-btn--danger" disabled={pending} onClick={() => void run(onDelete)}>{pending ? t('正在移入…') : t('移入回收站')}</button>
     </div>
   </ModalOverlay>;
 
   const left = Math.max(8, Math.min(x, (window.innerWidth || 1024) - 216));
   const top = Math.max(8, Math.min(y, (window.innerHeight || 768) - (onCreateCreativeAsset ? 292 : 172)));
-  return createPortal(<div ref={menuRef} role="menu" aria-label={`${name}的文件操作`} className="ui-menu w-52"
+  return createPortal(<div ref={menuRef} role="menu" aria-label={t('{name}的文件操作', { name })} className="ui-menu w-52"
     style={{ position: 'fixed', left, top, zIndex: 340 }} onContextMenu={(event) => event.preventDefault()}>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canFileActions || pending} onClick={() => void run(onCopy)}>
-      <Icon icon="lucide:copy" className="w-4 h-4" />复制</button>
+      <Icon icon="lucide:copy" className="w-4 h-4" />{t("复制")}</button>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canCopyPrompt || pending} onClick={() => void run(onCopyPrompt)}>
-      <Icon icon="lucide:clipboard-copy" className="w-4 h-4" />复制提示词</button>
+      <Icon icon="lucide:clipboard-copy" className="w-4 h-4" />{t("复制提示词")}</button>
     <button type="button" role="menuitem" className="ui-menu__item" disabled={!canFileActions || pending} onClick={() => void run(onReveal)}>
-      <Icon icon="lucide:folder-open" className="w-4 h-4" />打开文件所在目录</button>
+      <Icon icon="lucide:folder-open" className="w-4 h-4" />{t("打开文件所在目录")}</button>
     {onCreateCreativeAsset && <>
       <div className="ui-menu__sep" />
-      {([{ kind: 'character', label: '添加到全局人物', icon: 'lucide:contact-round' },
-        { kind: 'scene', label: '添加到全局场景', icon: 'lucide:landmark' },
-        { kind: 'prop', label: '添加到全局道具', icon: 'lucide:box' }] as const).map((item) => (
+      {([{ kind: 'character', label: t('添加到全局人物'), icon: 'lucide:contact-round' },
+        { kind: 'scene', label: t('添加到全局场景'), icon: 'lucide:landmark' },
+        { kind: 'prop', label: t('添加到全局道具'), icon: 'lucide:box' }] as const).map((item) => (
         <button key={item.kind} type="button" role="menuitem" className="ui-menu__item" disabled={pending}
           onClick={() => void run(() => onCreateCreativeAsset(item.kind))}>
-          <Icon icon={item.icon} className="w-4 h-4" aria-hidden="true" />{item.label}
+          <Icon icon={item.icon} className="w-4 h-4" aria-hidden="true" />{t(item.label)}
         </button>
       ))}
     </>}
     <div className="ui-menu__sep" />
     <button type="button" role="menuitem" className="ui-menu__item is-danger" disabled={!canFileActions || pending} onClick={() => setConfirming(true)}>
-      <Icon icon="lucide:trash-2" className="w-4 h-4" />删除</button>
-    {error && <p role="alert" className="px-2 text-xs text-canvas-text-secondary">{error}</p>}
+      <Icon icon="lucide:trash-2" className="w-4 h-4" />{t("删除")}</button>
+    {error && <p role="alert" className="px-2 text-xs text-canvas-text-secondary">{t(error)}</p>}
   </div>, document.body);
 }

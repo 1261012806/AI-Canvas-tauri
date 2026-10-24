@@ -1,4 +1,5 @@
 import Select from '../shared/Select';
+import { useT } from '../../i18n';
 import { Icon } from '@iconify/react';
 import { Handle, Position } from '@xyflow/react';
 import { memo, useMemo, useState } from 'react';
@@ -18,6 +19,7 @@ function jsonRecord(value: unknown): Record<string, PluginJsonValue> {
 }
 
 function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; selected?: boolean }) {
+  const t = useT();
   const plugins = useAppStore((state) => state.installedPlugins);
   const config = useAppStore((state) => state.config);
   const updateNodeData = useAppStore((state) => state.updateNodeData);
@@ -52,7 +54,7 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
     try {
       await executePluginNode(available, id, models);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '插件节点执行失败', 'error');
+      showToast(error instanceof Error ? error.message : t('插件节点执行失败'), 'error');
     } finally {
       setBusy(false);
     }
@@ -61,8 +63,8 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
   if (!available) {
     return (
       <div className="w-80 rounded-xl border border-red-500/30 bg-canvas-card p-4 text-xs text-canvas-text-secondary">
-        <div className="font-medium text-red-300">插件节点不可用</div>
-        <div className="mt-1">请重新安装或启用插件：{String(data.pluginId || '未知插件')}</div>
+        <div className="font-medium text-red-300">{t('插件节点不可用')}</div>
+        <div className="mt-1">{t('请重新安装或启用插件：{plugin}', { plugin: String(data.pluginId || t('未知插件')) })}</div>
       </div>
     );
   }
@@ -104,7 +106,7 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
           disabled={busy}
           onClick={() => void run()}
         >
-          {busy ? '运行中…' : '运行'}
+          {t(busy ? '运行中…' : '运行')}
         </button>
       </header>
 
@@ -132,7 +134,7 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
                   value={typeof value === 'string' ? value : ''}
                   onChange={(selectedOptionValue) => setValue(field.id, selectedOptionValue)}
                 >
-                  <option value="">{field.placeholder || '请选择'}</option>
+                  <option value="">{field.placeholder || t('请选择')}</option>
                   {field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </Select>
               ) : field.type === 'boolean' ? (
@@ -148,7 +150,7 @@ function PluginNode({ id, data, selected }: { id: string; data: BaseNodeData; se
                   value={typeof value === 'string' ? value : ''}
                   onChange={(selectedOptionValue) => setValue(field.id, selectedOptionValue)}
                 >
-                  <option value="">{models.length > 0 ? '选择可调用模型' : '暂无可调用模型'}</option>
+                  <option value="">{t(models.length > 0 ? '选择可调用模型' : '暂无可调用模型')}</option>
                   {models
                     .filter((model) => field.modelCategories?.includes(model.category))
                     .map((model) => <option key={model.id} value={model.id}>{model.name} · {model.category}</option>)}

@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/useAppStore';
 import type { ReferencePreviewContent, ReferencePreviewSource } from '../../types/referencePreview';
 import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../utils/referencePreviewEvents';
 import ModalOverlay from './ModalOverlay';
+import { t, useT } from '../../i18n';
 
 const ReferenceContentPreview = lazy(() => import('./ReferenceContentPreview'));
 
@@ -21,6 +22,7 @@ const sourceKey = (source: ReferencePreviewSource) => JSON.stringify([
 
 /** 每个宿主窗口一个入口，覆盖编辑器和 Portal，不为每枚胶囊挂载播放器或订阅画布。 */
 export default function ReferencePreviewHost({ detached = false }: { detached?: boolean }) {
+  useT();
   const [session, setSession] = useState<PreviewSession | null>(null);
   const request = useRef<{ controller: AbortController; unsubscribe: () => void } | null>(null);
   const serial = useRef(0);
@@ -67,7 +69,7 @@ export default function ReferencePreviewHost({ detached = false }: { detached?: 
         if (state.currentProjectId !== projectId) close();
       });
       request.current = { controller, unsubscribe };
-      setSession({ key, source, content: { kind: 'text', title: source.label || '引用内容' }, loading: true, canGoBack });
+      setSession({ key, source, content: { kind: 'text', title: source.label || t('引用内容') }, loading: true, canGoBack });
       const resolve = async () => {
         if (detached) {
           const { requestDetachedReferencePreview } = await import('../../services/chat/chatReferencePreviewService');
@@ -81,7 +83,7 @@ export default function ReferencePreviewHost({ detached = false }: { detached?: 
           && useAppStore.getState().currentProjectId === projectId) setSession({ key, source, content, loading: false, canGoBack });
       }, () => {
         if (!controller.signal.aborted && serial.current === key) setSession({ key, source, loading: false, canGoBack,
-          content: { kind: 'text', title: source.label || '引用内容', unavailable: '内容读取失败，请检查引用是否仍可用后重试' } });
+          content: { kind: 'text', title: source.label || t('引用内容'), unavailable: '内容读取失败，请检查引用是否仍可用后重试' } });
       });
     };
     openRef.current = open;
@@ -159,9 +161,9 @@ export default function ReferencePreviewHost({ detached = false }: { detached?: 
   }, [back, close, detached]);
 
   if (!session) return null;
-  return <Suspense fallback={<ModalOverlay isOpen onClose={close} ariaLabel="引用内容"
+  return <Suspense fallback={<ModalOverlay isOpen onClose={close} ariaLabel={t('引用内容')}
     className="asset-image-preview reference-content-preview" zIndex={400} motionPreset="quick" backdropBlur={false}>
-    <div data-reference-preview-open className="p-3 text-sm text-canvas-text-secondary" role="status">正在打开引用内容…</div>
+    <div data-reference-preview-open className="p-3 text-sm text-canvas-text-secondary" role="status">{t('正在打开引用内容…')}</div>
   </ModalOverlay>}>
     <ReferenceContentPreview key={session.key} source={session.source} content={session.content} loading={session.loading}
       onBack={session.canGoBack ? back : undefined} onClose={close} />

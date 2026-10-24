@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect } from 'react';
 import { useImageViewportGesture } from '../../hooks/useImageViewportGesture';
+import { useT } from '../../i18n';
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
@@ -24,6 +25,7 @@ interface ZoomableImageProps {
 }
 
 export default function ZoomableImage({ src, alt = '', className = '', onError, onClose }: ZoomableImageProps) {
+  const t = useT();
   const {
     containerRef,
     containerEl,
@@ -101,15 +103,15 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
       </div>
 
       <div className="zoom-controls" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        <button type="button" className="zoom-btn" onClick={() => stepZoom(-1)} aria-label="缩小" disabled={scale <= MIN_SCALE}>
+        <button type="button" className="zoom-btn" onClick={() => stepZoom(-1)} aria-label={t('缩小')} disabled={scale <= MIN_SCALE}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
-        <button type="button" className="zoom-percent" onClick={reset} aria-label="复位缩放" data-tooltip="点击复位">
+        <button type="button" className="zoom-percent" onClick={reset} aria-label={t('复位缩放')} data-tooltip={t('点击复位')}>
           {Math.round(scale * 100)}%
         </button>
-        <button type="button" className="zoom-btn" onClick={() => stepZoom(1)} aria-label="放大" disabled={scale >= MAX_SCALE}>
+        <button type="button" className="zoom-btn" onClick={() => stepZoom(1)} aria-label={t('放大')} disabled={scale >= MAX_SCALE}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />

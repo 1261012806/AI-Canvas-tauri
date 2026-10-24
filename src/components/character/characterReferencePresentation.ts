@@ -3,6 +3,7 @@
  * 提供参考图类别（主视觉/头像/全身/表情/转面/服装）与声音类别（音色/台词/情绪）的中文标签、
  * 裁剪矩形样式、声音片段标题与时长格式化等纯展示逻辑，供角色库与角色资产弹窗复用。
  */
+import { t } from '../../i18n';
 import type {
   CharacterCropRect,
   CharacterReferenceImage,
@@ -28,7 +29,7 @@ export const CHARACTER_VOICE_KIND_LABELS: Record<CharacterVoiceClip['kind'], str
 
 /** 声音片段展示名：优先自定义名，其次用途标签 */
 export function voiceClipTitle(clip: CharacterVoiceClip): string {
-  return clip.label?.trim() || CHARACTER_VOICE_KIND_LABELS[clip.kind];
+  return clip.label?.trim() || t(CHARACTER_VOICE_KIND_LABELS[clip.kind]);
 }
 
 export function formatVoiceDuration(durationSec?: number): string {

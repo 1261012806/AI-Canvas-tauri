@@ -213,7 +213,7 @@ export default function ProviderModelSection({
               }`}
               onClick={() => onToggleVisibleCategory(item)}
             >
-              {GENERAL_MODEL_CATEGORY_LABELS[item]}
+              {t(GENERAL_MODEL_CATEGORY_LABELS[item])}
             </button>
           ))}
         </div>
@@ -258,7 +258,7 @@ export default function ProviderModelSection({
                   className={`provider-category-choice is-${item} ${category === item ? 'is-active' : ''}`}
                   onClick={() => setCategory(item)}
                 >
-                  {GENERAL_MODEL_CATEGORY_LABELS[item]}
+                  {t(GENERAL_MODEL_CATEGORY_LABELS[item])}
                 </button>
               ))}
             </div>
@@ -273,7 +273,7 @@ export default function ProviderModelSection({
               />
               <span>{t('选择当前结果')}</span>
             </label>
-            <span>{selectedModels.length} 个已选</span>
+            <span>{t('已选 {count} 个模型', { count: selectedModels.length })}</span>
           </div>
 
           <div className="provider-model-list">
@@ -285,12 +285,12 @@ export default function ProviderModelSection({
                 <button
                   type="button"
                   className={`provider-model-kind is-${model.category}`}
-                  aria-label={`修改 ${model.name} 的模型分类，当前为${GENERAL_MODEL_CATEGORY_LABELS[model.category]}`}
-                  title="点击修改模型分类"
+                  aria-label={t('修改 {name} 的模型分类，当前为{category}', { name: model.name, category: t(GENERAL_MODEL_CATEGORY_LABELS[model.category]) })}
+                  title={t("点击修改模型分类")}
                   aria-expanded={categoryEditModelId === model.id}
                   onClick={() => setCategoryEditModelId((current) => current === model.id ? null : model.id)}
                 >
-                  {GENERAL_MODEL_CATEGORY_LABELS[model.category]}
+                  {t(GENERAL_MODEL_CATEGORY_LABELS[model.category])}
                 </button>
                 <label className="provider-model-select">
                   <input
@@ -302,7 +302,7 @@ export default function ProviderModelSection({
                     <strong>{model.name}</strong>
                     <small>{model.id}</small>
                     {definition.id === 'custom-openai' && describeModelParameterGaps(model) ?
-                      <small>{describeModelParameterGaps(model)}</small> : null}
+                      <small>{t(describeModelParameterGaps(model))}</small> : null}
                   </span>
                 </label>
                 {definition.id === 'custom-openai' && selectedIds.has(model.id) ? (
@@ -310,7 +310,7 @@ export default function ProviderModelSection({
                     {model.category === 'image' ? (
                       <AnimatedButton type="button"
                         className={`ui-btn ui-icon-btn ui-icon-btn--sm${imageSettingsId === model.id ? ' is-active' : ''}`}
-                        aria-label={`配置 ${model.name} 图片参数能力`} title="图片参数能力"
+                        aria-label={t('配置 {name} 图片参数能力', { name: model.name })} title={t("图片参数能力")}
                         aria-pressed={imageSettingsId === model.id}
                         onClick={() => {
                           void onOpenModelSettings(model.id, 'image').then((opened) => { if (opened) scrollToSettings(); });
@@ -320,8 +320,8 @@ export default function ProviderModelSection({
                       <AnimatedButton
                         type="button"
                         className={`ui-btn ui-icon-btn ui-icon-btn--sm${videoSettingsId === model.id ? ' is-active' : ''}`}
-                        aria-label={`配置 ${model.name} 视频参数能力`}
-                        title="视频参数能力"
+                        aria-label={t('配置 {name} 视频参数能力', { name: model.name })}
+                        title={t("视频参数能力")}
                         aria-pressed={videoSettingsId === model.id}
                         onClick={() => {
                           void onOpenModelSettings(model.id, 'video').then((opened) => { if (opened) scrollToSettings(); });
@@ -333,8 +333,8 @@ export default function ProviderModelSection({
                     <AnimatedButton
                       type="button"
                       className={`ui-btn ui-icon-btn ui-icon-btn--sm${protocolSettingsId === model.id ? ' is-active' : ''}`}
-                      aria-label={`配置 ${model.name} 调用协议`}
-                      title="调用协议"
+                      aria-label={t('配置 {name} 调用协议', { name: model.name })}
+                      title={t("调用协议")}
                       aria-pressed={protocolSettingsId === model.id}
                       onClick={() => {
                         void onOpenModelSettings(model.id, 'protocol').then((opened) => { if (opened) scrollToSettings(); });
@@ -348,9 +348,9 @@ export default function ProviderModelSection({
                   <div
                     className="provider-model-category-editor"
                     role="group"
-                    aria-label={`选择 ${model.name} 的模型分类`}
+                    aria-label={t('选择 {name} 的模型分类', { name: model.name })}
                   >
-                    <span className="provider-model-category-editor-title">分类</span>
+                    <span className="provider-model-category-editor-title">{t("分类")}</span>
                     {CATEGORY_ORDER.map((item) => (
                       <button
                         key={item}
@@ -362,7 +362,7 @@ export default function ProviderModelSection({
                           else onUpdateModelCategory(model.id, item);
                         }}
                       >
-                        {GENERAL_MODEL_CATEGORY_LABELS[item]}
+                        {t(GENERAL_MODEL_CATEGORY_LABELS[item])}
                       </button>
                     ))}
                     {model.category === 'text' ? (
@@ -376,15 +376,15 @@ export default function ProviderModelSection({
                               event.target.checked,
                             )}
                           />
-                          <span>支持图片输入</span>
+                          <span>{t("支持图片输入")}</span>
                         </label>
                         <label className="provider-model-context-window">
-                          <span>上下文窗口（token）</span>
+                          <span>{t("上下文窗口（token）")}</span>
                           <input
                             type="text"
                             inputMode="numeric"
                             value={model.contextWindow ?? ''}
-                            placeholder="留空则按模型 ID 推断"
+                            placeholder={t("留空则按模型 ID 推断")}
                             onChange={(event) => onUpdateModelContextWindow(
                               model.id,
                               event.target.value,
@@ -394,12 +394,12 @@ export default function ProviderModelSection({
                       </>
                     ) : null}
                     <label className="provider-model-description-editor">
-                      <span>Agent 选型说明</span>
+                      <span>{t("Agent 选型说明")}</span>
                       <textarea
                         value={model.description ?? ''}
                         maxLength={500}
                         rows={2}
-                        placeholder="例如：适合中文 OCR、角色图分析，速度快、成本低"
+                        placeholder={t("例如：适合中文 OCR、角色图分析，速度快、成本低")}
                         onChange={(event) => onUpdateModelDescription(model.id, event.target.value)}
                       />
                     </label>
@@ -407,7 +407,7 @@ export default function ProviderModelSection({
                 ) : null}
               </div>
             )) : (
-              <div className="provider-model-empty">没有匹配的模型</div>
+              <div className="provider-model-empty">{t("没有匹配的模型")}</div>
             )}
           </div>
 
@@ -476,13 +476,13 @@ export default function ProviderModelSection({
             <input
               type="text"
               value={manualModelId}
-              placeholder="手动输入模型 ID"
+              placeholder={t("手动输入模型 ID")}
               onChange={(event) => setManualModelId(event.target.value)}
             />
             <input
               type="text"
               value={manualModelName}
-              placeholder="显示名称（可选）"
+              placeholder={t("显示名称（可选）")}
               onChange={(event) => setManualModelName(event.target.value)}
             />
             <Select fixedMenu
@@ -490,13 +490,13 @@ export default function ProviderModelSection({
               onChange={(selectedOptionValue) => setManualCategory(selectedOptionValue as GeneralModelCategory)}
             >
               {CATEGORY_ORDER.map((item) => (
-                <option key={item} value={item}>{GENERAL_MODEL_CATEGORY_LABELS[item]}</option>
+                <option key={item} value={item}>{t(GENERAL_MODEL_CATEGORY_LABELS[item])}</option>
               ))}
             </Select>
             <AnimatedButton
               type="button"
               className="provider-icon-btn"
-              aria-label="添加手动模型"
+              aria-label={t("添加手动模型")}
               disabled={!manualModelId.trim()}
               onClick={onAddManualModel}
             >

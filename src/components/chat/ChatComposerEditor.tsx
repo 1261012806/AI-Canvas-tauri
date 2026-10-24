@@ -8,7 +8,7 @@ import {
   useImperativeHandle,
   useRef,
 } from 'react';
-import { useT } from '../../i18n';
+import { t as translate, useT } from '../../i18n';
 import type { PromptSubmitShortcut } from '../../types';
 import { resolvePromptEnterAction } from '../../utils/promptSubmitShortcut';
 import { buildReferenceChipEl } from '../shared/referenceChipDom';
@@ -103,7 +103,7 @@ function parseReference(match: RegExpExecArray, nodeDisplayIds: ReadonlyMap<stri
     return {
       kind: 'model',
       id: match[3],
-      label: match[4] || '模型',
+      label: match[4] || translate('模型'),
       raw,
     };
   }
@@ -115,11 +115,11 @@ function parseReference(match: RegExpExecArray, nodeDisplayIds: ReadonlyMap<stri
       raw,
     };
   }
-  if (match[9] !== undefined) return { kind: 'image', id: match[9], label: decodeLabel(match[10]) || '参考图', raw };
+  if (match[9] !== undefined) return { kind: 'image', id: match[9], label: decodeLabel(match[10]) || translate('参考图'), raw };
   return {
     kind: 'drama',
     id: match[7],
-    label: match[8] || '资产',
+    label: match[8] || translate('资产'),
     raw,
   };
 }
@@ -139,6 +139,12 @@ function ensureCaretSlotBefore(referenceElement: HTMLElement): void {
   if (!previous || isBreakElement(previous) || isReferenceElement(previous)) {
     referenceElement.parentNode?.insertBefore(document.createTextNode(ZWSP), referenceElement);
   }
+}
+
+function setReferenceAriaLabel(element: HTMLElement, reference: ParsedReference): void {
+  element.setAttribute('aria-label', `${translate(REFERENCE_ARIA_PREFIX[reference.kind])} ${reference.label}${
+    reference.kind === 'node' && reference.displayId != null ? translate('，编号 {id}', { id: reference.displayId }) : ''
+  }`);
 }
 
 function buildReferenceElement(reference: ParsedReference, presentation?: ChatComposerEditorProps['referencePresentation']): HTMLSpanElement {
@@ -169,9 +175,7 @@ function buildReferenceElement(reference: ParsedReference, presentation?: ChatCo
     element.setAttribute('data-chat-image-file-name', reference.id);
     element.setAttribute('data-chat-image-label', reference.label);
   }
-  element.setAttribute('aria-label', `${REFERENCE_ARIA_PREFIX[reference.kind]} ${reference.label}${
-    reference.kind === 'node' && reference.displayId != null ? `，编号 ${reference.displayId}` : ''
-  }`);
+  setReferenceAriaLabel(element, reference);
   return element;
 }
 
@@ -349,6 +353,15 @@ const ChatComposerEditor = forwardRef<ChatComposerEditorHandle, ChatComposerEdit
     referencePresentation?.synchronize?.(editor);
     if (hadFocus) placeCaretAtEnd(editor);
   }, [nodeDisplayIds, value, referencePresentation]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    for (const element of editor.querySelectorAll<HTMLElement>('[data-chat-reference-raw]')) {
+      const match = element.getAttribute('data-chat-reference-raw')?.matchAll(REFERENCE_PATTERN).next().value;
+      if (match) setReferenceAriaLabel(element, parseReference(match, nodeDisplayIds));
+    }
+  }, [nodeDisplayIds, t]);
 
   useEffect(() => {
     const focusEditor = () => editorRef.current?.focus();

@@ -179,7 +179,7 @@ export default function OnboardingDialog({ onClose, onOpenHelp }: OnboardingDial
                 <div className="flex flex-wrap items-center gap-2">
                   <h4 className="text-sm font-medium text-canvas-text">{t(tip.title)}</h4>
                   <kbd className="rounded-md border border-canvas-border bg-canvas-hover px-1.5 py-0.5 font-sans text-[10px] font-medium text-canvas-text-secondary">
-                    {tip.shortcut}
+                    {t(tip.shortcut)}
                   </kbd>
                 </div>
                 <p className="mt-1.5 text-xs leading-5 text-canvas-text-secondary">{t(tip.description)}</p>

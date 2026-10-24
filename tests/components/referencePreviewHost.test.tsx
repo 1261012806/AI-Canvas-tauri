@@ -19,6 +19,10 @@ const driver = vi.hoisted(() => ({
   now: 1000,
   stateWrites: 0,
 }));
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => {
   const memo = <T,>(factory: () => T, deps: readonly unknown[]) => {
     const scope = driver.scope!; const index = scope.memoIndex++; const previous = scope.memos[index];

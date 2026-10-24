@@ -632,7 +632,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         } catch {
           // Action 先移除内存配置，再清理项目引用。后者失败不能跳过配置提交。
           // 若配置仍存在，则删除本身未完成，不能当作引用清理失败继续。
-          if (useAppStore.getState().config.providers[id]) throw new Error('连接删除失败，请重试');
+          if (useAppStore.getState().config.providers[id]) throw new Error(t('连接删除失败，请重试'));
           cleanupFailed = true;
         }
       }
@@ -850,7 +850,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                         {hasRunningHubWorkflowKey ? t('工作流连接已配置') : t('工作流连接未配置')}
                       </span>
                       <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost provider-runninghub-manage" onClick={() => { useAppStore.getState().setSettingsOpen(false); useAppStore.getState().setWorkflowPanelOpen(true, 'workflow'); }}>
-                        管理云工作流 <Icon icon="mdi:arrow-right" width="14" />
+                        {t("管理云工作流")} <Icon icon="mdi:arrow-right" width="14" />
                       </button>
                     </div>
                   </div>}
@@ -880,7 +880,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                   ) : (
                     <div className="provider-card-actions">
                       {definition.id === 'volcengine' && (
-                        <AnimatedButton type="button" className="provider-icon-btn" aria-label="查看火山方舟用量记录" data-tooltip="用量记录" onClick={() => setBillingOpen(true)}>
+                        <AnimatedButton type="button" className="provider-icon-btn" aria-label={t("查看火山方舟用量记录")} data-tooltip={t("用量记录")} onClick={() => setBillingOpen(true)}>
                           <Icon icon="lucide:receipt-text" width="16" />
                         </AnimatedButton>
                       )}
@@ -926,7 +926,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         )}
         {!hasVolcengineConnection && hasBillingHistory && (
           <button type="button" className="ui-btn ui-btn--sm ui-btn--secondary mt-3" onClick={() => setBillingOpen(true)}>
-            <Icon icon="lucide:receipt-text" />火山方舟历史用量
+            <Icon icon="lucide:receipt-text" />{t("火山方舟历史用量")}
           </button>
         )}
       </div>
@@ -976,7 +976,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       <ModalOverlay
         isOpen={billingOpen}
         onClose={() => setBillingOpen(false)}
-        ariaLabel="火山方舟用量记录"
+        ariaLabel={t("火山方舟用量记录")}
         className="h-[min(860px,calc(100dvh-24px))] w-[min(1120px,calc(100vw-24px))]"
         zIndex={270}
         closeOnBackdrop={false}
@@ -984,11 +984,11 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-canvas-border px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <Icon icon="lucide:receipt-text" width="19" className="shrink-0 text-canvas-text-secondary" />
-            <h2 className="truncate text-base font-semibold text-canvas-text">火山方舟用量记录</h2>
+            <h2 className="truncate text-base font-semibold text-canvas-text">{t("火山方舟用量记录")}</h2>
           </div>
           <PopupCloseButton
-            ariaLabel="关闭用量记录"
-            title="关闭"
+            ariaLabel={t("关闭用量记录")}
+            title={t("关闭")}
             onClick={() => setBillingOpen(false)}
           />
         </div>

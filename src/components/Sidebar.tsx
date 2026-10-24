@@ -845,7 +845,7 @@ export default function Sidebar() {
           <path d="M4 18l1 1 2-2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="task-center-tooltip">
-          <span>任务</span>
+          <span>{t('任务')}</span>
           <span className="task-center-tooltip-beta">beta</span>
         </span>
       </button> */}

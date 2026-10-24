@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -61,6 +62,7 @@ export function RefmodCatalogBrowser({
   onCountChange,
   onDragStart,
 }: RefmodBrowserProps) {
+  useT();
   const { servers, defaultComfyUrl, savedAssets, projectCharacters, globalCharacters, currentProjectId } = useAppStore(useShallow((state) => ({
     servers: state.config.comfyServers,
     defaultComfyUrl: state.config.comfyUIUrl,
@@ -229,38 +231,38 @@ export function RefmodCatalogBrowser({
     onDragStart?.();
   };
   const serverOptions = [
-    { value: DEFAULT_SERVER, label: '默认 ComfyUI 服务器' },
+    { value: DEFAULT_SERVER, label: t('默认 ComfyUI 服务器') },
     ...(servers ?? []).map((server) => ({ value: server.id, label: server.name })),
   ];
   const displayedServer = lockServer ? serverId ?? DEFAULT_SERVER : chosenServer;
-  if (!serverOptions.some((option) => option.value === displayedServer)) serverOptions.push({ value: displayedServer, label: '未配置的服务器' });
+  if (!serverOptions.some((option) => option.value === displayedServer)) serverOptions.push({ value: displayedServer, label: t('未配置的服务器') });
 
   return <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
     <div className="flex flex-wrap items-center gap-2">
       <Select className={compact ? 'w-full' : 'w-60'} value={displayedServer} disabled={lockServer || applying}
-        aria-label="参考包所在服务器" options={serverOptions}
+        aria-label={t("参考包所在服务器")} options={serverOptions}
         onChange={(value) => { setChosenServer(value); setActiveTag(''); setVisibleCount(48); }} />
       <label className="relative min-w-40 flex-1">
-        <span className="sr-only">搜索角色参考包</span>
-        <input className="ui-input" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(48); }} placeholder="搜索名称、文件名或标签" />
+        <span className="sr-only">{t("搜索角色参考包")}</span>
+        <input className="ui-input" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(48); }} placeholder={t("搜索名称、文件名或标签")} />
       </label>
       <button type="button" className="ui-btn ui-btn--secondary" disabled={busy || applying} onClick={() => setRefreshVersion((value) => value + 1)}>
-        <Icon icon={busy ? 'mdi:loading' : 'mdi:refresh'} className={busy ? 'animate-spin' : ''} />{busy ? '读取中' : '刷新目录'}
+        <Icon icon={busy ? 'mdi:loading' : 'mdi:refresh'} className={busy ? 'animate-spin' : ''} />{busy ? t('读取中') : t('刷新目录')}
       </button>
     </div>
-    <p className="text-xs leading-relaxed text-canvas-text-muted">RefMod 是已编码的 H3 角色参考包。文件保留在对应 ComfyUI 服务器中，画布只保存引用。不同插件格式分别显示。</p>
-    {tags.length > 0 && <div className="flex flex-wrap gap-1.5" aria-label="参考包标签">
-      <button type="button" className={`ui-badge ${activeTag ? 'ui-badge--outline' : 'ui-badge--primary'}`} onClick={() => { setActiveTag(''); setVisibleCount(48); }}>全部标签</button>
+    <p className="text-xs leading-relaxed text-canvas-text-muted">{t("RefMod 是已编码的 H3 角色参考包。文件保留在对应 ComfyUI 服务器中，画布只保存引用。不同插件格式分别显示。")}</p>
+    {tags.length > 0 && <div className="flex flex-wrap gap-1.5" aria-label={t("参考包标签")}>
+      <button type="button" className={`ui-badge ${activeTag ? 'ui-badge--outline' : 'ui-badge--primary'}`} onClick={() => { setActiveTag(''); setVisibleCount(48); }}>{t("全部标签")}</button>
       {tags.map((tag) => <button key={tag} type="button" className={`ui-badge ${activeTag === tag ? 'ui-badge--primary' : 'ui-badge--outline'}`} onClick={() => { setActiveTag(activeTag === tag ? '' : tag); setVisibleCount(48); }}>{tag}</button>)}
     </div>}
-    {currentView?.error && <div className="ui-alert ui-alert--warning" role="status"><Icon icon="mdi:cloud-off-outline" /><span>{currentView.error} 已保存的参考包仍保留，连接恢复后刷新目录。</span></div>}
-    {message && <div className="ui-alert ui-alert--warning" role="status"><Icon icon="mdi:alert-outline" /><span>{message}</span></div>}
+    {currentView?.error && <div className="ui-alert ui-alert--warning" role="status"><Icon icon="mdi:cloud-off-outline" /><span>{currentView.error} {t("已保存的参考包仍保留，连接恢复后刷新目录。")}</span></div>}
+    {message && <div className="ui-alert ui-alert--warning" role="status"><Icon icon="mdi:alert-outline" /><span>{t(message)}</span></div>}
     {currentView?.catalog?.warnings.map((warning) => <div key={warning} className="ui-alert ui-alert--info"><Icon icon="mdi:information-outline" /><span>{warning}</span></div>)}
     <div className="ui-scroll min-h-0 flex-1">
       {visibleEntries.length === 0 ? <div className="ui-empty">
         <Icon className="ui-empty__icon" icon={busy ? 'mdi:loading' : 'mdi:account-box-multiple-outline'} />
-        <p className="ui-empty__title">{busy ? '正在读取角色参考包…' : query || activeTag ? '没有匹配的参考包' : '暂无角色参考包'}</p>
-        <p className="ui-empty__desc">{query || activeTag ? '试试其他名称或标签。' : '先在对应 ComfyUI 中安装兼容的 RefMod 插件并保存参考包，再刷新目录。'}</p>
+        <p className="ui-empty__title">{busy ? t('正在读取角色参考包…') : query || activeTag ? t('没有匹配的参考包') : t('暂无角色参考包')}</p>
+        <p className="ui-empty__desc">{query || activeTag ? t('试试其他名称或标签。') : t('先在对应 ComfyUI 中安装兼容的 RefMod 插件并保存参考包，再刷新目录。')}</p>
       </div> : <div className={`grid gap-2 ${compact ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'}`}>
         {visibleEntries.slice(0, visibleCount).map((entry) => {
           const key = comfyRefmodKey(entry);
@@ -276,19 +278,19 @@ export function RefmodCatalogBrowser({
           return <article key={key} className={`ui-card min-w-0 p-2 ${checked ? 'is-selected' : ''}`}
             draggable={draggable && available && !applying} onDragStart={(event) => startDrag(event, entry)}>
             <label className="group relative mb-2 flex aspect-video cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-canvas-bg">
-              {preview ? <ViewportImage className="h-full w-full object-cover" src={preview.url} projectId={preview.projectId} previewMaxEdge={256} draggable={false} alt={`${preview.name}角色参考图`} />
+              {preview ? <ViewportImage className="h-full w-full object-cover" src={preview.url} projectId={preview.projectId} previewMaxEdge={256} draggable={false} alt={t('{name}角色参考图', { name: preview.name })} />
                 : <Icon icon="mdi:account-box-outline" className="text-4xl text-canvas-text-muted" />}
-              <input type="checkbox" className="absolute left-2 top-2 h-4 w-4 accent-brand" aria-label={`选择 ${entry.name}`} checked={checked}
+              <input type="checkbox" className="absolute left-2 top-2 h-4 w-4 accent-brand" aria-label={t('选择 {name}', { name: entry.name })} checked={checked}
                 disabled={!available || existingKeys.has(key) || applying || (!checked && selected.length >= maxSelections)} onChange={() => toggle(key)} />
-              <span className={`ui-badge absolute bottom-2 right-2 ${available ? 'ui-badge--success' : 'ui-badge--warning'}`}>{existingKeys.has(key) && available ? '已添加' : status}</span>
+              <span className={`ui-badge absolute bottom-2 right-2 ${available ? 'ui-badge--success' : 'ui-badge--warning'}`}>{existingKeys.has(key) && available ? t('已添加') : t(status)}</span>
             </label>
             {editingKey === key ? <div className="space-y-2">
-              <label className="ui-field"><span className="ui-label">名称</span><input className="ui-input" value={draftName} maxLength={120} onChange={(event) => setDraftName(event.target.value)} /></label>
-              <label className="ui-field"><span className="ui-label">标签（逗号分隔）</span><input className="ui-input" value={draftTags} maxLength={600} onChange={(event) => setDraftTags(event.target.value)} /></label>
-              <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={saving} onClick={() => setEditingKey(null)}>取消</button><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!draftName.trim() || saving} onClick={() => void saveMetadata(entry, Date.now())}>保存</button></div>
+              <label className="ui-field"><span className="ui-label">{t("名称")}</span><input className="ui-input" value={draftName} maxLength={120} onChange={(event) => setDraftName(event.target.value)} /></label>
+              <label className="ui-field"><span className="ui-label">{t("标签（逗号分隔）")}</span><input className="ui-input" value={draftTags} maxLength={600} onChange={(event) => setDraftTags(event.target.value)} /></label>
+              <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" disabled={saving} onClick={() => setEditingKey(null)}>{t("取消")}</button><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!draftName.trim() || saving} onClick={() => void saveMetadata(entry, Date.now())}>{t("保存")}</button></div>
             </div> : <>
               <div className="flex items-start gap-1"><h3 className="min-w-0 flex-1 break-words text-sm font-medium text-canvas-text">{entry.name}</h3>
-                {editable && <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" aria-label={`编辑 ${entry.name}`} onClick={() => { setEditingKey(key); setDraftName(entry.name); setDraftTags(entry.tags.join(', ')); }}><Icon icon="mdi:pencil-outline" /></button>}
+                {editable && <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost" aria-label={t('编辑 {name}', { name: entry.name })} onClick={() => { setEditingKey(key); setDraftName(entry.name); setDraftTags(entry.tags.join(', ')); }}><Icon icon="mdi:pencil-outline" /></button>}
               </div>
               <p className="mt-1 break-all text-xs text-canvas-text-muted" title={entry.fileName}>{entry.fileName}</p>
               <div className="mt-2 flex flex-wrap gap-1"><span className="ui-badge ui-badge--outline">{LOADER_LABELS[entry.loaderType]}</span>{entry.tags.map((tag) => <span key={tag} className="ui-badge">{tag}</span>)}</div>
@@ -297,16 +299,17 @@ export function RefmodCatalogBrowser({
           </article>;
         })}
       </div>}
-      {visibleEntries.length > visibleCount && <div className="flex justify-center p-3"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setVisibleCount((count) => count + 48)}>加载更多参考包（剩余 {visibleEntries.length - visibleCount} 个）</button></div>}
+      {visibleEntries.length > visibleCount && <div className="flex justify-center p-3"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setVisibleCount((count) => count + 48)}>{t('加载更多参考包（剩余 {count} 个）', { count: visibleEntries.length - visibleCount })}</button></div>}
     </div>
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-canvas-border pt-3">
-      <span className="text-xs text-canvas-text-muted">{entries.length} 个参考包 · 已选择 {selected.length} / {maxSelections}{draggable ? ' · 可拖到 H3 视频节点' : ''}</span>
-      <button type="button" className="ui-btn ui-btn--primary" disabled={!selected.length || applying || busy} onClick={() => void confirm()}><Icon icon={applying ? 'mdi:loading' : 'mdi:plus'} className={applying ? 'animate-spin' : ''} />{applying ? '添加中…' : confirmLabel}</button>
+      <span className="text-xs text-canvas-text-muted">{t('{count} 个参考包 · 已选择 {selected} / {max}', { count: entries.length, selected: selected.length, max: maxSelections })}{draggable ? t(' · 可拖到 H3 视频节点') : ''}</span>
+      <button type="button" className="ui-btn ui-btn--primary" disabled={!selected.length || applying || busy} onClick={() => void confirm()}><Icon icon={applying ? 'mdi:loading' : 'mdi:plus'} className={applying ? 'animate-spin' : ''} />{applying ? t('添加中…') : t(confirmLabel)}</button>
     </div>
   </div>;
 }
 
 export default function RefModAssetsPanel({ compact = false, onCountChange }: { compact?: boolean; onCountChange?: (count: number) => void }) {
+  useT();
   const { request, projectId, mode, nodes, selectedNodeIds } = useAppStore(useShallow((state) => ({
     request: state.assetsPanelRequest,
     projectId: state.currentProjectId,
@@ -327,9 +330,9 @@ export default function RefModAssetsPanel({ compact = false, onCountChange }: { 
   return <div className="flex min-h-0 flex-1 flex-col">
     {binding.request && <Suspense fallback={null}><ComfyRefmodBindingDialog key={binding.requestId} request={binding.request} onApply={binding.apply} onClose={binding.close} /></Suspense>}
     <div className="flex flex-wrap items-center gap-2 border-b border-canvas-border p-3">
-      <span className="text-xs text-canvas-text-secondary">添加到视频节点</span>
-      <Select className="min-w-40 flex-1" value={targetId} disabled={!!requestedNodeId} aria-label="目标 H3 视频节点"
-        options={[{ value: '', label: '选择 H3 视频节点' }, ...videoNodes.map((node) => ({ value: node.id, label: node.label }))]} onChange={setChosenTarget} />
+      <span className="text-xs text-canvas-text-secondary">{t("添加到视频节点")}</span>
+      <Select className="min-w-40 flex-1" value={targetId} disabled={!!requestedNodeId} aria-label={t("目标 H3 视频节点")}
+        options={[{ value: '', label: t('选择 H3 视频节点') }, ...videoNodes.map((node) => ({ value: node.id, label: node.label }))]} onChange={setChosenTarget} />
     </div>
     <RefmodCatalogBrowser compact={compact} editable draggable onConfirm={apply} onCountChange={onCountChange}
       onDragStart={() => { if (mode === 'modal') window.setTimeout(() => useAppStore.getState().setAssetsPanelOpen(false), 0); }} />

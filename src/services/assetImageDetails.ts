@@ -1,3 +1,4 @@
+import { getLocale } from '../i18n';
 import { findImageHistoryByReferences, getNodeHistoryEntries, getProjectById, imageHistoryReferenceKey, type HistoryRecord } from './indexedDbService';
 import { getFileCategory, type AssetFileEntry } from './fileService';
 import type { AssetImageLoadedDetails, AssetImageReferenceView } from '../types/assetImage';
@@ -130,7 +131,7 @@ export function describeAssetImageHistory(history: HistoryRecord): Array<{ label
     }
   }
   if (Number.isFinite(history.timestamp) && history.timestamp > 0) {
-    details.push({ label: '生成时间', value: new Date(history.timestamp).toLocaleString() });
+    details.push({ label: '生成时间', value: new Date(history.timestamp).toLocaleString(getLocale()) });
   }
   return details;
 }

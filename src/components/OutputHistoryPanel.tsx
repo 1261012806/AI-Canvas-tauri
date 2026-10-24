@@ -22,6 +22,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { isTauriEnv, saveAgentTextOutput } from '../services/fileService';
 import ResourceVideoPreview from './shared/ResourceVideoPreview';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
+import { getLocale, t, useT } from '../i18n';
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 type FilterType = 'all' | 'ai-text' | 'ai-image' | 'ai-video' | 'ai-audio';
@@ -39,16 +40,17 @@ const FILTER_OPTIONS: { key: FilterType; label: string }[] = [
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
   const diff = now - ts;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  if (diff < 60_000) return t('刚刚');
+  const relative = new Intl.RelativeTimeFormat(getLocale());
+  if (diff < 3_600_000) return relative.format(-Math.floor(diff / 60_000), 'minute');
+  if (diff < 86_400_000) return relative.format(-Math.floor(diff / 3_600_000), 'hour');
+  if (diff < 604_800_000) return relative.format(-Math.floor(diff / 86_400_000), 'day');
   const d = new Date(ts);
   const nowDate = new Date();
-  if (d.getFullYear() === nowDate.getFullYear()) {
-    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  }
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toLocaleString(getLocale(), {
+    year: d.getFullYear() === nowDate.getFullYear() ? undefined : 'numeric',
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function truncate(str: string, max: number): string {
@@ -118,6 +120,7 @@ function CompactHistoryRow({
   videoExpanded: boolean;
   onVideoExpandedChange: (expanded: boolean) => void;
 }) {
+  useT();
   const typeCfg = NODE_TYPE_CONFIG[entry.nodeType];
   const isError = entry.status === 'error';
   const hasThumb = entry.nodeType === 'ai-image' && !isError && Boolean(entry.mediaUrl || entry.filePath);
@@ -158,7 +161,7 @@ function CompactHistoryRow({
           <span className="min-w-0 truncate text-[10px] text-canvas-text-muted">
             {entry.provider}/{entry.model}
           </span>
-          {isError && <span className="shrink-0 text-[10px] font-medium text-red-400">失败</span>}
+          {isError && <span className="shrink-0 text-[10px] font-medium text-red-400">{t('失败')}</span>}
           <span className="ml-auto shrink-0 text-[10px] text-canvas-text-muted tabular-nums">
             {formatRelativeTime(entry.timestamp)}
           </span>
@@ -171,13 +174,13 @@ function CompactHistoryRow({
             exists ? 'text-indigo-400' : 'text-canvas-text-muted line-through'
           }`}
         >
-          {exists ? `#${entry.nodeLabel}` : '节点已删除'}
+          {exists ? `#${entry.nodeLabel}` : t('节点已删除')}
         </span>
       </div>
       <button
         type="button"
-        aria-label="查看节点"
-        data-tooltip="查看节点"
+        aria-label={t('查看节点')}
+        data-tooltip={t('查看节点')}
         className="shrink-0 self-start rounded px-1.5 py-0.5 text-[10px] text-indigo-400
                    transition-colors hover:bg-indigo-500/10 hover:text-indigo-300"
         onClick={(e) => {
@@ -185,12 +188,12 @@ function CompactHistoryRow({
           onLocate(entry);
         }}
       >
-        查看节点
+        {t('查看节点')}
       </button>
       <button
         type="button"
-        aria-label="删除"
-        data-tooltip="删除"
+        aria-label={t('删除')}
+        data-tooltip={t('删除')}
         className="shrink-0 self-start rounded p-1 text-canvas-text-muted opacity-0 transition-[opacity,color,background-color]
                    hover:bg-red-500/10 hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
         onClick={(e) => {
@@ -205,6 +208,7 @@ function CompactHistoryRow({
 }
 
 export default function OutputHistoryPanel() {
+  useT();
   const {
     outputHistoryRecords,
     historyTotalCount,
@@ -350,14 +354,14 @@ export default function OutputHistoryPanel() {
   const handleClearAll = useCallback(() => {
     clearAllHistory();
     setConfirmClear(false);
-    showToast('已清空全部历史记录');
+    showToast(t('已清空全部历史记录'));
   }, [clearAllHistory, showToast]);
 
   const handleLocateNode = useCallback(
     (entry: OutputHistoryEntry) => {
       const node = useAppStore.getState().nodes.find((n) => n.id === entry.nodeId);
       if (!node) {
-        showToast('节点已不存在', 'error');
+        showToast(t('节点已不存在'), 'error');
         return;
       }
       // Dispatch event for canvas to fit view to node（带一次放大回弹脉冲）
@@ -383,9 +387,9 @@ export default function OutputHistoryPanel() {
     async (entry: OutputHistoryEntry) => {
       try {
         await navigator.clipboard.writeText(entry.output);
-        showToast('已复制输出内容');
+        showToast(t('已复制输出内容'));
       } catch {
-        showToast('复制失败', 'error');
+        showToast(t('复制失败'), 'error');
       }
     },
     [showToast],
@@ -408,9 +412,9 @@ export default function OutputHistoryPanel() {
       const fileName = `ai-output-history-${new Date().toISOString().slice(0, 10)}.json`;
       // Tauri 里 <a download> 不会弹保存对话框，文件悄悄落到「下载」目录，得走原生对话框
       if (isTauriEnv()) {
-        const saved = await saveAgentTextOutput(json, fileName, '导出历史记录');
+        const saved = await saveAgentTextOutput(json, fileName, t('导出历史记录'));
         if (!saved) return; // 用户取消
-        showToast(`已导出历史记录到 ${saved.fileName}`);
+        showToast(t('已导出历史记录到 {name}', { name: saved.fileName }));
         return;
       }
       const blob = new Blob([json], { type: 'application/json' });
@@ -420,9 +424,9 @@ export default function OutputHistoryPanel() {
       a.download = fileName;
       a.click();
       URL.revokeObjectURL(url);
-      showToast('已导出历史记录');
+      showToast(t('已导出历史记录'));
     } catch {
-      showToast('导出历史记录失败', 'error');
+      showToast(t('导出历史记录失败'), 'error');
     }
   }, [getHistoryForExport, historyQuery, showToast]);
 
@@ -470,23 +474,23 @@ export default function OutputHistoryPanel() {
                   <circle cx="12" cy="12" r="10" />
                   <polyline points="12 6 12 12 16 14" />
                 </svg>
-                <h2 className="text-sm font-semibold text-canvas-text">输出历史</h2>
-                <span className="text-[11px] text-canvas-text-muted">共 {historyTotalCount} 条</span>
+                <h2 className="text-sm font-semibold text-canvas-text">{t('输出历史')}</h2>
+                <span className="text-[11px] text-canvas-text-muted">{t('共 {count} 条', { count: historyTotalCount })}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 {/* 固定面板：跳转节点不再关闭面板 */}
                 <label
                   className="flex items-center gap-1.5 cursor-pointer select-none"
-                  data-tooltip={historyPinned ? '取消固定' : '固定后面板常驻，跳转节点不关闭'}
+                  data-tooltip={historyPinned ? t('取消固定') : t('固定后面板常驻，跳转节点不关闭')}
                 >
                   <span className={`text-[11px] transition-colors ${historyPinned ? 'text-indigo-400' : 'text-canvas-text-muted'}`}>
-                    固定面板
+                    {t('固定面板')}
                   </span>
                   <button
                     type="button"
                     role="switch"
                     aria-checked={historyPinned}
-                    aria-label="固定面板"
+                    aria-label={t('固定面板')}
                     className="ui-switch"
                     onClick={togglePinned}
                   />
@@ -496,9 +500,9 @@ export default function OutputHistoryPanel() {
                   type="button"
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-canvas-text-muted
                              hover:bg-canvas-hover hover:text-canvas-text transition-colors"
-                  aria-label={collapsed ? '展开面板' : '收起面板'}
+                  aria-label={collapsed ? t('展开面板') : t('收起面板')}
                   aria-expanded={!collapsed}
-                  data-tooltip={collapsed ? '展开' : '收起'}
+                  data-tooltip={collapsed ? t('展开') : t('收起')}
                   onClick={() => setCollapsed((value) => !value)}
                 >
                   <Icon icon={collapsed ? 'mdi:chevron-up' : 'mdi:chevron-down'} width="18" aria-hidden="true" />
@@ -531,7 +535,7 @@ export default function OutputHistoryPanel() {
                     listRef.current?.scrollTo({ top: 0 });
                   }}
                 >
-                  {label}
+                  {t(label)}
                 </button>
               ))}
               {/* 固定小窗里不放搜索框，保持精简 */}
@@ -557,7 +561,7 @@ export default function OutputHistoryPanel() {
                     setSearch(e.target.value);
                     listRef.current?.scrollTo({ top: 0 });
                   }}
-                  placeholder="搜索提示词、输出内容或模型..."
+                  placeholder={t('搜索提示词、输出内容或模型...')}
                   className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-canvas-bg border border-canvas-border
                              text-[12px] text-canvas-text placeholder:text-canvas-text-muted
                              focus:outline-none focus:border-indigo-500/50 transition-colors"
@@ -592,10 +596,10 @@ export default function OutputHistoryPanel() {
                   </svg>
                   <p className="text-[12px]">
                     {historyLoading
-                      ? '正在加载历史记录...'
+                      ? t('正在加载历史记录...')
                       : historyTotalCount === 0
-                        ? '暂无生成记录，开始第一次生成后会自动记录'
-                        : '没有匹配的记录'}
+                        ? t('暂无生成记录，开始第一次生成后会自动记录')
+                        : t('没有匹配的记录')}
                   </p>
                 </div>
               ) : (
@@ -656,7 +660,7 @@ export default function OutputHistoryPanel() {
                               isError ? 'text-red-400' : 'text-green-400'
                             }`}
                           >
-                            {isError ? '❌ 失败' : '✅ 成功'}
+                            {isError ? t('❌ 失败') : t('✅ 成功')}
                           </span>
 
                           <div className="flex-1" />
@@ -672,7 +676,7 @@ export default function OutputHistoryPanel() {
                                 : 'text-canvas-text-muted line-through cursor-default'
                             }`}
                           >
-                            {exists ? `#${entry.nodeLabel}` : '节点已删除'}
+                            {exists ? `#${entry.nodeLabel}` : t('节点已删除')}
                           </button>
 
                           {/* Time */}
@@ -688,7 +692,7 @@ export default function OutputHistoryPanel() {
                             className="w-full text-left text-[11px] text-canvas-text-secondary leading-relaxed hover:text-canvas-text transition-colors"
                             onClick={() => toggleExpand(entry.id)}
                           >
-                            <span className="text-canvas-text-muted">提示词：</span>
+                            <span className="text-canvas-text-muted">{t('提示词：')}</span>
                             {isExpanded ? entry.prompt : truncate(entry.prompt, 80)}
                           </button>
                         </div>
@@ -719,15 +723,15 @@ export default function OutputHistoryPanel() {
                                   {/* Online URL */}
                                   {entry.mediaUrl && (
                                     <div className="flex items-center gap-1.5">
-                                      <span className="text-[10px] text-canvas-text-muted shrink-0">线上：</span>
+                                      <span className="text-[10px] text-canvas-text-muted shrink-0">{t('线上：')}</span>
                                       <span className="text-[10px] text-canvas-text-secondary truncate">{entry.mediaUrl}</span>
                                       <button
                                         type="button"
                                         className="shrink-0 w-4 h-4 rounded text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover flex items-center justify-center transition-colors"
                                         onClick={() => {
                                           navigator.clipboard.writeText(entry.mediaUrl!).then(
-                                            () => showToast('已复制线上地址'),
-                                            () => showToast('复制失败', 'error'),
+                                            () => showToast(t('已复制线上地址')),
+                                            () => showToast(t('复制失败'), 'error'),
                                           );
                                         }}
                                       >
@@ -741,15 +745,15 @@ export default function OutputHistoryPanel() {
                                   {/* Local file path */}
                                   {entry.filePath && (
                                     <div className="flex items-center gap-1.5">
-                                      <span className="text-[10px] text-canvas-text-muted shrink-0">本地：</span>
+                                      <span className="text-[10px] text-canvas-text-muted shrink-0">{t('本地：')}</span>
                                       <span className="text-[10px] text-canvas-text-secondary truncate font-mono">{entry.filePath}</span>
                                       <button
                                         type="button"
                                         className="shrink-0 w-4 h-4 rounded text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover flex items-center justify-center transition-colors"
                                         onClick={() => {
                                           navigator.clipboard.writeText(entry.filePath!).then(
-                                            () => showToast('已复制本地路径'),
-                                            () => showToast('复制失败', 'error'),
+                                            () => showToast(t('已复制本地路径')),
+                                            () => showToast(t('复制失败'), 'error'),
                                           );
                                         }}
                                       >
@@ -763,7 +767,7 @@ export default function OutputHistoryPanel() {
                                   {/* Fallback: output text */}
                                   {!entry.mediaUrl && !entry.filePath && (
                                     <span className="text-[10px] text-canvas-text-muted">
-                                      {entry.output || '无预览'}
+                                      {entry.output || t('无预览')}
                                     </span>
                                   )}
                                   {/* Params */}
@@ -794,7 +798,7 @@ export default function OutputHistoryPanel() {
                               className="text-[10px] px-2 py-1 rounded-md text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover transition-colors"
                               onClick={() => handleCopy(entry)}
                             >
-                              复制输出
+                              {t('复制输出')}
                             </AnimatedButton>
                           )}
                           {!isError && (
@@ -802,7 +806,7 @@ export default function OutputHistoryPanel() {
                               className="text-[10px] px-2 py-1 rounded-md text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover transition-colors"
                               onClick={() => handleLocateNode(entry)}
                             >
-                              查看节点
+                              {t('查看节点')}
                             </AnimatedButton>
                           )}
                           <div className="flex-1" />
@@ -810,7 +814,7 @@ export default function OutputHistoryPanel() {
                             className="text-[10px] px-2 py-1 rounded-md text-canvas-text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
                             onClick={() => handleDeleteEntry(entry)}
                           >
-                            删除
+                            {t('删除')}
                           </AnimatedButton>
                         </div>
                       </motion.div>
@@ -828,18 +832,18 @@ export default function OutputHistoryPanel() {
               <div className="flex items-center justify-between px-3 py-3 border-t border-canvas-border shrink-0 bg-canvas-surface/80">
                 {confirmClear ? (
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-canvas-text-secondary">确认清空全部历史？</span>
+                    <span className="text-[11px] text-canvas-text-secondary">{t('确认清空全部历史？')}</span>
                     <AnimatedButton
                       className="text-[11px] px-2.5 py-1 rounded-md bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
                       onClick={handleClearAll}
                     >
-                      确认清空
+                      {t('确认清空')}
                     </AnimatedButton>
                     <AnimatedButton
                       className="text-[11px] px-2.5 py-1 rounded-md text-canvas-text-muted hover:text-canvas-text hover:bg-canvas-hover transition-colors"
                       onClick={() => setConfirmClear(false)}
                     >
-                      取消
+                      {t('取消')}
                     </AnimatedButton>
                   </div>
                 ) : (
@@ -847,7 +851,7 @@ export default function OutputHistoryPanel() {
                     className="text-[11px] px-2.5 py-1 rounded-md text-canvas-text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
                     onClick={() => setConfirmClear(true)}
                   >
-                    清空全部历史
+                    {t('清空全部历史')}
                   </AnimatedButton>
                 )}
                 <AnimatedButton
@@ -855,7 +859,7 @@ export default function OutputHistoryPanel() {
                   onClick={handleExport}
                   disabled={filteredEntries.length === 0}
                 >
-                  导出 JSON
+                  {t('导出 JSON')}
                 </AnimatedButton>
               </div>
             )}

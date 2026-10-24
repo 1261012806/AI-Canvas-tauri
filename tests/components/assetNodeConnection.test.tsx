@@ -12,6 +12,8 @@ const driver = vi.hoisted(() => ({
 }));
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
+  useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
+  useCallback: <T,>(callback: T) => callback,
   memo: <T,>(value: T) => value,
   useMemo: <T,>(factory: () => T) => factory(),
   useState: <T,>(initial: T) => {

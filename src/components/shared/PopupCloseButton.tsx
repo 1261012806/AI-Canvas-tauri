@@ -3,6 +3,7 @@
  * 基于 UI Kit .ui-close-btn 设计规范（触感缩放 + 危险色悬浮）。
  */
 import type { ButtonHTMLAttributes, CSSProperties } from 'react';
+import { useT } from '../../i18n';
 
 interface PopupCloseButtonProps
   extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label' | 'children'> {
@@ -14,7 +15,7 @@ interface PopupCloseButtonProps
 }
 
 export default function PopupCloseButton({
-  ariaLabel = '关闭',
+  ariaLabel,
   className = '',
   type = 'button',
   scale = 1.04,
@@ -22,11 +23,12 @@ export default function PopupCloseButton({
   style,
   ...props
 }: PopupCloseButtonProps) {
+  const t = useT();
   return (
     <button
       {...props}
       type={type}
-      aria-label={ariaLabel}
+      aria-label={ariaLabel ?? t('关闭')}
       className={`ui-close-btn anim-btn chat-panel-close-btn ${className}`.trim()}
       style={{
         '--anim-hover-scale': scale,

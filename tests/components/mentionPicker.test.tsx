@@ -9,6 +9,10 @@ const hooks = vi.hoisted(() => ({
   pending: [] as Array<() => void>,
 }));
 
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   useRef: <T,>(initial: T) => {

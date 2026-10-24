@@ -22,6 +22,7 @@ import { useSourceFileUpload } from './shared/useSourceFileUpload';
 import { useAppStore, generateId } from '../../store/useAppStore';
 import { saveDataUrlToProjectData, buildNodeFileName } from '../../services/fileService';
 import { useCompletionFlash } from '../../hooks/useCompletionFlash';
+import { useT } from '../../i18n';
 import {
   cancelCanvasDerivation,
   completeCanvasDerivation,
@@ -50,6 +51,7 @@ function readScreenshotAspect(dataUrl: string): Promise<number | null> {
 }
 
 function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData; selected?: boolean }) {
+  const t = useT();
   const justCompleted = useCompletionFlash(data.status);
   const updateNodeData = useAppStore((state) => state.updateNodeData);
   const updateNodeDataTransient = useAppStore((state) => state.updateNodeDataTransient);
@@ -143,15 +145,15 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
       },
     } as Parameters<typeof liveStore.addNode>[0]);
     completeCanvasDerivation(derivation);
-    liveStore.showToast('截图已创建为图片节点', 'success');
+    liveStore.showToast(t('截图已创建为图片节点'), 'success');
     return true;
-  }, [id, nodeHeight, nodeWidth]);
+  }, [id, nodeHeight, nodeWidth, t]);
 
   const handleScreenshot = useCallback(async () => {
     const store = useAppStore.getState();
     const derivation = registerCanvasDerivation(store, id);
     if (!derivation) {
-      store.showToast('全景节点已失效，请重试', 'error');
+      store.showToast(t('全景节点已失效，请重试'), 'error');
       return;
     }
 
@@ -161,18 +163,18 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
     } catch {
       cancelCanvasDerivation(derivation);
       if (useAppStore.getState().currentProjectId === derivation.projectId) {
-        useAppStore.getState().showToast('截图失败', 'error');
+        useAppStore.getState().showToast(t('截图失败'), 'error');
       }
       return;
     }
     if (!dataUrl) {
       const shouldNotify = isCanvasDerivationFresh(derivation, useAppStore.getState());
       cancelCanvasDerivation(derivation);
-      if (shouldNotify) useAppStore.getState().showToast('截图失败', 'error');
+      if (shouldNotify) useAppStore.getState().showToast(t('截图失败'), 'error');
       return;
     }
     await createScreenshotNode(dataUrl, derivation);
-  }, [createScreenshotNode, id]);
+  }, [createScreenshotNode, id, t]);
 
   const handleFullscreenCapture = useCallback(async ({ dataUrl }: PanoramaCaptureResult) => {
     const store = useAppStore.getState();
@@ -212,7 +214,7 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
     } as Partial<BaseNodeData>);
   }, [id, updateNodeData, uploadSourceFile]);
 
-  const { displayLabel, handleRename } = useNodeRename(id, data, '360全景图');
+  const { displayLabel, handleRename } = useNodeRename(id, data, t('360全景图'));
   const hasImage = Boolean(panoramaUrl);
   const show360 = hasImage && previewMode === '360';
   const showImage = hasImage && previewMode === 'image';
@@ -275,8 +277,8 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
                   event.stopPropagation();
                   void handleUpload();
                 }}
-                data-tooltip="上传全景图"
-                aria-label="上传全景图"
+                data-tooltip={t('上传全景图')}
+                aria-label={t('上传全景图')}
               >
                 <Icon icon="mdi:upload" width="14" height="14" />
               </button>
@@ -304,17 +306,17 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
             ) : isUploading ? (
               <div className="node-preview-loading">
                 <div className="spinner large" />
-                <span>上传中...</span>
+                <span>{t('上传中...')}</span>
               </div>
             ) : data.status === 'loading' ? (
               <div className="node-preview-loading">
                 <div className="spinner large" />
-                <span>生成全景图中...</span>
+                <span>{t('生成全景图中...')}</span>
               </div>
             ) : (
               <div className="node-preview-placeholder">
                 <Icon icon="mdi:panorama-sphere-outline" width="36" height="36" />
-                <span className="text-xs text-canvas-text-muted mt-1">上传全景图或连线生成</span>
+                <span className="text-xs text-canvas-text-muted mt-1">{t('上传全景图或连线生成')}</span>
               </div>
             )}
           </div>
@@ -357,7 +359,7 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
       <FullscreenOverlay
         isOpen={isFullscreen && hasImage}
         onClose={toggleFullscreen}
-        title={(data.label as string) || '360全景图'}
+        title={(data.label as string) || t('360全景图')}
         panelWidth="calc(100vw - 24px)"
         className="pano-original-overlay"
         hideHeader

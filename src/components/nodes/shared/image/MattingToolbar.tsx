@@ -1,6 +1,7 @@
 ﻿/**
  * MattingToolbar 遮罩编辑工具栏 — 图像遮罩编辑模式下的工具条，提供画笔(绘制/擦除)、橡皮擦、油漆桶及笔刷大小调整
  */
+import { useT } from '../../../../i18n';
 import { memo, useCallback, useState, useRef } from 'react';
 import AnimatedButton from '../../../shared/AnimatedButton';
 
@@ -33,6 +34,7 @@ function MattingToolbar({
   canUndo,
   canRedo,
 }: MattingToolbarProps) {
+  const t = useT();
   const [activeTool, setActiveTool] = useState<MattingTool>('brush');
   const [brushMode, setBrushMode] = useState<BrushMode>('normal');
   const [brushSize, setBrushSize] = useState(40);
@@ -96,8 +98,8 @@ function MattingToolbar({
       <AnimatedButton
         className={`matting-btn icon-only tool-btn${activeTool === 'brush' ? ' active' : ''}`}
         data-tool="brush"
-        data-tooltip={activeTool === 'brush' ? `画笔 ${brushMode === 'alpha' ? '(擦除模式)' : '(绘制模式)'} B` : '画笔 B'}
-        aria-label="画笔"
+        data-tooltip={activeTool === 'brush' ? t('画笔 {mode} B', { mode: t(brushMode === 'alpha' ? '(擦除模式)' : '(绘制模式)') }) : t('画笔 B')}
+        aria-label={t('画笔')}
         onClick={() => handleToolSelect('brush')}
       >
         {brushMode === 'normal' ? (
@@ -118,8 +120,8 @@ function MattingToolbar({
       <AnimatedButton
         className={`matting-btn icon-only tool-btn${activeTool === 'eraser' ? ' active' : ''}`}
         data-tool="eraser"
-        data-tooltip="橡皮擦 E"
-        aria-label="橡皮擦"
+        data-tooltip={t('橡皮擦 E')}
+        aria-label={t('橡皮擦')}
         onClick={() => handleToolSelect('eraser')}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -131,8 +133,8 @@ function MattingToolbar({
       <AnimatedButton
         className={`matting-btn icon-only tool-btn${activeTool === 'bucket' ? ' active' : ''}`}
         data-tool="bucket"
-        data-tooltip="油漆桶 G"
-        aria-label="油漆桶"
+        data-tooltip={t('油漆桶 G')}
+        aria-label={t('油漆桶')}
         onClick={() => handleToolSelect('bucket')}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -164,8 +166,8 @@ function MattingToolbar({
       {/* Undo */}
       <AnimatedButton
         className="matting-btn icon-only act-undo"
-        data-tooltip="撤销 Ctrl+Z"
-        aria-label="撤销"
+        data-tooltip={t('撤销 Ctrl+Z')}
+        aria-label={t('撤销')}
         onClick={handleUndo}
         disabled={!canUndo}
       >
@@ -178,8 +180,8 @@ function MattingToolbar({
       {/* Redo */}
       <AnimatedButton
         className="matting-btn icon-only act-redo"
-        data-tooltip="重做 Ctrl+Y"
-        aria-label="重做"
+        data-tooltip={t('重做 Ctrl+Y')}
+        aria-label={t('重做')}
         onClick={handleRedo}
         disabled={!canRedo}
       >
@@ -192,8 +194,8 @@ function MattingToolbar({
       {/* Clear */}
       <AnimatedButton
         className="matting-btn icon-only act-clear"
-        data-tooltip="清空 R"
-        aria-label="清空"
+        data-tooltip={t('清空 R')}
+        aria-label={t('清空')}
         onClick={handleClear}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -206,8 +208,8 @@ function MattingToolbar({
       {/* Save */}
       <AnimatedButton
         className="matting-btn matting-save act-save"
-        data-tooltip="保存"
-        aria-label="保存"
+        data-tooltip={t('保存')}
+        aria-label={t('保存')}
         onClick={handleSave}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
@@ -215,7 +217,7 @@ function MattingToolbar({
           <path d="M17 21v-8H7v8" />
           <path d="M7 3v4h8" />
         </svg>
-        <span>保存</span>
+        <span>{t('保存')}</span>
       </AnimatedButton>
 
       <div className="matting-divider" />
@@ -223,8 +225,8 @@ function MattingToolbar({
       {/* Cancel */}
       <AnimatedButton
         className="matting-btn icon-only act-cancel"
-        data-tooltip="取消 (Esc)"
-        aria-label="取消"
+        data-tooltip={t('取消 (Esc)')}
+        aria-label={t('取消')}
         onClick={handleCancel}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">

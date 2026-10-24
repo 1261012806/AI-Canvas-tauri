@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
@@ -37,6 +38,7 @@ export default function AssetFolderNavigation({
   globalRootPath, onCreate, onOpen, onCopy, onPaste, dropTarget,
   creativeKind, creativeCounts, onSelectCreative,
 }: AssetFolderNavigationProps) {
+  useT();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ selection: AssetFolderSelection; label: string; x: number; y: number } | null>(null);
   const [creating, setCreating] = useState<{ selection: AssetFolderSelection; label: string } | null>(null);
@@ -88,7 +90,7 @@ export default function AssetFolderNavigation({
   const selectedFolder = selection.kind === 'folder'
     ? folders.find((folder) => folder.rootPath === selection.rootPath && folder.relativePath === selection.relativePath)
     : undefined;
-  const label = selection.kind === 'all' ? '全部资产' : selection.kind === 'global' ? '导入文件' : selectedFolder?.name ?? '文件夹';
+  const label = selection.kind === 'all' ? t('全部资产') : selection.kind === 'global' ? t('导入文件') : selectedFolder?.name ?? t('文件夹');
 
   const renderFolder = (folder: AssetFolderEntry) => {
     const key = folderKey(folder);
@@ -105,13 +107,13 @@ export default function AssetFolderNavigation({
           data-asset-folder-target={!readOnly && !loading && folder.availability === 'online' ? JSON.stringify({ kind: 'folder', rootPath: folder.rootPath, relativePath: folder.relativePath }) : undefined}>
           {childFolders.length > 0 ? (
             <button type="button" className="ui-icon-btn ui-icon-btn--sm assets-folder-toggle"
-              aria-label={`${isExpanded ? '收起' : '展开'}文件夹 ${folder.name}`} aria-expanded={isExpanded}
+              aria-label={t('{action}文件夹 {name}', { action: isExpanded ? t('收起') : t('展开'), name: folder.name })} aria-expanded={isExpanded}
               onClick={() => setExpanded((previous) => ({ ...previous, [key]: !isExpanded }))}>
               <Icon icon={isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'} aria-hidden="true" />
             </button>
           ) : <span className="assets-folder-toggle" />}
           <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select"
-            aria-label={`浏览文件夹 ${folder.name}`} aria-pressed={selected}
+            aria-label={t('浏览文件夹 {name}', { name: folder.name })} aria-pressed={selected}
             title={folder.relativePath || folder.name} disabled={loading || folder.availability === 'unscanned'}
             aria-haspopup={canManageFolders ? 'menu' : undefined}
             onContextMenu={canManageFolders ? (event) => {
@@ -125,11 +127,11 @@ export default function AssetFolderNavigation({
             <Icon icon={folder.availability === 'offline' ? 'lucide:folder-x' : selected ? 'lucide:folder-open' : 'lucide:folder'}
               className="shrink-0 text-canvas-text-secondary" aria-hidden="true" />
             <span className="min-w-0 flex-1 truncate text-left">{folder.name}</span>
-            <span className="ui-list__trailing">{receiving ? '放入' : folder.availability === 'online' ? folder.fileCount : '—'}</span>
+            <span className="ui-list__trailing">{receiving ? t('放入') : folder.availability === 'online' ? folder.fileCount : '—'}</span>
           </button>
           {!readOnly && onRemove && folder.parentRelativePath === null && folder.rootPath !== globalRootPath && (
             <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--danger assets-folder-remove"
-              aria-label={`移除文件夹引用 ${folder.name}`} title="取消引用，保留本地文件" disabled={loading}
+              aria-label={t('移除文件夹引用 {name}', { name: folder.name })} title={t("取消引用，保留本地文件")} disabled={loading}
               onClick={() => onRemove(folder.rootPath)}>
               <Icon icon="lucide:x" aria-hidden="true" />
             </button>
@@ -142,37 +144,37 @@ export default function AssetFolderNavigation({
     );
   };
   const creativeNavigation = onSelectCreative && <>
-    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">创作分类</h4>
-    {([{ kind: 'character', label: '人物', icon: 'lucide:contact-round' },
-      { kind: 'scene', label: '场景', icon: 'lucide:landmark' },
-      { kind: 'prop', label: '道具', icon: 'lucide:box' }] as const).map((item) => (
+    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">{t("创作分类")}</h4>
+    {([{ kind: 'character', label: t('人物'), icon: 'lucide:contact-round' },
+      { kind: 'scene', label: t('场景'), icon: 'lucide:landmark' },
+      { kind: 'prop', label: t('道具'), icon: 'lucide:box' }] as const).map((item) => (
       <div key={item.kind} className={`assets-folder-item${creativeKind === item.kind ? ' is-active' : ''}`}>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select" aria-pressed={creativeKind === item.kind}
           onClick={() => onSelectCreative(item.kind)}>
           <Icon icon={item.icon} aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{t(item.label)}</span>
           <span className="ui-list__trailing">{creativeCounts?.[item.kind] ?? 0}</span>
         </button>
       </div>
     ))}
-    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">文件夹</h4>
+    <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">{t("文件夹")}</h4>
   </>;
   const navigation = (
-    <nav aria-label="全局资产分类与文件夹" className="assets-folder-navigation">
-      {!compact && <h3 className="px-2 pb-2 text-xs font-medium text-canvas-text-secondary">全局资产</h3>}
-      {[{ kind: 'all' as const, label: '全部资产', count: totalCount, icon: 'lucide:folders' },
-        { kind: 'global' as const, label: '导入文件', count: globalCount, icon: 'lucide:folder-down' }].map((item) => (
+    <nav aria-label={t("全局资产分类与文件夹")} className="assets-folder-navigation">
+      {!compact && <h3 className="px-2 pb-2 text-xs font-medium text-canvas-text-secondary">{t("全局资产")}</h3>}
+      {[{ kind: 'all' as const, label: t('全部资产'), count: totalCount, icon: 'lucide:folders' },
+        { kind: 'global' as const, label: t('导入文件'), count: globalCount, icon: 'lucide:folder-down' }].map((item) => (
         <div key={item.kind}>
         {item.kind === 'global' && creativeNavigation}
         <div className={`assets-folder-item${folderMotionClass}${(!creativeKind && selection.kind === item.kind) || (!readOnly && dropTarget?.kind === item.kind) ? ' is-active' : ''}${!readOnly && dropTarget?.kind === item.kind ? folderDropClass : ''}`}
           data-asset-folder-target={!readOnly && !loading && item.kind === 'global' && globalRootPath ? JSON.stringify({ kind: 'global' }) : undefined}>
           <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select"
-            aria-label={item.label} aria-pressed={!creativeKind && selection.kind === item.kind} disabled={loading}
+            aria-label={t(item.label)} aria-pressed={!creativeKind && selection.kind === item.kind} disabled={loading}
             aria-haspopup={canManageFolders && item.kind === 'global' ? 'menu' : undefined}
-            onContextMenu={canManageFolders ? (event) => openMenu(event, { kind: item.kind }, item.label) : undefined}
+            onContextMenu={canManageFolders ? (event) => openMenu(event, { kind: item.kind }, t(item.label)) : undefined}
             onClick={() => onSelect({ kind: item.kind })}>
             <Icon icon={item.icon} aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
+            <span className="min-w-0 flex-1 truncate text-left">{t(item.label)}</span>
             <span className="ui-list__trailing">{item.count}</span>
           </button>
         </div>
@@ -181,10 +183,10 @@ export default function AssetFolderNavigation({
       {globalRootPath && <ul className="assets-folder-children">
         {(children.get(JSON.stringify([globalRootPath, ''])) ?? []).map(renderFolder)}
       </ul>}
-      <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">外部文件夹</h4>
+      <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">{t("外部文件夹")}</h4>
       <ul className="assets-folder-roots">{folders.filter((folder) => folder.parentRelativePath === null && folder.rootPath !== globalRootPath).map(renderFolder)}</ul>
-      {!loading && !folders.some((folder) => folder.rootPath !== globalRootPath) && <p className="p-2 text-xs text-canvas-text-muted">{readOnly ? '暂无外部文件夹' : '从“添加”中选择本地文件夹'}</p>}
-      {!readOnly && onCreate && creating && <form className="flex flex-col gap-2 p-2" aria-label="新建子文件夹" onSubmit={(event) => {
+      {!loading && !folders.some((folder) => folder.rootPath !== globalRootPath) && <p className="p-2 text-xs text-canvas-text-muted">{readOnly ? t('暂无外部文件夹') : t('从“添加”中选择本地文件夹')}</p>}
+      {!readOnly && onCreate && creating && <form className="flex flex-col gap-2 p-2" aria-label={t("新建子文件夹")} onSubmit={(event) => {
         event.preventDefault();
         if (readOnly || loading || !onCreate) return;
         setError('');
@@ -196,14 +198,14 @@ export default function AssetFolderNavigation({
       }} onKeyDown={(event) => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setCreating(null); }
       }}>
-        <label className="text-xs text-canvas-text-secondary" htmlFor="asset-subfolder-name">在 {creating.label} 中新建</label>
-        <input id="asset-subfolder-name" className="ui-input ui-input--sm" aria-label="子文件夹名称" autoFocus
+        <label className="text-xs text-canvas-text-secondary" htmlFor="asset-subfolder-name">{t('在 {name} 中新建', { name: creating.label })}</label>
+        <input id="asset-subfolder-name" className="ui-input ui-input--sm" aria-label={t("子文件夹名称")} autoFocus
           value={name} disabled={loading} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setName(event.target.value)} />
-        {error && <p role="alert" className="text-xs text-canvas-text-secondary">{error}</p>}
-        <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={loading} onClick={() => setCreating(null)}>取消</button>
-          <button type="submit" className="ui-btn ui-btn--primary ui-btn--sm" disabled={loading || !name.trim()}>创建</button></div>
+        {error && <p role="alert" className="text-xs text-canvas-text-secondary">{t(error)}</p>}
+        <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={loading} onClick={() => setCreating(null)}>{t("取消")}</button>
+          <button type="submit" className="ui-btn ui-btn--primary ui-btn--sm" disabled={loading || !name.trim()}>{t("创建")}</button></div>
       </form>}
-      {canManageFolders && menu && createPortal(<div ref={menuRef} role="menu" aria-label={`${menu.label} 文件夹操作`}
+      {canManageFolders && menu && createPortal(<div ref={menuRef} role="menu" aria-label={t('{name} 文件夹操作', { name: menu.label })}
         className="ui-menu w-44" style={{ position: 'fixed', zIndex: 320, left: menu.x, top: menu.y }}
         onKeyDown={(event) => {
           const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
@@ -212,19 +214,19 @@ export default function AssetFolderNavigation({
             event.preventDefault(); buttons[(index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length]?.focus();
           } else if (event.key === 'Tab') closeMenu();
         }}>
-        {onOpen && <button type="button" role="menuitem" autoFocus className="ui-menu__item" onClick={() => { onOpen(menu.selection); closeMenu(); }}><Icon icon="lucide:folder-open" aria-hidden="true" />打开文件夹位置</button>}
+        {onOpen && <button type="button" role="menuitem" autoFocus className="ui-menu__item" onClick={() => { onOpen(menu.selection); closeMenu(); }}><Icon icon="lucide:folder-open" aria-hidden="true" />{t("打开文件夹位置")}</button>}
         {onCreate && <button type="button" role="menuitem" autoFocus={!onOpen} className="ui-menu__item" onClick={() => {
           setCreating({ selection: menu.selection, label: menu.label }); setName('新建文件夹'); setError(''); closeMenu();
-        }}><Icon icon="lucide:folder-plus" aria-hidden="true" />新建子文件夹</button>}
-        {onCopy && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate} className="ui-menu__item" onClick={() => { onCopy(menu.selection); closeMenu(); }}><Icon icon="lucide:copy" aria-hidden="true" />复制文件夹</button>}
-        {onPaste && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate && !onCopy} className="ui-menu__item" onClick={() => { onPaste(menu.selection); closeMenu(); }}><Icon icon="lucide:clipboard-paste" aria-hidden="true" />粘贴</button>}
+        }}><Icon icon="lucide:folder-plus" aria-hidden="true" />{t("新建子文件夹")}</button>}
+        {onCopy && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate} className="ui-menu__item" onClick={() => { onCopy(menu.selection); closeMenu(); }}><Icon icon="lucide:copy" aria-hidden="true" />{t("复制文件夹")}</button>}
+        {onPaste && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate && !onCopy} className="ui-menu__item" onClick={() => { onPaste(menu.selection); closeMenu(); }}><Icon icon="lucide:clipboard-paste" aria-hidden="true" />{t("粘贴")}</button>}
       </div>, document.body)}
     </nav>
   );
   return compact ? (
     <details className="assets-folder-picker">
       <summary className="ui-btn ui-btn--ghost ui-btn--sm">
-        <Icon icon="lucide:folder" aria-hidden="true" />{creativeKind ? `创作分类 · ${{ character: '人物', scene: '场景', prop: '道具' }[creativeKind]}` : `文件夹 · ${label}`}
+        <Icon icon="lucide:folder" aria-hidden="true" />{creativeKind ? t('创作分类 · {kind}', { kind: t({ character: '人物', scene: '场景', prop: '道具' }[creativeKind]) }) : t('文件夹 · {name}', { name: label })}
         <Icon icon="lucide:chevron-down" className="ml-auto" aria-hidden="true" />
       </summary>
       {navigation}

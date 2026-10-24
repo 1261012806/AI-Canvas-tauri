@@ -178,7 +178,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
   /** 整表生成中（AI 弹窗把节点 status 置为 loading），与单格出图的 busyRows 是两回事 */
   const generating = data.status === 'loading';
 
-  const { displayLabel, handleRename } = useNodeRename(id, data, '分镜表');
+  const { displayLabel, handleRename } = useNodeRename(id, data, t('分镜表'));
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   useCanvasNodeLodProtection(id, isFullscreen);
@@ -563,10 +563,10 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
     timelineRunning.current = true;
     setTimelineBusy(true);
     try {
-      if (!timelineRows.length) throw new Error('请先在“生成视频”列回填已就绪的视频，再推送时间轴');
+      if (!timelineRows.length) throw new Error(t('请先在“生成视频”列回填已就绪的视频，再推送时间轴'));
       // 分镜表是时间轴的源，每次推送都按当前表重建，会覆盖上次在剪辑窗口里的调整
       if (await hasShotlistTimeline(projectId, id)) {
-        const confirmed = await confirmAction('这张分镜表已经推送过时间轴。继续将按当前表重建，剪辑窗口里的调整会丢失。', { title: '重新推送时间轴' });
+        const confirmed = await confirmAction(t('这张分镜表已经推送过时间轴。继续将按当前表重建，剪辑窗口里的调整会丢失。'), { title: t('重新推送时间轴') });
         if (!confirmed) return;
       }
       assertCurrent();
@@ -581,10 +581,10 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
         theme: store.config.theme === 'light' ? 'light' : 'dark',
       });
       store.showToast(skippedShots.length
-        ? `已推送 ${timelineRows.length} 段视频；跳过未就绪镜头：${skippedShots.slice(0, 8).join('、')}${skippedShots.length > 8 ? '…' : ''}`
-        : `已推送 ${timelineRows.length} 段视频`, skippedShots.length ? 'info' : 'success');
+        ? t('已推送 {count} 段视频；跳过未就绪镜头：{shots}', { count: timelineRows.length, shots: `${skippedShots.slice(0, 8).join('、')}${skippedShots.length > 8 ? '…' : ''}` })
+        : t('已推送 {count} 段视频', { count: timelineRows.length }), skippedShots.length ? 'info' : 'success');
     } catch (err: unknown) {
-      store.showToast(err instanceof Error ? err.message : '推送时间轴失败', 'error');
+      store.showToast(err instanceof Error ? err.message : t('推送时间轴失败'), 'error');
     } finally {
       completeCanvasDerivation(guard);
       timelineRunning.current = false;
@@ -634,20 +634,20 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
       if (!row.video) return <button type="button" className="shot-frame shot-frame--empty nodrag"
         data-shot-video-row={row.id} onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => openPicker(row.id, event.currentTarget, 'video')}
-        title="选择已生成的视频；按本镜头生成的视频会自动回填">
+        title={t('选择已生成的视频；按本镜头生成的视频会自动回填')}>
         <Icon icon="lucide:video" width={16} aria-hidden="true" />
-        <span className="shot-frame-hint">回填视频</span>
+        <span className="shot-frame-hint">{t('回填视频')}</span>
       </button>;
       return <div className={`shot-frame shot-video nodrag nowheel${video?.dangling ? ' shot-frame--dangling' : ''}`} data-shot-video-row={row.id}>
         {video?.available ? <ResourceVideoPreview key={`${row.id}:${video.url ?? video.filePath}`} src={video.url} filePath={video.filePath}
-          poster={video.poster} projectId={currentProjectId} name={`镜头 ${row.shotNo} 生成视频`} expanded={expandedVideoRowId === row.id}
+          poster={video.poster} projectId={currentProjectId} name={t('镜头 {shot} 生成视频', { shot: row.shotNo })} expanded={expandedVideoRowId === row.id}
           onExpandedChange={(expanded) => setExpandedVideoRowId(expanded ? row.id : null)} />
-          : <span className="shot-frame-hint">视频未就绪</span>}
+          : <span className="shot-frame-hint">{t('视频未就绪')}</span>}
         <button type="button" className="shot-frame-pick nodrag" onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => openPicker(row.id, event.currentTarget, 'video')} title="更换生成视频" aria-label="更换生成视频">
+          onClick={(event) => openPicker(row.id, event.currentTarget, 'video')} title={t('更换生成视频')} aria-label={t('更换生成视频')}>
           <Icon icon="mdi:video-sync-outline" width={11} aria-hidden="true" />
         </button>
-        <button type="button" className="shot-frame-unbind nodrag" onClick={() => unbindVideo(row.id)} title="解除视频绑定" aria-label="解除视频绑定">
+        <button type="button" className="shot-frame-unbind nodrag" onClick={() => unbindVideo(row.id)} title={t('解除视频绑定')} aria-label={t('解除视频绑定')}>
           <Icon icon="mdi:close" width={11} aria-hidden="true" />
         </button>
       </div>;
@@ -663,12 +663,12 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             data-shot-frame-row={row.id}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => openPicker(row.id, e.currentTarget)}
-            title="挑选连线进来的画面，或让 AI 生成"
+            title={t('挑选连线进来的画面，或让 AI 生成')}
           >
             {busy
               ? <span className="shot-frame-spinner" aria-hidden="true" />
               : <Icon icon="mdi:plus" width={16} height={16} aria-hidden="true" />}
-            <span className="shot-frame-hint">{busy ? '生成中' : '选择画面'}</span>
+            <span className="shot-frame-hint">{t(busy ? '生成中' : '选择画面')}</span>
           </button>
         );
       }
@@ -682,17 +682,17 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             className="shot-frame-pick nodrag"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => openPicker(row.id, e.currentTarget)}
-            title="换一个画面"
-            aria-label="换一个画面"
+            title={t('换一个画面')}
+            aria-label={t('换一个画面')}
           >
             <Icon icon="mdi:image-sync-outline" width={11} height={11} />
           </button>
           {frame?.kind === 'video' ? (
             <button type="button" className="shot-frame-img nodrag p-0"
               onClick={() => focusFrameNode(row.frame!.nodeId)}
-              title={frame.dangling ? '源节点已不在画布上，显示的是快照' : '点击定位到源节点'}>
+              title={t(frame.dangling ? '源节点已不在画布上，显示的是快照' : '点击定位到源节点')}>
               <VideoThumbnail src={frame.videoUrl} filePath={frame.filePath} poster={frame.url}
-                name={`镜头 ${row.shotNo} 参考视频`} alt="" className="h-full w-full object-contain" />
+                name={t('镜头 {shot} 参考视频', { shot: row.shotNo })} alt="" className="h-full w-full object-contain" />
             </button>
           ) : frame?.url ? (
             <img
@@ -701,10 +701,10 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               alt=""
               draggable={false}
               onClick={() => focusFrameNode(row.frame!.nodeId)}
-              title={frame.dangling ? '源节点已不在画布上，显示的是快照' : '点击定位到源节点'}
+              title={t(frame.dangling ? '源节点已不在画布上，显示的是快照' : '点击定位到源节点')}
             />
           ) : (
-            <span className="shot-frame-hint">无预览</span>
+            <span className="shot-frame-hint">{t('无预览')}</span>
           )}
           {frame?.kind === 'video' && (
             <Icon className="shot-frame-badge" icon="mdi:play-circle" width={14} height={14} aria-hidden="true" />
@@ -713,8 +713,8 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             type="button"
             className="shot-frame-unbind nodrag"
             onClick={() => unbindFrame(row.id)}
-            title="解除绑定"
-            aria-label="解除绑定"
+            title={t('解除绑定')}
+            aria-label={t('解除绑定')}
           >
             <Icon icon="mdi:close" width={11} height={11} />
           </button>
@@ -756,7 +756,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           <Select
             size="sm" fixedMenu className="min-w-0"
             value={custom ? 'custom' : value ? `preset:${options.indexOf(value)}` : ''}
-            aria-label={SHOTLIST_COLUMN_LABELS[column]}
+            aria-label={t(SHOTLIST_COLUMN_LABELS[column])}
             placeholder={t('未选择')}
             customInput={custom ? {
               value, placeholder: t('自定义'), autoFocus: customOptionCells.includes(cellId),
@@ -768,7 +768,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             } : undefined}
             options={[
               { value: '', label: t('未选择') },
-              ...options.map((option, index) => ({ value: `preset:${index}`, label: option })),
+              ...options.map((option, index) => ({ value: `preset:${index}`, label: t(option) })),
               { value: 'custom', label: t('自定义') },
             ]}
             onChange={(selectedValue) => {
@@ -794,7 +794,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             value={row.content ?? ''}
             onChange={(content) => patchRow(row.id, { content })}
             onBlur={commitToHistory}
-            ariaLabel={SHOTLIST_COLUMN_LABELS.content}
+            ariaLabel={t(SHOTLIST_COLUMN_LABELS.content)}
             portalDropdown
             placeholder=""
             canSubmit={false}
@@ -809,7 +809,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
       return (
         <textarea
           className="ui-textarea shot-input shot-input--text nodrag nowheel"
-          aria-label={SHOTLIST_COLUMN_LABELS[column]}
+          aria-label={t(SHOTLIST_COLUMN_LABELS[column])}
           rows={2}
           value={(row[column] as string) ?? ''}
           onChange={(e) => patchRow(row.id, { [column]: e.target.value } as Partial<ShotRow>)}
@@ -827,7 +827,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
         {/* 工具条本身不加 nodrag：表体几乎被输入框占满，这条带子是节点主要的拖拽手柄 */}
         <div className="shotlist-toolbar flex-wrap">
           <span className="shotlist-stat">
-            共 {rows.length} 镜 · 总时长 {Number(totalDuration.toFixed(1))}″
+            {t('共 {count} 镜 · 总时长 {duration}″', { count: rows.length, duration: Number(totalDuration.toFixed(1)) })}
           </span>
           <div className="shotlist-toolbar-actions nodrag flex-wrap" ref={columnMenuRef}>
             {!isFullscreen && <button type="button" className="ui-icon-btn ui-icon-btn--sm nodrag"
@@ -858,21 +858,21 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               className="shotlist-btn"
               onClick={(event) => { event.stopPropagation(); openAiDialog(); }}
               disabled={generating}
-              title="按剧本让模型拆出整张分镜表（只填当前显示的列）"
+              title={t('按剧本让模型拆出整张分镜表（只填当前显示的列）')}
             >
               {generating
                 ? <span className="shot-frame-spinner" aria-hidden="true" />
                 : <Icon icon="mdi:auto-fix" width={13} height={13} />}
-              {generating ? '生成中' : 'AI 生成'}
+              {t(generating ? '生成中' : 'AI 生成')}
             </button>
             <button
               type="button"
               className="shotlist-btn"
               onClick={() => setColumnMenuRequested((open) => !open)}
-              title="选择显示的列与列宽"
+              title={t('选择显示的列与列宽')}
             >
               <Icon icon="mdi:view-column-outline" width={13} height={13} />
-              列
+              {t('列')}
             </button>
             {columnMenuOpen && (
               <div className="ui-menu ui-menu--right shotlist-column-menu nowheel w-64 p-2">
@@ -885,7 +885,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                       checked={columns.includes(key)}
                       onChange={() => toggleColumn(key)}
                     />
-                    <label htmlFor={`${subtitleInputId}-column-${key}`}>{SHOTLIST_COLUMN_LABELS[key]}</label>
+                    <label htmlFor={`${subtitleInputId}-column-${key}`}>{t(SHOTLIST_COLUMN_LABELS[key])}</label>
                   </div>
                 ))}
                 <div className="mt-2 border-t border-canvas-border pt-2">
@@ -898,11 +898,11 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                   {flexibleColumns.map((column) => (
                     <div key={column} className="mb-1 grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-2 text-xs text-canvas-text"
                       onKeyDown={(event) => event.stopPropagation()}>
-                      <label htmlFor={`${subtitleInputId}-${column}-width`} className="whitespace-nowrap">{SHOTLIST_COLUMN_LABELS[column]}</label>
+                      <label htmlFor={`${subtitleInputId}-${column}-width`} className="whitespace-nowrap">{t(SHOTLIST_COLUMN_LABELS[column])}</label>
                       <NumberStepper id={`${subtitleInputId}-${column}-width`} size="sm" unit="%"
                         className="w-full nodrag" min={1} max={95} step={0.5} precision={1}
                         value={getColumnRatio(column)}
-                        aria-label={`${SHOTLIST_COLUMN_LABELS[column]}列宽`}
+                        aria-label={t('{column}列宽', { column: t(SHOTLIST_COLUMN_LABELS[column]) })}
                         onChange={(ratio) => setColumnRatio(column, ratio, !numberScrubbingRef.current)}
                         onScrubStateChange={onNumberScrubStateChange} />
                     </div>
@@ -925,10 +925,10 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               className="shotlist-btn shotlist-btn--primary"
               onClick={pushToTimeline}
               disabled={timelineBusy}
-              title="仅按“生成视频”列重建时间轴，跳过没有成片的镜头"
+              title={t('仅按“生成视频”列重建时间轴，跳过没有成片的镜头')}
             >
               <Icon icon="mdi:timeline-plus-outline" width={13} height={13} />
-              推送时间轴
+              {t('推送时间轴')}
             </button>
           </div>
         </div>
@@ -937,12 +937,12 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           <table ref={tableRef} className="shotlist-table" style={{ '--shotlist-columns': tableColumns } as CSSProperties}>
             <thead>
               <tr>
-                <th className="shot-col-grip" aria-label="排序" />
+                <th className="shot-col-grip" aria-label={t('排序')} />
                 {visibleColumns.map((column) => (
                   <th key={column} className={`shot-col-${column}`} data-shot-column={column}>
-                    {SHOTLIST_COLUMN_LABELS[column]}
+                    {t(SHOTLIST_COLUMN_LABELS[column])}
                     {flexibleColumns.includes(column) && <button type="button" className="shotlist-column-resize nodrag nowheel"
-                      aria-label={`${SHOTLIST_COLUMN_LABELS[column]}列宽`} title={t('拖动调整列宽')}
+                      aria-label={t('{column}列宽', { column: t(SHOTLIST_COLUMN_LABELS[column]) })} title={t('拖动调整列宽')}
                       onPointerDown={(event) => startColumnResize(event, column)} onPointerMove={moveColumnResize}
                       onPointerUp={(event) => finishColumnResize(event)}
                       onPointerCancel={(event) => finishColumnResize(event, true)}
@@ -978,7 +978,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                       draggable
                       onDragStart={() => setDragRowId(row.id)}
                       onDragEnd={() => setDragRowId(null)}
-                      title="拖动调整顺序"
+                      title={t('拖动调整顺序')}
                     >
                       <Icon icon="mdi:drag-horizontal-variant" width={13} height={13} />
                     </span>
@@ -1002,8 +1002,8 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                         type="button"
                         className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--danger nodrag"
                         onClick={() => deleteRow(row.id)}
-                        title="删除该镜"
-                        aria-label="删除该镜"
+                        title={t('删除该镜')}
+                        aria-label={t('删除该镜')}
                       >
                         <Icon icon="mdi:trash-can-outline" width={13} height={13} />
                       </button>
@@ -1015,13 +1015,13 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           </table>
 
           {rows.length === 0 && (
-            <div className="shotlist-empty">还没有镜头，点「AI 生成」让模型拆，或点下面「加一镜」自己写</div>
+            <div className="shotlist-empty">{t('还没有镜头，点「AI 生成」让模型拆，或点下面「加一镜」自己写')}</div>
           )}
         </div>
 
         <button type="button" className="shotlist-add nodrag" onClick={addRow}>
           <Icon icon="mdi:plus" width={13} height={13} />
-          加一镜
+          {t('加一镜')}
         </button>
 
         {data.error && <NodeError nodeId={id} message={data.error} />}
@@ -1069,7 +1069,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           className="shot-picker nodrag nowheel"
           style={{ left: picker.left, top: picker.top }}
         >
-          <div className="shot-picker-title">{picker.target === 'video' ? '选择已生成的视频（本镜头来源优先）' : '连线进来的画面'}</div>
+          <div className="shot-picker-title">{t(picker.target === 'video' ? '选择已生成的视频（本镜头来源优先）' : '连线进来的画面')}</div>
           {picker.candidates.length > 0 ? (
             <div className="shot-picker-grid">
               {picker.candidates.map((candidate) => (
@@ -1085,7 +1085,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                         name={candidate.label} alt="" className="shot-picker-img absolute inset-0" />
                     : candidate.url
                     ? <img src={candidate.url} alt="" className="shot-picker-img" />
-                    : <span className="shot-frame-hint">未出图</span>}
+                    : <span className="shot-frame-hint">{t('未出图')}</span>}
                   {candidate.kind === 'video' && (
                     <Icon className="shot-frame-badge" icon="mdi:play-circle" width={12} height={12} />
                   )}
@@ -1094,12 +1094,12 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               ))}
             </div>
           ) : (
-            <div className="shot-picker-empty">{picker.target === 'video' ? '暂无已就绪视频，请先为镜头生成视频或导入视频节点' : '把图像/视频节点连到这张表，这里就能直接挑'}</div>
+            <div className="shot-picker-empty">{t(picker.target === 'video' ? '暂无已就绪视频，请先为镜头生成视频或导入视频节点' : '把图像/视频节点连到这张表，这里就能直接挑')}</div>
           )}
 
           {picker.target === 'frame' && <>
           <button type="button" className="ui-btn ui-btn--sm my-2" onClick={() => { setStoryboardRowId(picker.rowId); setPicker(null); }}>{t('从宫格取画面')}</button>
-          <div className="shot-picker-title">AI 生成画面</div>
+          <div className="shot-picker-title">{t('AI 生成画面')}</div>
           <Select value={frameModelRef} onChange={setFrameModelRef}
             options={imageModels.map((model) => ({ value: model.value, label: model.label }))}
             placeholder={t('选择图片模型')} aria-label={t('选择图片模型')} fixedMenu />
@@ -1115,7 +1115,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             canSubmit={!busyRows.length && !!frameModelRef}
             nodeId={id}
             className="shot-picker-input"
-            placeholder="默认用「内容」栏，@ 可引用角色、资源库和连线节点"
+            placeholder={t('默认用「内容」栏，@ 可引用角色、资源库和连线节点')}
           />
           <button
             type="button"
@@ -1124,7 +1124,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
             disabled={!!busyRows.length || !frameModelRef}
           >
             <Icon icon="mdi:auto-fix" width={13} height={13} />
-            生成并绑定
+            {t('生成并绑定')}
           </button>
           </>}
         </div>,

@@ -4,6 +4,7 @@ import {
   type HistorySnapshotLike,
 } from '../../src/utils/historyOperationLabels';
 import type { BaseNodeData, NodeGroup } from '../../src/types';
+import { getLocale, setLocale } from '../../src/i18n';
 
 function node(
   id: string,
@@ -23,6 +24,19 @@ function snapshot(partial: Partial<HistorySnapshotLike> = {}): HistorySnapshotLi
 }
 
 describe('从快照差异推断操作名', () => {
+  it('translates dynamic node counts and connection counts', () => {
+    const previousLocale = getLocale();
+    try {
+      setLocale('en-US');
+      expect(describeCanvasChange(snapshot(), snapshot({ nodes: [node('a'), node('b')] })).title)
+        .toBe('Added 2 Generate Image nodes');
+      expect(describeCanvasChange(snapshot(), snapshot({ edges: [{ id: 'a' }, { id: 'b' }] })).title)
+        .toBe('Added 2 connections');
+    } finally {
+      setLocale(previousLocale);
+    }
+  });
+
   it('单个新增节点用节点类型命名', () => {
     const result = describeCanvasChange(
       snapshot(),

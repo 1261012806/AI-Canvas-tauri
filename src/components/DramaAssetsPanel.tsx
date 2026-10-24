@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { Download } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { useT } from '../i18n';
+import { t as translate, useT } from '../i18n';
 import { useAppStore } from '../store/useAppStore';
 import type { DramaAsset, DramaAssetKind, DramaAssetWriteOptions } from '../types/dramaAssets';
 import { DRAMA_ASSET_KIND_LABEL } from '../types/dramaAssets';
@@ -136,7 +136,7 @@ export function DramaAssetCard({
         <button
           type="button"
           className="absolute inset-0 z-10 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
-          aria-label={`打开${DRAMA_ASSET_KIND_LABEL[asset.kind]}：${asset.name}`}
+          aria-label={t('打开{kind}：{name}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]), name: asset.name })}
           onClick={onOpen}
         />
       ) : null}
@@ -155,7 +155,7 @@ export function DramaAssetCard({
             />
           ) : (
             <span className="drama-asset-thumbnail-placeholder text-[12px] text-canvas-text-muted">
-              {DRAMA_ASSET_KIND_LABEL[asset.kind][0]}
+              {t(DRAMA_ASSET_KIND_LABEL[asset.kind])[0]}
             </span>
           )}
         </div>
@@ -164,14 +164,14 @@ export function DramaAssetCard({
           <div className="drama-asset-meta flex items-center gap-1.5 flex-wrap">
             <span className="w-full text-[13px] font-semibold text-canvas-text truncate">{asset.name}</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-canvas-hover text-canvas-text-muted shrink-0">
-              {DRAMA_ASSET_KIND_LABEL[asset.kind]}
+              {t(DRAMA_ASSET_KIND_LABEL[asset.kind])}
             </span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-canvas-hover text-canvas-text-muted shrink-0">
-              {IMPORTANCE_LABEL[asset.importance] ?? asset.importance}
+              {IMPORTANCE_LABEL[asset.importance] ? t(IMPORTANCE_LABEL[asset.importance]) : asset.importance}
             </span>
             {displayThumb ? (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 shrink-0">
-                已绑图
+                {t('已绑图')}
               </span>
             ) : null}
           </div>
@@ -185,7 +185,7 @@ export function DramaAssetCard({
               ) : null}
               {asset.visualNotes ? (
                 <p className="drama-asset-visual-notes mt-0.5 text-[11px] text-canvas-text-muted leading-relaxed line-clamp-2">
-                  外形：{asset.visualNotes}
+                  {t('外形：{notes}', { notes: asset.visualNotes })}
                 </p>
               ) : null}
               {assetExtraLine(asset) ? (
@@ -201,27 +201,27 @@ export function DramaAssetCard({
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="名称"
+                placeholder={t('名称')}
                 className="w-full px-2 py-1 rounded-lg bg-canvas-bg border border-canvas-border text-[12px] text-canvas-text focus:outline-none focus:border-indigo-500/50"
               />
               <textarea
                 value={summary}
                 onChange={(e) => setSummary(e.target.value)}
-                placeholder="简介"
+                placeholder={t('简介')}
                 rows={2}
                 className="w-full px-2 py-1 rounded-lg bg-canvas-bg border border-canvas-border text-[12px] text-canvas-text focus:outline-none focus:border-indigo-500/50 resize-none"
               />
               <textarea
                 value={visualNotes}
                 onChange={(e) => setVisualNotes(e.target.value)}
-                placeholder="外形/视觉要点"
+                placeholder={t('外形/视觉要点')}
                 rows={2}
                 className="w-full px-2 py-1 rounded-lg bg-canvas-bg border border-canvas-border text-[12px] text-canvas-text focus:outline-none focus:border-indigo-500/50 resize-none"
               />
               <input
                 value={storyRole}
                 onChange={(e) => setStoryRole(e.target.value)}
-                placeholder="剧情功能（可选）"
+                placeholder={t('剧情功能（可选）')}
                 className="w-full px-2 py-1 rounded-lg bg-canvas-bg border border-canvas-border text-[12px] text-canvas-text focus:outline-none focus:border-indigo-500/50"
               />
               <div className="flex gap-1.5">
@@ -237,14 +237,14 @@ export function DramaAssetCard({
                     })
                   }
                 >
-                  保存
+                  {t('保存')}
                 </button>
                 <button
                   type="button"
                   className="px-2.5 py-1 rounded-lg text-[11px] text-canvas-text-muted hover:bg-canvas-hover"
                   onClick={onToggleEdit}
                 >
-                  取消
+                  {t('取消')}
                 </button>
               </div>
             </div>
@@ -254,7 +254,7 @@ export function DramaAssetCard({
           {bindOpen && (
             <div className={`drama-asset-bind-picker mt-2 p-2 rounded-lg border border-canvas-border bg-canvas-surface/80 max-h-32 overflow-y-auto space-y-1${onOpen && !editing ? ' relative z-20' : ''}`}>
               {imageNodes.length === 0 ? (
-                <p className="text-[11px] text-canvas-text-muted px-1">画布上暂无图像节点</p>
+                <p className="text-[11px] text-canvas-text-muted px-1">{t('画布上暂无图像节点')}</p>
               ) : (
                 imageNodes.map((n) => (
                   <button
@@ -275,7 +275,7 @@ export function DramaAssetCard({
                 className="text-[11px] text-canvas-text-muted hover:text-canvas-text px-1"
                 onClick={() => setBindOpen(false)}
               >
-                关闭
+                {t('关闭')}
               </button>
             </div>
           )}
@@ -287,21 +287,21 @@ export function DramaAssetCard({
             type="button"
             className="drama-asset-action-copy ui-btn ui-btn--ghost ui-btn--sm"
             onClick={onCopyBrief}
-            title="复制本条简介（可粘到图像节点 prompt）"
+            title={t('复制本条简介（可粘到图像节点 prompt）')}
           >
-            复制简介
+            {t('复制简介')}
           </button>
           <button
             type="button"
             className="drama-asset-action-edit ui-btn ui-btn--ghost ui-btn--sm"
             onClick={handleToggleEdit}
           >
-            {editing ? '收起' : '编辑'}
+            {t(editing ? '收起' : '编辑')}
           </button>
           {(!hasUploadedImage || manageUploadedImage) && (
             <>
               <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={uploading} onClick={onUploadImage}>
-                上传图片
+                {t('上传图片')}
               </button>
               {asset.imageNodeId || asset.imageUrl ? (
                 onUnbindImage && <button
@@ -309,7 +309,7 @@ export function DramaAssetCard({
                   className="drama-asset-action-unbind ui-btn ui-btn--ghost ui-btn--sm"
                   onClick={onUnbindImage}
                 >
-                  解绑图
+                  {t('解绑图')}
                 </button>
               ) : (
                 <button
@@ -317,16 +317,16 @@ export function DramaAssetCard({
                   className="drama-asset-action-bind ui-btn ui-btn--ghost ui-btn--sm"
                   onClick={() => setBindOpen((v) => !v)}
                 >
-                  绑图
+                  {t('绑图')}
                 </button>
               )}
             </>
           )}
           {onManageVoice && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onManageVoice}>
-            声音{asset.kind === 'character' && asset.voiceClips?.length ? ` ${asset.voiceClips.length}` : ''}
+            {t('声音')}{asset.kind === 'character' && asset.voiceClips?.length ? ` ${asset.voiceClips.length}` : ''}
           </button>}
           {onManageActions && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onManageActions}>
-            动作{asset.kind === 'character' && asset.actions?.length ? ` ${asset.actions.length}` : ''}
+            {t('动作')}{asset.kind === 'character' && asset.actions?.length ? ` ${asset.actions.length}` : ''}
           </button>}
           {onCopyToScope && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={onCopyToScope}>
             {copyToScopeLabel}
@@ -346,8 +346,8 @@ export function DramaAssetCard({
               type="button"
               className="drama-asset-action-delete ui-btn ui-btn--ghost ui-btn--sm text-red-400/80 hover:bg-red-500/10"
               onClick={onDelete}
-              aria-label={`删除${asset.name}`}
-              title={`删除${asset.name}`}
+              aria-label={t('删除{name}', { name: asset.name })}
+              title={t('删除{name}', { name: asset.name })}
             >
               <Icon icon="lucide:trash-2" width="16" height="16" aria-hidden="true" />
             </button>
@@ -488,7 +488,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
     } }, options);
     if (!result || options.signal?.aborted) return;
     options.assertCurrent?.();
-    showToast(t(kind === 'export' ? '已导出 {count} 项创作资产，包含 {mediaCount} 份媒体' : '已导入 {count} 项创作资产，包含 {mediaCount} 份媒体', {
+    showToast(t(kind === 'export' ? translate('已导出 {count} 项创作资产，包含 {mediaCount} 份媒体') : translate('已导入 {count} 项创作资产，包含 {mediaCount} 份媒体'), {
       count: result.assetCount, mediaCount: result.mediaCount,
     }), 'success');
   });
@@ -501,9 +501,9 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
     unbindPending.current = true;
     try {
       const message = asset.kind === 'character'
-        ? `确定解绑「${target.name}」的全部参考图并清除头像设置？声音、动作、画布节点和原图片文件会保留。`
-        : `确定解绑「${target.name}」的图片？画布节点和原图片文件会保留。`;
-      if (!await confirmAction(message, { title: '解绑图片', okLabel: '确认解绑', cancelLabel: '取消' })) return;
+        ? translate('确定解绑「{name}」的全部参考图并清除头像设置？声音、动作、画布节点和原图片文件会保留。', { name: target.name })
+        : translate('确定解绑「{name}」的图片？画布节点和原图片文件会保留。', { name: target.name });
+      if (!await confirmAction(message, { title: translate('解绑图片'), okLabel: translate('确认解绑'), cancelLabel: translate('取消') })) return;
       const latest = useAppStore.getState();
       if (latest.currentProjectId !== initial.currentProjectId
         || !latest.assetsPanelOpen || !latest.dramaAssetsPanelOpen
@@ -556,11 +556,11 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
           avatarReferenceImageId: undefined, avatarCrop: undefined,
         }, options);
         options.assertCurrent?.();
-        if (!saved) throw new Error('角色素材保存失败');
+        if (!saved) throw new Error(translate('角色素材保存失败'));
       } else {
         latest.upsertDramaAsset({ ...asset, kind });
       }
-      showToast(isTauriEnv() ? '素材已保存到 Library' : '素材已添加；浏览器模式不支持本地目录保存');
+      showToast(isTauriEnv() ? translate('素材已保存到 Library') : translate('素材已添加；浏览器模式不支持本地目录保存'));
   });
 
   const imageNodes = useMemo(
@@ -617,16 +617,16 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
   const lastExtractLabel = useMemo(() => {
     const le = dramaAssets.lastExtract;
     if (!le) return null;
-    const kinds = le.kinds.map((k) => DRAMA_ASSET_KIND_LABEL[k]).join('、');
-    const t = new Date(le.at);
-    const time = `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-    return `最近提取：${kinds} · ${time}`;
-  }, [dramaAssets.lastExtract]);
+    const kinds = le.kinds.map((k) => t(DRAMA_ASSET_KIND_LABEL[k])).join('、');
+    const extractedAt = new Date(le.at);
+    const time = `${extractedAt.getMonth() + 1}/${extractedAt.getDate()} ${String(extractedAt.getHours()).padStart(2, '0')}:${String(extractedAt.getMinutes()).padStart(2, '0')}`;
+    return t('最近提取：{kinds} · {time}', { kinds, time });
+  }, [dramaAssets.lastExtract, t]);
 
   const handleClearTab = useCallback(() => {
     if (tab === 'all') return;
-    const label = DRAMA_ASSET_KIND_LABEL[tab];
-    void confirmAction(`清空全部「${label}」资产？此操作不可撤销。`, { title: '清空资产' }).then((confirmed) => {
+    const label = translate(DRAMA_ASSET_KIND_LABEL[tab]);
+    void confirmAction(translate('清空全部「{label}」资产？此操作不可撤销。', { label }), { title: translate('清空资产') }).then((confirmed) => {
       if (confirmed) clearDramaAssetsByKind(tab);
     });
   }, [tab, clearDramaAssetsByKind]);
@@ -660,7 +660,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索名称、简介..."
+            placeholder={t('搜索名称、简介...')}
             className="ui-input ui-input--sm select-text"
           />
         </label>
@@ -674,7 +674,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                     aria-pressed={tab === key}
                     onClick={() => setTab(key)}
                   >
-                    {label}
+                    {t(label)}
                     {count > 0 ? ` ${count}` : ''}
                   </button>
                 );
@@ -691,22 +691,22 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                   disabled={busy}
                   onClick={() => setCharacterLibraryOpen(true, { scope: 'project', origin: 'assets' })}
                 >
-                  打开角色库
+                  {t('打开角色库')}
                 </button>
               ) : null}
       <div className={`flex items-center gap-2 shrink-0 ${tab === 'all' || tab === 'character' ? '' : 'ml-auto'}`}>
         {tab === 'all' && (
-          <Select aria-label="上传资产类型" className="w-auto" size="sm" value={uploadKind} disabled={busy} fixedMenu
+          <Select aria-label={t('上传资产类型')} className="w-auto" size="sm" value={uploadKind} disabled={busy} fixedMenu
             onChange={(selectedOptionValue) => setUploadKind(selectedOptionValue as DramaAssetKind)}>
             {KIND_TABS.filter((item) => item.key !== 'all').map((item) => (
-              <option key={item.key} value={item.key}>{item.label}</option>
+              <option key={item.key} value={item.key}>{t(item.label)}</option>
             ))}
           </Select>
         )}
         <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={busy}
           onClick={() => void handleUpload(tab === 'all' ? uploadKind : tab)}>
           <Icon icon="lucide:upload" width={14} aria-hidden="true" />
-          {uploading ? '上传中…' : `上传${DRAMA_ASSET_KIND_LABEL[tab === 'all' ? uploadKind : tab]}图片`}
+          {uploading ? t('上传中…') : t('上传{kind}图片', { kind: t(DRAMA_ASSET_KIND_LABEL[tab === 'all' ? uploadKind : tab]) })}
         </button>
       </div>
               <div className="flex shrink-0 items-center gap-1">
@@ -746,7 +746,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                   disabled={operationKind === 'import'}
                   onClick={handleClearTab}
                 >
-                  清空本类
+                  {t('清空本类')}
                 </button>
         </div>
       ) : null}
@@ -768,14 +768,14 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                     <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
                   </svg>
                   <p className="text-[13px] mb-1">
-                    {search ? '无匹配资产' : '暂无短剧资产'}
+                    {t(search ? '无匹配资产' : '暂无短剧资产')}
                   </p>
                   <div className="text-[11px] text-center max-w-[340px] leading-relaxed opacity-90 space-y-1.5">
-                    <p className="font-medium text-canvas-text-secondary">可本地上传图片，也可管理简介与绑图</p>
-                    <p>1. 文本节点 <code className="px-1 rounded bg-canvas-hover">/</code> → 提取人物/场景/道具</p>
-                    <p>2. 图像节点 prompt 里 <code className="px-1 rounded bg-canvas-hover">@</code> 选资产（无图=简介）</p>
-                    <p>3. 再 <code className="px-1 rounded bg-canvas-hover">/</code> 人设参考等生成资产图</p>
-                    <p>4. 生成后可在此「绑图」，之后 @ 即为参考图</p>
+                    <p className="font-medium text-canvas-text-secondary">{t('可本地上传图片，也可管理简介与绑图')}</p>
+                    <p>{t('1. 文本节点')} <code className="px-1 rounded bg-canvas-hover">/</code> {t('→ 提取人物/场景/道具')}</p>
+                    <p>{t('2. 图像节点提示词中')} <code className="px-1 rounded bg-canvas-hover">@</code> {t('选资产（无图=简介）')}</p>
+                    <p>{t('3. 再')} <code className="px-1 rounded bg-canvas-hover">/</code> {t('使用人设参考等生成资产图')}</p>
+                    <p>{t('4. 生成后可在此「绑图」，之后 @ 即为参考图')}</p>
                   </div>
                 </div>
               ) : (
@@ -791,7 +791,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                       setEditingId((cur) => (cur === asset.id ? null : asset.id))
                     }
                     onDelete={() => {
-                      void confirmAction(`删除「${asset.name}」？`, { title: '删除资产' }).then((confirmed) => {
+                      void confirmAction(t('删除「{name}」？', { name: asset.name }), { title: t('删除资产') }).then((confirmed) => {
                         if (confirmed) deleteDramaAsset(asset.kind, asset.id);
                       });
                     }}
@@ -807,7 +807,7 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                     }}
                     onBindImage={(nodeId) => {
                       bindDramaAssetImage(asset.kind, asset.id, nodeId);
-                      showToast(`已绑定图像节点`);
+                      showToast(t('已绑定图像节点'));
                     }}
                     onUnbindImage={() => void handleUnbindImage(asset)}
                     onCopyBrief={() => void copyBrief(asset)}
@@ -824,12 +824,12 @@ export default function DramaAssetsPanel({ compact = false }: { compact?: boolea
                           imageUrl: resolveThumb(asset, initial.nodes as Array<{ id: string; data: Record<string, unknown> }>),
                           createdAt: Date.now(), updatedAt: Date.now(),
                         }, { assertCurrent: () => {
-                          if (useAppStore.getState().currentProjectId !== projectId) throw new Error('项目已切换');
+                          if (useAppStore.getState().currentProjectId !== projectId) throw new Error(translate('项目已切换'));
                         } });
                         if (saved) showToast('已复制到全局创作资产');
                       })();
                     }}
-                    copyToScopeLabel="复制到全局"
+                    copyToScopeLabel={t('复制到全局')}
                     uploading={busy}
                     onExport={isTauriEnv() ? () => void handleTransfer('export', asset) : undefined}
                     onUploadImage={() => void handleUpload(asset.kind, asset.id)}

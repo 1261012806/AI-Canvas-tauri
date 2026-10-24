@@ -1,6 +1,7 @@
 /**
  * 校验高级预设参数定义与取值，并安全渲染提示词模板变量。
  */
+import { t } from '../i18n';
 import type {
   PresetAdvancedConfig,
   PresetParameterDefinition,
@@ -83,68 +84,69 @@ export function composeStepPrompt(
 export function validatePresetParameterValues(
   parameters: PresetParameterDefinition[],
   values: PresetParameterValues,
+  translate: typeof t = t,
 ): string[] {
   const errors: string[] = [];
   for (const parameter of parameters) {
     const value = values[parameter.key];
     if (parameter.required && isBlank(value)) {
-      errors.push('请填写“' + (parameter.label || parameter.key) + '”');
+      errors.push(translate('请填写“{label}”', { label: parameter.label || parameter.key }));
       continue;
     }
     if (parameter.type === 'number' && !isBlank(value) && !Number.isFinite(Number(value))) {
-      errors.push('“' + (parameter.label || parameter.key) + '”必须是数字');
+      errors.push(translate('“{label}”必须是数字', { label: parameter.label || parameter.key }));
     }
     if (
       parameter.type === 'select'
       && !isBlank(value)
       && !(parameter.options ?? []).includes(String(value))
     ) {
-      errors.push('“' + (parameter.label || parameter.key) + '”的选项无效');
+      errors.push(translate('“{label}”的选项无效', { label: parameter.label || parameter.key }));
     }
   }
   return errors;
 }
 
-export function validatePresetAdvancedConfig(config: PresetAdvancedConfig): string[] {
+export function validatePresetAdvancedConfig(config: PresetAdvancedConfig, translate: typeof t = t): string[] {
   const errors: string[] = [];
   const keys = new Set<string>();
 
   for (const [index, parameter] of config.parameters.entries()) {
     const displayIndex = index + 1;
     const key = parameter.key.trim();
-    if (!parameter.label.trim()) errors.push('参数 ' + displayIndex + ' 缺少名称');
+    if (!parameter.label.trim()) errors.push(translate('参数 {index} 缺少名称', { index: displayIndex }));
     if (!key) {
-      errors.push('参数 ' + displayIndex + ' 缺少变量名');
+      errors.push(translate('参数 {index} 缺少变量名', { index: displayIndex }));
     } else if (!PARAMETER_KEY_PATTERN.test(key)) {
-      errors.push('参数“' + (parameter.label || displayIndex) + '”的变量名格式无效');
+      errors.push(translate('参数“{label}”的变量名格式无效', { label: parameter.label || displayIndex }));
     } else if (RESERVED_VARIABLES.includes(key)) {
-      errors.push('变量名“' + key + '”是内置变量，请换一个');
+      errors.push(translate('变量名“{key}”是内置变量，请换一个', { key }));
     } else if (keys.has(key)) {
-      errors.push('变量名“' + key + '”重复');
+      errors.push(translate('变量名“{key}”重复', { key }));
     }
     keys.add(key);
 
     if (parameter.type === 'select') {
       const options = (parameter.options ?? []).map((option) => option.trim()).filter(Boolean);
       if (options.length === 0) {
-        errors.push('参数“' + (parameter.label || displayIndex) + '”至少需要一个选项');
+        errors.push(translate('参数“{label}”至少需要一个选项', { label: parameter.label || displayIndex }));
       }
     }
   }
 
   if (config.steps.length === 0) {
-    errors.push('高级快捷指令至少需要一个执行步骤');
+    errors.push(translate('高级快捷指令至少需要一个执行步骤'));
     return errors;
   }
 
   const allowedVariables = new Set([...RESERVED_VARIABLES, ...keys]);
   for (const [index, step] of config.steps.entries()) {
     const displayIndex = index + 1;
-    if (!step.name.trim()) errors.push('步骤 ' + displayIndex + ' 缺少名称');
-    if (!step.promptTemplate.trim()) errors.push('步骤 ' + displayIndex + ' 缺少提示词模板');
+    if (!step.name.trim()) errors.push(translate('步骤 {index} 缺少名称', { index: displayIndex }));
+    if (!step.promptTemplate.trim()) errors.push(translate('步骤 {index} 缺少提示词模板', { index: displayIndex }));
     for (const variable of extractPresetTemplateVariables(step.promptTemplate)) {
       if (!allowedVariables.has(variable)) {
-        errors.push('步骤 ' + displayIndex + ' 使用了未定义变量“' + variable + '”');
+        errors.push(translate('步骤 {index} 使用了未定义变量“{variable}”', { index: displayIndex, variable }));
       }
     }
   }

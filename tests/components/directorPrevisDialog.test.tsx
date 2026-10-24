@@ -11,6 +11,7 @@ const driver = vi.hoisted(() => ({
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
   useCallback: <T,>(callback: T) => callback,
+  useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
   useRef: <T,>(initial: T) => {
     const index = driver.index++;
     driver.slots[index] ??= { current: initial };

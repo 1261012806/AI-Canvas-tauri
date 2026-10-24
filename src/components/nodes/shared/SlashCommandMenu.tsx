@@ -2,6 +2,7 @@
  * SlashCommandMenu — / 指令弹出菜单
  * 显示内置快捷指令 + 用户自定义快捷指令，支持子菜单，选中后插入模板到提示词
  */
+import { useT } from '../../../i18n';
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
@@ -55,6 +56,7 @@ export default function SlashCommandMenu({
   onClose,
   onManagePresets,
 }: SlashCommandMenuProps) {
+  const t = useT();
   const invocableSkills = skillOptions;
   const [activeParentId, setActiveParentId] = useState<string | null>(null);
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
@@ -202,7 +204,7 @@ export default function SlashCommandMenu({
         {/* Built-in commands */}
         {commands.length > 0 && (
           <>
-            <div className="slash-command-header">内置快捷指令</div>
+            <div className="slash-command-header">{t('内置快捷指令')}</div>
             {commands.map((item) => (
               <div
                 key={item.id}
@@ -221,12 +223,12 @@ export default function SlashCommandMenu({
                 {renderIcon(item.icon)}
                 <div className="slash-command-text">
                   <span className="slash-command-title">
-                    {item.title}
+                    {t(item.title)}
                     {item.children && <span className="slash-command-arrow">›</span>}
                   </span>
-                  <span className="slash-command-desc">{item.description}</span>
+                  <span className="slash-command-desc">{t(item.description)}</span>
                 </div>
-                {!item.children && <span className="slash-command-badge">直接触发</span>}
+                {!item.children && <span className="slash-command-badge">{t('直接触发')}</span>}
               </div>
             ))}
           </>
@@ -254,7 +256,7 @@ export default function SlashCommandMenu({
               }}
             >
               {renderIcon('mdi:star-outline')}
-              <span className="min-w-0 flex-1 truncate">快捷指令</span>
+              <span className="min-w-0 flex-1 truncate">{t('快捷指令')}</span>
               <span className="ui-menu__shortcut">{presetCount}</span>
               <span className="slash-command-arrow" aria-hidden="true">›</span>
             </button>
@@ -277,7 +279,7 @@ export default function SlashCommandMenu({
               Skill
               <span className="slash-command-arrow">›</span>
             </span>
-            <span className="slash-command-desc">调用或上传只读 Skill</span>
+            <span className="slash-command-desc">{t('调用或上传只读 Skill')}</span>
           </div>
         </div>
         <div className="slash-command-divider" />
@@ -291,9 +293,9 @@ export default function SlashCommandMenu({
           <span className="slash-command-icon">⚙️</span>
           <div className="slash-command-text">
             <span className="slash-command-title slash-command-manage-title">
-              管理快捷指令
+              {t('管理快捷指令')}
             </span>
-            <span className="slash-command-desc">创建和管理自定义提示词模板</span>
+            <span className="slash-command-desc">{t('创建和管理自定义提示词模板')}</span>
           </div>
         </div>
       </div>
@@ -318,10 +320,10 @@ export default function SlashCommandMenu({
             >
               {renderIcon(child.icon)}
               <div className="slash-command-text">
-                <span className="slash-command-title">{child.title}</span>
-                <span className="slash-command-desc">{child.description}</span>
+                <span className="slash-command-title">{t(child.title)}</span>
+                <span className="slash-command-desc">{t(child.description)}</span>
               </div>
-              <span className="slash-command-badge">直接触发</span>
+              <span className="slash-command-badge">{t('直接触发')}</span>
             </div>
           ))}
         </div>
@@ -332,7 +334,7 @@ export default function SlashCommandMenu({
           ref={submenuRef}
           className="slash-command-submenu"
           role="menu"
-          aria-label="快捷指令"
+          aria-label={t('快捷指令')}
           style={{ left: submenuPos.left, top: submenuPos.top }}
           onKeyDown={(event) => {
             if (event.key !== 'ArrowLeft') return;
@@ -343,7 +345,7 @@ export default function SlashCommandMenu({
             setActiveParentId(null);
           }}
         >
-          <div className="ui-menu__label">快捷指令</div>
+          <div className="ui-menu__label">{t('快捷指令')}</div>
           {presetGroups.map((group, index) => (
             <div key={group.id} role="group" aria-label={group.id === UNGROUPED_PRESET_FOLDER_ID ? undefined : group.name}>
               {index > 0 && <div className="ui-menu__sep" />}
@@ -360,12 +362,12 @@ export default function SlashCommandMenu({
                   {renderIcon(preset.icon || 'mdi:star-outline')}
                   <span className="min-w-0 flex-1 truncate">{preset.name}</span>
                   <span className="ui-badge ui-badge--success shrink-0">
-                    {isAdvancedPreset(preset) ? '顺序执行' : preset.triggerMode === 'direct' ? '直接触发' : '加入提示词'}
+                    {t(isAdvancedPreset(preset) ? '顺序执行' : preset.triggerMode === 'direct' ? '直接触发' : '加入提示词')}
                   </span>
                 </button>
               ))}
               {group.presets.length === 0 && (
-                <div className="p-2 text-xs text-canvas-text-muted" role="status">暂无快捷指令</div>
+                <div className="p-2 text-xs text-canvas-text-muted" role="status">{t('暂无快捷指令')}</div>
               )}
             </div>
           ))}
@@ -395,7 +397,7 @@ export default function SlashCommandMenu({
                   {skill.description || skill.fileName}
                 </span>
               </div>
-              <span className="slash-command-badge">调用</span>
+              <span className="slash-command-badge">{t('调用')}</span>
             </div>
           ))}
           {invocableSkills.length > 0 && <div className="slash-command-divider" />}
@@ -408,8 +410,8 @@ export default function SlashCommandMenu({
             onMouseEnter={() => setHoveredItemId('manage-skills')}
           >
             <div className="slash-command-text">
-              <span className="slash-command-title">管理 Skill</span>
-              <span className="slash-command-desc">查看内容和删除已上传 Skill</span>
+              <span className="slash-command-title">{t('管理 Skill')}</span>
+              <span className="slash-command-desc">{t('查看内容和删除已上传 Skill')}</span>
             </div>
           </div>
           <div className="slash-command-divider" />
@@ -422,8 +424,8 @@ export default function SlashCommandMenu({
             onMouseEnter={() => setHoveredItemId('upload-folder')}
           >
             <div className="slash-command-text">
-              <span className="slash-command-title">上传 Skill 文件夹</span>
-              <span className="slash-command-desc">保存到应用 skill 目录后调用</span>
+              <span className="slash-command-title">{t('上传 Skill 文件夹')}</span>
+              <span className="slash-command-desc">{t('保存到应用 skill 目录后调用')}</span>
             </div>
           </div>
           <div
@@ -435,8 +437,8 @@ export default function SlashCommandMenu({
             onMouseEnter={() => setHoveredItemId('upload-file')}
           >
             <div className="slash-command-text">
-              <span className="slash-command-title">上传 Skill 文件</span>
-              <span className="slash-command-desc">支持文本文件及 .zip / .tar.gz / .tgz 压缩包</span>
+              <span className="slash-command-title">{t('上传 Skill 文件')}</span>
+              <span className="slash-command-desc">{t('支持文本文件及 .zip / .tar.gz / .tgz 压缩包')}</span>
             </div>
           </div>
         </div>

@@ -1,4 +1,5 @@
 /** 自定义媒体模型的能力与请求映射一致性；不推断厂商参数或发送网络请求。 */
+import { t } from '../../i18n';
 import type { GeneralModelCategory, ProviderModelSelection } from '../../types';
 import type { ImageModelCapability, ModelProtocolPresetId, NormalizedModelExecutionProtocol } from '../../types/aiTypes';
 import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
@@ -270,5 +271,5 @@ export function describeModelParameterGaps(model: ProviderModelSelection): strin
     if (!capability?.durations?.length && capability?.minDuration === undefined && capability?.maxDuration === undefined) missing.push('时长');
     if (!capability?.frameRates?.length) missing.push('帧率');
   }
-  return missing.length ? `${missing.join('、')}待确认（未声明）` : '';
+  return missing.length ? t('{parameters}待确认（未声明）', { parameters: missing.map((label) => t(label)).join(', ') }) : '';
 }

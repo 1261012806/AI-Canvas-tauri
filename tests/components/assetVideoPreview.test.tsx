@@ -8,6 +8,10 @@ interface Harness {
   pending: Array<() => void>; stateIndex: number; refIndex: number; effectIndex: number;
 }
 const driver = vi.hoisted(() => ({ current: null as Harness | null, load: vi.fn(), copy: vi.fn() }));
+vi.mock('../../src/i18n', async (original) => {
+  const actual = await original<typeof import('../../src/i18n')>();
+  return { ...actual, useT: () => actual.t };
+});
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
   useState: <T,>(initial: T | (() => T)) => {

@@ -7,6 +7,7 @@
  *
  * 与裁切/扩图一致：onStart() 即时建 loading 节点，onSave(dataUrl, meta) 回填结果。
  */
+import { t as translate, useT } from '../../../../../i18n';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Konva from 'konva';
 import { Stage, Layer as KLayer, Rect, Line, Transformer } from 'react-konva';
@@ -91,7 +92,7 @@ async function saveComposerSourceToProject(source: string, projectId: string) {
     );
   }
   const response = await fetch(resolvedSource);
-  if (!response.ok) throw new Error(`图片读取失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(translate('图片读取失败：HTTP {status}', { status: response.status }));
   const blob = await response.blob();
   return saveBinaryToProjectData(
     new Uint8Array(await blob.arrayBuffer()),
@@ -101,6 +102,7 @@ async function saveComposerSourceToProject(source: string, projectId: string) {
 }
 
 export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose, onStart, onSave }: ImageComposerEditorProps) {
+  const t = useT();
   const cmp = useComposer();
   const modelDownload = useModelDownload();
   const { download: downloadMattingModel, cancel: cancelModelDownload } = modelDownload;
@@ -195,7 +197,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
       });
     imageImportQueueRef.current = queued.catch((error) => {
       if (notifyFailure && isCurrent()) {
-        useAppStore.getState().showToast(errMessage(error, '图片导入失败'), 'error');
+        useAppStore.getState().showToast(translate(errMessage(error, '图片导入失败')), 'error');
       }
     });
     return queued;
@@ -246,7 +248,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
     if (!isOpen || seededRef.current || stageSize.w === 0 || !imageUrl) return;
     seededRef.current = true;
     void enqueueImageImport(async (isCurrent) => {
-      await addImageLayer(imageUrl, '底图', (img) => {
+      await addImageLayer(imageUrl, translate('底图'), (img) => {
         if (!isCurrent()) throw new Error('编辑器已关闭');
         const W = Math.min(img.naturalWidth, MAX_SEED);
         const H = Math.round((img.naturalHeight / img.naturalWidth) * W);
@@ -514,7 +516,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
       e.preventDefault();
       void enqueueImageImport(async (isCurrent) => {
         if (!isCurrent()) return;
-        await addImageFileLayer(file, '粘贴图片');
+        await addImageFileLayer(file, translate('粘贴图片'));
       }).catch(() => {});
     };
     window.addEventListener('paste', onPaste);
@@ -589,7 +591,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
       if (cancelled) release();
       else unlisten.push(release);
     })().catch(() => {
-      if (!cancelled) useAppStore.getState().showToast('拖放接收不可用，请点击上传图片按钮', 'error');
+      if (!cancelled) useAppStore.getState().showToast(translate('拖放接收不可用，请点击上传图片按钮'), 'error');
     });
     return () => {
       cancelled = true;
@@ -609,12 +611,12 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
     const isCurrent = () => editorEpochRef.current === editorEpoch;
     const store = useAppStore.getState();
     if (!('__TAURI_INTERNALS__' in window)) {
-      store.showToast('主体识别仅桌面端可用', 'error');
+      store.showToast(translate('主体识别仅桌面端可用'), 'error');
       return;
     }
     const projectId = store.currentProjectId;
     if (!projectId || projectId === 'default') {
-      store.showToast('请先在项目中使用主体识别', 'error');
+      store.showToast(translate('请先在项目中使用主体识别'), 'error');
       return;
     }
 
@@ -637,9 +639,9 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
       // 3. 载回并原位替换图层图片
       const resultSrc = convertFileSrc(result.subject_path);
       await replaceImageLayer(layer.id, resultSrc);
-      store.showToast(`主体识别完成 (${result.input_size})`);
+      store.showToast(translate('主体识别完成 ({size})', { size: result.input_size }));
     } catch (err) {
-      if (isCurrent()) store.showToast(errMessage(err, '主体识别失败'), 'error');
+      if (isCurrent()) store.showToast(translate(errMessage(err, '主体识别失败')), 'error');
     } finally {
       setMattingLayerId(null);
     }
@@ -651,7 +653,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
     if (!stage || layers.length === 0 || exportingRef.current) return;
     const resourceIssue = resourceIssuesRef.current.values().next().value;
     if (resourceIssue) {
-      useAppStore.getState().showToast(`${resourceIssue}；请处理后再导出`, 'error');
+      useAppStore.getState().showToast(translate('{error}；请处理后再导出', { error: translate(resourceIssue) }), 'error');
       return;
     }
     const budgetError = getEditorCanvasBudgetError(canvas.width, canvas.height, '合成导出');
@@ -728,7 +730,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
         if (!isCurrentExport()) return;
         if (exportError || !dataUrl) {
           console.error('[Composer] export failed:', exportError);
-          useAppStore.getState().showToast(errMessage(exportError, '合成导出失败，请重试'), 'error');
+          useAppStore.getState().showToast(translate(errMessage(exportError, '合成导出失败，请重试')), 'error');
           return;
         }
 
@@ -752,7 +754,7 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
   }), [canvas.width, canvas.height]);
 
   return (
-    <FullscreenOverlay isOpen={isOpen} onClose={handleClose} title="多图编辑" hidePanel className="composer-overlay">
+    <FullscreenOverlay isOpen={isOpen} onClose={handleClose} title={t('多图编辑')} hidePanel className="composer-overlay">
       <div data-tauri-drag-region className={`composer-root${sideCollapsed ? ' side-collapsed' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="composer-toolbar-dock">
           <ComposerToolbar
@@ -777,11 +779,11 @@ export default function ImageComposerEditor({ isOpen, nodeId, imageUrl, onClose,
               <DownloadProgress
                 downloadedBytes={modelDownload.progress?.transferredBytes ?? 0}
                 totalBytes={modelDownload.progress?.totalBytes ?? undefined}
-                label="正在下载主体识别模型..."
+                label={t('正在下载主体识别模型...')}
                 className="min-w-0 flex-1"
               />
               <button type="button" className="ui-btn ui-btn--sm" onClick={cancelModelDownload}>
-                取消下载
+                {t('取消下载')}
               </button>
             </div>
           </div>

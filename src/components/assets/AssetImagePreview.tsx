@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import type { AssetFileEntry } from '../../services/fileService';
@@ -29,6 +30,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
   onRenamed?: (previous: AssetFileEntry, next: AssetFileEntry) => void;
   onClose: () => void;
 }) {
+  useT();
   const [activePath, setActivePath] = useState(initialPath);
   const [renamedFiles, setRenamedFiles] = useState<Record<string, AssetFileEntry>>({});
   const files = useMemo(() => sourceFiles.map((entry) => renamedFiles[entry.path] ?? entry), [sourceFiles, renamedFiles]);
@@ -100,7 +102,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
 
   const loading = metadata?.key !== queryKey;
   const metadataError = metadata?.key === queryKey && metadata.error;
-  const details = useMemo(() => history ? describeAssetImageHistory(history) : [], [history]);
+  const details = history ? describeAssetImageHistory(history) : [];
   const close = useCallback(() => {
     if (renameBusyRef.current) return;
     if (draftRef.current) { setLeaveRequest({}); return; }
@@ -275,7 +277,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
         ...(tagReplacement ? { tagReplacement } : {}),
       }, {
         signal: controller.signal, onProgress: ({ transferredBytes, totalBytes }) => {
-          if (activeKeyRef.current === key) setOperation({ key, message: totalBytes ? `正在复制参考图 ${Math.round(transferredBytes / totalBytes * 100)}%` : '正在复制参考图…', busy: true });
+          if (activeKeyRef.current === key) setOperation({ key, message: totalBytes ? t('正在复制参考图 {progress}%', { progress: Math.round(transferredBytes / totalBytes * 100) }) : '正在复制参考图…', busy: true });
         },
       });
       // 事务已经提交后，取消或预览读取失败不能把成功保存报告成失败。
@@ -302,7 +304,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
   };
   const pixelSize = dimensions?.key === imageKey ? `${dimensions.width} × ${dimensions.height}` : null;
 
-  return <ModalOverlay isOpen onClose={close} ariaLabel="图片与生成信息" className="asset-image-preview"
+  return <ModalOverlay isOpen onClose={close} ariaLabel={t("图片与生成信息")} className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
     <img className="asset-image-preview-backdrop" src={file.assetUrl} alt="" aria-hidden="true" />
     <div data-tauri-drag-region className="asset-image-preview-layout">
@@ -314,70 +316,70 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
       }}>
         {broken ? <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-3 text-canvas-text-secondary">
           <Icon icon="lucide:image-off" className="h-8 w-8" aria-hidden="true" />
-          <p>图片加载失败</p><button type="button" className="ui-btn ui-btn--sm" onClick={() => setImageRetry((value) => value + 1)}>重新加载图片</button>
+          <p>{t("图片加载失败")}</p><button type="button" className="ui-btn ui-btn--sm" onClick={() => setImageRetry((value) => value + 1)}>{t("重新加载图片")}</button>
         </div> : <ZoomableImage key={shownImageKey} src={referencePreview?.url ?? file.assetUrl} alt={referencePreview?.name ?? file.name} className="fullscreen-img-view"
           onError={() => setFailedImage(shownImageKey)} />}
-        {referencePreview && <button type="button" className="ui-btn absolute left-3 top-3" onClick={() => setReferencePreview(null)}><Icon icon="lucide:arrow-left" aria-hidden="true" />返回原图</button>}
+        {referencePreview && <button type="button" className="ui-btn absolute left-3 top-3" onClick={() => setReferencePreview(null)}><Icon icon="lucide:arrow-left" aria-hidden="true" />{t("返回原图")}</button>}
       </div>
-      <aside className="asset-image-preview-info" aria-label="图片提示词和参数">
+      <aside className="asset-image-preview-info" aria-label={t("图片提示词和参数")}>
         <header className="flex shrink-0 items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-canvas-hover text-canvas-text-secondary"><Icon icon="lucide:image" className="h-4 w-4" aria-hidden="true" /></div>
           <div className="min-w-0 flex-1">{renaming ? <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); void saveFileName(); }}>
-              <input autoFocus className="ui-input ui-input--sm min-w-0 flex-1" aria-label="新文件名" value={renameDraft.value} disabled={renameBusy}
+              <input autoFocus className="ui-input ui-input--sm min-w-0 flex-1" aria-label={t("新文件名")} value={renameDraft.value} disabled={renameBusy}
                 onChange={(event) => setRenameDraft({ path: file.path, value: event.target.value })} />
               <span className="shrink-0 text-xs text-canvas-text-muted">{extension}</span>
-              <button type="submit" className="ui-icon-btn ui-icon-btn--sm" aria-label="保存文件名" title="保存文件名" disabled={renameBusy || !renameDraft.value.trim()}><Icon icon="lucide:check" aria-hidden="true" /></button>
-              <button type="button" className="ui-icon-btn ui-icon-btn--sm" aria-label="取消修改文件名" disabled={renameBusy} onClick={() => { setRenameDraft(null); setRenameMessage(''); }}><Icon icon="lucide:x" aria-hidden="true" /></button>
+              <button type="submit" className="ui-icon-btn ui-icon-btn--sm" aria-label={t("保存文件名")} title={t("保存文件名")} disabled={renameBusy || !renameDraft.value.trim()}><Icon icon="lucide:check" aria-hidden="true" /></button>
+              <button type="button" className="ui-icon-btn ui-icon-btn--sm" aria-label={t("取消修改文件名")} disabled={renameBusy} onClick={() => { setRenameDraft(null); setRenameMessage(''); }}><Icon icon="lucide:x" aria-hidden="true" /></button>
             </form> : <h1 className="break-words text-sm font-semibold text-canvas-text">{file.name}</h1>}
             <p className="pt-1 text-xs text-canvas-text-muted" aria-live="polite">{index + 1} / {files.length}</p>
-            {renameMessage && <p role="status" className="pt-1 text-xs text-canvas-text-secondary">{renameMessage}</p>}</div>
-          {!renaming && <button type="button" className="ui-icon-btn ui-icon-btn--sm [&.ui-icon-btn]:border-0 [&.ui-icon-btn]:bg-transparent [&.ui-icon-btn:hover]:bg-transparent" aria-label="修改文件名" title={editing ? '请先保存或取消当前编辑' : '修改磁盘文件名'}
+            {renameMessage && <p role="status" className="pt-1 text-xs text-canvas-text-secondary">{t(renameMessage)}</p>}</div>
+          {!renaming && <button type="button" className="ui-icon-btn ui-icon-btn--sm [&.ui-icon-btn]:border-0 [&.ui-icon-btn]:bg-transparent [&.ui-icon-btn:hover]:bg-transparent" aria-label={t("修改文件名")} title={editing ? t('请先保存或取消当前编辑') : t('修改磁盘文件名')}
             disabled={!isTauriEnv() || busy || reversing || reversePanelOpen || editing || renameBusy || file.availability === 'offline'}
             onClick={() => { setRenameMessage(''); setRenameDraft({ path: file.path, value: extension ? file.name.slice(0, -extension.length) : file.name }); }}><Icon icon="lucide:pencil" aria-hidden="true" /></button>}
-          <button type="button" className="ui-close-btn" aria-label="关闭图片预览" title="关闭（Esc）" disabled={renameBusy} onClick={close}><Icon icon="lucide:x" aria-hidden="true" /></button>
+          <button type="button" className="ui-close-btn" aria-label={t("关闭图片预览")} title={t("关闭（Esc）")} disabled={renameBusy} onClick={close}><Icon icon="lucide:x" aria-hidden="true" /></button>
         </header>
         <div ref={infoContentRef} className="asset-image-preview-info-content">
-          <section className="ui-card asset-image-preview-section p-3" aria-label="提示词">
-            <div className="flex items-center justify-between gap-2 pb-2"><h2 ref={promptHeadingRef} tabIndex={-1} className="text-xs font-medium text-canvas-text-secondary">提示词</h2>
+          <section className="ui-card asset-image-preview-section p-3" aria-label={t("提示词")}>
+            <div className="flex items-center justify-between gap-2 pb-2"><h2 ref={promptHeadingRef} tabIndex={-1} className="text-xs font-medium text-canvas-text-secondary">{t("提示词")}</h2>
               <button type="button" className="ui-btn ui-btn--sm" disabled={!prompt.trim()} onClick={() => {
                 if (!prompt) return;
                 const key = queryKey;
                 void copyText(prompt).then((copied) => setCopyStatus({ key, message: copied ? '提示词已复制' : '复制失败，请重试' }));
-              }}><Icon icon="lucide:copy" aria-hidden="true" />复制提示词</button>
+              }}><Icon icon="lucide:copy" aria-hidden="true" />{t("复制提示词")}</button>
             </div>
             {!loading && !metadataError && (referenceViews.length > 0 || editing) && <div className="asset-image-preview-references">
               {referenceViews.map((reference) => <div className="asset-image-preview-reference" key={reference.id}>
-                <button type="button" aria-label={`查看参考图 ${reference.name}`} title={`查看参考图 ${reference.name}`} disabled={!reference.url} onClick={() => setReferencePreview({ key: queryKey, url: reference.url!, name: reference.name })}>
-                  {reference.url ? <img src={reference.url} alt={reference.name} /> : <span className="text-xs text-canvas-text-muted">参考图不可用</span>}
+                <button type="button" aria-label={t('查看参考图 {name}', { name: reference.name })} title={t('查看参考图 {name}', { name: reference.name })} disabled={!reference.url} onClick={() => setReferencePreview({ key: queryKey, url: reference.url!, name: reference.name })}>
+                  {reference.url ? <img src={reference.url} alt={reference.name} /> : <span className="text-xs text-canvas-text-muted">{t("参考图不可用")}</span>}
                 </button>
-                {editing && <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={`移除参考图 ${reference.name}`}
+                {editing && <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={t('移除参考图 {name}', { name: reference.name })}
                   onClick={() => setDraft((current) => current ? { ...current, references: current.references.filter((item) => item.id !== reference.id) } : current)}><Icon icon="lucide:x" aria-hidden="true" /></button>}
               </div>)}
               {editing && draft.pending.map((reference, i) => <div className="asset-image-preview-reference" key={`${i}:${reference.path}`}>
-                <button type="button" aria-label={`查看待保存参考图 ${reference.name}`} onClick={() => setReferencePreview({ key: queryKey, url: reference.url, name: reference.name })}><img src={reference.url} alt={reference.name} /></button>
-                <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={`移除待保存参考图 ${reference.name}`}
+                <button type="button" aria-label={t('查看待保存参考图 {name}', { name: reference.name })} onClick={() => setReferencePreview({ key: queryKey, url: reference.url, name: reference.name })}><img src={reference.url} alt={reference.name} /></button>
+                <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={t('移除待保存参考图 {name}', { name: reference.name })}
                   onClick={() => setDraft((current) => current ? { ...current, pending: current.pending.filter((_, index) => index !== i) } : current)}><Icon icon="lucide:x" aria-hidden="true" /></button>
               </div>)}
-              {editing && <button type="button" className="ui-icon-btn asset-image-preview-add-reference" aria-label="添加参考图" title="添加本地参考图" disabled={busy} onClick={() => void addReferences()}><Icon icon="lucide:plus" aria-hidden="true" /></button>}
+              {editing && <button type="button" className="ui-icon-btn asset-image-preview-add-reference" aria-label={t("添加参考图")} title={t("添加本地参考图")} disabled={busy} onClick={() => void addReferences()}><Icon icon="lucide:plus" aria-hidden="true" /></button>}
             </div>}
-            {loading ? <p role="status" className="text-xs text-canvas-text-muted">正在读取生成信息…</p>
-              : metadataError ? <div role="alert" className="space-y-2 text-xs text-canvas-text-secondary"><p>生成信息读取失败</p>
-                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setRetry((value) => value + 1)}>重试读取</button></div>
-              : editing ? <textarea className="ui-textarea asset-image-preview-editor" aria-label="编辑图片提示词" value={draft.prompt} maxLength={MAX_ASSET_IMAGE_PROMPT} disabled={busy}
+            {loading ? <p role="status" className="text-xs text-canvas-text-muted">{t("正在读取生成信息…")}</p>
+              : metadataError ? <div role="alert" className="space-y-2 text-xs text-canvas-text-secondary"><p>{t("生成信息读取失败")}</p>
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setRetry((value) => value + 1)}>{t("重试读取")}</button></div>
+              : editing ? <textarea className="ui-textarea asset-image-preview-editor" aria-label={t("编辑图片提示词")} value={draft.prompt} maxLength={MAX_ASSET_IMAGE_PROMPT} disabled={busy}
                 onChange={(event) => setDraft((current) => current ? { ...current, prompt: event.target.value } : current)} />
               : <p className="asset-image-preview-prompt whitespace-pre-wrap break-words text-sm leading-relaxed text-canvas-text">{renderPromptWithChips(prompt, {
                   nodes,
                   dramaAssets,
                   globalAssets,
                   nodeMetaMap,
-                  emptyText: saved?.record ? '尚未填写提示词' : history ? '此记录未保存提示词' : '暂无生成信息',
+                  emptyText: saved?.record ? t('尚未填写提示词') : history ? t('此记录未保存提示词') : t('暂无生成信息'),
                 })}</p>}
-            {(tags.length > 0 || editing) && <div className="flex flex-wrap items-center gap-2 pt-3" role="group" aria-label="资产标签">
+            {(tags.length > 0 || editing) && <div className="flex flex-wrap items-center gap-2 pt-3" role="group" aria-label={t("资产标签")}>
               {tags.map((tag) => <span key={tag} className={editing ? 'ui-tag' : 'ui-badge ui-badge--primary'}>{tag}
-                {editing && <button type="button" className="ui-tag__remove" aria-label={`移除标签 ${tag}`} disabled={busy}
+                {editing && <button type="button" className="ui-tag__remove" aria-label={t('移除标签 {tag}', { tag })} disabled={busy}
                   onClick={() => setDraft((current) => current ? { ...current, tags: current.tags.filter((item) => item !== tag) } : current)}><Icon icon="lucide:x" aria-hidden="true" /></button>}
               </span>)}
-              {editing && <input className="ui-input ui-input--sm w-40" aria-label="添加资产标签" placeholder="标签，回车添加" title="输入后按回车添加，也可直接保存" value={draft.tagInput} disabled={busy}
+              {editing && <input className="ui-input ui-input--sm w-40" aria-label={t("添加资产标签")} placeholder={t("标签，回车添加")} title={t("输入后按回车添加，也可直接保存")} value={draft.tagInput} disabled={busy}
                 onChange={(event) => setDraft((current) => current ? { ...current, tagInput: event.target.value } : current)}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
@@ -392,59 +394,59 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
             {saved?.warning && <p className="pt-2 text-xs text-canvas-text-muted">{saved.warning}</p>}
             {canEdit && <div className="flex flex-wrap justify-end gap-2 pt-2">
               <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || reversing || renaming || renameBusy} onClick={() => { setOperation(null); setReversePanelKey(queryKey); }}>
-                <Icon icon="lucide:sparkles" aria-hidden="true" />反推提示词和标签</button>
-              {editing ? <><button type="button" className="ui-btn ui-btn--sm" disabled={busy} onClick={() => { setDraft(null); setOperation(null); }}>取消编辑</button>
-                <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={busy} onClick={() => void saveEdit()}>保存</button></>
-                : <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || renaming || renameBusy} onClick={startEdit}><Icon icon="lucide:pencil" aria-hidden="true" />编辑提示词与参考图</button>}
+                <Icon icon="lucide:sparkles" aria-hidden="true" />{t("反推提示词和标签")}</button>
+              {editing ? <><button type="button" className="ui-btn ui-btn--sm" disabled={busy} onClick={() => { setDraft(null); setOperation(null); }}>{t("取消编辑")}</button>
+                <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={busy} onClick={() => void saveEdit()}>{t("保存")}</button></>
+                : <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || renaming || renameBusy} onClick={startEdit}><Icon icon="lucide:pencil" aria-hidden="true" />{t("编辑提示词与参考图")}</button>}
             </div>}
-            {operation?.key === queryKey && <div className="pt-2 text-xs text-canvas-text-secondary" role="status">{operation.message}{operation.busy && operation.message !== '正在选择参考图…' && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => operationRef.current?.abort()}>取消保存</button>}</div>}
-            {copyStatus?.key === queryKey && <p role="status" className="pt-2 text-xs text-canvas-text-secondary">{copyStatus.message}</p>}
+            {operation?.key === queryKey && <div className="pt-2 text-xs text-canvas-text-secondary" role="status">{t(operation.message)}{operation.busy && operation.message !== '正在选择参考图…' && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => operationRef.current?.abort()}>{t("取消保存")}</button>}</div>}
+            {copyStatus?.key === queryKey && <p role="status" className="pt-2 text-xs text-canvas-text-secondary">{t(copyStatus.message)}</p>}
           </section>
-          <section className="asset-image-preview-parameters" aria-label="生成参数">
-            <h2 className="flex items-center gap-2 pb-3 text-xs font-medium text-canvas-text-secondary"><Icon icon="lucide:info" className="h-3.5 w-3.5" aria-hidden="true" />参数与文件信息</h2>
+          <section className="asset-image-preview-parameters" aria-label={t("生成参数")}>
+            <h2 className="flex items-center gap-2 pb-3 text-xs font-medium text-canvas-text-secondary"><Icon icon="lucide:info" className="h-3.5 w-3.5" aria-hidden="true" />{t("参数与文件信息")}</h2>
             <dl className="ui-card asset-image-preview-section space-y-3 p-3 text-sm">
               {details.map(({ label, value }) => <div className="flex items-start justify-between gap-3" key={label}>
-                <dt className="shrink-0 text-canvas-text-muted">{label}</dt><dd className="min-w-0 whitespace-pre-wrap break-words text-right text-canvas-text">{value}</dd>
+                <dt className="shrink-0 text-canvas-text-muted">{t(label)}</dt><dd className="min-w-0 whitespace-pre-wrap break-words text-right text-canvas-text">{label === '提示词来源' ? t(value) : value}</dd>
               </div>)}
-              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">图片尺寸</dt><dd className="text-canvas-text">{pixelSize ?? (broken ? '无法读取' : '正在读取…')}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">文件大小</dt><dd className="text-canvas-text">{file.size > 0 ? formatSize(file.size) : '未知'}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">来源</dt><dd className="text-canvas-text">{file.source === 'folder' ? '外部文件夹' : file.source === 'global' ? '导入文件' : '项目文件'}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">{t("图片尺寸")}</dt><dd className="text-canvas-text">{pixelSize ?? (broken ? '无法读取' : '正在读取…')}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">{t("文件大小")}</dt><dd className="text-canvas-text">{file.size > 0 ? formatSize(file.size) : t('未知')}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-canvas-text-muted">{t("来源")}</dt><dd className="text-canvas-text">{file.source === 'folder' ? t('外部文件夹') : file.source === 'global' ? t('导入文件') : t('项目文件')}</dd></div>
             </dl>
-            {!loading && !metadataError && !history && !saved?.record && <p className="pt-3 text-xs leading-relaxed text-canvas-text-muted">此图片未关联到保留的生成记录，可手动编辑提示词和参考图。</p>}
+            {!loading && !metadataError && !history && !saved?.record && <p className="pt-3 text-xs leading-relaxed text-canvas-text-muted">{t("此图片未关联到保留的生成记录，可手动编辑提示词和参考图。")}</p>}
           </section>
         </div>
         <footer className="asset-image-preview-footer">
-          <p className="pb-2 text-center text-xs text-canvas-text-muted">双击缩放 · 拖动查看 · Esc 关闭</p>
+          <p className="pb-2 text-center text-xs text-canvas-text-muted">{t("双击缩放 · 拖动查看 · Esc 关闭")}</p>
           <div className="flex gap-2">
-            <button type="button" className="ui-btn ui-btn--block" aria-label="上一张图片" title="上一张（←）" disabled={renameBusy || index <= 0} onClick={() => navigate(-1)}><Icon icon="lucide:arrow-left" aria-hidden="true" />上一张</button>
-            <button type="button" className="ui-btn ui-btn--primary ui-btn--block" aria-label="下一张图片" title="下一张（→）" disabled={renameBusy || index >= files.length - 1} onClick={() => navigate(1)}>下一张<Icon icon="lucide:arrow-right" aria-hidden="true" /></button>
+            <button type="button" className="ui-btn ui-btn--block" aria-label={t("上一张图片")} title={t("上一张（←）")} disabled={renameBusy || index <= 0} onClick={() => navigate(-1)}><Icon icon="lucide:arrow-left" aria-hidden="true" />{t("上一张")}</button>
+            <button type="button" className="ui-btn ui-btn--primary ui-btn--block" aria-label={t("下一张图片")} title={t("下一张（→）")} disabled={renameBusy || index >= files.length - 1} onClick={() => navigate(1)}>{t("下一张")}<Icon icon="lucide:arrow-right" aria-hidden="true" /></button>
           </div>
         </footer>
       </aside>
     </div>
-    {reversePanelOpen && <ModalOverlay isOpen onClose={closeReversePanel} ariaLabel="反推提示词和标签" zIndex={370} closeOnBackdrop={false}
+    {reversePanelOpen && <ModalOverlay isOpen onClose={closeReversePanel} ariaLabel={t("反推提示词和标签")} zIndex={370} closeOnBackdrop={false}
       className="w-full max-w-lg [&.glass-panel]:overflow-visible">
       <div className="ui-card w-full space-y-3 p-3 [&.ui-card]:overflow-visible">
-        <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-sm font-semibold text-canvas-text"><Icon icon="lucide:sparkles" aria-hidden="true" />反推提示词和标签</h2>
-          <button type="button" className="ui-close-btn" aria-label="关闭反推" onClick={closeReversePanel}><Icon icon="lucide:x" aria-hidden="true" /></button></div>
-        <p className="text-xs text-canvas-text-secondary">选择能读图的文本模型。反推成功后自动保存提示词和标签，之后仍可手动编辑。</p>
-        <fieldset disabled={reversing} className="min-w-0 space-y-2"><legend className="pb-2 text-xs text-canvas-text-secondary">反推模型</legend>
+        <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-sm font-semibold text-canvas-text"><Icon icon="lucide:sparkles" aria-hidden="true" />{t("反推提示词和标签")}</h2>
+          <button type="button" className="ui-close-btn" aria-label={t("关闭反推")} onClick={closeReversePanel}><Icon icon="lucide:x" aria-hidden="true" /></button></div>
+        <p className="text-xs text-canvas-text-secondary">{t("选择能读图的文本模型。反推成功后自动保存提示词和标签，之后仍可手动编辑。")}</p>
+        <fieldset disabled={reversing} className="min-w-0 space-y-2"><legend className="pb-2 text-xs text-canvas-text-secondary">{t("反推模型")}</legend>
           <ModelSelector nodeType="ai-text" selectedModel={reverseModel?.model} selectedProvider={reverseModel?.provider}
             onSelect={(option) => setReverseModel({ model: option.value, provider: option.provider })} />
         </fieldset>
-        {operation?.key === queryKey && <p role="status" className="whitespace-pre-wrap break-words text-xs text-canvas-text-secondary">{operation.message}</p>}
-        <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--sm" onClick={closeReversePanel}>{reversing ? '取消反推' : '取消'}</button>
+        {operation?.key === queryKey && <p role="status" className="whitespace-pre-wrap break-words text-xs text-canvas-text-secondary">{t(operation.message)}</p>}
+        <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--sm" onClick={closeReversePanel}>{reversing ? t('取消反推') : t('取消')}</button>
           <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={reversing || !reverseModel?.model || !reverseModel.provider} onClick={() => void runReverse()}>
-            <Icon icon={reversing ? 'lucide:loader-circle' : 'lucide:sparkles'} className={reversing ? 'animate-spin' : undefined} aria-hidden="true" />{reversing ? '正在反推…' : '开始反推'}</button></div>
+            <Icon icon={reversing ? 'lucide:loader-circle' : 'lucide:sparkles'} className={reversing ? 'animate-spin' : undefined} aria-hidden="true" />{reversing ? t('正在反推…') : t('开始反推')}</button></div>
       </div>
     </ModalOverlay>}
-    {leaveRequest && <ModalOverlay isOpen onClose={() => setLeaveRequest(null)} ariaLabel="未保存的图片信息" zIndex={370} closeOnBackdrop={false}>
-      <div ref={leavePanelRef} role="alertdialog" className="ui-card p-3 space-y-3"><p className="text-sm text-canvas-text">图片信息尚未保存，要放弃这次编辑吗？</p>
-        <div className="flex justify-end gap-2"><button type="button" className="ui-btn" onClick={() => setLeaveRequest(null)}>继续编辑</button>
+    {leaveRequest && <ModalOverlay isOpen onClose={() => setLeaveRequest(null)} ariaLabel={t("未保存的图片信息")} zIndex={370} closeOnBackdrop={false}>
+      <div ref={leavePanelRef} role="alertdialog" className="ui-card p-3 space-y-3"><p className="text-sm text-canvas-text">{t("图片信息尚未保存，要放弃这次编辑吗？")}</p>
+        <div className="flex justify-end gap-2"><button type="button" className="ui-btn" onClick={() => setLeaveRequest(null)}>{t("继续编辑")}</button>
           <button type="button" className="ui-btn ui-btn--danger" disabled={busy} onClick={() => {
             const direction = leaveRequest.direction; setDraft(null); draftRef.current = false; setLeaveRequest(null);
             if (direction) navigate(direction); else onClose();
-          }}>放弃编辑</button></div>
+          }}>{t("放弃编辑")}</button></div>
       </div>
     </ModalOverlay>}
   </ModalOverlay>;

@@ -1,3 +1,4 @@
+import { t, useT } from '../../i18n';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -18,6 +19,7 @@ const AssetImagePreview = lazy(() => import('./AssetImagePreview'));
 
 /** 启动页的轻量资源入口；不扫描整个目录，不挂载画布或生成业务。 */
 export default function RecentAssetsSection() {
+  useT();
   const { projects, folderRoots, revision, panelOpen, openLibrary, markUsed } = useAppStore(useShallow((state) => ({
     projects: state.projects, folderRoots: state.config.assetFolders,
     revision: state.recentAssetsRevision, panelOpen: state.assetsPanelOpen,
@@ -109,15 +111,15 @@ export default function RecentAssetsSection() {
   }, []);
 
   return (
-    <section className="mt-6 border-t border-canvas-border pt-3" aria-label="最近使用资源">
+    <section className="mt-6 border-t border-canvas-border pt-3" aria-label={t("最近使用资源")}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Icon icon="mdi:folder-multiple-image" width="18" className="text-canvas-text-secondary" aria-hidden="true" />
-          <h2 className="text-sm font-semibold text-canvas-text">资源库</h2>
-          <span className="text-xs text-canvas-text-muted">最近使用</span>
+          <h2 className="text-sm font-semibold text-canvas-text">{t("资源库")}</h2>
+          <span className="text-xs text-canvas-text-muted">{t("最近使用")}</span>
         </div>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={showAll}>
-          进入资源库 <Icon icon="mdi:arrow-right" width="16" aria-hidden="true" />
+          {t("进入资源库")} <Icon icon="mdi:arrow-right" width="16" aria-hidden="true" />
         </button>
       </div>
 
@@ -155,13 +157,13 @@ export default function RecentAssetsSection() {
                   } : undefined} />
                 {file.category !== 'image' && file.category !== 'video' && file.category !== 'text' && (
                   <button type="button" className="absolute inset-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400"
-                    aria-label={`在资源库查看 ${file.name}`} onClick={() => openLibrary(true, 'page', projectId
+                    aria-label={t('在资源库查看 {name}', { name: file.name })} onClick={() => openLibrary(true, 'page', projectId
                       ? { tab: 'project', projectId } : { tab: 'permanent', folder: file.source === 'folder' && file.folderRoot
                         ? { kind: 'folder', rootPath: file.folderRoot, relativePath: file.relativePath?.split('/').slice(0, -1).join('/') ?? '' } : { kind: 'all' } })} />
                 )}
                 <span className="assets-card-badge pointer-events-none max-w-[calc(100%-5rem)] truncate opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
-                  {projectId ? projects.find((project) => project.id === seriesOwnerId(projects, projectId))?.name ?? '项目素材'
-                    : file.folderRoot ? shortFolderName(file.folderRoot) : '全局资产'}
+                  {projectId ? projects.find((project) => project.id === seriesOwnerId(projects, projectId))?.name ?? t('项目素材')
+                    : file.folderRoot ? shortFolderName(file.folderRoot) : t('全局资产')}
                 </span>
               </div>
             </article>
@@ -171,8 +173,8 @@ export default function RecentAssetsSection() {
       ) : (
         <div className="flex min-h-28 flex-col justify-center gap-3 rounded-lg bg-canvas-surface p-3">
           <p className="text-xs text-canvas-text-muted" role={result?.error ? 'status' : undefined}>
-            {!result || result.scope !== scopeKey ? '正在读取最近使用…' : result.error
-              ? '最近使用读取失败，可直接进入资源库。' : '暂无最近使用素材。预览或成功拖入画布后，会显示在这里。'}
+            {!result || result.scope !== scopeKey ? t('正在读取最近使用…') : result.error
+              ? t('最近使用读取失败，可直接进入资源库。') : t('暂无最近使用素材。预览或成功拖入画布后，会显示在这里。')}
           </p>
           <div className="flex flex-wrap gap-2">
             {(folderRoots ?? []).slice(0, 6).map((root) => (
@@ -181,12 +183,12 @@ export default function RecentAssetsSection() {
                 <Icon icon="mdi:folder-outline" width="16" aria-hidden="true" /><span className="truncate">{shortFolderName(root)}</span>
               </button>
             ))}
-            <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={showAll}>浏览资源库</button>
+            <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={showAll}>{t("浏览资源库")}</button>
           </div>
         </div>
       )}
       {message && <div role="status" className="mt-2 flex items-center justify-between gap-2 text-xs text-canvas-text-secondary">
-        <span>{message}</span><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setMessage(null)}>关闭</button>
+        <span>{t(message)}</span><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setMessage(null)}>{t("关闭")}</button>
       </div>}
       {!panelOpen && fileMenu?.scope === scopeKey && entries.some((entry) => entry.file.assetId === fileMenu.entry.file.assetId) &&
         <AssetFileContextMenu key={`${fileMenu.entry.file.assetId}:${fileMenu.x}:${fileMenu.y}`} name={fileMenu.entry.file.name}
@@ -194,11 +196,11 @@ export default function RecentAssetsSection() {
           canCopyPrompt={fileMenu.entry.file.category === 'image' || fileMenu.entry.file.category === 'video'}
           onCopy={() => performFileAction('copy')} onCopyPrompt={() => performFileAction('prompt')}
           onReveal={() => performFileAction('reveal')} onDelete={() => performFileAction('delete')} onClose={closeFileMenu} />}
-      {!panelOpen && text && <Suspense fallback={<p role="status">正在打开文档…</p>}>
+      {!panelOpen && text && <Suspense fallback={<p role="status">{t("正在打开文档…")}</p>}>
         <AssetTextPreview key={text.file.assetId} file={text.file} projectId={text.projectId} onClose={() => setTextId(null)}
           onSaved={() => setRefresh((value) => value + 1)} />
       </Suspense>}
-      {image && <Suspense fallback={<p role="status" className="mt-2 text-xs text-canvas-text-muted">正在打开图片预览…</p>}>
+      {image && <Suspense fallback={<p role="status" className="mt-2 text-xs text-canvas-text-muted">{t("正在打开图片预览…")}</p>}>
         <AssetImagePreview key={image.file.assetId} files={[image.file]} initialPath={image.file.path}
           projectId={image.projectId} onClose={() => setImageId(null)} />
       </Suspense>}

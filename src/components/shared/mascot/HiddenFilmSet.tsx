@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttribu
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { MascotHandle } from './Mascot';
+import { useT } from '../../../i18n';
 
 interface HiddenFilmSetProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   available: boolean;
@@ -36,6 +37,7 @@ interface Take {
 export default function HiddenFilmSet({
   available, reduceMotion, mascotHandleRef, consumeDragClick, children, onClick, onDoubleClick, ...buttonProps
 }: HiddenFilmSetProps) {
+  const t = useT();
   const stageRef = useRef<HTMLDivElement>(null);
   const streakRef = useRef({ count: 0, lastAt: 0 });
   const takeCountRef = useRef(0);
@@ -259,16 +261,16 @@ export default function HiddenFilmSet({
                 <div className="flex items-center justify-between border-b border-canvas-border bg-[var(--accent-amber-bg)] px-3 py-2">
                   <span className="flex items-center gap-1.5 text-[10px] font-medium tracking-[0.16em] text-[var(--accent-amber-text)]">
                     <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-amber)]" />
-                    幕后小剧场
+                    {t('幕后小剧场')}
                   </span>
                   <span className="font-mono text-[10px] tabular-nums text-canvas-text-muted">TAKE {String(take!.number).padStart(2, '0')}</span>
                 </div>
                 <div className="p-3">
-                  <p className="mb-1 text-sm font-semibold text-canvas-text">第 {take!.number} 场 · 灵感，开机。</p>
-                  <p className="text-xs leading-relaxed text-canvas-text-secondary">{take!.line}</p>
+                  <p className="mb-1 text-sm font-semibold text-canvas-text">{t('第 {number} 场 · 灵感，开机。', { number: take!.number })}</p>
+                  <p className="text-xs leading-relaxed text-canvas-text-secondary">{t(take!.line)}</p>
                   <div className="mt-3 flex items-center justify-between text-[10px] text-canvas-text-muted">
-                    <span>献给每一个认真做梦的人</span>
-                    <span className="font-mono">ESC 收场</span>
+                    <span>{t('献给每一个认真做梦的人')}</span>
+                    <span className="font-mono">{t('ESC 收场')}</span>
                   </div>
                 </div>
                 <motion.div
