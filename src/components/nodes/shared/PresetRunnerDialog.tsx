@@ -17,6 +17,7 @@ import type {
 import { getNodeTypeConfig } from '../../../types';
 import { useAppStore } from '../../../store/useAppStore';
 import {
+  MAX_PRESET_CONCURRENCY,
   createPresetParameterValues,
   validatePresetParameterValues,
   type PresetParameterValues,
@@ -115,6 +116,7 @@ function PresetRunnerContent({
   const t = useT();
   const parameters = preset.advanced?.parameters ?? EMPTY_PARAMETERS;
   const steps = preset.advanced?.steps ?? EMPTY_STEPS;
+  const isParallel = preset.advanced?.executionMode === 'parallel';
   const [values, setValues] = useState<PresetParameterValues>(() => {
     const initial = createPresetParameterValues(parameters);
     const remembered = lastRunValues.get(preset.id);
@@ -178,7 +180,7 @@ function PresetRunnerContent({
               </span>
               <div>
                 <h2 id="preset-runner-title">{preset.name}</h2>
-                <p>{t('将从“{name}”开始顺序执行', { name: sourceNode.data.label || sourceNode.id })}</p>
+                <p>{t(isParallel ? '将从“{name}”开始按依赖并发执行' : '将从“{name}”开始顺序执行', { name: sourceNode.data.label || sourceNode.id })}</p>
               </div>
             </div>
             <PopupCloseButton onClick={onClose} />
@@ -220,9 +222,12 @@ function PresetRunnerContent({
                 <h3 id="preset-runner-preview-title">{t('执行预览')}</h3>
                 <span>{t('{count} 次模型生成', { count: steps.length })}</span>
               </div>
+              <p className="ui-hint">{t('执行方式')} · {t(isParallel ? '按依赖并发' : '顺序执行')}</p>
               <div className="preset-runner-step-list">
                 {steps.map((step, index) => {
                   const visual = getNodeTypeConfig(step.nodeType);
+                  const reference = index === 0 || step.referenceSource === 'source'
+                    ? t('触发节点') : t('步骤 {index} 结果', { index });
                   return (
                     <div className="preset-runner-step" key={step.id}>
                       <span className={'preset-runner-step-icon ' + visual.bg + ' ' + visual.color}>
@@ -231,9 +236,9 @@ function PresetRunnerContent({
                       <span className="preset-runner-step-index">{index + 1}</span>
                       <span className="preset-runner-step-name">{step.name}</span>
                       <span className="preset-runner-step-type">
-                        {t(getNodeTypeConfig(step.nodeType).label)}
+                        {t(getNodeTypeConfig(step.nodeType).label)} · {t('参考：{source}', { source: reference })}
                       </span>
-                      {index < steps.length - 1 ? (
+                      {!isParallel && index < steps.length - 1 ? (
                         <Icon className="preset-runner-step-arrow" icon="mdi:arrow-right" width={15} height={15} />
                       ) : null}
                     </div>
@@ -242,7 +247,14 @@ function PresetRunnerContent({
               </div>
               <div className="preset-runner-notice">
                 <Icon icon="mdi:information-outline" width={16} height={16} />
-                <span>{t('任一步失败后会停止执行；已完成节点和结果会保留。')}</span>
+                <span>
+                  {isParallel ? (
+                    <>
+                      {t('最多同时执行 {count} 步，引用上一步结果的步骤会等待前一步成功。', { count: MAX_PRESET_CONCURRENCY })}
+                      {' '}{t('失败后不再启动新步骤，已开始的步骤会完成，已有结果会保留。')}
+                    </>
+                  ) : t('任一步失败后会停止执行；已完成节点和结果会保留。')}
+                </span>
               </div>
             </section>
           </div>

@@ -1,5 +1,5 @@
 /**
- * 构建并顺序执行高级预设步骤，在每一步生成派生节点、连线和对应模型任务。
+ * 构建高级预设步骤，按顺序或参考依赖并发执行派生节点的模型任务。
  */
 import type { Edge, Node } from '@xyflow/react';
 import type {
@@ -13,6 +13,7 @@ import { generateId } from '../store/store.utils';
 import { useAppStore } from '../store/useAppStore';
 import { executeGeneration } from './generationService';
 import {
+  MAX_PRESET_CONCURRENCY,
   composeStepPrompt,
   validatePresetAdvancedConfig,
   validatePresetParameterValues,
@@ -113,8 +114,9 @@ export function buildPresetSequencePlan({
   for (const step of preset.advanced.steps) {
     const nodeId = 'node-' + generateId();
     const label = step.name.trim();
-    const previousLabel = previousNode.data.label || previousNode.data.fileName || previousNode.id;
-    const mention = '@{' + previousNode.id + ':' + previousLabel + '}';
+    const referenceNode = step.referenceSource === 'source' ? sourceNode : previousNode;
+    const referenceLabel = referenceNode.data.label || referenceNode.data.fileName || referenceNode.id;
+    const mention = '@{' + referenceNode.id + ':' + referenceLabel + '}';
     const prompt = composeStepPrompt(step.promptTemplate, values, currentPrompt, mention);
     const dimensions = computeNodeDimensions(step.nodeType, step.aspectRatio);
     const canInheritModel = previousNode.data.type === step.nodeType;
@@ -147,7 +149,7 @@ export function buildPresetSequencePlan({
     nodes.push(node);
     edges.push({
       id: 'edge-' + generateId(),
-      source: previousNode.id,
+      source: referenceNode.id,
       target: nodeId,
       sourceHandle: 'right',
       targetHandle: 'left',
@@ -182,36 +184,59 @@ export async function runPresetSequence({
   initialStore.addNodesWithEdges(plan.nodes, plan.edges);
   initialStore.showToast('已启动“' + preset.name + '”，共 ' + plan.nodes.length + ' 个步骤');
 
-  for (const [index, node] of plan.nodes.entries()) {
-    const liveStore = useAppStore.getState();
-    if (
-      liveStore.currentProjectId !== projectId
-      || !liveStore.nodes.some((item) => item.id === node.id)
-    ) {
-      return {
-        success: false,
-        completedSteps: index,
-        failedStepIndex: index,
-        message: '项目已切换或执行节点已被移除',
-      };
-    }
+  const parallel = preset.advanced.executionMode === 'parallel';
+  const concurrency = parallel ? MAX_PRESET_CONCURRENCY : 1;
+  const pending = new Set(plan.nodes.map((_, index) => index));
+  const completed = new Set<number>();
+  const running = new Map<number, Promise<number>>();
+  let failure: { index: number; message: string } | undefined;
 
-    const result = await executeGeneration(node.id);
-    if (!result.success) {
-      const message = result.message || '步骤 ' + (index + 1) + ' 执行失败';
-      useAppStore.getState().showToast(
-        '“' + preset.name + '”已停在步骤 ' + (index + 1) + '：' + message,
-        'error',
-      );
-      return {
-        success: false,
-        completedSteps: index,
-        failedStepIndex: index,
-        message,
-      };
+  const executeStep = async (index: number): Promise<number> => {
+    try {
+      const result = await executeGeneration(plan.nodes[index].id);
+      const liveStore = useAppStore.getState();
+      if (liveStore.currentProjectId !== projectId || !liveStore.nodes.some((node) => node.id === plan.nodes[index].id)) {
+        failure ??= { index, message: '项目已切换或执行节点已被移除' };
+      } else if (result.success) {
+        completed.add(index);
+      } else {
+        failure ??= { index, message: result.message || '步骤 ' + (index + 1) + ' 执行失败' };
+      }
+    } catch (error) {
+      failure ??= { index, message: error instanceof Error ? error.message : '步骤 ' + (index + 1) + ' 执行失败' };
     }
+    return index;
+  };
+
+  while (pending.size > 0 || running.size > 0) {
+    for (const index of pending) {
+      if (failure || running.size >= concurrency) break;
+      const liveStore = useAppStore.getState();
+      if (
+        liveStore.currentProjectId !== projectId
+        || !liveStore.nodes.some((node) => node.id === plan.nodes[index].id)
+        || !liveStore.nodes.some((node) => node.id === plan.edges[index].source)
+      ) {
+        failure = { index, message: '项目已切换或执行节点或参考节点已被移除' };
+        break;
+      }
+      const needsPrevious = index > 0 && (!parallel || preset.advanced.steps[index].referenceSource !== 'source');
+      if (needsPrevious && !completed.has(index - 1)) continue;
+      pending.delete(index);
+      running.set(index, executeStep(index));
+    }
+    if (running.size === 0) break;
+    running.delete(await Promise.race(running.values()));
+  }
+
+  if (failure) {
+    useAppStore.getState().showToast(
+      '“' + preset.name + '”已停在步骤 ' + (failure.index + 1) + '：' + failure.message,
+      'error',
+    );
+    return { success: false, completedSteps: completed.size, failedStepIndex: failure.index, message: failure.message };
   }
 
   useAppStore.getState().showToast('“' + preset.name + '”已完成');
-  return { success: true, completedSteps: plan.nodes.length };
+  return { success: true, completedSteps: completed.size };
 }

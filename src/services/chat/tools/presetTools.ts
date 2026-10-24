@@ -22,6 +22,7 @@ import {
   isAdvancedPreset,
 } from '../../presetSequenceService';
 import {
+  MAX_PRESET_CONCURRENCY,
   createPresetParameterValues,
   validatePresetAdvancedConfig,
   validatePresetParameterValues,
@@ -63,6 +64,7 @@ interface PresetStepInput {
   name: string;
   nodeType: PresetNodeType;
   promptTemplate: string;
+  referenceSource?: PresetSequenceStep['referenceSource'];
   model?: string;
   provider?: string;
   imageSize?: string;
@@ -70,6 +72,7 @@ interface PresetStepInput {
 }
 
 interface PresetAdvancedInput {
+  executionMode?: PresetAdvancedConfig['executionMode'];
   parameters: PresetParameterInput[];
   steps: PresetStepInput[];
 }
@@ -142,6 +145,11 @@ const stepSchema: AgentToolSchema = {
     name: { type: 'string', minLength: 1, maxLength: 120 },
     nodeType: { type: 'string', enum: PRESET_NODE_TYPES },
     promptTemplate: { type: 'string', minLength: 1, maxLength: 12_000 },
+    referenceSource: {
+      type: 'string',
+      enum: ['source', 'previous'],
+      description: 'source 引用触发指令的原始节点；previous 或省略时引用上一步结果。第一步始终引用原始节点；{{previousResult}} 插入本步所选参考。',
+    },
     model: { type: 'string', maxLength: 240 },
     provider: { type: 'string', maxLength: 120 },
     imageSize: { type: 'string', maxLength: 40 },
@@ -154,6 +162,11 @@ const advancedSchema: AgentToolSchema = {
   required: ['parameters', 'steps'],
   additionalProperties: false,
   properties: {
+    executionMode: {
+      type: 'string',
+      enum: ['sequential', 'parallel'],
+      description: `画布一键运行入口的执行模式；省略为 sequential，parallel 按参考依赖最多并发 ${MAX_PRESET_CONCURRENCY} 步。Agent/MCP 分步工具仍按 nextStep 串行调用。`,
+    },
     parameters: {
       type: 'array',
       maxItems: MAX_AGENT_PRESET_PARAMETERS,
@@ -250,6 +263,7 @@ function validateAdvancedInput(input: PresetAdvancedInput | undefined): string |
 
 function toAdvancedConfig(input: PresetAdvancedInput): PresetAdvancedConfig {
   return {
+    executionMode: input.executionMode,
     parameters: input.parameters.map((parameter): PresetParameterDefinition => ({
       id: `preset-param-${generateId()}`,
       key: parameter.key.trim(),
@@ -266,6 +280,7 @@ function toAdvancedConfig(input: PresetAdvancedInput): PresetAdvancedConfig {
       name: step.name.trim(),
       nodeType: step.nodeType,
       promptTemplate: step.promptTemplate,
+      referenceSource: step.referenceSource,
       model: optionalTrimmed(step.model),
       provider: optionalTrimmed(step.provider),
       imageSize: optionalTrimmed(step.imageSize),
@@ -345,6 +360,7 @@ function publicPreset(preset: UserPreset, includeTemplates: boolean) {
     ...(includeTemplates ? { promptTemplate: preset.promptTemplate } : {}),
     advanced: preset.advanced && (includeTemplates || preset.mode === 'advanced')
       ? {
+          executionMode: preset.advanced.executionMode,
           parameters: preset.advanced.parameters.map((parameter) => ({
             key: parameter.key,
             label: parameter.label,
@@ -358,6 +374,7 @@ function publicPreset(preset: UserPreset, includeTemplates: boolean) {
             name: step.name,
             nodeType: step.nodeType,
             ...(includeTemplates ? { promptTemplate: step.promptTemplate } : {}),
+            referenceSource: step.referenceSource,
             model: step.model,
             provider: step.provider,
             imageSize: step.imageSize,
@@ -641,6 +658,7 @@ export function registerPresetAgentTools(): Array<() => void> {
       description: [
         '创建并持久化一个用户快捷指令，必须经用户确认。',
         '基础模式填写 promptTemplate；高级模式填写 advanced.parameters 和 advanced.steps。',
+        '高级步骤通过 referenceSource 选择原始节点或上一步结果；executionMode 控制画布一键入口的顺序或依赖并发执行。',
         `高级快捷指令最多 ${MAX_AGENT_PRESET_STEPS} 个步骤。`,
       ].join(''),
       inputSchema: {
@@ -776,6 +794,7 @@ export function registerPresetAgentTools(): Array<() => void> {
         '在指定源节点后应用一个用户快捷指令并创建运行节点，但这一步不会调用生成模型。',
         '收到结果后必须等待 Observation，再按 nextStep.nextTool 和 nextStep.nodeId 逐步调用；',
         '不要在同一轮同时调用启动工具和步骤工具。高级指令参数通过 values 传入，未传参数使用默认值。',
+        'Agent/MCP 分步调用始终按 nextStep 串行执行；advanced.executionMode 的自动并发仅由画布一键运行入口应用。',
       ].join(''),
       inputSchema: {
         type: 'object',
@@ -910,6 +929,7 @@ export function registerPresetAgentTools(): Array<() => void> {
             runId,
             presetId: preset.id,
             presetName: preset.name,
+            executionMode: 'sequential',
             steps: nodes.map(describeRunStep),
             nextStep: describeRunStep(nodes[0]),
             revision: useAppStore.getState().getCurrentRevision(),

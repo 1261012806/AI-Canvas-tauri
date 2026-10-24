@@ -12,8 +12,9 @@ export type PresetParameterValues = Record<string, PresetParameterValue>;
 
 export const CURRENT_PROMPT_VARIABLE = 'currentPrompt';
 export const LEGACY_PROMPT_VARIABLE = '文章内容';
-/** 上一步生成结果的 @ 引用；模板里不写则自动前置，写了就按写的位置插入 */
+/** 本步骤所选参考节点的 @ 引用，保留旧变量名；不写则自动前置，写了则原位插入。 */
 export const PREVIOUS_RESULT_VARIABLE = 'previousResult';
+export const MAX_PRESET_CONCURRENCY = 3;
 
 const RESERVED_VARIABLES = [CURRENT_PROMPT_VARIABLE, LEGACY_PROMPT_VARIABLE, PREVIOUS_RESULT_VARIABLE];
 
@@ -62,23 +63,23 @@ export function renderPresetTemplate(
 }
 
 /**
- * 渲染一个步骤的最终提示词：模板里出现 {{previousResult}} 就替换到该位置，
- * 否则把上一步引用前置——保持旧预设的行为不变。
+ * 渲染一个步骤的最终提示词：模板里出现 {{previousResult}} 就原位插入所选参考，
+ * 否则把参考引用前置，保持旧预设的默认行为。
  */
 export function composeStepPrompt(
   template: string,
   values: PresetParameterValues,
   currentPrompt: string,
-  previousMention: string,
+  referenceMention: string,
 ): string {
   const rendered = renderPresetTemplate(
     template,
-    { ...values, [PREVIOUS_RESULT_VARIABLE]: previousMention },
+    { ...values, [PREVIOUS_RESULT_VARIABLE]: referenceMention },
     currentPrompt,
   ).trim();
   return extractPresetTemplateVariables(template).includes(PREVIOUS_RESULT_VARIABLE)
     ? rendered
-    : previousMention + '\n' + rendered;
+    : referenceMention + '\n' + rendered;
 }
 
 export function validatePresetParameterValues(
@@ -110,6 +111,9 @@ export function validatePresetParameterValues(
 export function validatePresetAdvancedConfig(config: PresetAdvancedConfig, translate: typeof t = t): string[] {
   const errors: string[] = [];
   const keys = new Set<string>();
+  if (config.executionMode !== undefined && !['sequential', 'parallel'].includes(config.executionMode)) {
+    errors.push(translate('快捷指令的执行方式无效'));
+  }
 
   for (const [index, parameter] of config.parameters.entries()) {
     const displayIndex = index + 1;
@@ -144,6 +148,9 @@ export function validatePresetAdvancedConfig(config: PresetAdvancedConfig, trans
     const displayIndex = index + 1;
     if (!step.name.trim()) errors.push(translate('步骤 {index} 缺少名称', { index: displayIndex }));
     if (!step.promptTemplate.trim()) errors.push(translate('步骤 {index} 缺少提示词模板', { index: displayIndex }));
+    if (step.referenceSource !== undefined && !['source', 'previous'].includes(step.referenceSource)) {
+      errors.push(translate('步骤 {index} 的参考来源无效', { index: displayIndex }));
+    }
     for (const variable of extractPresetTemplateVariables(step.promptTemplate)) {
       if (!allowedVariables.has(variable)) {
         errors.push(translate('步骤 {index} 使用了未定义变量“{variable}”', { index: displayIndex, variable }));

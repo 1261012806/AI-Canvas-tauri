@@ -22,6 +22,7 @@ import {
 import { generateId } from '../../../store/store.utils';
 import { useAppStore } from '../../../store/useAppStore';
 import {
+  MAX_PRESET_CONCURRENCY,
   PREVIOUS_RESULT_VARIABLE,
   composeStepPrompt,
   createPresetParameterValues,
@@ -127,6 +128,7 @@ export default function PresetAdvancedEditor({
 }: PresetAdvancedEditorProps) {
   const t = useT();
   const workflows = useAppStore((state) => state.workflows);
+  const isParallel = config.executionMode === 'parallel';
   const errors = useMemo(() => validatePresetAdvancedConfig(config, t), [config, t]);
   // 预览用默认值渲染，未填的必填参数会显示成空——只是让变量拼写和拼接位置可见
   const previewValues = useMemo(
@@ -301,8 +303,8 @@ export default function PresetAdvancedEditor({
       <section className="preset-advanced-section" aria-labelledby="preset-steps-title">
         <div className="preset-advanced-section-header">
           <div>
-            <h3 id="preset-steps-title">{t('顺序步骤')}</h3>
-            <p>{t('第一步引用当前节点，后续步骤自动引用前一步生成结果。')}</p>
+            <h3 id="preset-steps-title">{t('生成步骤')}</h3>
+            <p>{t('第一步引用触发节点，后续步骤可选择原始输入或上一步结果。')}</p>
           </div>
           <button
             type="button"
@@ -320,12 +322,35 @@ export default function PresetAdvancedEditor({
           </button>
         </div>
 
+        <div className="preset-advanced-setting">
+          <span>{t('执行方式')}</span>
+          <Select<'sequential' | 'parallel'> fixedMenu
+            className="min-w-0"
+            size="sm"
+            value={isParallel ? 'parallel' : 'sequential'}
+            aria-label={t('执行方式')}
+            onChange={(executionMode) => onChange({ ...config, executionMode })}
+          >
+            <option value="sequential">{t('顺序执行')}</option>
+            <option value="parallel">{t('按依赖并发')}</option>
+          </Select>
+        </div>
+        <p className="ui-hint">
+          {isParallel ? (
+            <>
+              {t('最多同时执行 {count} 步，引用上一步结果的步骤会等待前一步成功。', { count: MAX_PRESET_CONCURRENCY })}
+              {' '}{t('失败后不再启动新步骤，已开始的步骤会完成，已有结果会保留。')}
+            </>
+          ) : t('按步骤顺序自动执行，失败时停止')}
+        </p>
+
         {config.steps.length === 0 ? (
           <div className="preset-advanced-empty">{t('添加至少一个生成步骤后才能保存高级指令。')}</div>
         ) : (
           <div className="preset-advanced-step-list">
             {config.steps.map((step, index) => {
               const visual = getNodeTypeConfig(step.nodeType);
+              const referenceSource = index === 0 || step.referenceSource === 'source' ? 'source' : 'previous';
               return (
                 <article className="preset-advanced-step" key={step.id}>
                   <header className="preset-advanced-step-header">
@@ -398,6 +423,21 @@ export default function PresetAdvancedEditor({
                     </div>
                   </header>
 
+                  <div className="preset-advanced-setting">
+                    <span>{t('参考来源')}</span>
+                    <Select<'source' | 'previous'> fixedMenu
+                      className="min-w-0"
+                      size="sm"
+                      value={referenceSource}
+                      disabled={index === 0}
+                      aria-label={t('步骤 {index} 参考来源', { index: index + 1 })}
+                      onChange={(referenceSource) => updateStep(step.id, { referenceSource })}
+                    >
+                      <option value="source">{t('原始输入（触发节点）')}</option>
+                      <option value="previous">{t('上一步结果')}</option>
+                    </Select>
+                  </div>
+
                   <div className="preset-advanced-variable-bar">
                     <span>{t('插入变量')}</span>
                     <button type="button" onClick={() => appendVariable(step, 'currentPrompt')}>
@@ -407,7 +447,7 @@ export default function PresetAdvancedEditor({
                       type="button"
                       onClick={() => appendVariable(step, PREVIOUS_RESULT_VARIABLE)}
                     >
-                      {t(index === 0 ? '触发节点' : '上一步结果')}
+                      {t(referenceSource === 'source' ? '触发节点' : '上一步结果')}
                     </button>
                     {config.parameters.map((parameter) => (
                       <button
@@ -434,7 +474,7 @@ export default function PresetAdvancedEditor({
                         step.promptTemplate,
                         previewValues,
                         t('当前提示词'),
-                        t(index === 0 ? '@触发节点' : '@上一步'),
+                        t(referenceSource === 'source' ? '@触发节点' : '@上一步'),
                       )}
                     </p>
                   </div>

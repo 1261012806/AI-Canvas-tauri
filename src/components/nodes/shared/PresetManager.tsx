@@ -735,7 +735,7 @@ export default function PresetManager() {
                     <span className="preset-manager-mode-help">
                       {presetMode === 'basic'
                         ? t('适合快速保存单次提示词操作')
-                        : t('使用参数和步骤定义顺序生成链')}
+                        : t('使用参数和步骤定义生成流程')}
                     </span>
                   </div>
                   <div className="preset-manager-mode-segment" role="group" aria-label={t('配置模式')}>
@@ -908,7 +908,9 @@ export default function PresetManager() {
           ) : (
             <div className="preset-manager-sequence-mode">
               <span className="preset-manager-sequence-dot" aria-hidden="true" />
-              <span>{t('按步骤顺序自动执行，失败时停止')}</span>
+              <span>{t(advancedConfig.executionMode === 'parallel'
+                ? '按引用依赖并发，失败后停止启动新步骤'
+                : '按步骤顺序自动执行，失败时停止')}</span>
             </div>
           )}
           <AnimatedButton

@@ -1065,6 +1065,8 @@ export interface PresetSequenceStep {
   name: string;
   nodeType: PresetNodeType;
   promptTemplate: string;
+  /** source 引用触发节点；previous 或缺省引用上一步，首步始终引用触发节点。 */
+  referenceSource?: 'source' | 'previous';
   model?: string;
   provider?: string;
   /** provider=comfyui 时指定本地工作流；缺省则沿用触发节点的工作流 */
@@ -1076,6 +1078,8 @@ export interface PresetSequenceStep {
 export interface PresetAdvancedConfig {
   parameters: PresetParameterDefinition[];
   steps: PresetSequenceStep[];
+  /** 缺省顺序执行；parallel 按参考依赖并发，仍等待依赖成功并在失败后停止启动新步骤。 */
+  executionMode?: 'sequential' | 'parallel';
 }
 
 export interface PresetRunRequest {
