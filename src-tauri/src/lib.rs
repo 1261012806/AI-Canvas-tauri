@@ -899,12 +899,23 @@ async fn open_with_app(
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg("-a")
-            .arg(&launch_target)
-            .arg(&target)
-            .spawn()
-            .map_err(|e| format!("启动应用失败: {e}"))?;
+        // open 能启动不代表找到了应用；等它确认后，前端才停止尝试下一个候选。
+        let status = tauri::async_runtime::spawn_blocking(move || {
+            std::process::Command::new("/usr/bin/open")
+                .arg("-a")
+                .arg(launch_target)
+                .arg(target)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+        })
+        .await
+        .map_err(|_| "启动应用任务失败，请重试".to_string())?
+        .map_err(|_| "无法启动应用，请检查应用安装状态".to_string())?;
+        if !status.success() {
+            return Err("应用未能打开文件，请检查应用安装状态与文件类型".to_string());
+        }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {

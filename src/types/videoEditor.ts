@@ -314,6 +314,12 @@ export function needsCompositing(tracks: VideoEditorTrack[]): boolean {
   if (videoTracks.length > 1) return true;
   // 独立音轨需要混入输出，不能只直通主视频而丢失配音。
   if (visible.some((track) => track.kind === 'audio' && !track.muted && track.clips.length > 0)) return true;
+  // 主视频的声音有改动时也要合成，直通分组不会应用静音、增益和包络。
+  if (videoTracks.some((track) => track.clips.length > 0 && (
+    track.muted
+    || (track.volume ?? 1) !== 1
+    || track.clips.some((clip) => (clip.volume ?? 1) !== 1 || (clip.volumePoints?.length ?? 0) > 0)
+  ))) return true;
 
   return visible.some((track) => track.clips.some((clip) => (
     clip.kind === 'image'
