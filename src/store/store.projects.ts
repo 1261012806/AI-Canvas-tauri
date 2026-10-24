@@ -38,7 +38,7 @@ import {
 } from '../services/indexedDbService';
 import { describeStorageError, type StorageFailureKind } from '../services/storageQuota';
 import { relocateMediaReferences } from '../services/indexedDb/mediaRelocations';
-import { applyAssetRepairs, type AssetRepairPreview } from '../services/fs/assetRepair';
+import { applyAssetRepairs, cleanupUnavailableAssets, type AssetRepairPreview } from '../services/fs/assetRepair';
 import type { DramaAssetWriteOptions } from '../types/dramaAssets';
 import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import { isWebviewRecovery } from '../services/webviewRecoveryService';
@@ -462,6 +462,7 @@ export interface ProjectSlice {
     options?: fileService.FileTransferOptions) => Promise<{ path: string; moved: boolean }>;
   renameAssetFile: (file: fileService.AssetFileEntry, name: string, projectId?: string) => Promise<fileService.AssetFileRenameResult>;
   repairAssetLocations: (preview: AssetRepairPreview, assetIds: readonly string[], options?: DramaAssetWriteOptions) => Promise<number>;
+  cleanupMissingAssets: (preview: AssetRepairPreview, assetIds: readonly string[], options?: DramaAssetWriteOptions) => Promise<number>;
 }
 
 type ProjectSliceSet = Parameters<StateCreator<AppState, [], [], ProjectSlice>>[0];
@@ -681,6 +682,28 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           : [...current, selectedRoot];
         get().updateConfig({ assetFolders: [...new Set(assetFolders)] });
       }
+    }, { ...options, assertCurrent });
+  },
+
+  cleanupMissingAssets: async (preview, assetIds, options = {}) => {
+    const initialRoot = get().config.baseDataDir;
+    const assertCurrent = () => {
+      assertDramaAssetWriteCurrent(options);
+      if (get().config.baseDataDir !== initialRoot) throw new Error(t('素材根目录已变化，请重新预览'));
+      if (preview.target.kind === 'folder' && !(get().config.assetFolders ?? []).includes(preview.target.path)) {
+        throw new Error(t('原目录引用已移除，请重新选择'));
+      }
+    };
+    assertCurrent();
+    return cleanupUnavailableAssets(preview, assetIds, ({ historyIds, deletedHistoryCounts }) => {
+      const removed = new Set(historyIds);
+      set((state) => {
+        const records = state.outputHistoryRecords.filter((record) => !removed.has(record.id));
+        const totalCount = Math.max(0, state.historyTotalCount - (state.historyProjectId ? deletedHistoryCounts[state.historyProjectId] ?? 0 : 0));
+        return { outputHistoryRecords: records, historyTotalCount: totalCount,
+          historyHasMore: state.historyHasMore && totalCount > records.length, recentAssetsRevision: state.recentAssetsRevision + 1 };
+      });
+      void get().refreshHistoryAfterAssetCleanup();
     }, { ...options, assertCurrent });
   },
 

@@ -18,6 +18,7 @@ import {
   claimLegacyHistoryEntries,
   clearAllHistoryEntries,
   deleteNodeHistoryEntries,
+  isAssetHistoryRecordActive,
 } from '../services/indexedDbService';
 import type { HistoryPageCursor, HistoryQuery } from '../services/indexedDbService';
 import { tagGeneratedProjectAssetSafely } from '../services/fs/generatedAssetTags';
@@ -161,6 +162,8 @@ export interface HistoryRecordSlice {
   historyLoading: boolean;
   /** 从 IndexedDB 加载首批历史记录 */
   loadHistoryFromDb: (query?: HistoryQuery) => Promise<void>;
+  /** 清理素材后撤销旧读取，并沿用当前历史筛选重新加载。 */
+  refreshHistoryAfterAssetCleanup: () => Promise<void>;
   /** 按当前查询继续加载下一批历史记录 */
   loadMoreHistoryFromDb: (query?: HistoryQuery) => Promise<void>;
   /** 显式导出时读取全部匹配历史 */
@@ -230,6 +233,10 @@ export const createHistoryRecordSlice: StateCreator<AppState, [], [], HistoryRec
       console.warn('Failed to load history from IndexedDB:', e);
       if (requestId === historyLoadRequestId) set({ historyLoading: false });
     }
+  },
+
+  refreshHistoryAfterAssetCleanup: async () => {
+    await get().loadHistoryFromDb({ ...activeHistoryQuery });
   },
 
   loadMoreHistoryFromDb: async (query = {}) => {
@@ -340,6 +347,8 @@ export const createHistoryRecordSlice: StateCreator<AppState, [], [], HistoryRec
         prompt: record.prompt,
       });
     }
+    // 提示词/标签保存期间也可能完成素材清理，旧结果不得重新加入内存列表。
+    if (!await isAssetHistoryRecordActive(record)) return;
     set((state) => {
       if (state.currentProjectId !== projectId) return {};
       const sameProject = state.historyProjectId === projectId;

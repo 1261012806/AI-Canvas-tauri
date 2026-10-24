@@ -42,6 +42,123 @@ import { isProjectSnapshotDataUrl } from './projectSnapshotValidation';
 const LAST_ACTIVE_PROJECT_KEY = 'last-active-project';
 const RECENT_ASSET_USAGE_KEY = 'recent-asset-usage';
 const MAX_RECENT_ASSET_USAGE = 10;
+const FORGOTTEN_ASSET_PREFIX = 'forgotten-missing-asset:';
+const FORGOTTEN_PATH_PREFIX = 'forgotten-missing-path:';
+const FORGOTTEN_HISTORY_PREFIX = 'forgotten-missing-history:';
+const forgottenAssetKey = (assetId: string) => `${FORGOTTEN_ASSET_PREFIX}${encodeURIComponent(assetId)}`;
+const forgottenPathKey = (path: string) => `${FORGOTTEN_PATH_PREFIX}${encodeURIComponent(path)}`;
+const forgottenHistoryKey = (historyId: string) => `${FORGOTTEN_HISTORY_PREFIX}${encodeURIComponent(historyId)}`;
+const MEDIA_HISTORY_TYPES = new Set(['ai-image', 'ai-animation', 'ai-panorama', 'ai-storyboard', 'ai-video', 'ai-audio',
+  'source-image', 'source-video', 'source-audio']);
+
+function cleanupTimestamp(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const timestamp = value && typeof value === 'object' && 'forgottenAt' in value ? value.forgottenAt : undefined;
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp < 0) {
+    throw new Error('失效素材清理记录无效，请检查存储');
+  }
+  return timestamp;
+}
+
+/** Old identities stay retired; an explicit new import receives an independent asset ID. */
+function withActiveAsset(tx: IDBTransaction, assetId: string, write: () => void, onForgotten: () => void): void {
+  const request = tx.objectStore(STORE_METADATA).get(forgottenAssetKey(assetId));
+  request.onsuccess = () => {
+    if (request.result !== undefined) { onForgotten(); tx.abort(); return; }
+    write();
+  };
+}
+
+/** Only output identity fields count; prompt text and input/reference fields are never matched. */
+function historyOutputKeys(record: HistoryRecord): string[] {
+  const localKey = (reference: string | undefined) => {
+    if (typeof reference !== 'string' || !reference.trim()) return undefined;
+    const path = localMediaUrlToPath(reference) ?? reference;
+    if (!/^[a-z]:[/\\]/i.test(path) && !path.startsWith('/') && !path.startsWith('\\\\')) return undefined;
+    return imageHistoryReferenceKey(path);
+  };
+  // A saved copy owns its history even when its original remote/output URL is shared.
+  if (typeof record.filePath === 'string' && record.filePath.trim()) {
+    const path = localKey(record.filePath);
+    return path ? [path] : [];
+  }
+  return [...new Set([record.mediaUrl, MEDIA_HISTORY_TYPES.has(record.nodeType) ? record.output : undefined]
+    .map(localKey).filter((key): key is string => !!key))];
+}
+
+function withActiveHistory(tx: IDBTransaction, records: readonly HistoryRecord[], write: (active: HistoryRecord[]) => void): void {
+  const paths = [...new Set(records.flatMap(historyOutputKeys))];
+  const historyIds = [...new Set(records.map((record) => record.id))];
+  if (!paths.length && !historyIds.length) { write([]); return; }
+  const cutoffs = new Map<string, number>();
+  const forgotten = new Set<string>();
+  let remaining = paths.length + historyIds.length;
+  const finish = () => {
+    if (--remaining !== 0) return;
+    write(records.filter((record) => !forgotten.has(record.id) && historyOutputKeys(record)
+      .every((key) => !cutoffs.has(key) || record.timestamp > cutoffs.get(key)!)));
+  };
+  for (const historyId of historyIds) {
+    const request = tx.objectStore(STORE_METADATA).get(forgottenHistoryKey(historyId));
+    request.onsuccess = () => {
+      if (request.result !== undefined) forgotten.add(historyId);
+      finish();
+    };
+  }
+  for (const path of paths) {
+    const request = tx.objectStore(STORE_METADATA).get(forgottenPathKey(path));
+    request.onsuccess = () => {
+      try {
+        const cutoff = cleanupTimestamp(request.result);
+        if (cutoff !== undefined) cutoffs.set(path, cutoff);
+        finish();
+      } catch { tx.abort(); }
+    };
+  }
+}
+
+/** A cleared path must not recover its old prompt from an unchanged canvas node. */
+export async function getAssetCleanupTime(references: readonly string[], signal?: AbortSignal): Promise<number | undefined> {
+  signal?.throwIfAborted();
+  const paths = [...new Set(references.map(imageHistoryReferenceKey).filter((key): key is string => !!key))];
+  if (!paths.length) return undefined;
+  const db = await openDB();
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_METADATA, 'readonly');
+    let latest: number | undefined;
+    let failure: unknown;
+    const abort = () => { try { tx.abort(); } catch { /* 已结束。 */ } };
+    signal?.addEventListener('abort', abort, { once: true });
+    for (const path of paths) {
+      const request = tx.objectStore(STORE_METADATA).get(forgottenPathKey(path));
+      request.onsuccess = () => {
+        try {
+          const cutoff = cleanupTimestamp(request.result);
+          if (cutoff !== undefined) latest = latest === undefined ? cutoff : Math.max(latest, cutoff);
+        } catch (error) { failure = error; abort(); }
+      };
+    }
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(latest); };
+    tx.onerror = tx.onabort = () => {
+      cleanup(); reject(signal?.aborted ? new DOMException('失效素材清理已取消', 'AbortError')
+        : failure ?? new Error('失效素材清理读取失败'));
+    };
+    if (signal?.aborted) abort();
+  });
+}
+
+export async function isAssetHistoryRecordActive(record: HistoryRecord): Promise<boolean> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_METADATA, 'readonly');
+    let active = false;
+    withActiveHistory(tx, [record], (records) => { active = records.length === 1; });
+    tx.oncomplete = () => resolve(active);
+    tx.onerror = tx.onabort = () => reject(new Error('失效素材清理读取失败'));
+  });
+}
 
 function validAssetUsageTime(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -115,36 +232,39 @@ export async function recordRecentAssetUsage(assetId: string, usedAt = Date.now(
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_METADATA, STORE_ASSET_INDEX], 'readwrite');
     const store = tx.objectStore(STORE_METADATA);
-    const request = store.get(RECENT_ASSET_USAGE_KEY);
-    request.onsuccess = () => {
-      const previous = normalizeAssetUsage(request.result?.entries);
-      const existing = previous.find((entry) => entry.assetId === assetId);
-      const assetStore = tx.objectStore(STORE_ASSET_INDEX);
-      // 旧库只在 metadata 留有十项；裁剪前保留仍可恢复的真实时间，不为缺失资产造索引。
-      for (const entry of previous) {
-        if (entry.assetId === assetId) continue;
-        const legacy = assetStore.get(entry.assetId);
-        legacy.onsuccess = () => {
-          const record = legacy.result as AssetIndexRecord | undefined;
-          if (!record) return;
-          const lastUsedAt = latestAssetUsageTime(record.lastUsedAt, entry.usedAt)!;
-          if (lastUsedAt !== record.lastUsedAt) assetStore.put({ ...record, lastUsedAt });
+    let forgotten = false;
+    withActiveAsset(tx, assetId, () => {
+      const request = store.get(RECENT_ASSET_USAGE_KEY);
+      request.onsuccess = () => {
+        const previous = normalizeAssetUsage(request.result?.entries);
+        const existing = previous.find((entry) => entry.assetId === assetId);
+        const assetStore = tx.objectStore(STORE_ASSET_INDEX);
+        // 旧库只在 metadata 留有十项；裁剪前保留仍可恢复的真实时间，不为缺失资产造索引。
+        for (const entry of previous) {
+          if (entry.assetId === assetId) continue;
+          const legacy = assetStore.get(entry.assetId);
+          legacy.onsuccess = () => {
+            const record = legacy.result as AssetIndexRecord | undefined;
+            if (!record) return;
+            const lastUsedAt = latestAssetUsageTime(record.lastUsedAt, entry.usedAt)!;
+            if (lastUsedAt !== record.lastUsedAt) assetStore.put({ ...record, lastUsedAt });
+          };
+        }
+        const indexed = assetStore.get(assetId);
+        indexed.onsuccess = () => {
+          const record = indexed.result as AssetIndexRecord | undefined;
+          const lastUsedAt = latestAssetUsageTime(usedAt, existing?.usedAt, record?.lastUsedAt)!;
+          const entries = normalizeAssetUsage([
+            { assetId, usedAt: lastUsedAt },
+            ...previous.filter((entry) => entry.assetId !== assetId),
+          ]);
+          store.put({ id: RECENT_ASSET_USAGE_KEY, entries });
+          if (record) assetStore.put({ ...record, lastUsedAt });
         };
-      }
-      const indexed = assetStore.get(assetId);
-      indexed.onsuccess = () => {
-        const record = indexed.result as AssetIndexRecord | undefined;
-        const lastUsedAt = latestAssetUsageTime(usedAt, existing?.usedAt, record?.lastUsedAt)!;
-        const entries = normalizeAssetUsage([
-          { assetId, usedAt: lastUsedAt },
-          ...previous.filter((entry) => entry.assetId !== assetId),
-        ]);
-        store.put({ id: RECENT_ASSET_USAGE_KEY, entries });
-        if (record) assetStore.put({ ...record, lastUsedAt });
       };
-    };
+    }, () => { forgotten = true; });
     tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('最近使用记录保存失败'));
+    tx.onerror = tx.onabort = () => reject(new Error(forgotten ? '素材已被清理，请重新加载后重试' : '最近使用记录保存失败'));
   });
 }
 
@@ -673,7 +793,7 @@ async function findMediaHistoryByReferences(references: string[], nodeType: 'ai-
   const db = await openDB();
   if (signal?.aborted) throw new DOMException('Preview closed', 'AbortError');
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_HISTORY, 'readonly');
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readonly');
     const store = tx.objectStore(STORE_HISTORY);
     const request = projectId
       ? store.index('projectId_timestamp_id').openCursor(projectHistoryRange(projectId), 'prev')
@@ -700,7 +820,11 @@ async function findMediaHistoryByReferences(references: string[], nodeType: 'ai-
         && [record.filePath, record.mediaUrl, record.output].some((reference) => {
           const key = imageHistoryReferenceKey(reference); return !!key && keys.has(key);
         }) && (!latest || record.timestamp > latest.timestamp || record.timestamp === latest.timestamp && record.id > latest.id)) {
-        latest = record;
+        withActiveHistory(tx, [record], (active) => {
+          if (active.length) latest = record;
+          cursor.continue();
+        });
+        return;
       }
       cursor.continue();
     };
@@ -762,8 +886,10 @@ export async function putHistoryEntry(record: HistoryRecord): Promise<void> {
     const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(STORE_HISTORY);
     withRelocatedMedia(tx, record, (next) => {
-      store.put(next);
-      pruneProjectHistory(store, record.projectId);
+      withActiveHistory(tx, [next], (active) => {
+        for (const entry of active) store.put(entry);
+        if (active.length) pruneProjectHistory(store, record.projectId);
+      });
     });
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
@@ -778,8 +904,10 @@ export async function putHistoryEntries(records: HistoryRecord[]): Promise<void>
     const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(STORE_HISTORY);
     withRelocatedMedia(tx, records, (next) => {
-      for (const record of next) store.put(record);
-      for (const projectId of new Set(records.map((record) => record.projectId))) pruneProjectHistory(store, projectId);
+      withActiveHistory(tx, next, (active) => {
+        for (const record of active) store.put(record);
+        for (const projectId of new Set(active.map((record) => record.projectId))) pruneProjectHistory(store, projectId);
+      });
     });
     tx.oncomplete = () => resolve();
     tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
@@ -811,31 +939,37 @@ export async function getHistoryEntriesPage(
 ): Promise<HistoryPage> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_HISTORY, 'readonly');
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readonly');
     const index = tx.objectStore(STORE_HISTORY).index('projectId_timestamp_id');
     const request = index.openCursor(projectHistoryRange(projectId, cursor), 'prev');
     const records: HistoryRecord[] = [];
     let nextCursor: HistoryPageCursor | null = null;
+    let hasMore = false;
+    tx.oncomplete = () => resolve({ records, nextCursor: hasMore ? nextCursor : null, hasMore });
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('生成记录读取失败'));
 
     request.onsuccess = () => {
       const current = request.result;
-      if (!current) {
-        resolve({ records, nextCursor: null, hasMore: false });
-        return;
-      }
+      if (!current) return;
       if (records.length >= limit) {
-        resolve({ records, nextCursor, hasMore: true });
+        hasMore = true;
         return;
       }
 
       const record = current.value as HistoryRecord;
       if (matchesHistoryQuery(record, query)) {
-        records.push(record);
-        nextCursor = { timestamp: record.timestamp, id: record.id };
+        withActiveHistory(tx, [record], (active) => {
+          if (active.length) {
+            records.push(record);
+            nextCursor = { timestamp: record.timestamp, id: record.id };
+          }
+          current.continue();
+        });
+        return;
       }
       current.continue();
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => { /* 事务统一报告。 */ };
   });
 }
 
@@ -846,22 +980,24 @@ export async function getHistoryEntriesForExport(
 ): Promise<HistoryRecord[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_HISTORY, 'readonly');
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readonly');
     const request = tx.objectStore(STORE_HISTORY)
       .index('projectId_timestamp_id')
       .openCursor(projectHistoryRange(projectId), 'prev');
     const records: HistoryRecord[] = [];
+    tx.oncomplete = () => resolve(records);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('生成记录读取失败'));
     request.onsuccess = () => {
       const cursor = request.result;
-      if (!cursor) {
-        resolve(records);
+      if (!cursor) return;
+      const record = cursor.value as HistoryRecord;
+      if (matchesHistoryQuery(record, query)) {
+        withActiveHistory(tx, [record], (active) => { records.push(...active); cursor.continue(); });
         return;
       }
-      const record = cursor.value as HistoryRecord;
-      if (matchesHistoryQuery(record, query)) records.push(record);
       cursor.continue();
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => { /* 事务统一报告。 */ };
   });
 }
 
@@ -869,17 +1005,18 @@ export async function getHistoryEntriesForExport(
 export async function getNodeHistoryEntries(projectId: string, nodeId: string): Promise<HistoryRecord[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const request = db.transaction(STORE_HISTORY, 'readonly')
-      .objectStore(STORE_HISTORY)
+    const tx = db.transaction([STORE_HISTORY, STORE_METADATA], 'readonly');
+    let records: HistoryRecord[] = [];
+    const request = tx.objectStore(STORE_HISTORY)
       .index('projectId_nodeId')
       .getAll(IDBKeyRange.only([projectId, nodeId]));
     request.onsuccess = () => {
-      const records = (request.result as HistoryRecord[]).sort((left, right) => (
-        right.timestamp - left.timestamp || right.id.localeCompare(left.id)
-      ));
-      resolve(records);
+      withActiveHistory(tx, request.result as HistoryRecord[], (active) => {
+        records = active.sort((left, right) => right.timestamp - left.timestamp || right.id.localeCompare(left.id));
+      });
     };
-    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve(records);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('生成记录读取失败'));
   });
 }
 
@@ -1067,33 +1204,37 @@ export async function putAssetImageRecord(record: import('../types/assetImage').
     const tx = db.transaction(replacement ? [STORE_METADATA, STORE_ASSET_META_V2] : STORE_METADATA, 'readwrite');
     const store = tx.objectStore(STORE_METADATA);
     let conflict = false;
+    let forgotten = false;
     const abort = () => { try { tx.abort(); } catch { /* 事务已完成 */ } };
     const cleanup = () => options?.signal?.removeEventListener('abort', abort);
     options?.signal?.addEventListener('abort', abort, { once: true });
-    const request = store.get(record.id);
-    request.onsuccess = () => {
-      const current = request.result as import('../types/assetImage').AssetImageRecord | undefined;
-      if ((current?.revision ?? 0) !== expectedRevision || current && current.contentDigest !== record.contentDigest) {
-        conflict = true; tx.abort(); return;
-      }
-      withRelocatedMedia(tx, record, (next) => store.put(next));
-    };
-    if (replacement) {
-      const tags = tx.objectStore(STORE_ASSET_META_V2);
-      const baseline = tags.get(record.assetId);
-      baseline.onsuccess = () => {
-        const current = baseline.result as AssetMetaRecord | undefined;
-        if (replacement.expected ? !current || current.updatedAt !== replacement.expected.updatedAt
-          || JSON.stringify(current.tags) !== JSON.stringify(replacement.expected.tags) : !!current) {
-          conflict = true; abort(); return;
+    withActiveAsset(tx, record.assetId, () => {
+      const request = store.get(record.id);
+      request.onsuccess = () => {
+        const current = request.result as import('../types/assetImage').AssetImageRecord | undefined;
+        if ((current?.revision ?? 0) !== expectedRevision || current && current.contentDigest !== record.contentDigest) {
+          conflict = true; tx.abort(); return;
         }
-        tags.put({ assetId: record.assetId, tags: [...replacement.tags], taggedBy: 'vision', updatedAt: Date.now() } satisfies AssetMetaRecord);
+        withRelocatedMedia(tx, record, (next) => store.put(next));
       };
-    }
+      if (replacement) {
+        const tags = tx.objectStore(STORE_ASSET_META_V2);
+        const baseline = tags.get(record.assetId);
+        baseline.onsuccess = () => {
+          const current = baseline.result as AssetMetaRecord | undefined;
+          if (replacement.expected ? !current || current.updatedAt !== replacement.expected.updatedAt
+            || JSON.stringify(current.tags) !== JSON.stringify(replacement.expected.tags) : !!current) {
+            conflict = true; abort(); return;
+          }
+          tags.put({ assetId: record.assetId, tags: [...replacement.tags], taggedBy: 'vision', updatedAt: Date.now() } satisfies AssetMetaRecord);
+        };
+      }
+    }, () => { forgotten = true; });
     tx.oncomplete = () => { cleanup(); resolve(); };
     tx.onabort = tx.onerror = () => {
       cleanup(); reject(options?.signal?.aborted ? new DOMException('Cancelled', 'AbortError')
-        : new Error(conflict ? '提示词或标签已被其他操作修改，请重新读取后重试' : '图片信息保存失败'));
+        : new Error(forgotten ? '素材已被清理，请重新加载后重试'
+          : conflict ? '提示词或标签已被其他操作修改，请重新读取后重试' : '图片信息保存失败'));
     };
     if (options?.signal?.aborted) abort();
   });
@@ -1126,9 +1267,12 @@ export async function putAssetMeta(record: AssetMetaRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_ASSET_META_V2, STORE_METADATA], 'readwrite');
-    withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_ASSET_META_V2).put(next));
+    let forgotten = false;
+    withActiveAsset(tx, record.assetId, () => {
+      withRelocatedMedia(tx, record, (next) => tx.objectStore(STORE_ASSET_META_V2).put(next));
+    }, () => { forgotten = true; });
     tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
+    tx.onerror = tx.onabort = () => reject(new Error(forgotten ? '素材已被清理，请重新加载后重试' : '文件引用写入事务失败'));
   });
 }
 
@@ -1319,22 +1463,134 @@ export async function putAssetIndex(record: AssetIndexRecord): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_ASSET_INDEX, STORE_METADATA], 'readwrite');
-    withRelocatedMedia(tx, record, (next) => {
-      const store = tx.objectStore(STORE_ASSET_INDEX);
-      const current = store.get(next.assetId);
-      current.onsuccess = () => {
-        const lastUsedAt = latestAssetUsageTime(next.lastUsedAt, current.result?.lastUsedAt);
-        const merged = { ...next };
-        if (!merged.contentDigest && current.result?.size === next.size && current.result?.mtimeMs === next.mtimeMs) {
-          merged.contentDigest = current.result.contentDigest;
-        }
-        if (lastUsedAt === undefined) delete merged.lastUsedAt;
-        else merged.lastUsedAt = lastUsedAt;
-        store.put(merged);
-      };
-    });
+    let forgotten = false;
+    withActiveAsset(tx, record.assetId, () => {
+      withRelocatedMedia(tx, record, (next) => {
+        const store = tx.objectStore(STORE_ASSET_INDEX);
+        const current = store.get(next.assetId);
+        current.onsuccess = () => {
+          const lastUsedAt = latestAssetUsageTime(next.lastUsedAt, current.result?.lastUsedAt);
+          const merged = { ...next };
+          if (!merged.contentDigest && current.result?.size === next.size && current.result?.mtimeMs === next.mtimeMs) {
+            merged.contentDigest = current.result.contentDigest;
+          }
+          if (lastUsedAt === undefined) delete merged.lastUsedAt;
+          else merged.lastUsedAt = lastUsedAt;
+          store.put(merged);
+        };
+      });
+    }, () => { forgotten = true; });
     tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('文件引用写入事务失败'));
+    tx.onerror = tx.onabort = () => reject(new Error(forgotten ? '素材已被清理，请重新加载后重试' : '文件引用写入事务失败'));
+  });
+}
+
+/** Forget only identities already verified missing by the file service; never delete disk files. */
+export async function forgetMissingAssetRecords(
+  expected: readonly AssetIndexRecord[], options: DramaAssetWriteOptions = {},
+): Promise<{ assetIds: string[]; historyIds: string[]; deletedHistoryCounts: Record<string, number> }> {
+  assertDramaAssetWriteCurrent(options);
+  const snapshot = expected.map((record) => ({ ...record }));
+  const assetIds = new Set(snapshot.map((record) => record.assetId));
+  if (snapshot.length > 500 || assetIds.size !== snapshot.length || snapshot.some((record) => (
+    typeof record.assetId !== 'string' || !record.assetId.trim() || record.assetId.length > 256
+    || typeof record.path !== 'string' || !record.path.trim() || !imageHistoryReferenceKey(record.path)
+  ))) throw new Error('失效素材清理批次无效');
+  if (!snapshot.length) return { assetIds: [], historyIds: [], deletedHistoryCounts: {} };
+  const paths = new Set(snapshot.map((record) => imageHistoryReferenceKey(record.path)!));
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_ASSET_INDEX, STORE_ASSET_META, STORE_ASSET_META_V2, STORE_METADATA, STORE_HISTORY], 'readwrite');
+    const indexes = tx.objectStore(STORE_ASSET_INDEX);
+    const metadata = tx.objectStore(STORE_METADATA);
+    const historyIds: string[] = [];
+    const counts = new Map<string, number>();
+    let failure: unknown;
+    let scanned = 0;
+    let remaining = snapshot.length;
+    const fail = (error: unknown) => { failure ??= error; try { tx.abort(); } catch { /* 已有终态。 */ } };
+    const abort = () => fail(new DOMException('失效素材清理已取消', 'AbortError'));
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => {
+      cleanup();
+      // The committed removal is authoritative even if the view has just closed.
+      resolve({ assetIds: [...assetIds], historyIds, deletedHistoryCounts: Object.fromEntries(counts) });
+    };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(failure ?? new Error('失效素材清理保存失败')); };
+    const scan = (store: IDBObjectStore, visit: (cursor: IDBCursorWithValue) => void, range?: IDBKeyRange) => {
+      const request = store.openCursor(range);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        try {
+          assertDramaAssetWriteCurrent(options);
+          if (++scanned > 100_000) throw new Error('失效素材清理扫描超过上限，请按目录分批处理');
+          visit(cursor); cursor.continue();
+        } catch (error) { fail(error); }
+      };
+    };
+    const remove = () => {
+      assertDramaAssetWriteCurrent(options);
+      const forgottenAt = Date.now();
+      for (const record of snapshot) {
+        indexes.delete(record.assetId);
+        tx.objectStore(STORE_ASSET_META_V2).delete(record.assetId);
+        metadata.put({ id: forgottenAssetKey(record.assetId), assetId: record.assetId, forgottenAt });
+      }
+      for (const path of paths) {
+        const marker = metadata.get(forgottenPathKey(path));
+        marker.onsuccess = () => {
+          try {
+            assertDramaAssetWriteCurrent(options);
+            const previous = cleanupTimestamp(marker.result);
+            metadata.put({ id: forgottenPathKey(path), forgottenAt: Math.max(forgottenAt, previous ?? 0) });
+          } catch (error) { fail(error); }
+        };
+      }
+      const recent = metadata.get(RECENT_ASSET_USAGE_KEY);
+      recent.onsuccess = () => {
+        try {
+          assertDramaAssetWriteCurrent(options);
+          if (recent.result === undefined) return;
+          if (!Array.isArray(recent.result.entries)) throw new Error('失效素材清理记录无效，请检查存储');
+          metadata.put({ ...recent.result, entries: recent.result.entries.filter((entry: AssetUsageRecord) => !assetIds.has(entry?.assetId)) });
+        } catch (error) { fail(error); }
+      };
+      scan(tx.objectStore(STORE_ASSET_META), (cursor) => {
+        const path = imageHistoryReferenceKey(cursor.value.path);
+        if (path && paths.has(path)) cursor.delete();
+      });
+      scan(metadata, (cursor) => {
+        if (assetIds.has(cursor.value.assetId)) cursor.delete();
+      }, IDBKeyRange.bound(ASSET_IMAGE_PREFIX, `${ASSET_IMAGE_PREFIX}\uffff`));
+      scan(tx.objectStore(STORE_HISTORY), (cursor) => {
+        const record = cursor.value as HistoryRecord;
+        if (!historyOutputKeys(record).some((path) => paths.has(path))) return;
+        if (typeof record.id !== 'string' || typeof record.projectId !== 'string') throw new Error('失效素材清理记录无效，请检查存储');
+        historyIds.push(record.id);
+        counts.set(record.projectId, (counts.get(record.projectId) ?? 0) + 1);
+        metadata.put({ id: forgottenHistoryKey(record.id), historyId: record.id, forgottenAt });
+        cursor.delete();
+      });
+    };
+    for (const before of snapshot) {
+      const request = indexes.get(before.assetId);
+      request.onsuccess = () => {
+        try {
+          assertDramaAssetWriteCurrent(options);
+          const current = request.result as AssetIndexRecord | undefined;
+          if (!current || imageHistoryReferenceKey(current.path) !== imageHistoryReferenceKey(before.path)
+            || current.fingerprint !== before.fingerprint || current.size !== before.size || current.mtimeMs !== before.mtimeMs
+            || current.contentDigest !== before.contentDigest || current.updatedAt !== before.updatedAt || current.status !== before.status
+            || current.source !== before.source || current.projectId !== before.projectId || current.rootPath !== before.rootPath
+            || current.relativePath !== before.relativePath) throw new Error('素材身份或位置已变化，请重新预览');
+          if (--remaining === 0) remove();
+        } catch (error) { fail(error); }
+      };
+    }
+    if (options.signal?.aborted) abort();
   });
 }
 

@@ -41,18 +41,21 @@ export default function AssetFolderNavigation({
 }: AssetFolderNavigationProps) {
   useT();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [menu, setMenu] = useState<{ selection: AssetFolderSelection; label: string; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ selection: AssetFolderSelection; label: string; x: number; y: number; repair?: boolean } | null>(null);
   const [creating, setCreating] = useState<{ selection: AssetFolderSelection; label: string } | null>(null);
   const [name, setName] = useState('新建文件夹');
   const [error, setError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const canManageFolders = !readOnly && !!(onCreate || onOpen || onCopy || onPaste);
+  const canRepairFolders = !readOnly && !!onRepair;
+  const externalRoots = folders.filter((folder) => folder.parentRelativePath === null && folder.rootPath !== globalRootPath);
   const closeMenu = () => { setMenu(null); triggerRef.current?.focus?.(); };
   useEffect(() => {
-    if (!menu || !canManageFolders) return;
+    if (!menu || !(menu.repair ? canRepairFolders : canManageFolders)) return;
     const dismiss = (event: Event) => {
-      if (menuRef.current?.contains(event.target as Node)) return;
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      if (menu.repair && event.target instanceof Node && triggerRef.current?.contains(event.target)) return;
       setMenu(null);
     };
     const escape = (event: KeyboardEvent) => {
@@ -69,7 +72,7 @@ export default function AssetFolderNavigation({
       window.removeEventListener('resize', dismiss);
       window.removeEventListener('scroll', dismiss, true);
     };
-  }, [menu, canManageFolders]);
+  }, [menu, canManageFolders, canRepairFolders]);
   const openMenu = (event: MouseEvent<HTMLElement>, target: AssetFolderSelection, label: string) => {
     event.preventDefault(); event.stopPropagation();
     if (!canManageFolders || loading || target.kind === 'all') return;
@@ -102,9 +105,10 @@ export default function AssetFolderNavigation({
     const selected = !creativeKind && selection.kind === 'folder' && selection.rootPath === folder.rootPath
       && selection.relativePath === folder.relativePath;
     const receiving = !readOnly && dropTarget?.kind === 'folder' && dropTarget.rootPath === folder.rootPath && dropTarget.relativePath === folder.relativePath;
+    const removable = !readOnly && !!onRemove && folder.parentRelativePath === null && folder.rootPath !== globalRootPath;
     return (
       <li key={key}>
-        <div className={`assets-folder-item${folderMotionClass}${selected || receiving ? ' is-active' : ''}${receiving ? folderDropClass : ''}`}
+        <div className={`assets-folder-item${removable ? ' assets-folder-item--removable' : ''}${folderMotionClass}${selected || receiving ? ' is-active' : ''}${receiving ? folderDropClass : ''}`}
           data-asset-folder-target={!readOnly && !loading && folder.availability === 'online' ? JSON.stringify({ kind: 'folder', rootPath: folder.rootPath, relativePath: folder.relativePath }) : undefined}>
           {childFolders.length > 0 ? (
             <button type="button" className="ui-icon-btn ui-icon-btn--sm assets-folder-toggle"
@@ -130,9 +134,6 @@ export default function AssetFolderNavigation({
             <span className="min-w-0 flex-1 truncate text-left">{folder.name}</span>
             <span className="ui-list__trailing">{receiving ? t('放入') : folder.availability === 'online' ? folder.fileCount : '—'}</span>
           </button>
-          {!readOnly && onRepair && folder.parentRelativePath === null && folder.rootPath !== globalRootPath && <button type="button"
-            className="ui-icon-btn ui-icon-btn--sm" disabled={loading} aria-label={t('重新定位文件夹 {name}', { name: folder.name })}
-            title={t('重新定位文件夹')} onClick={() => onRepair(folder.rootPath)}><Icon icon="lucide:folder-search" aria-hidden="true" /></button>}
           {!readOnly && onRemove && folder.parentRelativePath === null && folder.rootPath !== globalRootPath && (
             <button type="button" className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--danger assets-folder-remove"
               aria-label={t('移除文件夹引用 {name}', { name: folder.name })} title={t("取消引用，保留本地文件")} disabled={loading}
@@ -187,8 +188,25 @@ export default function AssetFolderNavigation({
       {globalRootPath && <ul className="assets-folder-children">
         {(children.get(JSON.stringify([globalRootPath, ''])) ?? []).map(renderFolder)}
       </ul>}
-      <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">{t("外部文件夹")}</h4>
-      <ul className="assets-folder-roots">{folders.filter((folder) => folder.parentRelativePath === null && folder.rootPath !== globalRootPath).map(renderFolder)}</ul>
+      <div className="assets-folder-section-header">
+        <h4 className="min-w-0 text-xs text-canvas-text-muted">{t("外部文件夹")}</h4>
+        {canRepairFolders && externalRoots.length > 0 && <button type="button"
+          className="ui-icon-btn ui-icon-btn--sm ui-icon-btn--ghost assets-folder-repair" disabled={loading}
+          aria-label={t('重新定位文件夹')} title={t('重新定位文件夹')}
+          aria-haspopup={externalRoots.length > 1 ? 'menu' : undefined}
+          aria-expanded={externalRoots.length > 1 ? !!menu?.repair : undefined}
+          onClick={(event) => {
+            if (!onRepair) return;
+            if (externalRoots.length === 1) { onRepair(externalRoots[0].rootPath); return; }
+            if (menu?.repair) { closeMenu(); return; }
+            triggerRef.current = event.currentTarget;
+            const rect = event.currentTarget.getBoundingClientRect();
+            setMenu({ selection: { kind: 'all' }, label: t('外部文件夹'), repair: true,
+              x: Math.max(4, Math.min(rect.right - 176, (window.innerWidth || 1280) - 188)),
+              y: Math.max(4, Math.min(rect.bottom + 4, (window.innerHeight || 720) - 176)) });
+          }}><Icon icon="lucide:folder-search" aria-hidden="true" /></button>}
+      </div>
+      <ul className="assets-folder-roots">{externalRoots.map(renderFolder)}</ul>
       {!loading && !folders.some((folder) => folder.rootPath !== globalRootPath) && <p className="p-2 text-xs text-canvas-text-muted">{readOnly ? t('暂无外部文件夹') : t('从“添加”中选择本地文件夹')}</p>}
       {!readOnly && onCreate && creating && <form className="flex flex-col gap-2 p-2" aria-label={t("新建子文件夹")} onSubmit={(event) => {
         event.preventDefault();
@@ -209,8 +227,9 @@ export default function AssetFolderNavigation({
         <div className="flex justify-end gap-2"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={loading} onClick={() => setCreating(null)}>{t("取消")}</button>
           <button type="submit" className="ui-btn ui-btn--primary ui-btn--sm" disabled={loading || !name.trim()}>{t("创建")}</button></div>
       </form>}
-      {canManageFolders && menu && createPortal(<div ref={menuRef} role="menu" aria-label={t('{name} 文件夹操作', { name: menu.label })}
-        className="ui-menu w-44" style={{ position: 'fixed', zIndex: 320, left: menu.x, top: menu.y }}
+      {menu && (menu.repair ? canRepairFolders : canManageFolders) && createPortal(<div ref={menuRef} role="menu" aria-label={t('{name} 文件夹操作', { name: menu.label })}
+        className={`ui-menu w-44${menu.repair ? ' ui-scroll' : ''}`} style={{ position: 'fixed', zIndex: 320, left: menu.x, top: menu.y,
+          maxHeight: menu.repair ? Math.max(48, Math.min(320, (window.innerHeight || 720) - menu.y - 8)) : undefined }}
         onKeyDown={(event) => {
           const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
           const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -218,12 +237,18 @@ export default function AssetFolderNavigation({
             event.preventDefault(); buttons[(index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length]?.focus();
           } else if (event.key === 'Tab') closeMenu();
         }}>
+        {menu.repair ? externalRoots.map((folder, index) => <button key={folder.rootPath} type="button" role="menuitem" autoFocus={index === 0}
+          className="ui-menu__item" disabled={loading} title={folder.rootPath}
+          aria-label={t('重新定位文件夹 {name}', { name: folder.name })} onClick={() => { closeMenu(); onRepair?.(folder.rootPath); }}>
+          <Icon icon="lucide:folder-search" className="shrink-0" aria-hidden="true" /><span className="min-w-0 truncate">{folder.name}</span>
+        </button>) : <>
         {onOpen && <button type="button" role="menuitem" autoFocus className="ui-menu__item" onClick={() => { onOpen(menu.selection); closeMenu(); }}><Icon icon="lucide:folder-open" aria-hidden="true" />{t("打开文件夹位置")}</button>}
         {onCreate && <button type="button" role="menuitem" autoFocus={!onOpen} className="ui-menu__item" onClick={() => {
           setCreating({ selection: menu.selection, label: menu.label }); setName('新建文件夹'); setError(''); closeMenu();
         }}><Icon icon="lucide:folder-plus" aria-hidden="true" />{t("新建子文件夹")}</button>}
         {onCopy && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate} className="ui-menu__item" onClick={() => { onCopy(menu.selection); closeMenu(); }}><Icon icon="lucide:copy" aria-hidden="true" />{t("复制文件夹")}</button>}
         {onPaste && <button type="button" role="menuitem" autoFocus={!onOpen && !onCreate && !onCopy} className="ui-menu__item" onClick={() => { onPaste(menu.selection); closeMenu(); }}><Icon icon="lucide:clipboard-paste" aria-hidden="true" />{t("粘贴")}</button>}
+        </>}
       </div>, document.body)}
     </nav>
   );

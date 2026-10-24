@@ -2,7 +2,7 @@ import { lstat, mkdir, stat } from '@tauri-apps/plugin-fs';
 import { open } from '@tauri-apps/plugin-dialog';
 import { t } from '../../i18n';
 import { assertDramaAssetWriteCurrent, type DramaAssetWriteOptions } from '../../types/dramaAssets';
-import { getAllAssetIndexes, getAssetIndexById, getAssetImageRecords, type AssetIndexRecord } from '../indexedDbService';
+import { forgetMissingAssetRecords, getAllAssetIndexes, getAssetIndexById, getAssetImageRecords, type AssetIndexRecord } from '../indexedDbService';
 import { persistAssetRepairBatch, retiredMediaPaths, type MediaRelocation } from '../indexedDb/mediaRelocations';
 import { copyAssetFileToFolder } from '../fileService';
 import { fingerprintAssetImage } from './assetImageMetadata';
@@ -24,7 +24,15 @@ export interface AssetRepairPreview { target: AssetRepairTarget; candidates: Ass
 export interface AssetRepairScan { candidates: AssetRepairCandidate[]; truncated: boolean }
 const normalize = (value: string) => stripVerbatimPrefix(value).replace(/\\/g, '/').replace(/\/+$/, '');
 const key = (value: string) => /^[a-z]:\//i.test(normalize(value)) || normalize(value).startsWith('//') ? normalize(value).toLowerCase() : normalize(value);
-const missing = (error: unknown) => /no such file|path not found|not found|找不到指定|ENOENT|os error [23]\b/i.test(String(error));
+const missing = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  // 原生错误可能附带路径；文件名中的“not found”不能把权限拒绝变成缺失。
+  if (/forbidden path|permission denied|access (?:is )?denied|not allowed|scope (?:check failed|denied|mismatch)|EACCES|EPERM|\(os error (?:5|13)\)|拒绝访问|权限不足|无权/i.test(message)) return false;
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  if (code === 'ENOENT' || code === 'NotFound') return true;
+  return /\(os error [23]\)\s*$/i.test(message)
+    || /^(?:ENOENT|NotFound|not found|no such file or directory|path not found|系统找不到指定的文件。?|系统找不到指定的路径。?)$/i.test(message.trim());
+};
 const guarded = async <T>(work: () => Promise<T>, options: DramaAssetWriteOptions) => {
   assertDramaAssetWriteCurrent(options); const result = await work(); assertDramaAssetWriteCurrent(options); return result;
 };
@@ -57,6 +65,34 @@ export async function listUnavailableAssetIndexes(target: AssetRepairTarget, opt
     if (result[result.length - 1].status !== 'online') issues++;
   }
   return { candidates: result, truncated: examined < selected.length };
+}
+
+/** 只忘记明确缺失的素材及其专属信息；不操作磁盘原件或项目正文。 */
+export async function cleanupUnavailableAssets(
+  preview: AssetRepairPreview, assetIds: readonly string[],
+  onCommitted: (result: Awaited<ReturnType<typeof forgetMissingAssetRecords>>) => void,
+  options: DramaAssetWriteOptions = {},
+): Promise<number> {
+  if (!isTauriEnv()) throw new Error(t('失效素材清理仅支持桌面应用'));
+  const ids = new Set(assetIds);
+  const selected = preview.candidates.filter((candidate) => ids.has(candidate.index.assetId));
+  if (!ids.size || ids.size > 500 || selected.length !== ids.size || selected.some((candidate) => candidate.status !== 'missing')) {
+    throw new Error(t('请选择本批已确认缺失的素材'));
+  }
+  for (const { index } of selected) {
+    const current = await guarded(() => getAssetIndexById(index.assetId), options);
+    if (!current || key(current.path) !== key(index.path) || current.fingerprint !== index.fingerprint
+      || current.size !== index.size || current.mtimeMs !== index.mtimeMs || current.contentDigest !== index.contentDigest) {
+      throw new Error(t('素材身份或位置已变化，请重新预览'));
+    }
+    if (await inspect(index.path, options)) throw new Error(t('原文件已恢复或位置已变化，请重新预览'));
+  }
+  assertDramaAssetWriteCurrent(options);
+  const result = await forgetMissingAssetRecords(selected.map(({ index }) => index), options);
+  // 已提交的结果必须刷新内存，即便提交后用户取消或离开视图。
+  onCommitted(result);
+  notifyProjectDiskChanged();
+  return result.assetIds.length;
 }
 
 /** 用户先明确选择目录，再按原相对路径预览；不按文件名全盘猜测。 */

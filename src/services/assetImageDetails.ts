@@ -1,5 +1,5 @@
 import { getLocale } from '../i18n';
-import { findImageHistoryByReferences, getNodeHistoryEntries, getProjectById, imageHistoryReferenceKey, type HistoryRecord } from './indexedDbService';
+import { findImageHistoryByReferences, getAssetCleanupTime, getNodeHistoryEntries, getProjectById, imageHistoryReferenceKey, type HistoryRecord } from './indexedDbService';
 import { getFileCategory, type AssetFileEntry } from './fileService';
 import type { AssetImageLoadedDetails, AssetImageReferenceView } from '../types/assetImage';
 import { findSavedAssetImage, identifyAssetImage, resolveAssetImageReferences } from './fs/assetImageMetadata';
@@ -49,8 +49,9 @@ function completeAnimationPrompt(history: HistoryRecord): HistoryRecord {
 export async function loadAssetImageHistory(file: AssetFileEntry, projectId?: string, signal?: AbortSignal): Promise<HistoryRecord | null> {
   const references = [file.path, ...(file.assetUrl ? [file.assetUrl] : [])];
   const history = await findImageHistoryByReferences(references, projectId, signal);
-  if (history) return completeAnimationPrompt(history);
-  if (!projectId) return null;
+  const cleanupTime = await getAssetCleanupTime(references, signal);
+  if (history && (cleanupTime === undefined || history.timestamp > cleanupTime)) return completeAnimationPrompt(history);
+  if (cleanupTime !== undefined || !projectId) return null;
   const checkAbort = () => { if (signal?.aborted) throw new DOMException('Preview closed', 'AbortError'); };
   checkAbort();
   const { useAppStore } = await import('../store/useAppStore');
@@ -76,6 +77,9 @@ export async function loadAssetImageHistory(file: AssetFileEntry, projectId?: st
   const originalReferences = [data.sourceUrl, data.output].filter((value): value is string => typeof value === 'string' && !!value);
   // 节点改名后仍保留原输出地址，可以用它找回原始提示词与参数。
   const original = originalReferences.length ? await findImageHistoryByReferences(originalReferences, projectId, signal) : null;
+  checkAbort();
+  // Cleanup may have committed while the project or original history was loading.
+  if (await getAssetCleanupTime(references, signal) !== undefined) return null;
   checkAbort();
   if (original?.nodeId === id) return completeAnimationPrompt(original);
   if (typeof data.prompt !== 'string' || !data.prompt.trim()) return null;

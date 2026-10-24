@@ -1265,6 +1265,7 @@ button.wf-ionode-badge.is-default {
 }
 .assets-folder-children { padding-left: 12px; }
 .assets-folder-item {
+  position: relative;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -1280,7 +1281,38 @@ button.wf-ionode-badge.is-default {
   font-size: var(--ui-font-sm);
 }
 .assets-folder-item.is-active .assets-folder-select { color: var(--brand-light); }
-.assets-folder-select .ui-list__trailing { font-variant-numeric: tabular-nums; }
+.assets-folder-select .ui-list__trailing {
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.assets-folder-item--removable > .assets-folder-remove {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  margin-block: auto;
+}
+.assets-folder-item--removable:not(:hover):not(:focus-within) > .assets-folder-remove {
+  opacity: 0;
+  pointer-events: none;
+}
+.assets-folder-item--removable:hover > .assets-folder-select > .ui-list__trailing,
+.assets-folder-item--removable:focus-within > .assets-folder-select > .ui-list__trailing {
+  opacity: 0;
+}
+.assets-folder-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 0 4px 8px;
+}
+.assets-folder-section-header .assets-folder-repair {
+  width: 20px;
+  height: 28px;
+}
 .assets-folder-item .assets-folder-toggle,
 .assets-folder-item .assets-folder-remove {
   flex: 0 0 20px;
