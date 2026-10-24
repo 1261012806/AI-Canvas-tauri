@@ -9,7 +9,7 @@ export function useDramaAssetList(source: readonly DramaAsset[], search: string,
   const configuredOrder = useAppStore((state) => state.config.creativeAssetSortOrder);
   const updateConfig = useAppStore((state) => state.updateConfig);
   const sortBy: DramaAssetSortBy = configuredBy === 'name' || configuredBy === 'createdAt' ? configuredBy : 'updatedAt';
-  const sortOrder = configuredOrder === 'asc' ? 'asc' : 'desc';
+  const sortOrder: 'asc' | 'desc' = configuredOrder === 'asc' ? 'asc' : 'desc';
   const [selecting, setSelecting] = useState(false);
   const selectionScope = `${scopeKey}\u0000${search}`;
   const [selection, setSelection] = useState<{ scope: string; keys: Set<string> }>(() => ({ scope: selectionScope, keys: new Set() }));

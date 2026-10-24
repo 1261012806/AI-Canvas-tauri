@@ -1314,6 +1314,44 @@ describe('general video runtime safety', () => {
       expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['https://toapis.cn/v1/videos/generations', 'https://toapis.cn/v1/videos/generations/toapis-video-task']);
     } finally { resolve.mockRestore(); }
   });
+  it.each(['toapis', 'libapi'])('同名 %s 连接显式改为自定义后保持 Data URL 引用策略', async (connectionId) => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, [connectionId]: { name: '自定义视频', catalogId: 'custom-openai',
+        baseUrl: 'https://custom-video.example/v1', apiKey: 'custom-video-fixture' } },
+      generalModels: [{ id: 'custom-video-policy', providerConfigId: connectionId, category: 'video',
+        name: '自定义视频', modelId: 'seedance-2-5',
+        videoCapability: { operations: ['text-to-video', 'video-to-video'], maxVideoReferences: 1, maxAudioReferences: 1 },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync', submit: {
+          method: 'POST', path: '/generate', pathMode: 'origin', bodyEncoding: 'json',
+          body: { prompt: '{{prompt}}', videos: '{{referenceVideoUrls}}', audios: '{{referenceAudioUrls}}' },
+        }, response: { type: 'json', result: { urlPath: 'url' } } } },
+      }],
+    } }));
+    const resolve = vi.spyOn(uploadService, 'resolveMediaReferenceUrl').mockImplementation(async (url) => url);
+    const constraints = vi.spyOn(videoInputValidation, 'assertVideoInputConstraints').mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ url: 'https://cdn.example/custom-video.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const video = 'data:video/mp4;base64,Y3VzdG9tLXZpZGVv';
+    const audio = 'data:audio/mpeg;base64,Y3VzdG9tLWF1ZGlv';
+    try {
+      await expect(generateVideo({ provider: 'general', model: 'general/custom-video-policy', prompt: '保留自定义引用',
+        referenceMedia: [
+          { kind: 'video', url: video, role: 'reference', origin: 'connection' },
+          { kind: 'audio', url: audio, role: 'reference_audio', origin: 'connection' },
+        ],
+      })).resolves.toEqual({ url: 'https://cdn.example/custom-video.mp4' });
+      for (const [url, kind] of [[video, 'video'], [audio, 'audio']]) {
+        expect(resolve).toHaveBeenCalledWith(url, expect.objectContaining({ mode: 'dataUrl', provider: undefined, kind }));
+      }
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith('https://custom-video.example/generate', expect.objectContaining({ method: 'POST' }));
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ videos: [video], audios: [audio] });
+      expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer custom-video-fixture' });
+    } finally {
+      resolve.mockRestore();
+      constraints.mockRestore();
+    }
+  });
+
   function configureGeneralVideoModel(options: {
     id: string;
     executionProfile?: ModelExecutionProfile;

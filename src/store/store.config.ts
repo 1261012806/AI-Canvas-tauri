@@ -32,6 +32,7 @@ import { migrateLegacyAppearance } from '../services/appearance/appearanceMigrat
 import { syncPerformanceModeRuntime } from '../services/performanceModeRuntime';
 import { hydrateRunningHubAliases, isRunningHubCredentialAlias } from '../services/runninghubSiteCredentials';
 import { normalizeComfyRefmodAssets } from '../utils/comfyRefmod';
+import { getProviderPolicy } from '../services/ai/providerPolicies';
 
 const defaultConfig: AppConfig = {
   providers: {},
@@ -125,14 +126,12 @@ function createGeneralModelId(providerConfigId: string, modelId: string): string
   return `provider-${safeProviderId}-${(hash >>> 0).toString(36)}`;
 }
 
-const GENERAL_MODEL_CATALOG_IDS = new Set(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi']);
-
 function syncProviderModels(
   generalModels: GeneralModelConfig[],
   providerConfigId: string,
   config: ApiProviderConfig,
 ): GeneralModelConfig[] {
-  if (!GENERAL_MODEL_CATALOG_IDS.has(config.catalogId ?? '') || config.selectedModels === undefined) {
+  if (!getProviderPolicy(config.catalogId).syncGeneralModels || config.selectedModels === undefined) {
     return generalModels;
   }
 

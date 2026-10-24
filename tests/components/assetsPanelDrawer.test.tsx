@@ -64,6 +64,11 @@ vi.mock('react', async () => {
     driver.refs[index] ??= { current: initial };
     return driver.refs[index];
   },
+  useId: () => {
+    const index = driver.refIndex++;
+    driver.refs[index] ??= { current: `asset-selection-${index}` };
+    return String(driver.refs[index].current);
+  },
   useEffect: (effect: () => void | (() => void), deps?: readonly unknown[]) => {
     const index = driver.effectIndex++;
     const previous = driver.effects[index];
@@ -335,10 +340,10 @@ describe('项目创作资产工具条', () => {
     const upload = find((element) => element.type === 'button' && String(element.props.className).includes('ui-btn--primary'));
     expect(upload.props.className).toContain('ui-btn--sm');
     expect(button('上传资产类型').props.size).toBe('sm');
-    const search = find((element) => element.props.placeholder === '搜索名称、简介...');
+    const search = find((element) => element.props.placeholder === '搜索名称、简介、别名…');
     expect(search.props.className).toContain('ui-input--sm');
     click(find((element) => element.type === 'button' && Array.isArray(element.props.children) && element.props.children[0] === '人物')); renderDrama();
-    (find((element) => element.props.placeholder === '搜索名称、简介...').props.onChange as (event: unknown) => void)({ target: { value: '无匹配' } }); renderDrama();
+    (find((element) => element.props.placeholder === '搜索名称、简介、别名…').props.onChange as (event: unknown) => void)({ target: { value: '无匹配' } }); renderDrama();
     driver.store!.setState({ currentProjectId: null });
     vi.mocked(driver.store!.getState().saveCurrentProjectSilent).mockImplementation(async () => {
       driver.store!.setState({ currentProjectId: 'project-1' }); return 'project-1';
@@ -453,8 +458,9 @@ describe('项目创作资产工具条', () => {
     vi.mocked(driver.store!.getState().importDramaAssets).mockImplementation(() => new Promise<number>((resolve) => { finishSave = () => resolve(1); }));
     driver.importDrama.mockImplementation(async (input: { commit: (assets: DramaAsset[]) => Promise<void> }, options: DramaAssetWriteOptions & { onProgress: (text: string) => void }) => {
       options.onProgress('正在保存资产');
-      await input.commit([{ ...driver.store!.getState().dramaAssets.characters[0], id: 'imported' }]);
-      return { assetCount: 1, mediaCount: 2 };
+      const assets = [{ ...driver.store!.getState().dramaAssets.characters[0], id: 'imported' }];
+      await input.commit(assets);
+      return { assetCount: 1, mediaCount: 2, assets: assets.map(({ kind, id }) => ({ kind, id })) };
     });
     click(button('导入创作资产')); renderDrama();
     click(exportButton); click(upload);
@@ -484,7 +490,7 @@ describe('项目创作资产工具条', () => {
     const options = driver.importDrama.mock.calls[0][1] as DramaAssetWriteOptions;
     if (change === 'project') driver.store!.setState({ currentProjectId: 'project-2' });
     else if (change === 'close') driver.store!.getState().setAssetsPanelOpen(false);
-    else driver.effects[1].cleanup?.();
+    else driver.effects.slice(1).forEach((effect) => effect?.cleanup?.());
     expect(options.signal?.aborted).toBe(true);
     finishRead(); await new Promise<void>((resolve) => setImmediate(resolve));
     expect(driver.store!.getState().importDramaAssets).not.toHaveBeenCalled();
@@ -586,7 +592,7 @@ describe('全局创作资产工具条', () => {
     driver.importGlobalDrama.mockImplementation(async (input: { commit: (assets: DramaAsset[]) => Promise<void> }, options: DramaAssetWriteOptions & { onProgress: (text: string) => void }) => {
       options.onProgress('正在保存资产');
       await input.commit(incoming);
-      return { assetCount: 3, mediaCount: 4 };
+      return { assetCount: 3, mediaCount: 4, assets: incoming.map(({ kind, id }) => ({ kind, id })) };
     });
     click(button('导入全局创作资产')); renderGlobal('prop');
     expect(driver.store!.getState().importGlobalDramaAssets).toHaveBeenCalledWith(incoming, expect.objectContaining({ signal: expect.any(AbortSignal) }));
@@ -618,7 +624,7 @@ describe('全局创作资产工具条', () => {
     const options = driver.importGlobalDrama.mock.calls[0][1] as DramaAssetWriteOptions;
     if (change === 'close') driver.store!.getState().setAssetsPanelOpen(false);
     else if (change === 'kind') renderGlobal('scene');
-    else driver.effects[1].cleanup?.();
+    else driver.effects.slice(1).forEach((effect) => effect?.cleanup?.());
     expect(options.signal?.aborted).toBe(true);
     finishRead(); await new Promise<void>((resolve) => setImmediate(resolve));
     expect(driver.store!.getState().importGlobalDramaAssets).not.toHaveBeenCalled();
@@ -853,7 +859,7 @@ describe('启动页资产入口与最近使用', () => {
     win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' }));
     expect(driver.store!.getState().assetsPanelOpen).toBe(true);
     blockingModal = false;
-    click(find((element) => element.type === 'button' && Array.isArray(element.props.children) && element.props.children.includes(' 返回启动页')));
+    click(find((element) => element.type === 'button' && Array.isArray(element.props.children) && element.props.children.includes('返回启动页')));
     render();
     expect(driver.store!.getState()).toMatchObject({ assetsPanelOpen: false, assetsPanelRequest: null, currentProjectId: null, recentAssetsRevision: 7 });
   });

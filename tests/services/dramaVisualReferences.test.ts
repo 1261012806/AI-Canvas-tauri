@@ -36,7 +36,10 @@ describe('场景道具独立参考图', () => {
     const asset = scene({ id: 'global/room', referenceImages: [{ ...references[1], sourceNodeId: 'same-node' }] });
     expect(resolveDramaAssetImageRef(asset, [{ id: 'same-node', data: { imageUrl: 'unrelated.png' } }], 'night'))
       .toEqual({ imageNodeId: undefined, imageUrl: 'night.png' });
-    expect(syncDramaVisualAssetPrimary(asset, true)).toMatchObject({ imageNodeId: undefined,
-      assetId: undefined, imageAssetId: 'night-file', imageRelativePath: 'night.png' });
+    const globalPrimary = syncDramaVisualAssetPrimary(asset, true);
+    expect(globalPrimary).toMatchObject({ imageAssetId: 'night-file', imageRelativePath: 'night.png' });
+    for (const field of ['imageNodeId', 'assetId', 'relativePath', 'filePath']) {
+      expect(globalPrimary).not.toHaveProperty(field);
+    }
   });
 });

@@ -57,7 +57,7 @@ describe('media preview memory guards', () => {
 
   it('serializes composer imports and invalidates deferred editor work on close', () => {
     expect(useComposerSource).toContain('const enqueueImageOperation = useCallback');
-    expect(composerEditorSource).toContain("addImageLayer(imageUrl, '底图', (img) => {");
+    expect(composerEditorSource).toContain("addImageLayer(imageUrl, translate('底图'), (img) => {");
     expect(composerEditorSource).toContain('const enqueueImageImport = useCallback');
     expect(composerEditorSource).toContain('imageImportQueueRef.current');
     expect(composerEditorSource).toContain('cancelAnimationFrame(exportFrameRef.current)');

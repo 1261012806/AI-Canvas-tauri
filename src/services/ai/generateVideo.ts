@@ -27,6 +27,7 @@ import type {
   MediaTaskReceipt,
 } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
+import { getProviderPolicy, resolveProviderCatalogId } from './providerPolicies';
 import { resolvePromptWithMediaRefs } from './promptResolver';
 import { compileVideoReferencePrompt } from './referencePrompt';
 import {
@@ -789,8 +790,10 @@ export async function generateVideo(
       references: originalReferences,
       capability: videoCapability,
     });
-    const isToapis = connection.providerConfigId === 'toapis' || connection.provider.catalogId === 'toapis';
-    const isLibapi = connection.providerConfigId === 'libapi' || connection.provider.catalogId === 'libapi';
+    const catalogId = connection.definition?.id ?? resolveProviderCatalogId(connection.providerConfigId, connection.provider);
+    const isToapis = catalogId === 'toapis';
+    const isLibapi = catalogId === 'libapi';
+    const publicUrlProvider = getProviderPolicy(catalogId).upload ? connection.providerConfigId : undefined;
     const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
     if (isToapis) assertToapisVideoInput(preflight);
     if (usesLibapiProtocol) assertLibapiVideoInput(preflight);
@@ -802,10 +805,10 @@ export async function generateVideo(
         signal,
       );
       const videoUrls = await resolveGeneralProtocolMediaUrls(
-        originalReferences, 'video', dataUrlBudget, signal, isToapis || isLibapi ? connection.providerConfigId : undefined,
+        originalReferences, 'video', dataUrlBudget, signal, publicUrlProvider,
       );
       const audioUrls = await resolveGeneralProtocolMediaUrls(
-        originalReferences, 'audio', dataUrlBudget, signal, isToapis || isLibapi ? connection.providerConfigId : undefined,
+        originalReferences, 'audio', dataUrlBudget, signal, publicUrlProvider,
       );
       const remoteReferences = replaceReferenceUrls(originalReferences, {
         image: remoteImageUrls,

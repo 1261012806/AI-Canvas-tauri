@@ -115,7 +115,7 @@ function readStep(value: unknown): SharedStep {
     name: text(input.name, 200, true),
     nodeType: choice(input.nodeType, PRESET_NODE_TYPES),
     promptTemplate: text(input.promptTemplate, MAX_TEMPLATE_LENGTH, true),
-    referenceSource: input.referenceSource === undefined ? undefined : choice(input.referenceSource, ['source', 'previous']),
+    referenceSource: input.referenceSource === undefined ? undefined : choice<NonNullable<PresetSequenceStep['referenceSource']>>(input.referenceSource, ['source', 'previous']),
     model: optionalText(input.model, 240),
     provider: optionalText(input.provider, 240),
     workflowId: optionalText(input.workflowId, 240),
@@ -127,7 +127,7 @@ function readStep(value: unknown): SharedStep {
 function readAdvanced(value: unknown): SharedAdvanced {
   const input = record(value);
   const advanced: SharedAdvanced = {
-    executionMode: input.executionMode === undefined ? undefined : choice(input.executionMode, ['sequential', 'parallel']),
+    executionMode: input.executionMode === undefined ? undefined : choice<NonNullable<PresetAdvancedConfig['executionMode']>>(input.executionMode, ['sequential', 'parallel']),
     parameters: boundedArray(input.parameters).map(readParameter),
     steps: boundedArray(input.steps).map(readStep),
   };

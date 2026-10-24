@@ -37,6 +37,7 @@ import {
   setLastActiveProjectId,
 } from '../../src/services/indexedDbService';
 import { loadProjectData, saveProject, type ProjectSaveData } from '../../src/services/storageService';
+import { normalizeDramaVisualAsset, syncDramaVisualAssetPrimary, type DramaScene } from '../../src/types/dramaAssets';
 
 describe('project loading tolerates asset recovery failures', () => {
   beforeEach(() => {
@@ -47,6 +48,48 @@ describe('project loading tolerates asset recovery failures', () => {
     mocks.resolveUniqueDestPath.mockImplementation(async (dir: string, name: string) => `${dir}/${name}`);
     mocks.writeFile.mockResolvedValue(undefined);
     mocks.mkdir.mockResolvedValue(undefined);
+  });
+
+  it('全局来源标记经重复归一化及 JSON 往返保留，明确改绑项目后不复活旧来源', () => {
+    const legacy: DramaScene = { id: 'scene-source', kind: 'scene', name: '全局复用', key: 'scene', summary: '', visualNotes: '',
+      importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 2,
+      imageAssetId: 'global-source-image', imageRelativePath: 'global.png' };
+    const normalized = normalizeDramaVisualAsset(legacy);
+    const roundTrip = normalizeDramaVisualAsset(JSON.parse(JSON.stringify(normalizeDramaVisualAsset(normalized))) as DramaScene);
+    expect(roundTrip.referenceImages?.[0]).toMatchObject({ assetId: 'global-source-image', assetSource: 'global', relativePath: 'global.png' });
+    expect(syncDramaVisualAssetPrimary(roundTrip)).toMatchObject({ imageAssetId: 'global-source-image', imageRelativePath: 'global.png' });
+
+    const reference = { ...roundTrip.referenceImages![0], assetSource: undefined,
+      relativePath: 'project.png', sourceNodeId: 'project-image-node' };
+    const rebound = syncDramaVisualAssetPrimary({ ...roundTrip, referenceImages: [reference] });
+    expect(rebound).toMatchObject({ assetId: 'global-source-image', relativePath: 'project.png', imageNodeId: 'project-image-node' });
+    expect(rebound.imageAssetId).toBeUndefined();
+    expect(normalizeDramaVisualAsset(rebound).referenceImages?.[0].assetSource).toBeUndefined();
+    const local = normalizeDramaVisualAsset({ ...legacy, imageAssetId: undefined, imageRelativePath: undefined,
+      assetId: 'local-only', relativePath: 'local.png' });
+    expect(local.referenceImages?.[0]).not.toHaveProperty('assetSource');
+  });
+
+  it.each(['missing', 'offline', 'wrong-scope'] as const)('已标全局的多图引用在索引 %s 时不借用项目同名文件或旧 URL', async (state) => {
+    const projectId = `global-reference-${state}-${Date.now()}`;
+    const assetId = `global-reference-${state}`;
+    const relativePath = `${state}/same.png`;
+    // assetIndex.path 为唯一索引；参数化用例保留各自记录，不抢占上一例的路径。
+    if (state !== 'missing') await putAssetIndex({ assetId, path: `/project/data/${relativePath}`, relativePath,
+      rootPath: state === 'wrong-scope' ? '/project/data' : '/global', source: state === 'wrong-scope' ? 'project' : 'global',
+      projectId: state === 'wrong-scope' ? projectId : undefined, fingerprint: '1:1', size: 1, mtimeMs: 1,
+      status: state === 'offline' ? 'offline' : 'online', updatedAt: 1 });
+    await saveProjectToDb({ id: projectId, name: '索引边界', createdAt: 1, updatedAt: 2, nodes: [], edges: [],
+      dramaAssets: { version: 2, characters: [], props: [], scenes: [{ id: 'scene', kind: 'scene', name: '场景', key: 'scene',
+        summary: '', visualNotes: '', importance: 'main', confirmed: true, source: 'manual', createdAt: 1, updatedAt: 2,
+        referenceImages: [{ id: 'global-ref', label: '', prompt: '', assetId, assetSource: 'global', relativePath,
+          imageUrl: 'asset:///old/same.png', createdAt: 1, updatedAt: 2 }], primaryReferenceImageId: 'global-ref' }],
+      } } as Parameters<typeof saveProjectToDb>[0]);
+    const loaded = await loadProjectData(projectId);
+    expect(loaded?.dramaAssets?.scenes[0].referenceImages?.[0]).toMatchObject({ assetId, assetSource: 'global', imageUrl: undefined });
+    expect(loaded?.dramaAssets?.scenes[0]).toMatchObject({ imageAssetId: assetId, imageUrl: undefined });
+    expect(mocks.identifyAsset).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
   });
 
   it('项目场景道具保留全局主图身份，重开按全局索引恢复且不复制到项目目录', async () => {

@@ -322,7 +322,8 @@ describe('createVideoInput range probe', () => {
     const input = await createVideoInput('https://example.test/video.mp4');
     inputs.push(input);
     await expect(input.source.getSize()).resolves.toBe(WHOLE.length);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    // CustomSource 的大小查询先探测总长，再读取首片；两次请求都必须保持 Range。
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls.every(([, init]) => Boolean((init?.headers as Record<string, string> | undefined)?.Range))).toBe(true);
   });
 

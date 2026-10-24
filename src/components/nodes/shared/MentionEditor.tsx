@@ -1572,7 +1572,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         const mention = parseComfyRefmodMentions(source.id).mentions[0];
         if (!mention) return null;
         return { label: mention.label, outputType: 'image', thumbnailUrl: resolveComfyRefmodChipPresentation(source.id)?.thumbnailUrl,
-          text: `${mention.selection.fileName}\n${t('加载节点 #{node} · 槽位 {slot}', { node: mention.selection.loaderNodeId, slot: mention.selection.slot })}\n${mention.selection.loaderType === 'refmods-lab' ? t('参考强度沿用工作流 Combine 设置') : t('参考强度 {strength}', { strength: mention.selection.strength })}`,
+          text: `${mention.selection.fileName}\n${t('加载节点 #{node} · 槽位 {slot}', { node: mention.selection.loaderNodeId || '—', slot: mention.selection.slot ?? '—' })}\n${mention.selection.loaderType === 'refmods-lab' ? t('参考强度沿用工作流 Combine 设置') : t('参考强度 {strength}', { strength: mention.selection.strength })}`,
           missing: false, description: t('ComfyUI 角色参考包 · 双击调整槽位和强度，生成前重新校验') };
       } catch { return { label: source.label, outputType: 'text', text: '', missing: true, description: t('角色引用已损坏，请删除后重新选择') }; }
     }

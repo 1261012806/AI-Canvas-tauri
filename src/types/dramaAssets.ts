@@ -95,6 +95,8 @@ export interface DramaAssetReferenceImage {
   label: string;
   prompt: string;
   assetId?: string;
+  /** 全局文件身份即使索引暂缺也不能改按项目目录或旧 URL 解析。 */
+  assetSource?: 'global';
   relativePath?: string;
   /** 仅运行期使用，持久化时收敛为受管文件身份。 */
   filePath?: string;
@@ -593,8 +595,14 @@ export function normalizeDramaVisualAsset<T extends DramaScene | DramaProp>(asse
       if (seen.has(id)) return [];
       seen.add(id);
       const text = (key: string) => typeof reference[key] === 'string' ? reference[key] as string : undefined;
+      const assetId = text('assetId');
+      const clearedSource = reference.assetSource === undefined && Object.prototype.hasOwnProperty.call(reference, 'assetSource');
+      const globalSource = reference.assetSource === 'global'
+        || (!clearedSource && !!asset.imageAssetId && asset.imageAssetId === assetId);
       return [{ id, label: text('label') ?? '', prompt: text('prompt') ?? '',
-        assetId: text('assetId'), relativePath: text('relativePath'), filePath: text('filePath'),
+        assetId, ...(globalSource ? { assetSource: 'global' as const }
+          : clearedSource ? { assetSource: undefined } : {}),
+        relativePath: text('relativePath'), filePath: text('filePath'),
         imageUrl: text('imageUrl'), sourceNodeId: text('sourceNodeId'),
         createdAt: finiteNumber(reference.createdAt, fallbackTime), updatedAt: finiteNumber(reference.updatedAt, fallbackTime) }];
     });
@@ -602,6 +610,7 @@ export function normalizeDramaVisualAsset<T extends DramaScene | DramaProp>(asse
     referenceImages.push({ id: `legacy-${asset.id}`, label: '', prompt: '',
       imageUrl: asset.imageUrl, sourceNodeId: asset.imageNodeId,
       assetId: asset.imageAssetId || asset.assetId, relativePath: asset.imageRelativePath || asset.relativePath,
+      ...(asset.imageAssetId ? { assetSource: 'global' as const } : {}),
       filePath: (asset as T & { filePath?: string }).filePath,
       createdAt: asset.createdAt, updatedAt: asset.updatedAt });
   }
@@ -613,15 +622,26 @@ export function normalizeDramaVisualAsset<T extends DramaScene | DramaProp>(asse
 /** 主图是指定参考图的兼容投影；明确清空后同时移除旧单图身份。 */
 export function syncDramaVisualAssetPrimary<T extends DramaScene | DramaProp>(asset: T, global = false): T {
   const normalized = normalizeDramaVisualAsset(asset);
-  const primary = normalized.referenceImages?.find((reference) => reference.id === normalized.primaryReferenceImageId);
-  return { ...normalized,
-    imageUrl: primary?.imageUrl, imageNodeId: global ? undefined : primary?.sourceNodeId,
-    assetId: global ? undefined : primary?.assetId,
-    relativePath: global ? undefined : primary?.relativePath,
-    filePath: global ? undefined : primary?.filePath,
-    imageAssetId: global ? primary?.assetId : undefined,
-    imageRelativePath: global ? primary?.relativePath : undefined,
+  const referenceImages = global ? normalized.referenceImages?.map((reference) => ({ ...reference,
+    ...(reference.assetId ? { assetSource: 'global' as const } : {}),
+  })) : normalized.referenceImages;
+  const primary = referenceImages?.find((reference) => reference.id === normalized.primaryReferenceImageId);
+  const globalPrimary = global || primary?.assetSource === 'global';
+  const result: T = { ...normalized, referenceImages,
+    imageUrl: primary?.imageUrl, imageNodeId: globalPrimary ? undefined : primary?.sourceNodeId,
+    assetId: globalPrimary ? undefined : primary?.assetId,
+    relativePath: globalPrimary ? undefined : primary?.relativePath,
+    filePath: globalPrimary ? undefined : primary?.filePath,
+    imageAssetId: globalPrimary ? primary?.assetId : undefined,
+    imageRelativePath: globalPrimary ? primary?.relativePath : undefined,
   };
+  if (globalPrimary) {
+    delete result.imageNodeId;
+    delete result.assetId;
+    delete result.relativePath;
+    Reflect.deleteProperty(result, 'filePath');
+  }
+  return result;
 }
 
 export function formatDramaMention(id: string, name: string): string {

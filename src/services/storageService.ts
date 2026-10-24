@@ -717,9 +717,10 @@ async function resolveVisualAssetReference(
   resolveProject: (reference: DramaAssetReferenceImage) => Promise<DramaAssetReferenceImage>,
 ): Promise<DramaAssetReferenceImage> {
   const indexed = reference.assetId ? await getAssetIndexById(reference.assetId).catch(() => undefined) : undefined;
-  if (indexed?.source !== 'global') return resolveProject(reference);
-  const detached = { ...reference, sourceNodeId: undefined, filePath: undefined };
-  return indexed.status !== 'online' || !await projectFileExists(indexed.path, lookup).catch(() => false)
+  if (reference.assetSource !== 'global' && indexed?.source !== 'global') return resolveProject(reference);
+  const detached = { ...reference, assetSource: 'global' as const, sourceNodeId: undefined, filePath: undefined };
+  return indexed?.source !== 'global' || indexed.status !== 'online'
+    || !await projectFileExists(indexed.path, lookup).catch(() => false)
     ? { ...detached, imageUrl: undefined }
     : { ...detached, relativePath: indexed.relativePath, imageUrl: await getAssetUrlFromPath(indexed.path) };
 }

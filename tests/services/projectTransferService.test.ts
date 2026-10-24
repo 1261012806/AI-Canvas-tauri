@@ -436,6 +436,33 @@ describe('projectTransferService', () => {
     expect(references.every((item) => item.assetId === undefined)).toBe(true);
   });
 
+  it.each([false, true])('按归档完整相对路径去重缺失文件，导入解除全局来源（首个文件存在=%s）', async (firstPresent) => {
+    const visual = { name: '场景', key: 'scene', summary: '', visualNotes: '', importance: 'main',
+      confirmed: true, source: 'manual', createdAt: 1, updatedAt: 1 };
+    const project = { ...SERIES_RECORD, dramaAssets: { version: 2, characters: [], props: [], scenes: [
+      { ...visual, id: 'global-scene', kind: 'scene', imageAssetId: 'same-source-id', imageRelativePath: 'left/same.png',
+        referenceImages: [{ id: 'global-ref', label: '', prompt: '', assetId: 'same-source-id', assetSource: 'global',
+          relativePath: 'left\\same.png', createdAt: 1, updatedAt: 1 }], primaryReferenceImageId: 'global-ref' },
+      { ...visual, id: 'local-scene', kind: 'scene', assetId: 'same-source-id', relativePath: 'right/same.png' },
+    ] } };
+    mocks.open.mockResolvedValue('/in/共享资产.aicanvas');
+    mocks.invoke.mockResolvedValue({ texts: archiveTexts({ project, chat: EMPTY_CHAT }),
+      assetPaths: firstPresent ? ['left/same.png'] : [], assetBytes: firstPresent ? 1 : 0 });
+    const result = (await importProjectArchive())!;
+    expect(result.missingAssetCount).toBe(firstPresent ? 1 : 2);
+    const saved = mocks.saveProject.mock.calls[0][0];
+    const global = saved.dramaAssets.scenes[0];
+    const local = saved.dramaAssets.scenes[1];
+    expect(global.referenceImages[0].relativePath).toBe('left\\same.png');
+    expect(global.referenceImages[0]).not.toHaveProperty('assetId');
+    expect(global.referenceImages[0]).not.toHaveProperty('assetSource');
+    expect(global).not.toHaveProperty('imageAssetId');
+    expect(global).not.toHaveProperty('imageRelativePath');
+    expect(local.relativePath).toBe('right/same.png');
+    expect(local.assetId).toBeUndefined();
+    expect(local.referenceImages[0].assetId).toBeUndefined();
+  });
+
   it('导入分镜参考画面与成片快照时解除源资产身份并统计缺失视频', async () => {
     const reference = (relativePath: string) => ({ assetId: 'source-asset', relativePath });
     const project = { ...PROJECT_RECORD, nodes: [{ id: 'sheet', data: { type: 'ai-shotlist', shotlistRows: [{

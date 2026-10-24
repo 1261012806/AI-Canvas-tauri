@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ComponentProps } from 'react';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { shallow } from 'zustand/shallow';
@@ -14,6 +15,7 @@ import VideoParamSelector, {
   selectConnectedVideoSourceNodes,
 } from '../../src/components/nodes/shared/VideoParamSelector';
 import type { AppState } from '../../src/store/useAppStore';
+import type { VideoModelCapability } from '../../src/types/aiTypes';
 
 describe('ComfyUI 时长显示与提交一致', () => {
   it.each([
@@ -28,6 +30,151 @@ describe('ComfyUI 时长显示与提交一致', () => {
 
     expect(submitted.seedanceDuration).toBe(seconds);
     expect(html).toContain(`时长${seconds}s`);
+  });
+});
+
+describe('视频比例保留与时长主题交互', () => {
+  interface ElementLike { type: unknown; props: Record<string, unknown> & { children?: unknown } }
+  function elements(tree: unknown): ElementLike[] {
+    if (Array.isArray(tree)) return tree.flatMap(elements);
+    if (!tree || typeof tree !== 'object' || !('props' in tree)) return [];
+    const element = tree as ElementLike;
+    return [element, ...elements(element.props.children)];
+  }
+  function textOf(value: unknown): string {
+    if (Array.isArray(value)) return value.map(textOf).join('');
+    if (value && typeof value === 'object' && 'props' in value) return textOf((value as ElementLike).props.children);
+    return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  }
+  let state: Pick<AppState, 'config' | 'dramaAssets' | 'globalCharacters' | 'loadGlobalCharacters' | 'nodes' | 'edges' | 'workflows'>;
+  let Component: typeof VideoParamSelector;
+  let effects: Array<() => unknown>;
+  let stateIndex: number;
+  function renderVideo(props: ComponentProps<typeof VideoParamSelector>) {
+    stateIndex = 0;
+    effects = [];
+    const tree = elements(Component(props));
+    effects.forEach((effect) => effect());
+    return tree;
+  }
+  function configureModel(capability: VideoModelCapability) {
+    state.config.generalModels = [{ id: 'video', modelId: 'model-video', name: '视频模型', category: 'video',
+      providerConfigId: 'relay', videoCapability: capability }];
+    return { provider: 'general', selectedModel: 'general/video' };
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    state = { config: { theme: 'light', providers: {} }, dramaAssets: { version: 2, characters: [], scenes: [], props: [] },
+      globalCharacters: [], loadGlobalCharacters: vi.fn(), nodes: [], edges: [], workflows: [] };
+    vi.doMock('react', async () => ({
+      ...await vi.importActual<typeof import('react')>('react'),
+      useState: () => [stateIndex++ === 0, vi.fn()],
+      useRef: () => ({ current: null }),
+      useMemo: <T,>(factory: () => T) => factory(),
+      useCallback: <T,>(callback: T) => callback,
+      useEffect: (effect: () => unknown) => { effects.push(effect); },
+    }));
+    vi.doMock('../../src/store/useAppStore', () => ({ useAppStore: (selector: (value: AppState) => unknown) => selector(state as AppState) }));
+    vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+    vi.doMock('../../src/i18n', () => ({ useT: () => (text: string, params: Record<string, string | number> = {}) =>
+      text.replace(/\{([^}]+)\}/g, (match, key: string) => String(params[key] ?? match)) }));
+    vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    Component = (await import('../../src/components/nodes/shared/VideoParamSelector')).default;
+  });
+  afterEach(() => {
+    vi.doUnmock('react');
+    vi.doUnmock('../../src/store/useAppStore');
+    vi.doUnmock('zustand/react/shallow');
+    vi.doUnmock('../../src/i18n');
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it.each(['9:16', '21:9'])('模型默认和候选改变后仍显示用户比例 %s，不通过 effect 改写它', (ratio) => {
+    const model = configureModel({ ratios: ['16:9'], defaultRatio: '16:9' });
+    const onChangeSeedanceRatio = vi.fn();
+    const props = { ...model, seedanceRatio: ratio, onChangeSeedanceRatio };
+    let tree = renderVideo(props);
+    expect(tree.find((element) => element.props.className === 'img-pill-btn ui-schema-menu-trigger')?.props.title).toContain(ratio);
+    configureModel({ ratios: ['1:1'], defaultRatio: '1:1' });
+    tree = renderVideo(props);
+    expect(tree.find((element) => element.props.className === 'img-pill-btn ui-schema-menu-trigger')?.props.title).toContain(ratio);
+    expect(onChangeSeedanceRatio).not.toHaveBeenCalled();
+  });
+
+  it.each(['dreamina', 'comfyui'])('%s 也如实显示自定义比例，不回落首档或写回默认', (provider) => {
+    const onChangeSeedanceRatio = vi.fn();
+    const tree = renderVideo({ provider, selectedModel: 'seedance2.5', seedanceRatio: '7:4', onChangeSeedanceRatio });
+    expect(tree.find((element) => element.props.className === 'img-pill-btn ui-schema-menu-trigger')?.props.title).toContain('7:4');
+    expect(onChangeSeedanceRatio).not.toHaveBeenCalled();
+  });
+
+  it('未设比例时只展示默认值，只有用户点击才写入选择', () => {
+    const model = configureModel({ ratios: ['16:9', '9:16'], defaultRatio: '16:9' });
+    const onChangeSeedanceRatio = vi.fn();
+    const tree = renderVideo({ ...model, onChangeSeedanceRatio });
+    expect(onChangeSeedanceRatio).not.toHaveBeenCalled();
+    const portrait = tree.find((element) => element.props.children === '9:16' && typeof element.props.onClick === 'function')!;
+    (portrait.props.onClick as () => void)();
+    expect(onChangeSeedanceRatio).toHaveBeenCalledExactlyOnceWith('9:16');
+  });
+
+  it('切换模型保留兼容的分辨率、时长、帧率及显式静音，不跟随新的默认值', () => {
+    const capability: VideoModelCapability = { ratios: ['16:9', '9:16', '1:1'], defaultRatio: '16:9',
+      resolutions: ['480p', '720p', '1080p'], defaultResolution: '480p', durations: [5, 15], defaultDuration: 5,
+      frameRates: [24, 30], defaultFrameRate: 24, supportsAudio: true };
+    const model = configureModel(capability);
+    const callbacks = { onChangeSeedanceRatio: vi.fn(), onChangeSeedanceResolution: vi.fn(),
+      onChangeSeedanceDuration: vi.fn(), onChangeFps: vi.fn(), onChangeGenerateAudio: vi.fn() };
+    const props = { ...model, seedanceRatio: '9:16', seedanceResolution: '720p', seedanceDuration: 15,
+      videoFps: 30, generateAudio: false, ...callbacks };
+    renderVideo(props);
+    configureModel({ ...capability, defaultRatio: '1:1', defaultResolution: '1080p', defaultDuration: 5 });
+    const tree = renderVideo(props);
+    const summary = tree.find((element) => element.props.className === 'img-pill-btn ui-schema-menu-trigger')?.props.title;
+    expect(summary).toContain('720p');
+    expect(summary).toContain('15s');
+    expect(summary).toContain('9:16');
+    expect(summary).toContain('30帧');
+    expect(summary).toContain('无声视频');
+    Object.values(callbacks).forEach((callback) => expect(callback).not.toHaveBeenCalled());
+  });
+
+  it.each([true, false, undefined])('仅明确不能生成音轨时清理旧的开启要求（supportsAudio=%s）', (supportsAudio) => {
+    const model = configureModel({ supportsAudio });
+    const onChangeGenerateAudio = vi.fn();
+    renderVideo({ ...model, generateAudio: true, onChangeGenerateAudio });
+    if (supportsAudio === false) expect(onChangeGenerateAudio).toHaveBeenCalledExactlyOnceWith(undefined);
+    else expect(onChangeGenerateAudio).not.toHaveBeenCalled();
+  });
+
+  it('原生合同没有音轨开关时不将其误当成不支持声音，不清理旧值', () => {
+    const onChangeGenerateAudio = vi.fn();
+    renderVideo({ provider: 'dreamina', selectedModel: 'seedance2.5', generateAudio: true, onChangeGenerateAudio });
+    expect(onChangeGenerateAudio).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { capability: { durations: [15], defaultDuration: 15 }, value: 15, label: '15s' },
+    { capability: { durations: [5, 15], automaticDurationValue: -1 }, value: -1, label: '自动' },
+    { capability: { durations: [5, 15] }, value: undefined, label: '模型默认' },
+  ])('时长选项 $label 使用同一品牌色分段且保持原提交值', ({ capability, value, label }) => {
+    const model = configureModel(capability);
+    const onChangeSeedanceDuration = vi.fn();
+    const tree = renderVideo({ ...model, seedanceDuration: value, onChangeSeedanceDuration });
+    const group = tree.find((element) => element.props.role === 'group' && element.props['aria-label'] === '生成时长（秒）')!;
+    expect(group.props.className).toBe('ui-segmented ui-segmented--brand');
+    const options = elements(group).filter((element) => element.type === 'button');
+    const selected = options.filter((element) => element.props['aria-pressed']);
+    expect(selected).toHaveLength(1);
+    expect(textOf(selected[0].props.children)).toBe(label);
+    expect(selected[0].props.className).toBe('ui-segmented__item is-active');
+    expect(options.every((element) => String(element.props.className).startsWith('ui-segmented__item'))).toBe(true);
+    onChangeSeedanceDuration.mockClear();
+    (selected[0].props.onClick as () => void)();
+    expect(onChangeSeedanceDuration).toHaveBeenCalledExactlyOnceWith(value);
   });
 });
 

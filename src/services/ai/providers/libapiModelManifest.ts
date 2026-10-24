@@ -436,7 +436,7 @@ export function libapiAudioVariables(modelId: string, variables: ModelProtocolVa
     if (hasAudioParameter(variables[name])) fail(`语音合成不支持 ${name} 参数，请清除该设置`);
   }
   const voiceValue = variables.audioVoice === undefined ? capability.defaultVoice : variables.audioVoice;
-  if (typeof voiceValue !== 'string' || !voiceValue.trim()) fail('请先填写或选择该平台已存在的音色 ID');
+  if (typeof voiceValue !== 'string' || !voiceValue.trim()) return fail('请先填写或选择该平台已存在的音色 ID');
   if (Array.from(voiceValue).some((character) => {
     const code = character.charCodeAt(0);
     return code < 32 || code >= 127 && code <= 159;

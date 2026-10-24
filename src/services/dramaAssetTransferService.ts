@@ -136,6 +136,13 @@ async function resolveMediaSource(
   source: MediaSource, kind: MediaKind, rootDirectory: string, nodes: ReadonlyMap<string, Node<BaseNodeData>>,
   scope: 'project' | 'global', options: DramaAssetTransferOptions,
 ): Promise<{ filePath?: string; url?: string }> {
+  // 明确的全局身份只能由全局索引解析，不能借用同 ID 项目节点或旧展示地址。
+  if (source.requireIndex) {
+    const indexed = source.assetId
+      ? await guardedDramaAssetTransfer(() => getAssetIndexById(source.assetId!), options) : undefined;
+    if (indexed?.status === 'online' && indexed.source === 'global') return { filePath: indexed.path };
+    throw new Error(t('创作资产媒体缺失，请先修复素材引用'));
+  }
   const node = source.sourceNodeId ? nodes.get(source.sourceNodeId) : undefined;
   const nodeType = node?.type || node?.data.type;
   const nodeUrl = node && (kind === 'image' && nodeType && IMAGE_NODE_TYPES.has(nodeType)
@@ -149,9 +156,8 @@ async function resolveMediaSource(
   if (source.assetId) {
     const indexed = await guardedDramaAssetTransfer(() => getAssetIndexById(source.assetId!), options);
     if (indexed?.status === 'online' && (scope !== 'global' || indexed.source === 'global')) return { filePath: indexed.path };
-    if (scope === 'global' || source.requireIndex || indexed) throw new Error(t('创作资产媒体缺失，请先修复素材引用'));
+    if (scope === 'global' || indexed) throw new Error(t('创作资产媒体缺失，请先修复素材引用'));
   }
-  if (source.requireIndex) throw new Error(t('创作资产媒体缺失，请先修复素材引用'));
   if (source.filePath) return { filePath: source.filePath };
   if (source.relativePath) return { filePath: joinPath(rootDirectory, projectRelativePath(source.relativePath)) };
   const localPath = localMediaUrlToPath(source.url);
@@ -212,7 +218,8 @@ async function prepareExportAssets(input: ExportInput, workspace: DramaAssetArch
     if (asset.kind !== 'character') {
       const referenceImages = [];
       for (const [index, reference] of (asset.referenceImages ?? []).entries()) {
-        referenceImages.push({ ...reference, imageUrl: await collect({ ...reference, url: reference.imageUrl }, 'image', asset, referenceLabel(asset, index)) });
+        referenceImages.push({ ...reference, imageUrl: await collect({ ...reference, url: reference.imageUrl,
+          requireIndex: reference.assetSource === 'global' }, 'image', asset, referenceLabel(asset, index)) });
       }
       const primary = referenceImages.find((reference) => reference.id === asset.primaryReferenceImageId) ?? referenceImages[0];
       assets.push({ ...asset, referenceImages, imageUrl: primary?.imageUrl

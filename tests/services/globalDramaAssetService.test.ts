@@ -34,7 +34,7 @@ describe('全局创作资产持久化', () => {
   it('沿用旧角色表，场景道具分别加载且删除卡片保留媒体身份', async () => {
     const db = await import('../../src/services/indexedDbService');
     const service = await import('../../src/services/globalDramaAssetService');
-    const character: DramaCharacter = { ...scene(), id: 'character-1', kind: 'character', identity: '' };
+    const character: DramaCharacter = { ...scene(), id: 'character-1', kind: 'character', identity: '', referenceImages: undefined };
     await service.saveGlobalDramaAssetCard(character);
     await service.saveGlobalDramaAssetCard(scene());
     await service.saveGlobalDramaAssetCard({ ...scene(), id: 'prop-1', kind: 'prop' });
@@ -55,6 +55,7 @@ describe('全局创作资产持久化', () => {
     const saved = await service.saveGlobalDramaAssetCard(input);
     expect(files.saveAssetToPermanent).toHaveBeenCalledWith(expect.objectContaining({ path: 'D:/project/scene.png' }));
     expect(saved).toMatchObject({ imageAssetId: 'global-image', imageRelativePath: 'scene.png' });
+    expect(saved.referenceImages?.[0]).toMatchObject({ assetId: 'global-image', assetSource: 'global', relativePath: 'scene.png' });
     expect(saved).not.toHaveProperty('imageNodeId');
     expect(saved).not.toHaveProperty('filePath');
   });

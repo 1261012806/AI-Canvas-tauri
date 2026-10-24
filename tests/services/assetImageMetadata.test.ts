@@ -28,6 +28,7 @@ vi.mock('../../src/services/indexedDbService', () => ({
   getAssetImageRecords: async () => driver.records,
   getAssetIndexById: async (id: string) => driver.indexes.has(id) ? { path: driver.indexes.get(id) } : null,
   putAssetImageRecord: driver.put,
+  getAssetCleanupTime: vi.fn(async () => undefined),
   findImageHistoryByReferences: async () => ({ prompt: '原始生成提示词', params: { imageSize: '2K' } }),
   putGlobalCharacterOrder: vi.fn(),
 }));

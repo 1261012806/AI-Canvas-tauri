@@ -36,6 +36,8 @@ vi.mock('../../src/services/fs/generatedAssetTags', () => ({
   tagGeneratedProjectAssetSafely: vi.fn(async () => undefined),
 }));
 vi.mock('../../src/services/fs/core', () => ({
+  // 本组夹具均为普通 POSIX 路径，没有 Windows 扩展长度前缀。
+  stripVerbatimPrefix: (path: string) => path,
   getAssetUrlFromPath: vi.fn(async (path: string) => `asset://${path}`),
   getProjectDataDir: vi.fn(async () => '/project/data'),
 }));

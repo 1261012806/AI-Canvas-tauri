@@ -129,7 +129,7 @@ export default function ProviderConnectionDialog({
     ? initialSelectedModels.find((model) => model.id === initialModelId)
     : undefined;
   const initialCatalogModels = initialConfig?.catalogModels || [];
-  const initialLocalModels = initialDefinition && initialDefinition.id !== 'libapi'
+  const initialLocalModels = initialDefinition?.policy.catalog.initialModelsOnEdit === 'fallback'
     ? (fallbackModels[initialDefinition.id] || []) : [];
   const initialBaseUrl = initialConfig?.baseUrl || initialDefinition?.defaultBaseUrl || '';
   const [definitionId, setDefinitionId] = useState(initialDefinitionId);
@@ -336,7 +336,7 @@ export default function ProviderConnectionDialog({
       setAssetLibraryConfig(savedConfig?.assetLibrary);
       setLegacyWorkflowApiKey('');
       if (nextDefinition.id === 'runninghub-model') setSiteKeys(runningHubSiteDrafts(providerConfigs));
-      const localModels = ['cccapi', 'libapi'].includes(nextDefinition.id) ? [] : fallbackModels[nextDefinition.id] || [];
+      const localModels = nextDefinition.policy.catalog.initialModelsOnCreate === 'empty' ? [] : fallbackModels[nextDefinition.id] || [];
       setModels(localModels);
       setSelectedIds(new Set());
       setCatalogStatus(localModels.length > 0 ? 'ready' : 'idle');
@@ -392,7 +392,7 @@ export default function ProviderConnectionDialog({
   };
 
   const changeApiKey = (value: string | ((previous: string) => string)) => {
-    if (definition?.id === 'toapis' || definition?.id === 'libapi') {
+    if (definition?.policy.catalog.invalidateOnKeyChange) {
       abortRef.current?.abort();
       setCatalogStatus('idle');
       setCatalogMessage(t('Key 已修改，保存后使用此 Key；可拉取模型验证权限。'));
@@ -429,11 +429,11 @@ export default function ProviderConnectionDialog({
       const resolvedBaseUrl = result.resolvedBaseUrl || baseUrl;
       const remoteIds = new Set(result.models.map((model) => model.id));
       setModels((current) => mergeModels(
-        ['cccapi', 'toapis', 'libapi'].includes(definition.id) ? current.filter((model) => remoteIds.has(model.id)) : current,
+        definition.policy.catalog.refresh === 'replace' ? current.filter((model) => remoteIds.has(model.id)) : current,
         result.models,
       )
         .map((model) => applyKnownVideoTemplateDefaults(model, resolvedBaseUrl)));
-      if (['cccapi', 'toapis', 'libapi'].includes(definition.id)) {
+      if (definition.policy.catalog.refresh === 'replace') {
         setSelectedIds((current) => new Set([...current].filter((id) => remoteIds.has(id))));
         if (protocolModelId && !remoteIds.has(protocolModelId)) {
           setProtocolModelId(null);
@@ -478,7 +478,7 @@ export default function ProviderConnectionDialog({
     if (definition.id === 'runninghub-model' && !apiKey.trim() && !workflowApiKey.trim()) {
       setCatalogStatus('warning'); setCatalogMessage(t('当前站点尚未配置密钥，请填写或切换到已配置的站点')); return;
     }
-    if (['cccapi', 'toapis', 'libapi'].includes(definition.id)) {
+    if (definition.policy.catalog.connectionTest === 'catalog') {
       // 用当前 Key 的模型目录验证连接，同时刷新对应分组或站点的可选模型。
       await handleFetchModels();
       return;

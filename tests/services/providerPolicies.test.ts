@@ -1,0 +1,56 @@
+import { describe, expect, it } from 'vitest';
+import { getProviderPolicy, resolveProviderCatalogId } from '../../src/services/ai/providerPolicies';
+
+describe('厂商接线策略', () => {
+  it.each(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi'])('%s 沿用通用模型同步', (id) => {
+    expect(getProviderPolicy(id).syncGeneralModels).toBe(true);
+  });
+
+  it.each(['apimart', 'runninghub-model', 'grsai', 'dreamina', 'workflow-api', 'unknown', undefined])('%s 不隐式改用通用模型或独立上传', (id) => {
+    const policy = getProviderPolicy(id);
+    expect(policy.syncGeneralModels).toBe(false);
+    expect(policy.upload).toBeUndefined();
+    expect(policy.catalog).toMatchObject({ refresh: 'merge', fallback: 'allow', connectionTest: 'default' });
+  });
+
+  it('CCC 合并连接分组，其他既有专属菜单按连接区分', () => {
+    expect(getProviderPolicy('cccapi').modelMenuGroup?.scope).toBe('catalog');
+    for (const id of ['sora2u', 'toapis', 'libapi']) {
+      expect(getProviderPolicy(id).modelMenuGroup?.scope).toBe('connection');
+    }
+    expect(getProviderPolicy('custom-openai').modelMenuGroup).toBeUndefined();
+  });
+
+  it.each([
+    ['cccapi', 'empty', 'fallback', 'ungrouped-only', false],
+    ['toapis', 'fallback', 'fallback', 'deny', true],
+    ['libapi', 'fallback', 'fallback', 'deny', true],
+  ] as const)('%s 分别声明初始目录、刷新和失败规则', (id, create, edit, fallback, keyChange) => {
+    expect(getProviderPolicy(id).catalog).toEqual({ initialModelsOnCreate: create,
+      initialModelsOnEdit: edit, refresh: 'replace', fallback,
+      invalidateOnKeyChange: keyChange, connectionTest: 'catalog' });
+  });
+
+  it('显式 catalogId 优先于同名连接，仅真实厂商选用已登记上传', () => {
+    expect(resolveProviderCatalogId('libapi', { catalogId: 'custom-openai' })).toBe('custom-openai');
+    expect(getProviderPolicy(resolveProviderCatalogId('libapi', { catalogId: 'custom-openai' })).upload).toBeUndefined();
+    expect(resolveProviderCatalogId('toapis', { catalogId: 'unknown' })).toBe('unknown');
+    expect(getProviderPolicy(resolveProviderCatalogId('自己的连接', { catalogId: 'libapi' })).upload).toBe('libapi');
+    expect(getProviderPolicy(resolveProviderCatalogId('自己的连接', { catalogId: 'toapis' })).upload).toBe('toapis');
+    expect(resolveProviderCatalogId('libapi')).toBe('libapi');
+    expect(resolveProviderCatalogId('autodl-workflow')).toBe('workflow-api');
+    expect(resolveProviderCatalogId('autodl-workflow', { catalogId: 'custom-openai' })).toBe('custom-openai');
+  });
+
+  it('查询返回稳定只读策略，不共享可变目录规则', () => {
+    const defaultPolicy = getProviderPolicy(undefined);
+    const libapiPolicy = getProviderPolicy('libapi');
+    expect(getProviderPolicy('libapi')).toBe(libapiPolicy);
+    expect(Object.isFrozen(libapiPolicy)).toBe(true);
+    expect(Object.isFrozen(libapiPolicy.catalog)).toBe(true);
+    expect(defaultPolicy.catalog.initialModelsOnCreate).toBe('fallback');
+    expect(libapiPolicy.catalog.initialModelsOnCreate).toBe('fallback');
+    expect(libapiPolicy.catalog.fallback).toBe('deny');
+    expect(defaultPolicy.catalog.fallback).toBe('allow');
+  });
+});

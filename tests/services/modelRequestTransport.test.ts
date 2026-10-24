@@ -255,6 +255,29 @@ describe('ToAPIs 参考素材上传与图片提交', () => {
   });
 });
 
+describe('上传策略使用显式厂商身份', () => {
+  it.each(['toapis', 'libapi'])('连接 ID 为 %s 但显式配置为自定义时不使用内置上传或泄露 Key', async (connectionId) => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      ...state.config.providers,
+      [connectionId]: { name: '自定义连接', catalogId: 'custom-openai', apiKey: 'private-custom-upload-fixture',
+        baseUrl: 'https://custom-upload.example/v1' },
+    } } }));
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({
+      success: true, files: [{ url: `https://cdn.example/custom-${connectionId}-reference` }],
+    }));
+
+    await expect(uploadToRemote('data:audio/mpeg;base64,cG9saWN5LW92ZXJyaWRl', connectionId, 'audio'))
+      .resolves.toBe(`https://cdn.example/custom-${connectionId}-reference`);
+
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(directFetch).toHaveBeenCalledExactlyOnceWith('https://uguu.se/upload', expect.objectContaining({
+      method: 'POST', body: expect.any(FormData),
+    }));
+    expect(directFetch.mock.calls[0][1]?.headers).toBeUndefined();
+    expect([...(directFetch.mock.calls[0][1]?.body as FormData).keys()]).toEqual(['files[]']);
+  });
+});
+
 describe('LibAPI 图片原任务与请求合同', () => {
   function configureLibapiImage() {
     const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!;
@@ -389,6 +412,27 @@ describe('LibAPI 音频合同与原任务交付', () => {
     transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ task_id: 'libapi-audio-task' }))
       .mockResolvedValueOnce(jsonResponse({ status: 'completed', output_url: 'https://cdn.example/libapi-audio.wav' }));
   }
+
+  it('同名连接显式改为自定义后保留原协议，不强加内置音色或官方地址', async () => {
+    const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'speech-2.8')!;
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, libapi: { name: '自定义语音', catalogId: 'custom-openai',
+        apiKey: 'custom-speech-fixture', baseUrl: 'https://custom-speech.example/v1' } },
+      generalModels: [{ id: 'custom-speech', providerConfigId: 'libapi', name: selected.name,
+        modelId: selected.id, category: 'audio', executionProfile: selected.executionProfile }],
+    } }));
+    successfulAudio();
+
+    await expect(generateAudio({ provider: 'general', model: 'general/custom-speech', prompt: '沿用自定义协议' }))
+      .resolves.toMatchObject({ url: 'https://cdn.example/libapi-audio.wav' });
+
+    const calls = transportMocks.corsSafeFetch.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      'https://custom-speech.example/api/v1/model-runtime/invoke', 'https://custom-speech.example/v1/tasks/libapi-audio-task',
+    ]);
+    expect(calls[0][1].headers).toMatchObject({ Authorization: 'Bearer custom-speech-fixture' });
+    expect(JSON.parse(String(calls[0][1].body)).params).not.toHaveProperty('voice');
+  });
 
   it.each([
     { id: 'gt-4o-mini-tts', expected: { voice: 'alloy', response_format: 'mp3', speed: 1 } },

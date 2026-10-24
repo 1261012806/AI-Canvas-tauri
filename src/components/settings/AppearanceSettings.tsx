@@ -175,7 +175,7 @@ function PresetSingleNodePreview({
   if (pickedReal) {
     const data = (pickedReal.data || {}) as BaseNodeData;
     const config = getNodeTypeConfig(pickedReal.type || 'ai-image');
-    label = data.label || tt(config.label || '节点');
+    label = data.label || t(config.label || '节点');
     icon = config.icon || 'mdi:cube-outline';
     iconColor = themeResolved.ui.accent;
     displayId = data.displayId;

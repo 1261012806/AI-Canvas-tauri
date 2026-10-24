@@ -302,10 +302,12 @@ describe('音频节点的角色声音引用', () => {
   });
 
   it('场景和道具只在原来的非音频选择器中出现', () => {
+    const visual = character();
+    const referenceImages = visual.referenceImages?.map(({ kind: _kind, ...reference }) => ({ ...reference, label: '' }));
     const library = {
       ...emptyDramaAssetLibrary(), characters: [voiceCharacter()],
-      scenes: [{ ...character(), id: 'scene', kind: 'scene' as const }],
-      props: [{ ...character(), id: 'prop', kind: 'prop' as const }],
+      scenes: [{ ...visual, id: 'scene', kind: 'scene' as const, referenceImages }],
+      props: [{ ...visual, id: 'prop', kind: 'prop' as const, referenceImages }],
     };
     expect(resolveDramaMentionItems(library, '', 'ai-audio').map((item) => item.id)).toEqual(['char_1']);
     expect(resolveDramaMentionItems(library, '').map((item) => item.id)).toEqual(['char_1', 'scene', 'prop']);

@@ -19,6 +19,7 @@ import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from '../../../services/
 import { APIMART_OMNI_MODELS, APIMART_UPDATED_VIDEO_MODELS, isLegacyApimartOmni, replaceLegacyApimartOmni } from '../../../services/ai/apimartVideoModels';
 import { GRSAI_ADDED_MODELS } from '../../../services/ai/grsaiModels';
 import { getLibapiAudioCapability, usesLibapiModelProtocol } from '../../../services/ai/providers/libapiModelManifest';
+import { getProviderDefinition } from '../../../services/ai/providerCatalogService';
 
 export type MediaModelKind = 'image' | 'video' | 'audio';
 
@@ -1058,40 +1059,15 @@ function dedicatedGeneralModelGroup(
   config?: ProviderModelVisibilityConfig,
 ): GeneralModelGroupPresentation | null {
   const provider = config?.providers[model.providerConfigId];
-  const catalogId = provider?.catalogId || model.providerConfigId;
-  if (catalogId === 'sora2u') {
-    return {
-      id: `general-provider-${model.providerConfigId}`,
-      name: 'Sora2U',
-      description: 'Seedance 视频与图片模型',
-      badgeText: 'S2U',
-    };
-  }
-  if (catalogId === 'cccapi') {
-    return {
-      id: 'general-provider-cccapi',
-      name: 'CCC API',
-      description: '按模型所属分组自动使用对应的 API Key',
-      badgeText: 'CCC',
-    };
-  }
-  if (catalogId === 'toapis') {
-    return {
-      id: `general-provider-${model.providerConfigId}`,
-      name: 'ToAPIs',
-      description: '使用连接中选择的国内站或国际站',
-      badgeText: 'T',
-    };
-  }
-  if (catalogId === 'libapi') {
-    return {
-      id: `general-provider-${model.providerConfigId}`,
-      name: 'LibAPI',
-      description: '使用当前 LibAPI 连接中启用的模型',
-      badgeText: 'LIB',
-    };
-  }
-  return null;
+  const definition = getProviderDefinition(model.providerConfigId, provider);
+  const menu = definition?.policy.modelMenuGroup;
+  if (!definition || !menu) return null;
+  return {
+    id: `general-provider-${menu.scope === 'catalog' ? definition.id : model.providerConfigId}`,
+    name: definition.name,
+    description: menu.description,
+    badgeText: definition.badgeText,
+  };
 }
 
 function generalModelLabel(model: GeneralModelConfig, config?: ProviderModelVisibilityConfig): string {

@@ -14,7 +14,7 @@
 
 AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, Markdown, shot lists, 360° panoramas and hand-drawn notes into connectable canvas nodes. In a single project you can orchestrate generation pipelines, manage characters, scenes, props and local media assets, run ComfyUI workflows, and use the conversational assistant to query or modify the canvas, generate media, dispatch read-only sub-agents, read authorized files, and accumulate project memory. Projects can also be split into series and episodes — each episode of an AI short drama gets its own canvas, while the character library and assets are shared across the whole series.
 
-![Version](https://img.shields.io/badge/version-0.10.15-6366f1)
+![Version](https://img.shields.io/badge/version-0.10.16-6366f1)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![React Flow](https://img.shields.io/badge/React_Flow-12-ff0072)
@@ -39,17 +39,20 @@ AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, 
 | --- | --- |
 | Multimodal node canvas | Connect text, images, video, audio, animation, Markdown, storyboards, panoramas, director nodes and canvas notes. |
 | Frame animation editing & export | Import or generate sprite sheets, edit animation frames and playback, and export GIFs, PNG sequences or atlases. |
-| AI & workflows | Connect cloud and custom models, CCC, multiple ComfyUI servers, RunningHub, generic workflow APIs, Dreamina and local ONNX models. |
+| AI & workflows | Connect cloud and custom models, CCC, LibAPI text/image/video/audio models, multiple ComfyUI servers, RunningHub, generic workflow APIs, Dreamina and local ONNX models. |
+| Preset workflows & sharing | Reference the original input or the previous step, run advanced steps sequentially or by dependency, and copy, export or import JSON as independent presets. |
+| Video parameter retention | Keep the chosen aspect ratio and compatible resolution, frame rate, duration and audio settings when switching video models. Review them against the selected model before generating. |
 | User plugins | Install plugins from local files, the marketplace or GitHub Releases to extend tools, nodes and interfaces. JavaScript runs with restricted capabilities; trusted Python plugins run with your user permissions. |
 | Scripts & shot production | Browse source material, write episode scripts, generate and revise shots, and prepare voice and video assets for the editing timeline. |
 | Built-in video editing | Arrange multiple tracks and edit clips, transitions, captions, stickers and volume in a separate editor. Supports video export and MCP control. |
 | Conversational Agent | Query and edit the canvas, generate media and manage tasks through conversation. Supports multiple conversations, Plan/B/C modes, project memory, separate windows and read-only sub-agents. |
 | AI app nodes | Create interactive apps through the Agent or MCP. Apps access only bound canvas assets, run read-only actions and save results. |
-| Characters & creative assets | Manage project and global character libraries, reference images, voices and action media, and organize characters, scenes and props. |
+| Characters & creative assets | Manage project and global characters, scenes and props, with character voices and actions, multiple scene/prop reference images and precise references to individual images. |
 | External MCP control | Let external AI tools control the canvas, media and editing projects through local stdio or Streamable HTTP. Disabled by default; remote access requires confirmation to enable. |
 | Local storage | Save projects and media locally, and manage API keys in a separate credential store. |
 | Series & episodes | Give each episode its own canvas while sharing characters, project memory and assets across the series. |
-| Asset library & editing | Manage, preview and edit assets, including prompts, tags, batch prompt extraction from images, text and Markdown. Supports project packages and recoverable deletion. |
+| Asset library & editing | Preview and edit media, prompts, tags, text and Markdown, with batch prompt extraction from images. Select creative assets in bulk, copy them between projects and the global library, transfer asset packages, find usage locations, reconnect missing files and explicitly clean up missing records. Record cleanup cannot be undone and keeps disk files. |
+| Multilingual interface | Use Simplified Chinese, English, Japanese or Korean while keeping user content and editing drafts when switching the interface language. |
 | 3D director desk | Build scenes, preview shots and produce video with the lightweight director desk, Blender editing and AI shot previs. |
 | Appearance customization | Apply appearance presets across pages, canvas, nodes and edges. Create custom themes and import or export presets. |
 | Video batches & usage tracking | Manage video generation batches and export local usage reports for Volcengine Ark image/video nodes. Usage estimates are not official bills. |

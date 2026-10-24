@@ -75,8 +75,8 @@
   <div class="orbits" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="wrap">
     <a class="pill reveal" href="https://github.com/Tenney95/AI-Canvas-tauri/releases/latest" target="_blank" rel="noopener">
-      <span class="pill-tag" data-version>v0.10.15</span>
-      <span>创作资产<span class="pill-more">与媒体生成恢复</span></span>
+      <span class="pill-tag" data-version>v0.10.16</span>
+      <span>素材复用<span class="pill-more">与多厂商生成</span></span>
       <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="m6 3.5 4.5 4.5L6 12.5"/></svg>
     </a>
 
@@ -221,7 +221,7 @@
     <article class="card reveal">
       <div class="card-body">
         <h3>高级预设编排</h3>
-        <p>把一串生成步骤存成预设，运行时逐步派生节点、连线与模型任务，重复的流程只配一次。</p>
+        <p>把生成步骤存成快捷指令，选择参考原图或上一步结果，按顺序或依赖并发执行；通过 JSON 复制、导出与导入，复用配好的流程。</p>
       </div>
       <div class="card-visual">
         <ol class="steps" aria-hidden="true">
@@ -238,7 +238,7 @@
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         </div>
         <h3>拖进来就能用</h3>
-        <p>系统剪贴板、文件拖放与资产面板都能把素材带进画布。资产库支持项目索引、外部文件夹登记、独立搜索与图片批量反推；图片改名会同步对应画布节点标题和已保存项目。</p>
+        <p>系统剪贴板、文件拖放与资产面板都能把素材带进画布。资产库支持项目索引、外部文件夹、独立搜索与图片批量反推；创作资产可多选、打包迁移、查询使用位置，并为失效素材重新选择位置；确认缺失的记录可单独清理，保留磁盘文件。</p>
       </div>
       <div class="card-visual">
         <div class="chips" aria-hidden="true">
@@ -417,14 +417,14 @@
   <div class="duo">
     <article class="dcard reveal">
       <h3>跨项目角色库</h3>
-      <p>全局角色库保存角色卡、多张参考图与头像裁切；项目角色可以直接从画布节点捕获。角色可绑定多段声音、设主声音、记录标签与台词，并一键创建音频节点或配音生成节点。</p>
+      <p>全局角色库保存角色卡、多张参考图与头像裁切；项目角色可以直接从画布节点捕获。角色可绑定声音与动作，并通过创作资产包连同绑定媒体迁移；项目与全局副本保持各自独立。</p>
       <div class="avatars" aria-hidden="true">
         <span class="av a1"></span><span class="av a2"></span><span class="av a3"></span><span class="av a4"></span><span class="av more">+12</span>
       </div>
     </article>
     <article class="dcard reveal">
       <h3>短剧资产面板</h3>
-      <p>人物、场景与道具集中管理，写提示词时用 <code>@</code> 直接引用。声音节点作为音色参考连进生成链路，角色台词自动预填到生成节点。</p>
+      <p>人物、场景与道具集中管理，按名称或设定查找、排序和批量复制。场景与道具可保存不同角度或时段的参考图，写提示词时用 <code>@</code> 精确选择单图；资产包导入前可预览并选择条目。</p>
       <div class="tagcloud" aria-hidden="true">
         <span>@主角</span><span>@雪山</span><span>@客栈夜</span><span>@长刀</span><span>@旁白音色</span><span>@开场分镜</span>
       </div>
@@ -490,7 +490,7 @@
   <div class="grid-3 grid-3-tight">
     <article class="mini reveal">
       <h4>多种生成后端</h4>
-      <p>云端模型、自定义模型执行协议、ComfyUI 工作流、Dreamina 登录态调用，以及本地 ONNX 推理（超分、抠图、角色方向图）。</p>
+      <p>连接 LibAPI 的文本、图片、视频与音频模型，以及其他云端、自定义接口、ComfyUI 工作流和 Dreamina；切换视频型号保留兼容参数。本地 ONNX 可用于超分、抠图和角色方向图。</p>
     </article>
     <article class="mini reveal">
       <h4>可校验的按需运行时</h4>
@@ -509,7 +509,7 @@
     <div class="dl-glow" aria-hidden="true"></div>
     <img class="dl-icon" src="assets/icon.svg" alt="" width="72" height="72" />
     <h2>开始使用 AI Canvas</h2>
-    <p class="lede">当前版本 <span data-version>v0.10.15</span>，从 GitHub Releases 下载对应平台的安装包。</p>
+    <p class="lede">版本 <span data-version>v0.10.16</span> · 素材复用与多厂商生成。安装包及公开状态以 GitHub Releases 为准。页面同步对应源码能力，下载后请核对应用版本。</p>
 
     <div class="dl-grid">
       <a class="dl-card" data-os="mac" href="https://github.com/Tenney95/AI-Canvas-tauri/releases/latest" target="_blank" rel="noopener">

@@ -28,6 +28,7 @@ import type {
 import type { NormalizedModelExecutionProtocol } from '../../types/aiTypes';
 import { corsSafeFetch } from './httpTransport';
 import { baseUrlCandidates } from './providerBaseUrl';
+import { getProviderPolicy, resolveProviderCatalogId, type ProviderPolicy } from './providerPolicies';
 import { APIMART_OMNI_MODELS, APIMART_UPDATED_VIDEO_MODELS, isLegacyApimartOmni } from './apimartVideoModels';
 import { getChatApiHeaders, normalizeGeminiModelId, resolveChatApiProtocol } from './chatApiProtocol';
 import { XAI_BASE_URL, XAI_MODEL_MANIFEST } from './providers/xaiModelManifest';
@@ -61,6 +62,8 @@ export interface ProviderCredentialField {
 
 export interface ProviderDefinition {
   id: string;
+  /** UI、Store 和执行入口复用的轻量接线策略，不进入用户配置。 */
+  policy: Readonly<ProviderPolicy>;
   name: string;
   description: string;
   badgeText: string;
@@ -249,7 +252,7 @@ export const WEB_SEARCH_PROVIDER_IDS: readonly WebSearchProviderId[] = [
   'exa',
 ];
 
-const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
+const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = ([
   {
     id: 'workflow-api', name: '工作流 API', kind: 'workflow-api',
     description: '自定义平台、工作流路径、输入参数与结果映射', badgeText: 'WF',
@@ -473,7 +476,9 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
       { key: 'baseUrl', label: '接口地址', required: true },
     ],
   },
-];
+] satisfies Omit<ProviderDefinition, 'policy'>[]).map((definition) => ({
+  ...definition, policy: getProviderPolicy(definition.id),
+}));
 
 export function isProviderModelVisible(catalogId: string | undefined, modelId: string): boolean {
   if (!catalogId) return true;
@@ -548,8 +553,7 @@ export function getProviderDefinition(
   providerId: string,
   config?: Pick<ApiProviderConfig, 'catalogId'>,
 ): ProviderDefinition | undefined {
-  const id = config?.catalogId || providerId;
-  return PROVIDER_DEFINITION_MAP.get(id === 'autodl-workflow' ? 'workflow-api' : id);
+  return PROVIDER_DEFINITION_MAP.get(resolveProviderCatalogId(providerId, config));
 }
 
 /** 设置与导入只校验有效合同的临时副本；保存的用户协议和能力声明保持原样。 */
@@ -954,8 +958,8 @@ export async function fetchProviderModelCatalog(
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     const warning = safeCatalogError(error);
     // CCC 分组权限由 Key 决定，不能用全站目录伪装成该 Key 的可用模型。
-    if (definition.id !== 'toapis' && definition.id !== 'libapi'
-      && !(definition.id === 'cccapi' && config.cccGroup) && normalizedFallback.length > 0) {
+    const fallback = definition.policy.catalog.fallback;
+    if (fallback !== 'deny' && !(fallback === 'ungrouped-only' && config.cccGroup) && normalizedFallback.length > 0) {
       return { models: normalizedFallback, source: 'local-fallback', warning };
     }
     throw new Error(warning, { cause: error });

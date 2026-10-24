@@ -769,10 +769,45 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
 
     const syncList = <T extends DramaAsset>(list: T[]): T[] =>
       list.map((item) => {
+        if (item.kind !== 'character') {
+          const visual = normalizeDramaVisualAsset(item);
+          const references = visual.referenceImages ?? [];
+          const matching = references.find((reference) => reference.sourceNodeId === imageNodeId);
+          const ownsNode = node?.data.dramaAssetId === item.id && node?.data.dramaAssetKind === item.kind;
+          if (!matching && (!ownsNode || references.length >= MAX_DRAMA_REFERENCE_IMAGES)) return item;
+          const now = Date.now();
+          const reference: DramaAssetReferenceImage = {
+            ...matching,
+            id: matching?.id ?? `reference-${generateId()}`,
+            label: matching?.label ?? node?.data.label ?? '',
+            prompt: matching?.prompt ?? node?.data.prompt ?? '',
+            ...nodeFileIdentity,
+            assetSource: undefined,
+            imageUrl,
+            sourceNodeId: imageNodeId,
+            createdAt: matching?.createdAt ?? now,
+            updatedAt: now,
+          };
+          const updated = syncDramaVisualAssetPrimary({
+            ...visual,
+            referenceImages: matching
+              ? references.map((entry) => entry.id === matching.id ? reference : entry)
+              : [...references, reference],
+            // 已绑定的次参考只刷新自身；首次补绑才选择新图为主图。
+            primaryReferenceImageId: matching ? visual.primaryReferenceImageId : reference.id,
+            updatedAt: now,
+          });
+          if (matching && item.referenceImages && matching.imageUrl === imageUrl
+            && sameImageIdentity(matching, nodeFileIdentity) && !matching.assetSource
+            && item.primaryReferenceImageId === updated.primaryReferenceImageId
+            && item.imageNodeId === updated.imageNodeId && item.imageUrl === updated.imageUrl
+            && sameImageIdentity(item, updated) && item.imageAssetId === updated.imageAssetId
+            && item.imageRelativePath === updated.imageRelativePath) return item;
+          changed = true;
+          return updated as T;
+        }
         // 音频节点重新生成后刷新已绑定的角色声音（同一节点不会既是图像又是音频来源）
-        const voiceClips: CharacterVoiceClip[] = item.kind === 'character'
-          ? item.voiceClips ?? []
-          : [];
+        const voiceClips: CharacterVoiceClip[] = item.voiceClips ?? [];
         const matchingVoiceClip = voiceClips.find((clip) => clip.sourceNodeId === imageNodeId);
         if (matchingVoiceClip) {
           if (matchingVoiceClip.audioUrl === imageUrl) return item;
@@ -823,25 +858,15 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     // 按节点 data.dramaAssetId 补绑（一键创建路径兜底）
     const dramaAssetId = node?.data?.dramaAssetId as string | undefined;
     const dramaAssetKind = node?.data?.dramaAssetKind as DramaAssetKind | undefined;
-    if (dramaAssetId && dramaAssetKind) {
+    if (dramaAssetId && dramaAssetKind === 'character') {
       const asset = findDramaAssetByKind(next, dramaAssetKind, dramaAssetId);
       if (asset && (asset.imageNodeId !== imageNodeId || asset.imageUrl !== imageUrl || !sameImageIdentity(asset, nodeFileIdentity))) {
         changed = true;
         const bindPatch = { ...nodeFileIdentity, imageNodeId, imageUrl,
           imageAssetId: undefined, imageRelativePath: undefined, updatedAt: Date.now() };
-        if (dramaAssetKind === 'character') {
-          next.characters = next.characters.map((c) =>
-            c.id === dramaAssetId ? { ...c, ...bindPatch } : c,
-          );
-        } else if (dramaAssetKind === 'scene') {
-          next.scenes = next.scenes.map((c) =>
-            c.id === dramaAssetId ? { ...c, ...bindPatch } : c,
-          );
-        } else {
-          next.props = next.props.map((c) =>
-            c.id === dramaAssetId ? { ...c, ...bindPatch } : c,
-          );
-        }
+        next.characters = next.characters.map((c) =>
+          c.id === dramaAssetId ? { ...c, ...bindPatch } : c,
+        );
       }
     }
 
@@ -1009,7 +1034,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       assertCurrent();
       const input = { ...normalized, referenceImages: normalized.referenceImages?.map((reference) => {
         const source = sources.find((node) => node?.id === reference.sourceNodeId);
-        return source ? { ...reference, imageUrl: source.data.imageUrl || source.data.thumbnailUrl,
+        return source ? { ...reference, assetSource: undefined, imageUrl: source.data.imageUrl || source.data.thumbnailUrl,
           assetId: source.data.assetId, relativePath: source.data.relativePath, filePath: source.data.filePath } : reference;
       }) };
       const persisted = await saveGlobalDramaAssetCard(input, {

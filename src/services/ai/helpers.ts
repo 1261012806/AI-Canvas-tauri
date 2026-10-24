@@ -3,7 +3,7 @@
  */
 import { useAppStore } from '../../store/useAppStore';
 import type { ApiProviderConfig, GeneralModelConfig } from '../../types';
-import { getProviderDefinition } from './providerCatalogService';
+import { getProviderDefinition, type ProviderDefinition } from './providerCatalogService';
 
 /** 去掉 model value 中的 provider/ 前缀，得到实际的模型名 */
 export function extractModelName(modelValue: string, provider: string): string {
@@ -82,6 +82,7 @@ export interface ResolvedGeneralModelConnection {
   model: GeneralModelConfig;
   providerConfigId: string;
   provider: ApiProviderConfig;
+  definition?: ProviderDefinition;
   apiKey: string;
   baseUrl: string;
 }
@@ -96,12 +97,14 @@ export function resolveGeneralModelConnection(
   if (!model?.providerConfigId) return undefined;
   const provider = config.providers[model.providerConfigId];
   if (!provider) return undefined;
+  const definition = getProviderDefinition(model.providerConfigId, provider);
   return {
     model,
     providerConfigId: model.providerConfigId,
     provider,
+    definition,
     apiKey: provider.apiKey || '',
-    baseUrl: provider.baseUrl?.trim() || getProviderDefinition(model.providerConfigId, provider)?.defaultBaseUrl || '',
+    baseUrl: provider.baseUrl?.trim() || definition?.defaultBaseUrl || '',
   };
 }
 

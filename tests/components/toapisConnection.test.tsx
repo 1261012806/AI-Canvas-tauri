@@ -120,3 +120,117 @@ describe('ToAPIs 国内与国际站共用凭据', () => {
     expect(section().selectedModels.map((model) => model.id)).toEqual(['gpt-image-2']);
   });
 });
+
+describe('厂商目录策略保持已有交互', () => {
+  function fixtureModel(id: string): ProviderModelSelection {
+    return { id, name: id, provider: 'fixture-connection', category: 'text', executionProfile: { preset: 'openai-chat' } };
+  }
+
+  function editConnection(catalogId: 'toapis' | 'libapi' | 'custom-openai') {
+    const config = { name: '测试连接', catalogId, apiKey: 'fixture', baseUrl: 'https://gateway.example/v1',
+      selectedModels: [fixtureModel('kept'), fixtureModel('retired')], catalogModels: [fixtureModel('cached')] };
+    props = { ...props, connectionId: 'fixture-connection', initialConfig: config,
+      providerConfigs: { 'fixture-connection': config }, connectedProviderIds: [catalogId],
+      fallbackModels: { [catalogId]: [fixtureModel('fallback-only')] } };
+    driver.scope = { values: [], index: 0 };
+  }
+
+  it.each([
+    { catalogId: 'toapis', expected: ['fallback-only'] },
+    { catalogId: 'libapi', expected: ['fallback-only'] },
+    { catalogId: 'custom-openai', expected: ['fallback-only'] },
+  ] as const)('新建 $catalogId 时使用该厂商初始列表，不把本地清单当远端验证', ({ catalogId, expected }) => {
+    props = { ...props, connectionId: undefined, initialConfig: undefined,
+      providerConfigs: {}, connectedProviderIds: [], fallbackModels: { [catalogId]: [fixtureModel('fallback-only')] } };
+    driver.scope = { values: [], index: 0 };
+    render();
+    const choice = elements(tree).find((element) => element.key === catalogId)!;
+    (choice.props.onClick as () => void)();
+    render();
+    expect(section().models.map((model) => model.id)).toEqual([...expected]);
+    expect(section().selectedModels).toEqual([]);
+    expect(driver.catalog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { catalogId: 'toapis', expected: ['fallback-only', 'cached', 'kept', 'retired'] },
+    { catalogId: 'libapi', expected: ['fallback-only', 'cached', 'kept', 'retired'] },
+    { catalogId: 'custom-openai', expected: ['fallback-only', 'cached', 'kept', 'retired'] },
+  ] as const)('编辑 $catalogId 时保留缓存与勾选，并按原规则合并初始清单', ({ catalogId, expected }) => {
+    editConnection(catalogId);
+    render();
+    expect(section().models.map((model) => model.id)).toEqual([...expected]);
+    expect(section().selectedModels.map((model) => model.id)).toEqual(['kept', 'retired']);
+  });
+
+  it('LibAPI 未填 Key 也预置全部四类已适配型号，等待用户勾选而不请求远端', () => {
+    const defaults = [...getProviderDefinition('libapi')!.models!];
+    props = { ...props, connectionId: undefined, initialConfig: undefined,
+      providerConfigs: {}, connectedProviderIds: [], fallbackModels: { libapi: defaults } };
+    driver.scope = { values: [], index: 0 };
+    render();
+    const choice = elements(tree).find((element) => element.key === 'libapi')!;
+    (choice.props.onClick as () => void)();
+    render();
+    expect(section().models.map((model) => model.id)).toEqual(defaults.map((model) => model.id));
+    expect(section().models.filter((model) => model.category === 'text')).toHaveLength(8);
+    expect(section().models.filter((model) => model.category === 'image')).toHaveLength(22);
+    expect(section().models.filter((model) => model.category === 'video')).toHaveLength(31);
+    expect(section().models.filter((model) => model.category === 'audio')).toHaveLength(6);
+    expect(section().selectedModels).toEqual([]);
+    expect(section().missingCredentials).toBe(true);
+    expect(driver.catalog).not.toHaveBeenCalled();
+  });
+
+  it.each(['toapis', 'libapi', 'custom-openai'] as const)('%s 刷新成功时正确更新勾选，拉取失败保留原目录', async (catalogId) => {
+    editConnection(catalogId);
+    render();
+    const before = section().models.map((model) => model.id);
+    driver.catalog.mockRejectedValueOnce(new Error('目录暂不可用'));
+    await section().onFetchModels();
+    render();
+    expect(form().catalogStatus).toBe('error');
+    expect(section().models.map((model) => model.id)).toEqual(before);
+    expect(section().selectedModels.map((model) => model.id)).toEqual(['kept', 'retired']);
+    driver.catalog.mockResolvedValueOnce({ source: 'remote', models: [fixtureModel('kept'), fixtureModel('new')] });
+    await section().onFetchModels();
+    render();
+    const replacing = catalogId !== 'custom-openai';
+    expect(section().models.map((model) => model.id)).toEqual(replacing ? ['kept', 'new'] : [...before, 'new']);
+    expect(section().selectedModels.map((model) => model.id)).toEqual(replacing ? ['kept'] : ['kept', 'retired']);
+    expect(form().catalogStatus).toBe('ready');
+  });
+
+  it.each(['toapis', 'libapi'] as const)('%s 的验证连接沿用目录拉取与权限刷新', async (catalogId) => {
+    editConnection(catalogId);
+    render();
+    driver.catalog.mockResolvedValueOnce({ source: 'remote', models: [fixtureModel('kept')] });
+    await form().onTestConnection();
+    render();
+    expect(driver.catalog).toHaveBeenCalledOnce();
+    expect(driver.catalog.mock.calls[0][0]).toMatchObject({ providerId: catalogId,
+      config: { catalogId, apiKey: 'fixture' } });
+    expect(section().models.map((model) => model.id)).toEqual(['kept']);
+    expect(section().selectedModels.map((model) => model.id)).toEqual(['kept']);
+  });
+
+  it('LibAPI 修改 Key 同样取消旧请求，旧权限的迟到目录不能污染新 Key', async () => {
+    editConnection('libapi');
+    let finish!: (result: unknown) => void;
+    driver.catalog.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render();
+    const pending = section().onFetchModels();
+    const oldSignal = driver.catalog.mock.calls[0][0].signal as AbortSignal;
+    render();
+    form().setApiKey('new-fixture');
+    render();
+    expect(oldSignal.aborted).toBe(true);
+    finish({ source: 'remote', models: [fixtureModel('stale')] });
+    await pending;
+    render();
+    expect(form().apiKey).toBe('new-fixture');
+    expect(form().catalogStatus).toBe('idle');
+    expect(section().models.some((model) => model.id === 'stale')).toBe(false);
+    expect(section().selectedModels.map((model) => model.id)).toEqual(['kept', 'retired']);
+  });
+});

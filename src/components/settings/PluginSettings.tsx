@@ -749,7 +749,7 @@ export default function PluginSettings() {
               {pythonChecking
                 ? t('正在检测 Python 3…')
                 : pythonStatus?.available
-                  ? t('可用：{command} · Python {version}', { command: pythonStatus.command, version: pythonStatus.version })
+                  ? t('可用：{command} · Python {version}', { command: pythonStatus.command || '—', version: pythonStatus.version || '—' })
                   : pythonStatus?.error || t('尚未检测')}
             </div>
           </div>

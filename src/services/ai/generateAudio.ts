@@ -20,6 +20,7 @@ import { resolveMediaReferenceUrl } from '../uploadService';
 import type { AIAudioGenParams, AudioGenerationResult, MediaReference } from '../../types/aiTypes';
 import type { MediaPersistenceStatus } from '../../types/media';
 import { resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
+import { resolveProviderCatalogId } from './providerPolicies';
 import {
   collectConnectedReferenceMedia,
   getMediaReferenceUrl,
@@ -213,8 +214,8 @@ export async function generateAudio(
     if (!connection) throw new Error(`通用模型 "${gm.name}" 的连接配置不存在`);
     if (!connection.baseUrl) throw new Error(`通用模型 "${gm.name}" 未配置接口地址`);
     if (gm.executionProfile) {
-      const isLibapi = connection.provider?.catalogId === 'libapi'
-        || (!connection.provider?.catalogId && connection.providerConfigId === 'libapi');
+      const catalogId = connection.definition?.id ?? resolveProviderCatalogId(connection.providerConfigId, connection.provider);
+      const isLibapi = catalogId === 'libapi';
       const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
       if (usesLibapiProtocol) {
         // 旧语音收集器只收视频／音频节点；完整解析还覆盖无连线图片、资产及角色素材引用。

@@ -112,7 +112,10 @@ export interface ProjectImportResult {
 /** 与项目节点、角色参考图共用的素材引用形状。 */
 interface AssetReferenceLike {
   assetId?: string;
+  assetSource?: 'global';
   relativePath?: string;
+  imageAssetId?: string;
+  imageRelativePath?: string;
   filePath?: string;
   storyboardOverrides?: (AssetReferenceLike | null)[];
   directorScene?: AssetReferenceLike;
@@ -203,7 +206,12 @@ function collectAssetReferences(record: ProjectSaveData): AssetReferenceLike[] {
  */
 function detachSourceAssetIdentity(record: ProjectSaveData): void {
   collectAssetReferences(record).forEach((reference) => {
-    if (reference.relativePath) delete reference.assetId;
+    if (reference.relativePath || reference.imageRelativePath || reference.imageAssetId || reference.assetSource === 'global') {
+      delete reference.assetId;
+      delete reference.assetSource;
+      delete reference.imageAssetId;
+      delete reference.imageRelativePath;
+    }
   });
 }
 
@@ -506,10 +514,13 @@ async function restoreProjectArchive(
       dramaAssets: undefined,
     } satisfies ProjectSaveData))];
 
-    const extractedAssets = new Set(unpacked.assetPaths);
-    const missingAssetCount = records.flatMap(collectAssetReferences)
-      .filter((reference) => reference.relativePath && !extractedAssets.has(reference.relativePath))
-      .length;
+    // 同一归档 assets 根中的相对路径是文件身份；主图投影与参考图不能重复计数。
+    const relativeKey = (path: string) => path.replace(/\\/g, '/').split('/').filter((part) => part !== '.').join('/');
+    const extractedAssets = new Set(unpacked.assetPaths.map(relativeKey));
+    const missingAssetCount = new Set(records.flatMap(collectAssetReferences)
+      .flatMap((reference) => typeof reference.relativePath === 'string' && reference.relativePath
+        ? [relativeKey(reference.relativePath)] : [])
+      .filter((path) => !extractedAssets.has(path))).size;
     let conversationCount = 0;
     let memoryCount = 0;
     for (const [index, next] of records.entries()) {

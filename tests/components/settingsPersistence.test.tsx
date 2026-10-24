@@ -30,7 +30,7 @@ vi.mock('zustand/react/shallow', () => ({ useShallow: <T,>(s: T) => s }));
 vi.mock('../../src/store/useAppStore', () => ({
   useAppStore: Object.assign((s: (state: AppState) => unknown) => s(driver.state), { getState: () => driver.state }),
 }));
-vi.mock('../../src/i18n', () => ({ useT: () => (s: string) => s, getLocale: () => 'zh-CN', LOCALES: [], LOCALE_LABELS: {}, setLocale: vi.fn() }));
+vi.mock('../../src/i18n', () => ({ t: (s: string) => s, useT: () => (s: string) => s, getLocale: () => 'zh-CN', LOCALES: [], LOCALE_LABELS: {}, setLocale: vi.fn() }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ ask: driver.ask }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('../../src/services/nativePerformanceModeService', () => ({

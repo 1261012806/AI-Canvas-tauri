@@ -152,6 +152,28 @@ describe('project creative asset packages', () => {
     expect(io.cleanup).toHaveBeenCalledWith('/staging');
   });
 
+  it.each([
+    ['legacy-top', 'missing'], ['reference', 'missing'],
+    ['legacy-top', 'offline'], ['reference', 'wrong-scope'],
+  ] as const)('%s 全局引用索引 %s 时不借用同 ID 项目节点、旧 URL 或相对文件', async (shape, status) => {
+    io.index.mockResolvedValue(status === 'missing' ? undefined : { assetId: 'global-required',
+      source: status === 'wrong-scope' ? 'project' : 'global', status: status === 'offline' ? 'offline' : 'online', path: '/project/live.png' });
+    const asset: DramaAsset = { ...base, id: 'global-required-card', kind: 'scene',
+      ...(shape === 'legacy-top' ? { imageAssetId: 'global-required', imageRelativePath: 'same.png',
+        imageNodeId: 'same-node', imageUrl: 'asset://localhost//old/same.png' }
+        : { referenceImages: [{ id: 'global-ref', label: '', prompt: '', assetId: 'global-required', assetSource: 'global',
+          relativePath: 'same.png', sourceNodeId: 'same-node', imageUrl: 'asset://localhost//old/same.png', createdAt: 1, updatedAt: 1 }],
+          primaryReferenceImageId: 'global-ref' }),
+    };
+    await expect(exportProjectDramaAssets({ projectId: 'episode', ownerId: 'series', projectName: '项目', assets: [asset],
+      nodes: [{ id: 'same-node', type: 'ai-image', position: { x: 0, y: 0 },
+        data: { type: 'ai-image', label: '同 ID 图', filePath: '/project/live.png', imageUrl: 'asset://localhost//project/live.png' } }],
+    })).rejects.toThrow('无法导出');
+    expect(io.stage).not.toHaveBeenCalled();
+    expect(io.pack).not.toHaveBeenCalled();
+    expect(io.cleanup).toHaveBeenCalledWith('/staging');
+  });
+
   it('verifies and indexes copied files before committing freshly remapped project assets', async () => {
     const input = importInput(vi.fn(async (assets: DramaAsset[]) => {
       expect(io.putIndex).toHaveBeenCalledTimes(1);

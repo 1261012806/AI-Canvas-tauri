@@ -28,6 +28,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { MIN_REFERENCE_REENCODE_BYTES, prepareReferenceImageUpload } from './ai/referenceImageUpload';
 import { corsSafeFetch } from './ai/httpTransport';
+import { getProviderPolicy, resolveProviderCatalogId } from './ai/providerPolicies';
 
 const DEFAULT_UPLOAD_BASE = APIMART_BASE_URL;
 
@@ -651,9 +652,10 @@ export async function uploadToRemote(
     if (queuedCached) return queuedCached;
 
     const connection = useAppStore.getState().config.providers[provider];
-    const publicUrl = provider === 'toapis' || connection?.catalogId === 'toapis'
+    const upload = getProviderPolicy(resolveProviderCatalogId(provider, connection)).upload;
+    const publicUrl = upload === 'toapis'
       ? await uploadToToapis(url, provider, kind, operationSignal)
-      : provider === 'libapi' || connection?.catalogId === 'libapi'
+      : upload === 'libapi'
       ? await uploadToLibapi(url, provider, kind, operationSignal)
       : provider === 'apimart' && kind === 'image'
       ? await uploadToApimart(url, operationSignal)

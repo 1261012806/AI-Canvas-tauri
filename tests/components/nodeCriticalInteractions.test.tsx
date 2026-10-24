@@ -222,7 +222,7 @@ async function setupImageHistoryApplication(currentPath = 'C:/project/current.pn
       annotation: 'old-annotation', mattingMask: 'old-mask', artifactId: 'old-artifact' },
   }], () => revision);
   installStoreMock(store);
-  vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+  vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text, getLocale: () => 'zh-CN' }));
   vi.doMock('react-dom', () => ({ createPortal: (children: unknown) => children }));
   vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => `asset://localhost/${encodeURIComponent(path)}` }));
   vi.doMock('../../src/services/indexedDbService', () => ({ getNodeHistoryEntries: vi.fn(async () => [entry]) }));
@@ -1734,6 +1734,55 @@ describe('critical canvas node interactions', () => {
     });
   });
 
+  it.each([
+    { label: '通用到通用', from: 'general/video-a', fromProvider: 'general', to: 'general/video-b', provider: 'general', ratio: '9:16' },
+    { label: '通用到原生', from: 'general/video-a', fromProvider: 'general', to: 'volcengine/doubao-seedance-2-5', provider: 'volcengine', ratio: '9:16' },
+    { label: '原生到通用', from: 'apimart/seedance-2.5', fromProvider: 'apimart', to: 'general/video-b', provider: 'general', ratio: '9:16' },
+    { label: '原生到原生', from: 'volcengine/doubao-seedance-2-5', fromProvider: 'volcengine', to: 'dreamina/seedance2.5', provider: 'dreamina', ratio: '16:9' },
+    { label: '未设比例到通用', from: 'general/video-a', fromProvider: 'general', to: 'general/video-b', provider: 'general', ratio: undefined },
+    { label: '未设比例到原生', from: 'general/video-a', fromProvider: 'general', to: 'dreamina/seedance2.5', provider: 'dreamina', ratio: undefined },
+    { label: '重选同一通用模型', from: 'general/video-a', fromProvider: 'general', to: 'general/video-a', provider: 'general', ratio: '9:16' },
+    { label: '未设比例重选同一原生模型', from: 'volcengine/doubao-seedance-2-5', fromProvider: 'volcengine', to: 'volcengine/doubao-seedance-2-5', provider: 'volcengine', ratio: undefined },
+    { label: '工作流转通用模型', from: 'comfyui/workflow-a', fromProvider: 'comfyui', to: 'general/video-b', provider: 'general', ratio: '9:16', workflowId: 'workflow-a' },
+    { label: '未设置任何参数到原生', from: 'general/video-a', fromProvider: 'general', to: 'dreamina/seedance2.5', provider: 'dreamina', ratio: undefined, unsetParameters: true },
+  ])('视频模型切换保留已有参数（$label）', async ({ from, fromProvider, to, provider, ratio, workflowId, unsetParameters }) => {
+    const parameters = { videoResolution: unsetParameters ? undefined : 1280, videoFps: unsetParameters ? undefined : 30,
+      videoFrames: unsetParameters ? undefined : 301, seedanceResolution: unsetParameters ? undefined : '1080p',
+      seedanceDuration: unsetParameters ? undefined : 10, generateAudio: unsetParameters ? undefined : false };
+    const store = createStore([{
+      id: 'ratio-video', type: 'ai-video', position: { x: 0, y: 0 }, data: {
+        type: 'ai-video', label: '比例保持', status: 'idle', prompt: '视频', model: from, provider: fromProvider,
+        seedanceRatio: ratio, aspectRatio: ratio, nodeWidth: 280, nodeHeight: 498,
+        ...parameters, workflowId,
+      },
+    }], () => 1);
+    store.activeNodeId = 'ratio-video';
+    await installReactHookDriver();
+    installStoreMock(store);
+    vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+    vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+    vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }));
+    vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({ default: function PromptPanelMock() { return null; } }));
+    vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+    const generateVideo = vi.fn();
+    vi.doMock('../../src/services/aiService', () => ({ generateText: vi.fn(), generateImage: vi.fn(), generateImagesBatch: vi.fn(),
+      generateVideo, generateAudio: vi.fn(), buildPanoramaPrompt: vi.fn() }));
+    vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), getPendingTasksForProject: () => [],
+      prepareMediaNodeGeneration: vi.fn(), registerMediaNodeOperation: () => vi.fn(), completeMediaNodeTask: vi.fn() }));
+    const Dialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+    const panel = () => findElement(Dialog(), (element) => componentName(element) === 'PromptPanelMock');
+    (panel().props.onModelSelect as (model: Record<string, unknown>) => void)({ value: to, provider });
+    expect(store.nodes[0].data).toMatchObject({ model: to, provider, seedanceRatio: ratio,
+      aspectRatio: ratio, nodeWidth: 280, nodeHeight: 498, workflowId: undefined,
+      ...parameters });
+    expect(panel().props.seedanceRatio).toBe(ratio);
+    expect(panel().props.seedanceResolution).toBe(parameters.seedanceResolution);
+    for (const key of ['seedanceRatio', ...Object.keys(parameters)]) {
+      expect(store.updateNodeData.mock.calls.at(-1)?.[1]).not.toHaveProperty(key);
+    }
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
   it('AINodeDialog submits the latest video parameters and resolved project prompt', async () => {
     const originalData = {
       type: 'ai-video',
@@ -1838,14 +1887,9 @@ describe('critical canvas node interactions', () => {
     expect(store.updateNodeData).toHaveBeenCalledWith('video-node', expect.objectContaining({
       model: 'general/custom-video',
       provider: 'general',
-      videoResolution: undefined,
-      videoFps: undefined,
-      videoFrames: undefined,
-      seedanceResolution: undefined,
-      seedanceRatio: undefined,
-      seedanceDuration: undefined,
-      generateAudio: undefined,
     }));
+    expect(store.nodes[0].data).toMatchObject({ seedanceRatio: '16:9', seedanceResolution: '720p',
+      videoResolution: 640, videoFps: 24, videoFrames: 77, seedanceDuration: 5, generateAudio: false });
     store.nodes[0] = {
       ...store.nodes[0],
       data: {

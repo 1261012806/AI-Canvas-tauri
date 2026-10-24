@@ -884,6 +884,7 @@ function AINodeDialog() {
       const validSpeed = audioCapability?.speed && typeof currentSpeed === 'number'
         && currentSpeed >= audioCapability.speed.min && currentSpeed <= audioCapability.speed.max
         && (!audioCapability.speed.options || audioCapability.speed.options.includes(currentSpeed));
+      // 视频保留用户参数，模型能力变化由参数控件和提交前校验处理。
       updateNodeData(activeNodeId!, {
         model: model.value,
         provider: model.provider,
@@ -895,15 +896,6 @@ function AINodeDialog() {
           imageSize: imageCapability?.defaultResolution || '2K',
           imageQuality: imageCapability?.defaultQuality,
           imageBackground: imageCapability?.defaultBackground,
-        } : {}),
-        ...(nodeType === 'ai-video' && modelChanged ? {
-          videoResolution: undefined,
-          videoFps: undefined,
-          videoFrames: undefined,
-          seedanceResolution: undefined,
-          seedanceRatio: undefined,
-          seedanceDuration: undefined,
-          generateAudio: undefined,
         } : {}),
         ...(modelChanged && audioCapability ? {
           audioVoice: audioCapability.kind === 'speech' && audioCapability.voices?.includes(current.audioVoice ?? '')

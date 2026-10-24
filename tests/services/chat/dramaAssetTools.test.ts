@@ -53,6 +53,8 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
     currentProjectId: 'p1',
+    projectLoadStatus: 'ready',
+    saveCurrentProjectSilent: vi.fn(async () => 'p1'),
     dramaAssets: { ...emptyDramaAssetLibrary(), characters: [character()] },
     loadGlobalDramaAssets: vi.fn(async () => undefined),
   });
@@ -112,7 +114,7 @@ describe('drama asset agent tools', () => {
     const bound = await tool.execute(context(), input);
     expect(bound.status).toBe('success');
     expect(JSON.parse(bound.modelContent)).toMatchObject({ assetId, kind, imageReady: true, reused: false,
-      mention: `@drama{${assetId}:参考资产}` });
+      referenceImageId: 'mcp-image-p1-image-1', mention: `@drama{${assetId}#mcp-image-p1-image-1:参考资产}` });
     expect(useAppStore.getState().nodes).toBe(before);
     const read = await getAgentTool('drama_asset_get')!.execute(context(), { assetId });
     expect(JSON.parse(read.modelContent)).toMatchObject({ imageNodeId: 'image-1', imageReady: true });
@@ -431,26 +433,30 @@ describe('drama asset agent tools', () => {
     registerDramaAssetAgentTools();
     mediaNodes();
     const asset = visualAsset(kind);
-    const bind = vi.fn(async (_kind, _assetId, _nodeId, options) => { options.assertCurrent(); return true; });
+    const addReference = vi.fn<ReturnType<typeof useAppStore.getState>['addDramaAssetReferenceImage']>(
+      async (_scope, _kind, _assetId, _reference, options) => { options?.assertCurrent?.(); return true; },
+    );
     const projectBind = vi.fn();
     useAppStore.setState({ globalScenes: kind === 'scene' ? [asset as DramaScene] : [],
-      globalProps: kind === 'prop' ? [asset as DramaProp] : [], bindGlobalDramaAssetImage: bind, bindDramaAssetImage: projectBind });
+      globalProps: kind === 'prop' ? [asset as DramaProp] : [], addDramaAssetReferenceImage: addReference, bindDramaAssetImage: projectBind });
     const before = useAppStore.getState().nodes;
     const signal = new AbortController().signal;
     const tool = getAgentTool('drama_reference_image_add')!;
     const input = { scope: 'global', assetId: asset.id, nodeId: 'image-1' };
     const result = await tool.execute({ ...context(), signal }, input);
     expect(result.status).toBe('success');
-    expect(bind).toHaveBeenCalledWith(kind, asset.id, 'image-1', { signal, assertCurrent: expect.any(Function) });
+    expect(addReference).toHaveBeenCalledWith('global', kind, asset.id, expect.objectContaining({
+      id: 'mcp-image-p1-image-1', sourceNodeId: 'image-1', assetId: 'image-asset', imageUrl: 'asset:///private/image.png',
+    }), { signal, assertCurrent: expect.any(Function), makePrimary: undefined });
     expect(JSON.parse(result.modelContent)).toMatchObject({ kind, scope: 'global', imageReady: true,
-      mention: `@drama{global/${asset.id}:参考资产}` });
+      referenceImageId: 'mcp-image-p1-image-1', mention: `@drama{global/${asset.id}#mcp-image-p1-image-1:参考资产}` });
     expect(result.modelContent).not.toContain('asset:///');
     expect(projectBind).not.toHaveBeenCalled();
     expect(useAppStore.getState().nodes).toBe(before);
     expect((await getAgentTool('drama_voice_add')!.execute(context(), { ...input, nodeId: 'audio-1' })).status).toBe('error');
-    bind.mockResolvedValueOnce(false);
+    addReference.mockResolvedValueOnce(false);
     expect((await tool.execute(context(), input)).status).toBe('error');
-    bind.mockRejectedValueOnce(new Error('private-path-must-not-leak'));
+    addReference.mockRejectedValueOnce(new Error('private-path-must-not-leak'));
     const failed = await tool.execute(context(), input);
     expect(failed.status).toBe('error');
     expect(failed.modelContent).not.toContain('private-path');
@@ -462,8 +468,8 @@ describe('drama asset agent tools', () => {
     const asset = visualAsset('scene') as DramaScene;
     const controller = new AbortController();
     let revision = useAppStore.getState().getCurrentRevision();
-    const bind = vi.fn(async () => true);
-    useAppStore.setState({ globalScenes: [asset], bindGlobalDramaAssetImage: bind, getCurrentRevision: () => revision,
+    const addReference = vi.fn(async () => true);
+    useAppStore.setState({ globalScenes: [asset], addDramaAssetReferenceImage: addReference, getCurrentRevision: () => revision,
       loadGlobalDramaAssets: vi.fn(async () => {
         if (change === 'project') useAppStore.setState({ currentProjectId: 'other' });
         if (change === 'revision') revision += 1;
@@ -472,7 +478,7 @@ describe('drama asset agent tools', () => {
     const result = await getAgentTool('drama_reference_image_add')!.execute({ ...context(), baseRevision: revision, signal: controller.signal },
       { scope: 'global', assetId: asset.id, nodeId: 'image-1' });
     expect(result.status).toBe('error');
-    expect(bind).not.toHaveBeenCalled();
+    expect(addReference).not.toHaveBeenCalled();
   });
 
   it('passes a live task guard to prevent committing after media persistence changes the canvas', async () => {
@@ -480,16 +486,18 @@ describe('drama asset agent tools', () => {
     mediaNodes();
     const asset = visualAsset('scene') as DramaScene;
     const commit = vi.fn();
-    const bind = vi.fn(async (_kind, _assetId, _nodeId, options) => {
+    const addReference = vi.fn<ReturnType<typeof useAppStore.getState>['addDramaAssetReferenceImage']>(async (_scope, _kind, _assetId, _reference, options) => {
       useAppStore.setState({ currentProjectId: 'other' });
-      options.assertCurrent();
+      options?.assertCurrent?.();
       commit();
       return true;
     });
-    useAppStore.setState({ globalScenes: [asset], bindGlobalDramaAssetImage: bind });
+    useAppStore.setState({ globalScenes: [asset], addDramaAssetReferenceImage: addReference });
     const result = await getAgentTool('drama_reference_image_add')!.execute(context(),
       { scope: 'global', assetId: asset.id, nodeId: 'image-1' });
     expect(result.status).toBe('error');
+    expect(addReference).toHaveBeenCalledWith('global', 'scene', asset.id, expect.any(Object),
+      expect.objectContaining({ assertCurrent: expect.any(Function) }));
     expect(commit).not.toHaveBeenCalled();
   });
 

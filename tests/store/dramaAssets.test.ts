@@ -151,8 +151,8 @@ describe('全局创作资产包批量导入', () => {
     globalDramaMocks.loadGlobalDramaAssetCards.mockResolvedValue([original]);
     useAppStore.setState({ currentProjectId: null, projectLoadStatus: 'error' });
     const imported = sampleCharacter({ id: 'imported-global', libraryOrder: 42 });
-    const scene: DramaScene = { ...imported, kind: 'scene', id: 'imported-scene' };
-    const prop: DramaProp = { ...imported, kind: 'prop', id: 'imported-prop' };
+    const scene: DramaScene = { ...imported, kind: 'scene', id: 'imported-scene', referenceImages: undefined };
+    const prop: DramaProp = { ...imported, kind: 'prop', id: 'imported-prop', referenceImages: undefined };
     const pending = deferred<DramaAsset[]>();
     globalDramaMocks.addImportedGlobalDramaAssets.mockReturnValueOnce(pending.promise);
     const importing = useAppStore.getState().importGlobalDramaAssets([imported, scene, prop]);
@@ -218,6 +218,8 @@ describe('全局创作资产包批量导入', () => {
 });
 
 describe('项目创作资产主图身份同步', () => {
+  beforeEach(() => useAppStore.setState({ projectLoadStatus: 'ready' }));
+
   it.each(['scene', 'prop'] as const)('%s 生成补绑和改绑同步新身份，解绑移除全部主图引用', (kind) => {
     const asset = { kind, id: 'imported', name: '导入资产', key: '导入资产', summary: '', visualNotes: '',
       importance: 'main' as const, source: 'manual' as const, confirmed: true, createdAt: 1, updatedAt: 1,
@@ -248,6 +250,61 @@ describe('项目创作资产主图身份同步', () => {
     for (const field of ['imageNodeId', 'imageUrl', 'assetId', 'relativePath', 'filePath', 'imageAssetId', 'imageRelativePath']) {
       expect(current()).not.toHaveProperty(field);
     }
+  });
+
+  it.each(['scene', 'prop'] as const)('%s 首次生成从显式空参考图补绑，保留可持久化的主图身份', (kind) => {
+    const asset = { kind, id: 'empty-asset', name: '新资产', key: '新资产', summary: '', visualNotes: '',
+      importance: 'main' as const, source: 'manual' as const, confirmed: true, createdAt: 1, updatedAt: 1,
+      referenceImages: [] };
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(),
+      scenes: kind === 'scene' ? [asset as DramaScene] : [], props: kind === 'prop' ? [asset as DramaProp] : [] },
+    nodes: [{ id: 'generated-image', type: 'ai-image', position: { x: 0, y: 0 }, data: {
+      type: 'ai-image', label: '新图', prompt: '资产外观', assetId: 'generated-index',
+      relativePath: 'generated.png', filePath: '/project/generated.png',
+      dramaAssetId: asset.id, dramaAssetKind: kind,
+    } }] });
+    useAppStore.getState().syncDramaAssetImageFromNode('generated-image', 'asset://localhost/generated.png');
+    const current = kind === 'scene' ? useAppStore.getState().dramaAssets.scenes[0] : useAppStore.getState().dramaAssets.props[0];
+    expect(current.referenceImages).toEqual([expect.objectContaining({
+      id: current.primaryReferenceImageId, sourceNodeId: 'generated-image', imageUrl: 'asset://localhost/generated.png',
+      assetId: 'generated-index', relativePath: 'generated.png', filePath: '/project/generated.png',
+    })]);
+    expect(current).toMatchObject({ imageNodeId: 'generated-image', imageUrl: 'asset://localhost/generated.png',
+      assetId: 'generated-index', relativePath: 'generated.png', filePath: '/project/generated.png' });
+    expect(useAppStore.getState().saveCurrentProjectSilent).toHaveBeenCalledOnce();
+    useAppStore.getState().syncDramaAssetImageFromNode('generated-image', 'asset://localhost/generated.png');
+    const unchanged = kind === 'scene' ? useAppStore.getState().dramaAssets.scenes[0] : useAppStore.getState().dramaAssets.props[0];
+    expect(unchanged).toBe(current);
+    expect(useAppStore.getState().saveCurrentProjectSilent).toHaveBeenCalledOnce();
+  });
+
+  it.each(['scene', 'prop'] as const)('%s 次参考重新生成只更新自身，不被节点归属兜底抢占主图', (kind) => {
+    const primary = { id: 'primary', label: '主图', prompt: '', sourceNodeId: 'primary-node',
+      imageUrl: 'asset://localhost/primary.png', assetId: 'primary-index', relativePath: 'primary.png',
+      createdAt: 1, updatedAt: 1 };
+    const secondary = { id: 'secondary', label: '次图', prompt: '', sourceNodeId: 'secondary-node',
+      imageUrl: 'asset://localhost/old.png', assetId: 'old-global-index', relativePath: 'old.png',
+      assetSource: 'global' as const, createdAt: 1, updatedAt: 1 };
+    const asset = { kind, id: 'multi-image', name: '多图资产', key: '多图资产', summary: '', visualNotes: '',
+      importance: 'main' as const, source: 'manual' as const, confirmed: true, createdAt: 1, updatedAt: 1,
+      referenceImages: [primary, secondary], primaryReferenceImageId: primary.id,
+      imageNodeId: primary.sourceNodeId, imageUrl: primary.imageUrl, assetId: primary.assetId, relativePath: primary.relativePath };
+    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(),
+      scenes: kind === 'scene' ? [asset as DramaScene] : [], props: kind === 'prop' ? [asset as DramaProp] : [] },
+    nodes: [{ id: secondary.sourceNodeId, type: 'ai-image', position: { x: 0, y: 0 }, data: {
+      type: 'ai-image', label: '次图', assetId: 'regenerated-index', relativePath: 'regenerated.png',
+      filePath: '/project/regenerated.png', dramaAssetId: asset.id, dramaAssetKind: kind,
+    } }] });
+    useAppStore.getState().syncDramaAssetImageFromNode(secondary.sourceNodeId, 'asset://localhost/regenerated.png');
+    const current = kind === 'scene' ? useAppStore.getState().dramaAssets.scenes[0] : useAppStore.getState().dramaAssets.props[0];
+    expect(current).toMatchObject({ primaryReferenceImageId: primary.id, imageNodeId: primary.sourceNodeId,
+      imageUrl: primary.imageUrl, assetId: primary.assetId, relativePath: primary.relativePath });
+    expect(current.referenceImages?.[0]).toEqual(primary);
+    expect(current.referenceImages?.[1]).toMatchObject({ id: secondary.id, label: secondary.label,
+      imageUrl: 'asset://localhost/regenerated.png', assetId: 'regenerated-index',
+      relativePath: 'regenerated.png', filePath: '/project/regenerated.png' });
+    expect(current.referenceImages?.[1].assetSource).toBeUndefined();
+    expect(current.imageAssetId).toBeUndefined();
   });
 
   it('新增次参考不改变导入主图，替换当前参考或编辑主视觉同步完整身份', async () => {
@@ -321,8 +378,12 @@ describe('全局创作资产作用域与异步保存', () => {
     const pending = deferred<DramaAsset>();
     globalDramaMocks.saveGlobalDramaAssetCard.mockReturnValueOnce(pending.promise);
     const binding = useAppStore.getState().bindGlobalDramaAssetImage('scene', original.id, 'image-source');
-    expect(globalDramaMocks.saveGlobalDramaAssetCard).toHaveBeenCalledWith(expect.objectContaining({ imageAssetId: 'project-image' }),
-      expect.objectContaining({ imageFilePath: 'D:/project/source.png', assertCurrent: expect.any(Function) }));
+    expect(globalDramaMocks.saveGlobalDramaAssetCard).toHaveBeenCalledWith(expect.objectContaining({
+      referenceImages: [expect.objectContaining({ sourceNodeId: 'image-source', assetId: 'project-image',
+        filePath: 'D:/project/source.png', imageUrl: 'asset://localhost/source.png' })],
+    }), expect.objectContaining({ signal: expect.any(AbortSignal), assertCurrent: expect.any(Function) }));
+    const savedInput = globalDramaMocks.saveGlobalDramaAssetCard.mock.calls[0][0];
+    expect(savedInput.kind !== 'character' && savedInput.primaryReferenceImageId).toBe(savedInput.referenceImages?.[0].id);
     useAppStore.setState({ currentProjectId: 'p2' });
     pending.resolve({ ...original, imageAssetId: 'global-image', imageUrl: 'asset://localhost/global.png' });
     expect(await binding).toBe(false);
@@ -360,7 +421,7 @@ describe('全局创作资产作用域与异步保存', () => {
 
   it('项目场景改绑或解绑图片清除复制时的全局主图身份', () => {
     const copied = { ...scene(), imageAssetId: 'global-image', imageRelativePath: 'global.png' };
-    useAppStore.setState({ dramaAssets: { ...emptyDramaAssetLibrary(), scenes: [copied] }, nodes: [{
+    useAppStore.setState({ projectLoadStatus: 'ready', dramaAssets: { ...emptyDramaAssetLibrary(), scenes: [copied] }, nodes: [{
       id: 'new-image', type: 'source-image', position: { x: 0, y: 0 },
       data: { type: 'source-image', label: '新图', imageUrl: 'data:image/png;base64,AA==' },
     }] });

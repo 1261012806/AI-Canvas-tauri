@@ -47,6 +47,38 @@ beforeEach(() => {
 });
 
 describe('config hydration guard', () => {
+  it.each(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi'])(
+    '%s 的声明式模型同步保留稳定身份、连接隔离及取消勾选语义', (catalogId) => {
+      useAppStore.setState((state) => ({ config: { ...state.config,
+        generalModels: [{ id: 'unrelated-model', name: '其他连接', modelId: 'same-model', category: 'text', providerConfigId: 'other' }],
+      } }));
+      const providerConfigId = `${catalogId}-connection`;
+      const selected = { id: 'same-model', name: '初始名称', category: 'text' as const, provider: providerConfigId,
+        executionProfile: { preset: 'openai-chat' as const } };
+      useAppStore.getState().saveProviderConfig(providerConfigId, { name: '测试连接', catalogId, apiKey: 'fixture', selectedModels: [selected] });
+      const first = useAppStore.getState().config.generalModels!.find((model) => model.providerConfigId === providerConfigId)!;
+      expect(first).toMatchObject({ modelId: selected.id, providerConfigId, executionProfile: selected.executionProfile });
+      useAppStore.getState().saveProviderConfig(providerConfigId, { name: '测试连接', catalogId, apiKey: 'fixture',
+        selectedModels: [{ ...selected, name: '更新名称' }] });
+      expect(useAppStore.getState().config.generalModels!.find((model) => model.providerConfigId === providerConfigId))
+        .toMatchObject({ id: first.id, name: '更新名称' });
+      useAppStore.getState().saveProviderConfig(providerConfigId, { name: '测试连接', catalogId, apiKey: 'fixture', selectedModels: [] });
+      expect(useAppStore.getState().config.generalModels).toEqual([
+        expect.objectContaining({ id: 'unrelated-model', providerConfigId: 'other' }),
+      ]);
+    },
+  );
+
+  it.each([undefined, 'unknown-relay', 'apimart', 'grsai', 'dreamina', 'runninghub-model'])(
+    'catalogId 为 %s 时不把选中目录误同步成声明式通用模型', (catalogId) => {
+      const existing = { id: 'existing-model', name: '已有配置', modelId: 'kept', category: 'text' as const, providerConfigId: 'libapi' };
+      useAppStore.setState((state) => ({ config: { ...state.config, generalModels: [existing] } }));
+      useAppStore.getState().saveProviderConfig('libapi', { name: '测试连接', catalogId, apiKey: 'fixture',
+        selectedModels: [{ id: 'replacement', name: '不能替换', category: 'text', provider: 'libapi' }] });
+      expect(useAppStore.getState().config.generalModels).toEqual([existing]);
+    },
+  );
+
   it('keeps each image model capability through provider synchronization and reload', async () => {
     fileMocks.loadConfig.mockResolvedValue({ providers: {} });
     await useAppStore.getState().loadConfig();

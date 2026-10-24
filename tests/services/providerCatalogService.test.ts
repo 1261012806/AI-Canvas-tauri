@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchProviderModelCatalog,
   getProviderDefinition,
+  getProviderDefinitions,
   createConnectionId,
   resolveProviderImageModelForValidation,
 } from '../../src/services/ai/providerCatalogService';
@@ -14,6 +15,8 @@ import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiMod
 import { useAppStore } from '../../src/store/useAppStore';
 import type { ApiProviderConfig, AppConfig, ProviderModelSelection } from '../../src/types';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
+import { getProviderPolicy } from '../../src/services/ai/providerPolicies';
+import { resolveGeneralModelConnection } from '../../src/services/ai/helpers';
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -21,6 +24,54 @@ function jsonResponse(body: unknown): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+describe('厂商定义与接线策略', () => {
+  it('目录沿用单一策略实例，连接类型不由显示名或同名 ID 覆盖', () => {
+    for (const definition of getProviderDefinitions()) expect(definition.policy).toBe(getProviderPolicy(definition.id));
+    const custom = getProviderDefinition('libapi', { catalogId: 'custom-openai' });
+    expect(custom?.id).toBe('custom-openai');
+    expect(custom?.policy.upload).toBeUndefined();
+    expect(getProviderDefinition('自己的站点', { catalogId: 'libapi' })?.policy.upload).toBe('libapi');
+  });
+
+  it('模型连接只解析一次真实定义和默认地址，不借用其他连接 Key', () => {
+    const previous = useAppStore.getState().config;
+    try {
+      useAppStore.setState({ config: { ...previous, providers: {
+        '自己的站点': { name: '自己的站点', catalogId: 'libapi', apiKey: 'own-key' },
+        libapi: { name: '同名自定义', catalogId: 'custom-openai', apiKey: 'custom-key', baseUrl: 'https://custom.example/v1' },
+      }, generalModels: [
+        { id: 'real', name: '视频', category: 'video', providerConfigId: '自己的站点', modelId: 'vo-3.1' },
+        { id: 'custom', name: '视频', category: 'video', providerConfigId: 'libapi', modelId: 'vo-3.1' },
+      ] } });
+      expect(resolveGeneralModelConnection('general/real')).toMatchObject({ apiKey: 'own-key', baseUrl: 'https://libapi.cc/v1',
+        definition: { id: 'libapi', policy: { upload: 'libapi' } } });
+      expect(resolveGeneralModelConnection('general/custom')).toMatchObject({ apiKey: 'custom-key', baseUrl: 'https://custom.example/v1',
+        definition: { id: 'custom-openai' } });
+      expect(resolveGeneralModelConnection('general/custom')?.definition?.policy.upload).toBeUndefined();
+    } finally {
+      useAppStore.setState({ config: previous });
+    }
+  });
+
+  it.each([
+    ['cccapi', undefined, true], ['cccapi', '白嫖', false],
+    ['toapis', undefined, false], ['libapi', undefined, false], ['custom-openai', undefined, true],
+  ] as const)('%s 的目录失败兜底保留原有分组条件（%s）', async (catalogId, cccGroup, allowFallback) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const fallback: ProviderModelSelection[] = [{ id: 'saved-model', name: '旧候选', provider: catalogId, category: 'text' }];
+    try {
+      const request = fetchProviderModelCatalog({ providerId: '任意连接名', config: {
+        name: '连接', catalogId, cccGroup, apiKey: 'fixture', baseUrl: 'https://relay.example/v1',
+      }, fallbackModels: fallback });
+      if (allowFallback) expect(await request).toMatchObject({ source: 'local-fallback', models: [{ ...fallback[0], provider: '任意连接名' }] });
+      else await expect(request).rejects.toThrow('503');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe('LibAPI 内置目录与连接身份', () => {
   afterEach(() => vi.unstubAllGlobals());

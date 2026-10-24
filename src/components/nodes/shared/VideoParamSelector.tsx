@@ -479,9 +479,7 @@ export default function VideoParamSelector({
   // 非 Seedance（ComfyUI / RunningHub / 自建模型）：比例换算成 width/height 后注入请求
   const genericRatios = VIDEO_ASPECT_RATIOS.map((value) => ({ value, label: value }));
   const showGenericRatio = showSeedanceRatio;
-  const genericRatio = genericRatios.some((item) => item.value === legacySeedanceRatio)
-    ? legacySeedanceRatio
-    : VIDEO_ASPECT_RATIOS[0];
+  const genericRatio = legacySeedanceRatio;
   const declaredResolutions = parameterCapability?.resolutions?.length
     ? parameterCapability.resolutions
     : parameterCapability?.defaultResolution
@@ -584,14 +582,10 @@ export default function VideoParamSelector({
     : seedanceResolution && seedanceResolutions.some((item) => item.value === seedanceResolution)
       ? seedanceResolution
       : parameterCapability?.defaultResolution ?? seedanceResolutions[0]?.value ?? '720p';
-  const displayedRatio = generalModel
+  // 比例属于用户选择；新模型不支持时保留原值，由提交前校验提示，不能悄悄换成模型默认。
+  const displayedRatio = seedanceRatio ?? (generalModel
     ? generalDisplayState.ratio
-      && (!declaredRatios || seedanceRatios.some((item) => item.value === generalDisplayState.ratio))
-      ? generalDisplayState.ratio
-      : parameterCapability?.defaultRatio
-    : seedanceRatio && seedanceRatios.some((item) => item.value === seedanceRatio)
-      ? seedanceRatio
-      : parameterCapability?.defaultRatio ?? seedanceRatios[0]?.value ?? '16:9';
+    : parameterCapability?.defaultRatio ?? seedanceRatios[0]?.value ?? '16:9');
   const configuredFrameRates = generalCapability?.frameRates?.length
     ? [...generalCapability.frameRates].sort((left, right) => left - right)
     : generalCapability?.defaultFrameRate === undefined
@@ -627,6 +621,8 @@ export default function VideoParamSelector({
   const displayedGenerateAudio = generateAudio
     ?? nativeCapability?.defaultAudio
     ?? false;
+  // 原生合同缺少 audioField 只表示没有开关，不能据此断言模型不能生成音轨。
+  const explicitlyUnsupportedAudio = (generalCapability ?? grsaiCapability ?? workflowApiCapability)?.supportsAudio === false;
 
   useEffect(() => {
     if (!parameterCapability) return;
@@ -635,17 +631,15 @@ export default function VideoParamSelector({
       && displayedResolution !== seedanceResolution) {
       onChangeSeedanceResolution?.(displayedResolution);
     }
-    if (displayedRatio !== undefined
-      && (isNativeSeedance || generalCapability?.defaultRatio !== undefined)
-      && displayedRatio !== seedanceRatio) {
-      onChangeSeedanceRatio?.(displayedRatio);
-    }
     if (displayedDuration !== undefined
       && (isNativeSeedance
         || generalCapability?.defaultDuration !== undefined
         || generalCapability?.automaticDurationValue !== undefined)
       && displayedDuration !== seedanceDuration) {
       onChangeSeedanceDuration?.(displayedDuration);
+    }
+    if (generateAudio === true && explicitlyUnsupportedAudio) {
+      onChangeGenerateAudio?.(undefined);
     }
     if (displayedFrameRate !== undefined
       && showFrameRateControl
@@ -656,21 +650,20 @@ export default function VideoParamSelector({
   }, [
     parameterCapability,
     displayedDuration,
-    displayedRatio,
     displayedResolution,
     displayedFrameRate,
     generalCapability?.defaultDuration,
     generalCapability?.automaticDurationValue,
     generalCapability?.defaultFrameRate,
-    generalCapability?.defaultRatio,
     generalCapability?.defaultResolution,
+    explicitlyUnsupportedAudio,
+    generateAudio,
     isNativeSeedance,
     onChangeSeedanceDuration,
-    onChangeSeedanceRatio,
+    onChangeGenerateAudio,
     onChangeSeedanceResolution,
     onChangeFps,
     seedanceDuration,
-    seedanceRatio,
     seedanceResolution,
     showFrameRateControl,
     videoFps,
@@ -965,60 +958,50 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                       <span>{t('生成时长（秒）')}</span>
                       <span className="rh-tip" data-tooltip={durationTooltip}>!</span>
                     </div>
-                    {generalModel
-                      && generalCapability?.defaultDuration === undefined
-                      && generalCapability?.automaticDurationValue === undefined && (
+                    {((generalModel && generalCapability?.defaultDuration === undefined
+                      && generalCapability?.automaticDurationValue === undefined) || automaticDurationValue !== undefined
+                      || (!automaticDurationOnly && allowedDurations)) && (
+                    <div className="ui-segmented ui-segmented--brand" role="group" aria-label={t('生成时长（秒）')}>
+                      {generalModel && generalCapability?.defaultDuration === undefined
+                        && generalCapability?.automaticDurationValue === undefined && (
                       <button
                         type="button"
                         aria-pressed={displayedDuration === undefined}
                         onClick={() => onChangeSeedanceDuration?.(undefined)}
-                        className={`mb-2 min-h-7 rounded-full border px-3 py-1 text-[11px] leading-4 transition-colors ${
-                          displayedDuration === undefined
-                            ? 'border-blue-400/70 bg-blue-400/15 text-blue-200'
-                            : 'border-canvas-border text-canvas-text-secondary hover:border-blue-400/40 hover:text-canvas-text'
-                        }`}
+                        className={`ui-segmented__item${displayedDuration === undefined ? ' is-active' : ''}`}
                       >
                         {t('模型默认')}
                       </button>
-                    )}
-                    {generalModel && displayedDuration === undefined && (
-                      <div className="mb-2 text-[10px] text-canvas-text-muted">
-                        {t('当前未指定时长；选择或输入数值后才会显式提交。')}
-                      </div>
                     )}
                     {automaticDurationValue !== undefined && (
                       <button
                         type="button"
                         aria-pressed={displayedDuration === automaticDurationValue}
                         onClick={() => onChangeSeedanceDuration?.(automaticDurationValue)}
-                        className={`mb-2 min-h-7 rounded-full border px-3 py-1 text-[11px] leading-4 transition-colors ${
-                          displayedDuration === automaticDurationValue
-                            ? 'border-blue-400/70 bg-blue-400/15 text-blue-200'
-                            : 'border-canvas-border text-canvas-text-secondary hover:border-blue-400/40 hover:text-canvas-text'
-                        }`}
+                        className={`ui-segmented__item${displayedDuration === automaticDurationValue ? ' is-active' : ''}`}
                       >
                         {t('自动')}
                       </button>
                     )}
-                    {!automaticDurationOnly && (allowedDurations ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {allowedDurations.map((value) => (
+                    {!automaticDurationOnly && allowedDurations?.map((value) => (
                           <button
                             key={value}
                             type="button"
                             aria-pressed={displayedDuration === value}
                             onClick={() => onChangeSeedanceDuration?.(value)}
-                            className={`min-h-7 rounded-full border px-3 py-1 text-[11px] leading-4 transition-colors ${
-                              displayedDuration === value
-                                ? 'border-blue-400/70 bg-blue-400/15 text-blue-200'
-                                : 'border-canvas-border text-canvas-text-secondary hover:border-blue-400/40 hover:text-canvas-text'
-                            }`}
+                            className={`ui-segmented__item${displayedDuration === value ? ' is-active' : ''}`}
                           >
                             {value}s
                           </button>
                         ))}
+                    </div>
+                    )}
+                    {generalModel && displayedDuration === undefined && (
+                      <div className="mb-2 text-[10px] text-canvas-text-muted">
+                        {t('当前未指定时长；选择或输入数值后才会显式提交。')}
                       </div>
-                    ) : useUnboundedDurationInput ? (
+                    )}
+                    {!automaticDurationOnly && !allowedDurations && (useUnboundedDurationInput ? (
                       <input
                         type="number"
                         className="h-8 w-full rounded-md border border-canvas-border bg-canvas-card px-2 text-[11px] text-canvas-text outline-none focus:border-blue-400/60"

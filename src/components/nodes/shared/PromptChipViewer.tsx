@@ -308,7 +308,7 @@ export function renderPromptWithChips(
         const mention = parseComfyRefmodMentions(match[0]).mentions[0];
         if (!mention) throw new Error('引用无效');
         const ref = mention.selection;
-        const title = t('{label} · ComfyUI 角色 · 加载节点 #{node} / 槽位 {slot}{strength}', { label: mention.label, node: ref.loaderNodeId, slot: ref.slot, strength: ref.loaderType === 'refmods-lab' ? '' : t(' · 强度 {value}', { value: ref.strength }) });
+        const title = t('{label} · ComfyUI 角色 · 加载节点 #{node} / 槽位 {slot}{strength}', { label: mention.label, node: ref.loaderNodeId || '—', slot: ref.slot ?? '—', strength: ref.loaderType === 'refmods-lab' ? '' : t(' · 强度 {value}', { value: ref.strength }) });
         elements.push(<span key={`refmod-${match.index}`} className="prompt-chip chip-text" title={title}>
           <span className="prompt-chip-icon" aria-hidden="true">R</span>
           <span className="prompt-chip-id">{mention.label}</span>

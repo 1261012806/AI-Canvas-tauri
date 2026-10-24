@@ -24,6 +24,7 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
     ...await vi.importActual<typeof import('react')>('react'),
     useCallback: <T,>(callback: T) => callback,
     useMemo: <T,>(factory: () => T) => factory(),
+    useSyncExternalStore: <T,>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
     useEffect: (effect: () => void | (() => void)) => { effects.push(effect); },
     useRef: <T,>(initial: T) => {
       const index = cursor++;

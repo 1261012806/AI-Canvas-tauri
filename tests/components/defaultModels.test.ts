@@ -484,6 +484,47 @@ describe('LibAPI 独立模型分组', () => {
   });
 });
 
+describe('声明式厂商菜单的分组范围', () => {
+  it.each([
+    { catalogId: 'cccapi', name: 'CCC API', badge: 'CCC', sharedGroup: true },
+    { catalogId: 'toapis', name: 'ToAPIs', badge: 'T', sharedGroup: false },
+    { catalogId: 'libapi', name: 'LibAPI', badge: 'LIB', sharedGroup: false },
+    { catalogId: 'sora2u', name: 'Sora2U', badge: 'S2U', sharedGroup: false },
+  ])('$catalogId 的节点和对话菜单保留连接身份及原分组范围', ({ catalogId, name, badge, sharedGroup }) => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      left: { name: '左连接', catalogId, apiKey: 'left-fixture' },
+      right: { name: '右连接', catalogId, apiKey: 'right-fixture' },
+    } };
+    const models = ['left', 'right'].map((providerConfigId) => ({ id: providerConfigId, name: providerConfigId,
+      modelId: 'same-remote-id', category: 'image' as const, providerConfigId }));
+    const expectedGroups = sharedGroup ? [`general-provider-${catalogId}`] : ['general-provider-left', 'general-provider-right'];
+    const groups = getGeneralModelGroups(models, config, 'ai-image');
+    expect(groups.map((group) => group.id)).toEqual(expectedGroups);
+    expect(groups.every((group) => group.name === name && group.badgeText === badge)).toBe(true);
+    expect(groups.flatMap((group) => group.models.map((model) => model.value))).toEqual(['general/left', 'general/right']);
+    const media = getMediaModelOptions(models, config).filter((model) => model.provider === 'general');
+    expect(media.map((model) => model.value)).toEqual(['general/left', 'general/right']);
+    expect([...new Set(media.map((model) => model.groupId))]).toEqual(expectedGroups);
+    expect(media.every((model) => model.groupName === name)).toBe(true);
+  });
+
+  it('显式自定义厂商身份优先于连接名，未声明独立菜单的官方模型仍在通用分组', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      libapi: { name: '同名自定义连接', catalogId: 'custom-openai', apiKey: 'fixture' },
+      official: { name: '官方连接', catalogId: 'google', apiKey: 'fixture' },
+    } };
+    const models = ['libapi', 'official'].map((providerConfigId) => ({ id: providerConfigId, name: providerConfigId,
+      modelId: 'same-remote-id', category: 'image' as const, providerConfigId }));
+    expect(getGeneralModelGroups(models, config, 'ai-image')).toEqual([
+      expect.objectContaining({ id: 'general-models', models: [
+        expect.objectContaining({ value: 'general/libapi' }), expect.objectContaining({ value: 'general/official' }),
+      ] }),
+    ]);
+    expect(getMediaModelOptions(models, config).filter((model) => model.provider === 'general')
+      .every((model) => model.groupId === 'general-models')).toBe(true);
+  });
+});
+
 describe('自定义连接模型的来源标注', () => {
   const config: AppConfig = {
     providers: {
