@@ -76,6 +76,7 @@ import { readAppSecret } from '../providerSecretService';
 import { quoteVolcengineVideo } from '../billing/volcenginePricing';
 import { createBillingRun, updateBillingRun } from '../billing/volcengineBillingService';
 import { assertToapisVideoInput, toapisVideoVariables } from './providers/toapisModelManifest';
+import { assertLibapiVideoInput, libapiVideoVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
 
 export { compileVideoReferencePrompt } from './referencePrompt';
 
@@ -218,7 +219,7 @@ async function resolveGeneralProtocolMediaUrls(
 ): Promise<string[]> {
   return mapSequentially(references.filter((reference) => reference.kind === kind), async (reference) => {
     const url = getMediaReferenceUrl(reference);
-    // ToAPIs 必须使用自己的上传 URL；其他通用协议继续沿用 data URL。
+    // 仅要求公网素材的厂商使用所属连接上传；其他通用协议继续沿用 data URL。
     return resolveMediaReferenceUrl(url, {
       mode: publicUrlProvider ? 'publicUrl' : 'dataUrl', provider: publicUrlProvider, kind, signal, dataUrlBudget: budget,
     });
@@ -789,7 +790,10 @@ export async function generateVideo(
       capability: videoCapability,
     });
     const isToapis = connection.providerConfigId === 'toapis' || connection.provider.catalogId === 'toapis';
+    const isLibapi = connection.providerConfigId === 'libapi' || connection.provider.catalogId === 'libapi';
+    const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
     if (isToapis) assertToapisVideoInput(preflight);
+    if (usesLibapiProtocol) assertLibapiVideoInput(preflight);
     if (resolveModelExecutionProfile(gm.executionProfile)) {
       const dataUrlBudget = createMediaDataUrlBudget('本次视频模型参考媒体');
       const remoteImageUrls = await resolveImageUrlsSequentially(
@@ -798,10 +802,10 @@ export async function generateVideo(
         signal,
       );
       const videoUrls = await resolveGeneralProtocolMediaUrls(
-        originalReferences, 'video', dataUrlBudget, signal, isToapis ? connection.providerConfigId : undefined,
+        originalReferences, 'video', dataUrlBudget, signal, isToapis || isLibapi ? connection.providerConfigId : undefined,
       );
       const audioUrls = await resolveGeneralProtocolMediaUrls(
-        originalReferences, 'audio', dataUrlBudget, signal, isToapis ? connection.providerConfigId : undefined,
+        originalReferences, 'audio', dataUrlBudget, signal, isToapis || isLibapi ? connection.providerConfigId : undefined,
       );
       const remoteReferences = replaceReferenceUrls(originalReferences, {
         image: remoteImageUrls,
@@ -836,7 +840,8 @@ export async function generateVideo(
         nodeId: params.nodeId,
         signal,
         variables: isToapis ? toapisVideoVariables(canonicalRequest, buildCanonicalVideoProtocolVariables(canonicalRequest))
-          : buildCanonicalVideoProtocolVariables(canonicalRequest),
+          : usesLibapiProtocol ? libapiVideoVariables(canonicalRequest, buildCanonicalVideoProtocolVariables(canonicalRequest))
+            : buildCanonicalVideoProtocolVariables(canonicalRequest),
       });
       const url = urls[0];
       if (!url) throw new Error('视频生成完成但未返回结果');

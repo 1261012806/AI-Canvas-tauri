@@ -145,6 +145,45 @@ describe('media generation cancellation', () => {
 });
 
 describe('media generation project settings', () => {
+  it('passes selected general speech parameters through to the original canvas and message execution', async () => {
+    mocks.storeState.config.providers.libapi = { name: 'LibAPI', apiKey: 'fixture', baseUrl: 'https://libapi.cc/v1' };
+    mocks.storeState.config.generalModels = [{ id: 'audio-libapi', name: 'LibAPI TTS', modelId: 'speech-2.8',
+      category: 'audio', providerConfigId: 'libapi' }];
+    const context = { projectId: 'project-1', conversationId: 'speech-chat', messageId: 'speech-message', deliveryMode: 'both' as const };
+
+    await runMediaGeneration({ kind: 'audio', prompt: '欢迎回来', modelRef: 'general/audio-libapi',
+      deliveryMode: 'both', audioPurpose: 'speech', audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25,
+    }, 'project-1', undefined, 'audio-node', context);
+
+    expect(mocks.generateAudio).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'general', model: 'general/audio-libapi', nodeId: 'audio-node',
+      audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25, runninghubTaskContext: context,
+    }), undefined);
+  });
+
+  it('passes music title and literal lyrics for a message-only generation without RunningHub parameters', async () => {
+    mocks.storeState.config.providers.libapi = { name: 'LibAPI', apiKey: 'fixture', baseUrl: 'https://libapi.cc/v1' };
+    mocks.storeState.config.generalModels = [{ id: 'audio-libapi-music', name: 'LibAPI Music', modelId: 'music',
+      category: 'audio', providerConfigId: 'libapi' }];
+
+    await runMediaGeneration({ kind: 'audio', prompt: '轻柔民谣', modelRef: 'general/audio-libapi-music',
+      deliveryMode: 'chat', audioPurpose: 'music', musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走',
+    }, 'project-1');
+
+    expect(mocks.generateAudio).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'general/audio-libapi-music', musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走',
+    }), undefined);
+    expect(mocks.generateAudio.mock.calls[0][0].runninghubModelParameters).toBeUndefined();
+  });
+
+  it('rejects audio controls on image generation before calling any media provider', async () => {
+    await expect(runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'openai/image-model',
+      deliveryMode: 'chat', audioVoice: 'Zephyr',
+    }, 'project-1')).rejects.toThrow('音频参数只能用于音频生成');
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateAudio).not.toHaveBeenCalled();
+  });
+
   it('RunningHub 使用专属参数与原节点，不注入项目的其他视频默认值', async () => {
     mocks.storeState.config.providers['runninghub-model'] = { name: 'RH', apiKey: 'fake' };
     mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { videoAspectRatio: '16:9', videoResolution: '1080p', videoDuration: 10 } } }];

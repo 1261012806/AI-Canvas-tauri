@@ -5,6 +5,7 @@
  * 上传策略：
  *  - provider === 'apimart' → APIMart /uploads/images（需 API Key）
  *  - ToAPIs 连接 → 当前站点 /uploads/{images,videos,audios}（仅使用该连接 Key）
+ *  - LibAPI 连接 → /v1/files（仅使用该连接 Key）
  *  - 其他 provider → uguu.se 免费图床（无需 API Key，直接返回无轮询）
  *
  * 缓存策略：
@@ -13,7 +14,7 @@
  */
 import { isLocalMediaUrl, isRemoteMediaUrl, isTauriAssetUrl, localMediaUrlToPath } from '../utils/mediaUrl';
 import { useAppStore } from '../store/useAppStore';
-import { APIMART_BASE_URL, TOAPIS_API_SITES, TOAPIS_BASE_URL } from '../constants/api';
+import { APIMART_BASE_URL, LIBAPI_BASE_URL, TOAPIS_API_SITES, TOAPIS_BASE_URL } from '../constants/api';
 import { bytePartsToBase64Async, getAssetUrlFromPath, isTauriEnv } from './fs/core';
 import {
   assertMediaDataUrlSize,
@@ -388,6 +389,39 @@ async function uploadToToapis(url: string, providerId: string, kind: MediaDataUr
   return result.data.url;
 }
 
+/** LibAPI 参考素材只使用当前连接上传，不借用公共图床或其他连接的 Key。 */
+async function uploadToLibapi(url: string, providerId: string, kind: MediaDataUrlKind, signal?: AbortSignal): Promise<string> {
+  const connection = useAppStore.getState().config.providers[providerId];
+  const apiKey = connection?.apiKey?.trim();
+  if (!apiKey) throw new Error('LibAPI 参考素材上传失败：请在「设置 → API Key → LibAPI」填写当前连接的 Key');
+  const baseUrl = (connection.baseUrl || LIBAPI_BASE_URL).trim().replace(/\/+$/, '');
+  if (baseUrl !== LIBAPI_BASE_URL) throw new Error('LibAPI 上传地址无效，请在「设置 → API Key → LibAPI」恢复官方接口地址');
+  const { blob, ext } = await urlToBlob(url, kind, undefined, signal);
+  if (blob.size > 50 * 1024 * 1024) throw new Error('LibAPI 单个上传文件不能超过 50 MB；模型自身的素材限制仍需分别满足');
+  const extension = ext.toLowerCase().split(';')[0];
+  const aliases: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov', mpeg: 'mp3', 'x-wav': 'wav', 'x-m4a': 'm4a' };
+  const filenameExt = kind === 'audio' && extension === 'mp4' ? 'm4a' : aliases[extension] ?? extension;
+  const allowed = kind === 'image' ? ['jpg', 'png', 'webp', 'gif', 'heic']
+    : kind === 'video' ? ['mp4', 'webm', 'mov'] : kind === 'audio' ? ['mp3', 'wav', 'm4a'] : [];
+  if (!allowed.includes(filenameExt)) throw new Error(`LibAPI ${mediaKindLabel(kind)}格式不支持，请按厂商文档转换文件格式后重试`);
+  const form = new FormData();
+  form.append('file', blob, `reference.${filenameExt}`);
+  const response = await corsSafeFetch(`${baseUrl}/files`, {
+    method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form, signal,
+  });
+  signal?.throwIfAborted();
+  if (!response.ok) throw new Error(`LibAPI ${mediaKindLabel(kind)}上传失败（HTTP ${response.status}），请检查当前连接的 Key、文件权限与体积限制`);
+  const result = await response.json().catch(() => {
+    signal?.throwIfAborted();
+    throw new Error('LibAPI 上传返回了无效 JSON');
+  }) as { url?: unknown } | null;
+  signal?.throwIfAborted();
+  if (typeof result?.url !== 'string' || !isRemoteMediaUrl(result.url)) {
+    throw new Error('LibAPI 上传未返回有效公网 URL，本次尚未提交生成请求；请重试上传');
+  }
+  return result.url;
+}
+
 // ── APIMart 上传 ──
 
 async function uploadToApimart(url: string, signal?: AbortSignal): Promise<string> {
@@ -579,7 +613,7 @@ function setCachedUrl(key: string, remoteUrl: string) {
 /**
  * 上传单个本地文件到远端图床
  * @param url    本地文件 URL（data: / asset: / file:）
- * @param provider 连接身份；ToAPIs 的全部媒体走自己的上传接口，APIMart 图片走其图床，其余走 uguu.se
+ * @param provider 连接身份；ToAPIs / LibAPI 的媒体走自己的上传接口，APIMart 图片走其图床，其余走 uguu.se
  * @returns 公网可访问的 URL
  */
 export async function uploadToRemote(
@@ -619,6 +653,8 @@ export async function uploadToRemote(
     const connection = useAppStore.getState().config.providers[provider];
     const publicUrl = provider === 'toapis' || connection?.catalogId === 'toapis'
       ? await uploadToToapis(url, provider, kind, operationSignal)
+      : provider === 'libapi' || connection?.catalogId === 'libapi'
+      ? await uploadToLibapi(url, provider, kind, operationSignal)
       : provider === 'apimart' && kind === 'image'
       ? await uploadToApimart(url, operationSignal)
       : await uploadToUguu(url, kind, operationSignal);

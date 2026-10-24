@@ -28,6 +28,8 @@ import * as volcengineBilling from '../../src/services/billing/volcengineBilling
 import { createSeedanceQuickAdaptTemplate } from '../../src/services/ai/seedanceModelCapabilities';
 import { resolveVideoSubmissionControls } from '../../src/services/ai/videoRequestResolver';
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
+import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
+import { getPendingTasksForProject } from '../../src/services/pollManager';
 import { buildCharacterVideoReferences, resolveVideoParameterInputMode } from '../../src/components/nodes/shared/VideoParamSelector';
 import type {
   ModelExecutionProfile,
@@ -1196,6 +1198,98 @@ describe('离散时长校验', () => {
 });
 
 describe('general video runtime safety', () => {
+  function configureLibapiVideo() {
+    const selected = LIBAPI_MODEL_MANIFEST.find((item) => item.id === 'seedance-2-5')!;
+    useAppStore.getState().saveProviderConfig('libapi-video-connection', {
+      name: 'LibAPI', catalogId: 'libapi', baseUrl: 'https://libapi.cc/v1', apiKey: 'libapi-video-fixture',
+      selectedModels: [selected],
+    });
+    const general = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'libapi-video-connection')!;
+    return { model: `general/${general.id}`, provider: 'general', prompt: '按参考素材生成连续镜头' };
+  }
+
+  it('LibAPI 视频和音频使用当前连接上传，异步结果等待保存与回填确认', async () => {
+    const params = configureLibapiVideo();
+    useAppStore.setState({ currentProjectId: 'libapi-video-project', nodes: [{ id: 'libapi-video-node', type: 'ai-video',
+      position: { x: 0, y: 0 }, data: { type: 'ai-video', label: 'LibAPI 视频', status: 'loading' } }] });
+    const resolve = vi.spyOn(uploadService, 'resolveMediaReferenceUrl').mockImplementation(async (_url, options) =>
+      `https://cdn.example/libapi-${options?.kind}.ref`);
+    // 媒体元数据约束在独立用例覆盖；本例只检查通过预检后的上传身份与请求映射。
+    const constraints = vi.spyOn(videoInputValidation, 'assertVideoInputConstraints').mockResolvedValue(undefined);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'libapi-video-task', status: 'pending' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed', is_final: true,
+        output_url: 'https://cdn.example/libapi-complete.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const result = await generateVideo({ ...params, nodeId: 'libapi-video-node', referenceMedia: [
+        { kind: 'video', role: 'reference', origin: 'connection', url: 'data:video/mp4;base64,dmlkZW8=' },
+        { kind: 'audio', role: 'reference_audio', origin: 'connection', url: 'data:audio/mpeg;base64,YXVkaW8=' },
+      ] });
+
+      expect(resolve).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        provider: 'libapi-video-connection', mode: 'publicUrl', kind: 'video',
+      }));
+      expect(resolve).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        provider: 'libapi-video-connection', mode: 'publicUrl', kind: 'audio',
+      }));
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ model_id: 'seedance-2-5', modality: 'video', params: {
+        mode: 'reference', count: 1, videos: ['https://cdn.example/libapi-video.ref'], audios: ['https://cdn.example/libapi-audio.ref'],
+      } });
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        'https://libapi.cc/api/v1/model-runtime/invoke', 'https://libapi.cc/v1/tasks/libapi-video-task',
+      ]);
+      expect(result).toMatchObject({ url: 'https://cdn.example/libapi-complete.mp4',
+        taskReceipt: { projectId: 'libapi-video-project', nodeId: 'libapi-video-node', taskId: 'libapi-video-task' } });
+      const pending = getPendingTasksForProject('libapi-video-project');
+      expect(pending).toEqual([expect.objectContaining({ taskId: 'libapi-video-task', providerConfigId: 'libapi-video-connection',
+        mediaRecoveryState: 'delivery_pending' })]);
+      expect(JSON.stringify(pending)).not.toContain('libapi-video-fixture');
+    } finally {
+      resolve.mockRestore();
+      constraints.mockRestore();
+    }
+  });
+
+  it.each([false, true])('LibAPI 显式首尾帧映射为厂商模式，首尾顺序保持稳定（尾帧 %s）', async (hasLastFrame) => {
+    const params = configureLibapiVideo();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'libapi-frame-task' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed', is_final: true,
+        output_url: 'https://cdn.example/libapi-frames.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const images = ['https://cdn.example/libapi-first.png', ...(hasLastFrame ? ['https://cdn.example/libapi-last.png'] : [])];
+
+    await generateVideo({ ...params, referenceMedia: images.map((url, index) => ({
+      kind: 'image' as const, role: index === 0 ? 'first_frame' as const : 'last_frame' as const, origin: 'connection' as const, url,
+    })) });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ params: {
+      mode: hasLastFrame ? 'first-last' : 'first-frame', images,
+    } });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('LibAPI 首帧与普通参考混用时在上传和付费提交前拒绝', async () => {
+    const params = configureLibapiVideo();
+    const resolve = vi.spyOn(uploadService, 'resolveMediaReferenceUrl');
+    const images = vi.spyOn(imageUtils, 'resolveImageUrlArray');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(generateVideo({ ...params, referenceMedia: [
+        { kind: 'image', role: 'first_frame', origin: 'connection', url: 'data:image/png;base64,Zmlyc3Q=' },
+        { kind: 'video', role: 'reference', origin: 'connection', url: 'data:video/mp4;base64,dmlkZW8=' },
+      ] })).rejects.toThrow(/首.*帧/);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(images).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+      images.mockRestore();
+    }
+  });
+
   it('ToAPIs 本地视频/音频转为所属连接的公网 URL，不再转换为 Base64', async () => {
     const selected = TOAPIS_MODEL_MANIFEST.find((item) => item.id === 'seedance-2-5')!;
     useAppStore.getState().saveProviderConfig('toapis-local', { name: 'ToAPIs', catalogId: 'toapis',

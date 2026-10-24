@@ -343,13 +343,21 @@ export interface ImageModelCapability {
 
 /**
  * 音频生成模型的能力声明，用于按模型约束音色 / 输出格式 / 参考音频等。
- * APIMart 目前只有 speech（TTS）与 music（Flow Music）两类，字段对齐各自协议。
+ * 这是运行期厂商合同，不写入用户模型持久化结构；未声明的控件不代表平台支持。
  */
 export interface AudioModelCapability {
   /** 能力类型：speech = 语音合成（TTS），music = 音乐生成（Flow Music）。 */
   kind: 'speech' | 'music';
   /** 支持的音色列表（仅 speech 生效）。 */
   voices?: string[];
+  /** 预置音色选择，或用户已存在的平台音色 ID；后者不等于上传音频自动克隆。 */
+  voiceInput?: 'select' | 'id';
+  defaultVoice?: string;
+  formats?: AudioOutputFormat[];
+  defaultFormat?: AudioOutputFormat;
+  speed?: { min: number; max: number; step?: number; options?: number[]; default?: number };
+  /** 明确声明普通音乐生成能接收哪些现有控件。 */
+  musicControls?: { title?: boolean; lyrics?: boolean; bpm?: boolean; duration?: boolean; autoGenerateLyrics?: boolean };
   /** 是否支持音色参考（连入的音频作为音色克隆）。当前 APIMart 两类均不支持。 */
   supportsVoiceReference?: boolean;
 }
@@ -623,9 +631,10 @@ export interface AIAudioGenParams {
   nodeId?: string;
 }
 
-export type AudioTtsVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
+/** 平台预置音色或用户已创建的音色 ID，由实际厂商合同校验。 */
+export type AudioTtsVoice = string;
 
-export type AudioOutputFormat = 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
+export type AudioOutputFormat = 'mp3' | 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
 
 export interface AudioGenerationResult {
   url: string;

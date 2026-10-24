@@ -9,6 +9,7 @@ import {
   CCCAPI_BASE_URL,
   EXA_SEARCH_BASE_URL,
   GRSAI_BASE_URL,
+  LIBAPI_BASE_URL,
   RUNNINGHUB_MODEL_BASE_URL,
   TAVILY_BASE_URL,
   TOAPIS_BASE_URL,
@@ -33,6 +34,7 @@ import { XAI_BASE_URL, XAI_MODEL_MANIFEST } from './providers/xaiModelManifest';
 import { GRSAI_ADDED_MODELS } from './grsaiModels';
 import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from './dreaminaModels';
 import { matchToapisCatalog, resolveToapisImageModelContract, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
+import { LIBAPI_MODEL_MANIFEST, matchLibapiCatalog, resolveLibapiModelId } from './providers/libapiModelManifest';
 import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { validateModelExecutionProtocol } from './modelProtocolValidation';
 import { filterCccGroupModels } from './cccProviderGroups';
@@ -295,6 +297,15 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultBaseUrl: TOAPIS_BASE_URL, modelsPath: '/models', allowCustomBaseUrl: false,
     externalUrl: 'https://toapis.cn/login?aff=SnMr',
     credentials: [{ ...API_KEY_FIELD, placeholder: 'sk-...' }], models: TOAPIS_MODEL_MANIFEST,
+  },
+  {
+    id: 'libapi', name: 'LibAPI',
+    description: '文本、图片、视频与音频模型，按官方目录配置调用参数。',
+    badgeText: 'LIB', authType: 'api-key', catalogAdapter: 'openai-compatible',
+    defaultBaseUrl: LIBAPI_BASE_URL, modelsPath: '/models', allowCustomBaseUrl: false,
+    externalUrl: 'https://libapi.cc/signup?ref=HVM4YNC85BR8R97K',
+    credentials: [{ ...API_KEY_FIELD, placeholder: '填写 LibAPI API Key' }],
+    models: LIBAPI_MODEL_MANIFEST,
   },
   {
     id: 'xai',
@@ -848,6 +859,27 @@ async function fetchOpenAiCompatibleCatalog(
   throw lastError instanceof Error ? lastError : new Error('模型列表拉取失败');
 }
 
+/** 先校验 Key 可访问目录；公开技能目录仅排退役，不保证生成或文件权限，也不携带凭据。 */
+async function matchActiveLibapiCatalog(
+  models: ProviderModelSelection[],
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<ProviderModelSelection[]> {
+  const response = await corsSafeFetch(`${baseUrl}/skills/models`, { method: 'GET', signal });
+  if (!response.ok) throw new Error(`模型列表拉取失败 (HTTP ${response.status})`);
+  const payload: unknown = await response.json().catch(() => null);
+  const activeIds = new Set(readCatalogItems(payload).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const name = (item as Record<string, unknown>).name;
+    return typeof name === 'string' && name.trim() ? [name.trim()] : [];
+  }));
+  if (activeIds.size === 0) throw new Error('模型列表拉取失败 (HTTP 200)');
+  return matchLibapiCatalog(models.filter((model) => {
+    const id = resolveLibapiModelId(model.id);
+    return id !== undefined && activeIds.has(id);
+  }));
+}
+
 export async function fetchProviderModelCatalog(
   options: FetchProviderCatalogOptions,
 ): Promise<ProviderCatalogResult> {
@@ -886,12 +918,24 @@ export async function fetchProviderModelCatalog(
   }
 
   try {
+    if (definition.id === 'libapi' && !config.apiKey.trim()) throw new Error('请填写 API Key');
     const { models, baseUrl } = await fetchOpenAiCompatibleCatalog(
       definition,
       providerId,
       config,
       signal,
     );
+    if (definition.id === 'libapi') {
+      const matched = await matchActiveLibapiCatalog(models, baseUrl, signal);
+      return {
+        models: matched,
+        source: 'remote',
+        resolvedBaseUrl: baseUrl,
+        ...(models.some((model) => !matched.some((known) => known.id === model.id))
+          ? { warning: '已获取官方目录，仅展示仍在售且已适配的文本、图片、视频与音频型号；尚无完整调用合同的型号暂不展示。' }
+          : {}),
+      };
+    }
     const matchedToapis = definition.id === 'toapis' ? matchToapisCatalog(models) : undefined;
     const catalogModels = mergeRemoteCatalogMetadata(
       definition.id === 'apimart'
@@ -910,7 +954,8 @@ export async function fetchProviderModelCatalog(
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     const warning = safeCatalogError(error);
     // CCC 分组权限由 Key 决定，不能用全站目录伪装成该 Key 的可用模型。
-    if (definition.id !== 'toapis' && !(definition.id === 'cccapi' && config.cccGroup) && normalizedFallback.length > 0) {
+    if (definition.id !== 'toapis' && definition.id !== 'libapi'
+      && !(definition.id === 'cccapi' && config.cccGroup) && normalizedFallback.length > 0) {
       return { models: normalizedFallback, source: 'local-fallback', warning };
     }
     throw new Error(warning, { cause: error });

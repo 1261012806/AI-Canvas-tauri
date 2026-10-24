@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryRecord } from '../../src/services/indexedDbService';
 import type { BatchContext } from '../../src/utils/batchExecute';
 import type { ComfyNodeProgress } from '../../src/types/comfyProgress';
+import type { AppConfig } from '../../src/types';
 
 interface ElementLike {
   type: unknown;
@@ -18,7 +19,7 @@ interface TestNode {
 
 interface TestStore {
   activeNodeId: string | null;
-  config: { performanceMode: boolean; providers: Record<string, never> };
+  config: Pick<AppConfig, 'providers' | 'generalModels'> & { performanceMode: boolean };
   currentProjectId: string | null;
   projectLoadStatus: 'ready' | 'loading';
   dialogPosition?: { x: number; y: number };
@@ -1568,6 +1569,51 @@ describe('critical canvas node interactions', () => {
       }
       expect(store.nodes[0].data).toMatchObject({ aspectRatio: '16:9', nodeWidth: 280, nodeHeight: 158 });
     });
+  });
+
+  it.each([
+    { catalogId: 'libapi', customized: false, adapted: true },
+    { catalogId: 'custom-openai', customized: false, adapted: false },
+    { catalogId: 'libapi', customized: true, adapted: false },
+  ])('音频模型切换仅清理真实 LibAPI 完整合同的不适用参数（$catalogId / 自定义协议 $customized）', async ({ catalogId, customized, adapted }) => {
+    const { LIBAPI_MODEL_MANIFEST } = await import('../../src/services/ai/providers/libapiModelManifest');
+    const selected = structuredClone(LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gm-3.1-flash-tts')!);
+    if (customized) selected.executionProfile!.protocol!.submit.path = '/custom/audio';
+    const store = createStore([{
+      id: 'speech-node', type: 'ai-audio', position: { x: 0, y: 0 }, data: { type: 'ai-audio', label: '配音', status: 'idle',
+        prompt: '你好', model: 'general/previous-audio', provider: 'general', audioVoice: 'alloy', audioFormat: 'wav', audioSpeed: 1,
+        musicDuration: 60, musicBpm: 120, autoGenerateLyrics: true },
+    }], () => 1);
+    store.activeNodeId = 'speech-node';
+    store.config = { ...store.config, providers: { 'audio-connection': { name: '音频连接', apiKey: 'fixture', catalogId } },
+      generalModels: [{ id: 'selected-audio', name: selected.name, modelId: selected.id, category: 'audio',
+        providerConfigId: 'audio-connection', executionProfile: selected.executionProfile }] };
+    await installReactHookDriver();
+    installStoreMock(store);
+    vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+    vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+    vi.doMock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }));
+    vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({ default: function PromptPanelMock() { return null; } }));
+    vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+    vi.doMock('../../src/services/aiService', () => ({ generateText: vi.fn(), generateImage: vi.fn(), generateImagesBatch: vi.fn(),
+      generateVideo: vi.fn(), generateAudio: vi.fn(), buildPanoramaPrompt: vi.fn() }));
+    vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), getPendingTasksForProject: () => [],
+      prepareMediaNodeGeneration: vi.fn(), registerMediaNodeOperation: () => vi.fn(), completeMediaNodeTask: vi.fn() }));
+    const Dialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+    const panel = () => findElement(Dialog(), (element) => componentName(element) === 'PromptPanelMock');
+    (panel().props.onModelSelect as (model: Record<string, unknown>) => void)({
+      value: 'general/selected-audio', provider: 'general', audioPurpose: 'speech',
+    });
+    expect(store.nodes[0].data.audioFormat).toBe('wav');
+    if (adapted) {
+      expect(store.nodes[0].data).toMatchObject({ audioVoice: undefined, audioSpeed: undefined,
+        musicDuration: undefined, musicBpm: undefined, autoGenerateLyrics: undefined });
+      expect(panel().props.audioVoice).toBeUndefined();
+      expect(panel().props.audioSpeed).toBeUndefined();
+    } else {
+      expect(store.nodes[0].data).toMatchObject({ audioVoice: 'alloy', audioSpeed: 1,
+        musicDuration: 60, musicBpm: 120, autoGenerateLyrics: true });
+    }
   });
 
   it.each([

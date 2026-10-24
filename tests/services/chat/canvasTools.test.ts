@@ -491,6 +491,52 @@ describe('canvas agent tools', () => {
     expect(useAppStore.getState().nodes[0].data).toBe(beforeImage);
   });
 
+  it('creates and updates a configured general voice ID and MP3 without resetting its model', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, 'libapi-voice': { name: 'LibAPI', catalogId: 'libapi',
+        apiKey: 'fixture', baseUrl: 'https://libapi.cc/v1' } },
+      generalModels: [{ id: 'libapi-voice', name: 'LibAPI TTS', modelId: 'speech-2.8',
+        category: 'audio', providerConfigId: 'libapi-voice' }],
+    } }));
+    const create = getAgentTool('canvas_create_nodes')!;
+    const input = { nodes: [{ type: 'ai-audio', label: '旁白', model: 'general/libapi-voice',
+      audioPurpose: 'speech', audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25 }] };
+    expect(validateAgentToolInput(create.inputSchema, input).valid).toBe(true);
+    expect((await create.execute(context(), input)).status).toBe('success');
+    const created = useAppStore.getState().nodes.at(-1)!;
+    expect(created.data).toMatchObject({ model: 'general/libapi-voice', provider: 'general',
+      audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25 });
+
+    const update = await getAgentTool('canvas_update_nodes')!.execute(context(), {
+      nodeIds: [created.id], audioVoice: 'user_cloned_voice_02', audioSpeed: 0.8,
+    });
+    expect(update.status).toBe('success');
+    expect(useAppStore.getState().nodes.at(-1)?.data).toMatchObject({ model: 'general/libapi-voice',
+      audioVoice: 'user_cloned_voice_02', audioFormat: 'mp3', audioSpeed: 0.8 });
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsafe voice IDs and keeps the existing voice restriction for other providers', async () => {
+    useAppStore.setState({ nodes: [node('legacy-audio', { type: 'ai-audio', provider: 'apimart',
+      model: 'apimart/gpt-4o-mini-tts', audioVoice: 'alloy' })] });
+    const update = getAgentTool('canvas_update_nodes')!;
+    const before = useAppStore.getState().nodes;
+    for (const audioVoice of ['Zephyr', 'voice\nID', 'voice\u0085ID', 'x'.repeat(257)]) {
+      expect((await update.execute(context(), { nodeIds: ['legacy-audio'], audioVoice })).status).toBe('error');
+      expect(useAppStore.getState().nodes).toBe(before);
+    }
+  });
+
+  it('keeps title and lyrics on audio placeholders so later node generation uses the same settings', () => {
+    const intent = { kind: 'audio' as const, prompt: '轻柔民谣', modelRef: 'general/music-model', deliveryMode: 'both' as const,
+      audioPurpose: 'music' as const, musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走' };
+    const id = useAppStore.getState().createMediaPlaceholder(intent, { x: 1000, y: 100 });
+    expect(useAppStore.getState().nodes.find((item) => item.id === id)?.data).toMatchObject({
+      type: 'ai-audio', model: 'general/music-model', audioPurpose: 'music',
+      musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走',
+    });
+  });
+
   it('导入分镜小数秒写入实际视频时长，并优先于项目默认值', async () => {
     useAppStore.setState({ projects: [{ id: 'p1', name: '项目', createdAt: 1, updatedAt: 1,
       settings: { generation: { videoDuration: 5 } } }] });

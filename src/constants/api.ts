@@ -16,6 +16,9 @@ export const TOAPIS_API_SITES = [
 /** CCC API 中转站（OpenAI 兼容协议） */
 export const CCCAPI_BASE_URL = 'https://cccapi.cn/v1';
 
+/** LibAPI 文本、图片、视频与音频模型 */
+export const LIBAPI_BASE_URL = 'https://libapi.cc/v1';
+
 /** 火山方舟 */
 export const VOLCENGINE_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 
@@ -56,6 +59,7 @@ export const DEFAULT_BASE_URLS: Record<string, string> = {
   apimart: APIMART_BASE_URL,
   toapis: TOAPIS_BASE_URL,
   cccapi: CCCAPI_BASE_URL,
+  libapi: LIBAPI_BASE_URL,
   volcengine: VOLCENGINE_BASE_URL,
   grsai: GRSAI_BASE_URL,
   dreamina: DREAMINA_BASE_URL,

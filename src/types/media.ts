@@ -1,4 +1,6 @@
 /** 对话助手媒体生成领域类型。 */
+import type { AudioOutputFormat, AudioTtsVoice } from './aiTypes';
+
 export type MediaKind = 'image' | 'video' | 'audio';
 
 export type AudioGenerationPurpose = 'music' | 'speech';
@@ -13,6 +15,12 @@ export interface MediaGenerationIntent {
   deliveryMode: MediaDeliveryMode;
   /** 音频生成时用于区分音乐与语音，底层仍复用音频节点执行能力。 */
   audioPurpose?: AudioGenerationPurpose;
+  /** 音色 ID、格式和速度由所选音频模型在提交前校验。 */
+  audioVoice?: AudioTtsVoice;
+  audioFormat?: AudioOutputFormat;
+  audioSpeed?: number;
+  musicTitle?: string;
+  musicLyrics?: string;
   /** 审批前锁定的视频有效参数；缺省表示沿用模型默认。 */
   aspectRatio?: string;
   resolution?: string;

@@ -34,6 +34,7 @@ import { executeGeneralAsyncTask } from './apimartGen';
 import { runConfiguredModelProtocol } from './modelProtocolRuntime';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
 import { mapAudioParameters } from './audioParameterMappings';
+import { libapiAudioVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
 
 export interface PersistedAudioGenerationResult {
   mediaUrl: string;
@@ -212,6 +213,34 @@ export async function generateAudio(
     if (!connection) throw new Error(`通用模型 "${gm.name}" 的连接配置不存在`);
     if (!connection.baseUrl) throw new Error(`通用模型 "${gm.name}" 未配置接口地址`);
     if (gm.executionProfile) {
+      const isLibapi = connection.provider?.catalogId === 'libapi'
+        || (!connection.provider?.catalogId && connection.providerConfigId === 'libapi');
+      const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
+      if (usesLibapiProtocol) {
+        // 旧语音收集器只收视频／音频节点；完整解析还覆盖无连线图片、资产及角色素材引用。
+        const hasReferences = references.length || (await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true })).references.length;
+        if (hasReferences) {
+          throw new Error('LibAPI 当前语音与音乐生成不接受参考素材；声音克隆需先在平台创建音色 ID，再填写到语音参数。本次尚未提交生成请求');
+        }
+      }
+      if (usesLibapiProtocol && params.autoGenerateLyrics) {
+        throw new Error('LibAPI 音乐由模型直接生成歌词，请关闭「自动生成歌词」的单独步骤，或填写自定义歌词。本次尚未提交生成请求');
+      }
+      // 已核对合同先验证参数，避免无效音色或素材被上传后才发现请求不能执行。
+      const variables = {
+        model: gm.modelId,
+        prompt,
+        audioVoice: params.audioVoice,
+        audioFormat: params.audioFormat,
+        audioSpeed: params.audioSpeed,
+        duration: params.musicDuration,
+        musicTitle: params.musicTitle,
+        musicLyrics: params.musicLyrics,
+        musicBpm: params.musicBpm,
+        n: 1,
+        batchCount: 1,
+      };
+      const effectiveVariables = usesLibapiProtocol ? libapiAudioVariables(gm.modelId, variables) : variables;
       const protocolAudioUrls = await resolveGeneralAudioReferenceUrls(references, signal);
       const urls = await runConfiguredModelProtocol({
         model: gm,
@@ -219,20 +248,10 @@ export async function generateAudio(
         nodeId: params.nodeId,
         signal,
         variables: {
-          model: gm.modelId,
-          prompt,
-          audioVoice: params.audioVoice,
-          audioFormat: params.audioFormat,
-          audioSpeed: params.audioSpeed,
-          duration: params.musicDuration,
-          musicTitle: params.musicTitle,
-          musicLyrics: params.musicLyrics,
-          musicBpm: params.musicBpm,
+          ...effectiveVariables,
           audioUrls: protocolAudioUrls,
           audioUrl: protocolAudioUrls[0],
           referenceAudioUrls: protocolAudioUrls,
-          n: 1,
-          batchCount: 1,
         },
       });
       const url = urls[0];

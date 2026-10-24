@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { registerMediaAgentTools } from '../../../src/services/chat/tools/mediaTools';
 import {
@@ -8,6 +8,7 @@ import {
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
 import { savePendingTask } from '../../../src/services/pollManager';
+import * as generationRuntime from '../../../src/services/ai/generationRuntime';
 
 const context: Omit<AgentToolContext, 'signal'> = {
   taskId: 'task-media',
@@ -44,6 +45,7 @@ beforeEach(() => {
   });
   registerMediaAgentTools();
 });
+afterEach(() => { vi.restoreAllMocks(); });
 
 describe('media task recovery tools', () => {
   it('lists original task identities without exposing their polling URLs', async () => {
@@ -104,6 +106,68 @@ describe('media task recovery tools', () => {
 });
 
 describe('media_generate display parameters', () => {
+  function configureGeneralAudio() {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, 'libapi-audio': { name: 'LibAPI', catalogId: 'libapi',
+        apiKey: 'fixture', baseUrl: 'https://libapi.cc/v1' } },
+      generalModels: [
+        { id: 'libapi-tts', name: 'LibAPI TTS', modelId: 'speech-2.8', category: 'audio', providerConfigId: 'libapi-audio' },
+        { id: 'libapi-music', name: 'LibAPI Music', modelId: 'music', category: 'audio', providerConfigId: 'libapi-audio' },
+      ],
+    } }));
+  }
+
+  it.each(['chat', 'both'] as const)('keeps model voice and MP3 settings from the tool through %s delivery', async (deliveryMode) => {
+    configureGeneralAudio();
+    useAppStore.setState({ messages: [{ id: 'audio-message', conversationId: context.conversationId,
+      role: 'assistant', content: '', timestamp: 1, status: 'executing', agentTaskId: context.taskId }] });
+    const generate = vi.spyOn(generationRuntime, 'runMediaGeneration').mockResolvedValue({
+      id: 'audio-artifact', kind: 'audio', deliveryMode, url: 'https://cdn.example/voice.mp3',
+      sourceUrl: 'https://cdn.example/voice.mp3', persistence: 'skipped', prompt: '欢迎回来',
+      modelId: 'general/libapi-tts', provider: 'general', audioPurpose: 'speech', createdAt: 1,
+    });
+    const input = { kind: 'audio', prompt: '欢迎回来', modelRef: 'general/libapi-tts', deliveryMode,
+      audioPurpose: 'speech', audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25 };
+    const definition = getAgentTool('media_generate')!;
+    expect(prepareAgentToolCall({ callId: 'libapi-speech', toolId: 'media_generate', input }, context).ok).toBe(true);
+    expect(definition.authorize?.(context, input).allowed).toBe(true);
+
+    const result = await definition.execute({ ...context, signal: new AbortController().signal }, input);
+
+    expect(result.status).toBe('success');
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({ audioVoice: 'Chinese_Female_01',
+      audioFormat: 'mp3', audioSpeed: 1.25 }), context.projectId, expect.any(AbortSignal),
+    deliveryMode === 'both' ? expect.any(String) : undefined, expect.objectContaining({ messageId: 'audio-message', deliveryMode }));
+    if (deliveryMode === 'both') {
+      expect(useAppStore.getState().nodes.at(-1)?.data).toMatchObject({ audioPurpose: 'speech',
+        audioVoice: 'Chinese_Female_01', audioFormat: 'mp3', audioSpeed: 1.25, status: 'success' });
+    } else expect(useAppStore.getState().nodes).toHaveLength(1);
+  });
+
+  it('accepts literal music title and lyrics without using RunningHub modelParameters', () => {
+    configureGeneralAudio();
+    const input = { kind: 'audio', prompt: '轻柔民谣', modelRef: 'general/libapi-music', deliveryMode: 'chat',
+      audioPurpose: 'music', musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走' };
+    const prepared = prepareAgentToolCall({ callId: 'libapi-music', toolId: 'media_generate', input }, context);
+    expect(prepared.ok).toBe(true);
+    if (prepared.ok) {
+      expect(prepared.prepared.input).toMatchObject({ musicTitle: '回家', musicLyrics: '灯火等着我\n沿着路慢慢走' });
+      expect(prepared.prepared.input).not.toHaveProperty('modelParameters');
+    }
+    expect(getAgentTool('media_generate')!.authorize?.(context, input).allowed).toBe(true);
+  });
+
+  it('rejects invalid voice IDs and audio fields on another media kind without changing policy', () => {
+    configureGeneralAudio();
+    const tool = getAgentTool('media_generate')!;
+    const input = { kind: 'audio', prompt: '欢迎回来', modelRef: 'general/libapi-tts', deliveryMode: 'chat', audioPurpose: 'speech' };
+    for (const audioVoice of ['', ' Zephyr ', 'voice\nID', 'voice\u0085ID', 'x'.repeat(257)]) {
+      expect(tool.authorize?.(context, { ...input, audioVoice }).allowed).toBe(false);
+    }
+    expect(tool.authorize?.(context, { ...input, kind: 'image', audioVoice: 'Zephyr' }).allowed).toBe(false);
+    expect(tool.effect).toBe('media_generation');
+  });
+
   it('RunningHub 专属参数保持字符串，且不注入其他模型的视频默认值', () => {
     const id = 'minimax/h3-max-turbo/image-to-video';
     useAppStore.setState((state) => ({ config: { ...state.config, providers: { 'runninghub-model': { name: 'RH', apiKey: 'fake', selectedModels: [{ id, name: 'H3', provider: 'runninghub', category: 'video' }] } } } }));

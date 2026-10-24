@@ -15,6 +15,7 @@ import {
   GRSAI_BASE_URL,
   GRSAI_GLOBAL_BASE_URL,
   GRSAI_LEGACY_BASE_URL,
+  LIBAPI_BASE_URL,
 } from '../constants/api';
 import * as fileService from '../services/fileService';
 import {
@@ -124,7 +125,7 @@ function createGeneralModelId(providerConfigId: string, modelId: string): string
   return `provider-${safeProviderId}-${(hash >>> 0).toString(36)}`;
 }
 
-const GENERAL_MODEL_CATALOG_IDS = new Set(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis']);
+const GENERAL_MODEL_CATALOG_IDS = new Set(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi']);
 
 function syncProviderModels(
   generalModels: GeneralModelConfig[],
@@ -504,18 +505,23 @@ export const createConfigSlice: StateCreator<AppState, [], [], ConfigSlice> = (r
       },
     })),
 
-  saveProviderConfig: (providerName, cfg) =>
+  saveProviderConfig: (providerName, cfg) => {
+    // 声明式任务恢复读取连接保存的地址；分享省略默认地址时也保留完整执行身份。
+    const nextConfig = cfg.catalogId === 'libapi' || (!cfg.catalogId && providerName === 'libapi')
+      ? { ...cfg, baseUrl: cfg.baseUrl?.trim() || LIBAPI_BASE_URL }
+      : cfg;
     set((state) => ({
       config: {
         ...state.config,
-        providers: { ...state.config.providers, [providerName]: cfg },
+        providers: { ...state.config.providers, [providerName]: nextConfig },
         generalModels: syncProviderModels(
           state.config.generalModels ?? [],
           providerName,
-          cfg,
+          nextConfig,
         ),
       },
-    })),
+    }));
+  },
 
   removeProviderConfig: async (providerName) => {
     if (areSettingsMutationsFrozen()) return;

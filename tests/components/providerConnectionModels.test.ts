@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { assertProviderModelsVideoCapabilities, materializeLegacyImageProtocolDefault, mergeModels } from '../../src/components/settings/providerConnection/providerConnectionModels';
 import { assertModelProtocolResult } from '../../src/services/ai/modelCapabilityValidation';
 import type { ModelExecutionProtocol, ModelProtocolPresetId } from '../../src/types/aiTypes';
-import type { GeneralModelCategory } from '../../src/types';
+import type { GeneralModelCategory, ProviderModelSelection } from '../../src/types';
+import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
 
 it('preserves configured image tiers and video limits when refreshing a raw catalog', () => {
   const configured = [
@@ -13,6 +14,26 @@ it('preserves configured image tiers and video limits when refreshing a raw cata
     imageCapability: undefined, videoCapability: undefined })));
   expect(refreshed[0].imageCapability).toEqual(configured[0].imageCapability);
   expect(refreshed[1].videoCapability).toEqual(configured[1].videoCapability);
+});
+
+it('LibAPI 刷新目录保留当前连接的显式协议和能力，不借用同名其他厂商合同', () => {
+  const catalog = structuredClone(LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!);
+  const configured: ProviderModelSelection = { ...catalog, provider: 'libapi',
+    imageCapability: { resolutions: ['1K'] },
+    executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+      submit: { method: 'POST', path: '/user/images', body: { prompt: '{{prompt}}' } },
+      response: { type: 'json', result: { urlPath: 'output' } },
+    } },
+  };
+  const original = JSON.stringify(configured);
+  const refreshed = mergeModels([configured], [{ ...catalog, provider: 'libapi' }]);
+  expect(refreshed[0].executionProfile).toEqual(configured.executionProfile);
+  expect(refreshed[0].imageCapability).toEqual({ resolutions: ['1K'] });
+  expect(refreshed[0].provider).toBe('libapi');
+  expect(JSON.stringify(configured)).toBe(original);
+  const other: ProviderModelSelection = { ...configured, provider: 'other-relay', executionProfile: { preset: 'openai-gpt-image' } };
+  expect(mergeModels([other], [{ id: other.id, name: other.name, category: other.category, provider: 'other-relay' }])[0].executionProfile)
+    .toEqual({ preset: 'openai-gpt-image' });
 });
 
 describe('legacy connection image protocol', () => {

@@ -18,6 +18,7 @@ import { isRunningHubWorkflow, workflowExecution } from '../../../services/workf
 import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from '../../../services/ai/dreaminaModels';
 import { APIMART_OMNI_MODELS, APIMART_UPDATED_VIDEO_MODELS, isLegacyApimartOmni, replaceLegacyApimartOmni } from '../../../services/ai/apimartVideoModels';
 import { GRSAI_ADDED_MODELS } from '../../../services/ai/grsaiModels';
+import { getLibapiAudioCapability, usesLibapiModelProtocol } from '../../../services/ai/providers/libapiModelManifest';
 
 export type MediaModelKind = 'image' | 'video' | 'audio';
 
@@ -1082,6 +1083,14 @@ function dedicatedGeneralModelGroup(
       badgeText: 'T',
     };
   }
+  if (catalogId === 'libapi') {
+    return {
+      id: `general-provider-${model.providerConfigId}`,
+      name: 'LibAPI',
+      description: '使用当前 LibAPI 连接中启用的模型',
+      badgeText: 'LIB',
+    };
+  }
   return null;
 }
 
@@ -1092,12 +1101,18 @@ function generalModelLabel(model: GeneralModelConfig, config?: ProviderModelVisi
 }
 
 function createGeneralModelOption(model: GeneralModelConfig, config?: ProviderModelVisibilityConfig): ModelOption {
+  const connection = config?.providers[model.providerConfigId];
+  const audioCapability = model.category === 'audio' && connection
+    && (connection.catalogId || model.providerConfigId) === 'libapi'
+    && usesLibapiModelProtocol(model.modelId, model.executionProfile)
+    ? getLibapiAudioCapability(model.modelId) : undefined;
   return {
     value: `general/${model.id}`,
     provider: 'general',
     label: generalModelLabel(model, config),
     description: describeGeneralModel(model, config),
     inputModalities: model.inputModalities,
+    ...(audioCapability ? { audioPurpose: audioCapability.kind } : {}),
     iconType: 'badge',
     badgeText: GENERAL_MODEL_CATEGORY_LABELS[model.category].slice(0, 2),
     nodeTypes: CATEGORY_TO_NODE_TYPES[model.category],
@@ -1190,12 +1205,14 @@ export function getMediaModelOptions(
           ? 'ai-video'
           : 'ai-audio';
       const dedicatedGroup = dedicatedGeneralModelGroup(model, config);
+      const audioPurpose = createGeneralModelOption(model, config).audioPurpose;
       return {
         value: `general/${model.id}`,
         provider: 'general',
         label: generalModelLabel(model, config),
         description: describeGeneralModel(model, config),
         inputModalities: model.inputModalities,
+        ...(audioPurpose ? { audioPurpose } : {}),
         iconType: 'badge',
         badgeText: mediaKind === 'image' ? '图' : mediaKind === 'video' ? '视' : '音',
         nodeTypes: [nodeType],

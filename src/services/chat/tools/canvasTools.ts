@@ -98,7 +98,7 @@ const TEXT_OUTPUT_NODE_TYPES = new Set<NodeType>([
   'comment',
 ]);
 const AUDIO_VOICES: AudioTtsVoice[] = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-const AUDIO_FORMATS: AudioOutputFormat[] = ['wav', 'opus', 'aac', 'flac', 'pcm'];
+const AUDIO_FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'];
 const SPEECH_STYLES: NonNullable<AudioSpeechSettings['voiceStyle']>[] = [
   'male', 'female', 'shota', 'loli', 'girl', 'boy',
 ];
@@ -120,7 +120,7 @@ function visibleVideoResolution(data: BaseNodeData): string | undefined {
 }
 
 /** 创建和更新共用校验；错误必须在任何 Store 写入前返回，避免半批节点。 */
-function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodesInput): string | undefined {
+function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodesInput, currentData?: BaseNodeData): string | undefined {
   if (input.aspectRatio !== undefined && !VISUAL_NODE_TYPES.has(type)) return 'aspectRatio 只能用于图片或视频节点';
   if (input.imageSize !== undefined || input.batchCount !== undefined) {
     if (type !== 'ai-image') return 'imageSize / batchCount 只能用于生图节点';
@@ -150,7 +150,23 @@ function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodes
     || input.musicLyrics !== undefined || input.autoGenerateLyrics !== undefined;
   if (audioInput && type !== 'ai-audio') return '音频生成参数只能用于音频节点';
   if (input.audioPurpose !== undefined && !['music', 'speech'].includes(input.audioPurpose)) return 'audioPurpose 必须是 music 或 speech';
-  if (input.audioVoice !== undefined && !AUDIO_VOICES.includes(input.audioVoice)) return 'audioVoice 不在支持的音色中';
+  if (input.audioVoice !== undefined) {
+    if (typeof input.audioVoice !== 'string' || !input.audioVoice.trim() || input.audioVoice !== input.audioVoice.trim()
+      || input.audioVoice.length > 256 || Array.from(input.audioVoice).some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || (code >= 127 && code <= 159);
+      })) {
+      return 'audioVoice 必须是 1–256 字符且不含控制字符的音色 ID';
+    }
+    const modelRef = input.model ?? currentData?.model;
+    const provider = parseProjectModelRef(modelRef)?.provider ?? currentData?.provider;
+    const config = useAppStore.getState().config;
+    const general = provider === 'general' && config.generalModels?.find((model) => model.id === modelRef?.replace(/^general\//, ''));
+    // 通用协议可使用厂商公布的音色 ID；具体型号仍在生成前校验，其他入口保留六音色限制。
+    if (!(general && config.providers[general.providerConfigId]) && !AUDIO_VOICES.includes(input.audioVoice)) {
+      return 'audioVoice 不在当前模型支持的音色中';
+    }
+  }
   if (input.audioFormat !== undefined && !AUDIO_FORMATS.includes(input.audioFormat)) return 'audioFormat 不在支持的格式中';
   if (input.audioSpeed !== undefined && (!Number.isFinite(input.audioSpeed)
     || input.audioSpeed < 0.25 || input.audioSpeed > 4)) return 'audioSpeed 必须在 0.25–4 之间';
@@ -1192,7 +1208,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
                 videoDuration: { type: 'number', minimum: 0.01, maximum: 3600,
                   description: '仅 ai-video：来源分镜的秒数，支持小数并向上取整，写入实际生成时长控件。' },
                 audioPurpose: { type: 'string', enum: ['music', 'speech'] },
-                audioVoice: { type: 'string', enum: AUDIO_VOICES },
+                audioVoice: { type: 'string', minLength: 1, maxLength: 256, description: '当前模型公布的音色 ID，不含控制字符。' },
                 audioFormat: { type: 'string', enum: AUDIO_FORMATS },
                 audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
                 audioSpeechSettings: { type: 'object', additionalProperties: false, properties: {
@@ -1397,7 +1413,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
           videoLongSide: { type: 'integer', minimum: 128, maximum: 4096 },
           videoDuration: { type: 'integer', minimum: 1, maximum: 3600 },
           audioPurpose: { type: 'string', enum: ['music', 'speech'] },
-          audioVoice: { type: 'string', enum: AUDIO_VOICES },
+          audioVoice: { type: 'string', minLength: 1, maxLength: 256, description: '当前模型公布的音色 ID，不含控制字符。' },
           audioFormat: { type: 'string', enum: AUDIO_FORMATS },
           audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
           audioSpeechSettings: { type: 'object', additionalProperties: false, properties: {
@@ -1467,7 +1483,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
           targets.map((node) => [node.id, captureNodeAudit(node)]),
         );
         const invalidMedia = targets.map((node) => ({ label: node.data.label,
-          issue: mediaSettingsIssue(node.data.type, input) })).find((entry) => entry.issue);
+          issue: mediaSettingsIssue(node.data.type, input, node.data) })).find((entry) => entry.issue);
         if (invalidMedia) {
           const message = `${invalidMedia.label}：${invalidMedia.issue}`;
           return { status: 'error', summary: message, modelContent: message };

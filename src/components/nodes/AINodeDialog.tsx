@@ -49,6 +49,7 @@ import {
   resolveAnimationSheetAspectRatio,
 } from '../../services/ai/animationPrompt';
 import { resolveImageParameterCapability } from '../../services/ai/mediaModelCapabilities';
+import { getLibapiAudioCapability, usesLibapiModelProtocol } from '../../services/ai/providers/libapiModelManifest';
 import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from '../../services/ai/modelCapabilityValidation';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
@@ -872,11 +873,22 @@ function AINodeDialog() {
       const modelChanged = current.model !== model.value || current.provider !== model.provider || !!current.workflowId;
       const imageCapability = nodeType === 'ai-image' && modelChanged
         ? resolveImageParameterCapability(model.value, model.provider, state.config) : undefined;
+      const audioModel = nodeType === 'ai-audio' && model.provider === 'general'
+        ? state.config.generalModels?.find((item) => item.id === model.value.replace(/^general\//, '')) : undefined;
+      const audioConnection = audioModel ? state.config.providers[audioModel.providerConfigId] : undefined;
+      const audioCapability = audioModel?.category === 'audio' && audioConnection
+        && (audioConnection.catalogId || audioModel.providerConfigId) === 'libapi'
+        && usesLibapiModelProtocol(audioModel.modelId, audioModel.executionProfile)
+        ? getLibapiAudioCapability(audioModel.modelId) : undefined;
+      const currentSpeed = current.audioSpeed;
+      const validSpeed = audioCapability?.speed && typeof currentSpeed === 'number'
+        && currentSpeed >= audioCapability.speed.min && currentSpeed <= audioCapability.speed.max
+        && (!audioCapability.speed.options || audioCapability.speed.options.includes(currentSpeed));
       updateNodeData(activeNodeId!, {
         model: model.value,
         provider: model.provider,
         ...(nodeType === 'ai-director' ? { directorPrevisModel: model.value, directorPrevisProvider: model.provider } : {}),
-        audioPurpose: model.audioPurpose,
+        audioPurpose: audioCapability?.kind ?? model.audioPurpose,
         runninghubModelParameters: undefined, runninghubOutputs: undefined, runninghubStage: undefined, workflowId: undefined,
         ...(modelChanged ? { comfyRefmods: undefined } : {}),
         ...(nodeType === 'ai-image' && modelChanged ? {
@@ -892,6 +904,18 @@ function AINodeDialog() {
           seedanceRatio: undefined,
           seedanceDuration: undefined,
           generateAudio: undefined,
+        } : {}),
+        ...(modelChanged && audioCapability ? {
+          audioVoice: audioCapability.kind === 'speech' && audioCapability.voices?.includes(current.audioVoice ?? '')
+            ? current.audioVoice : undefined,
+          audioFormat: current.audioFormat && audioCapability.formats?.includes(current.audioFormat) ? current.audioFormat : undefined,
+          audioSpeed: validSpeed ? currentSpeed : undefined,
+          audioSpeechSettings: undefined,
+          musicTitle: audioCapability.musicControls?.title ? current.musicTitle : undefined,
+          musicLyrics: audioCapability.musicControls?.lyrics ? current.musicLyrics : undefined,
+          musicBpm: audioCapability.musicControls?.bpm ? current.musicBpm : undefined,
+          musicDuration: audioCapability.musicControls?.duration ? current.musicDuration : undefined,
+          autoGenerateLyrics: audioCapability.musicControls?.autoGenerateLyrics ? current.autoGenerateLyrics : undefined,
         } : {}),
         ...(model.provider === 'dreamina' ? { batchCount: 1 } : {}),
       });
@@ -1307,9 +1331,9 @@ function AINodeDialog() {
             audioSpeechSettings={data.audioSpeechSettings}
             onChangeAudioSpeechSettings={onChangeAudioSpeechSettings}
             onRemoveAudioReference={onRemoveAudioReference}
-            audioVoice={data.audioVoice ?? 'alloy'}
-            audioFormat={data.audioFormat ?? 'wav'}
-            audioSpeed={data.audioSpeed ?? 1}
+            audioVoice={data.audioVoice}
+            audioFormat={data.audioFormat}
+            audioSpeed={data.audioSpeed}
             musicTitle={data.musicTitle ?? ''}
             musicLyrics={data.musicLyrics ?? ''}
             musicBpm={data.musicBpm}

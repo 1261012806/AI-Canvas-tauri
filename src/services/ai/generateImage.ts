@@ -38,6 +38,7 @@ import { getProviderDefinition } from './providerCatalogService';
 import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from './imageRequestContracts';
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
 import { assertToapisImageInput, resolveToapisImageModelContract, toapisImageReferences } from './providers/toapisModelManifest';
+import { assertLibapiImageInput, libapiImageExecutionProfile, libapiImageVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
 import { resolveImageParameterCapability } from './mediaModelCapabilities';
 import { DREAMINA_IMAGE_RATIOS } from './dreaminaModels';
 import { compileVideoReferencePrompt } from './referencePrompt';
@@ -143,6 +144,7 @@ export async function generateImagesBatch(
   const providerConfig = config.providers[connectionId];
   const modelName = generalModel?.modelId ?? extractModelName(model, provider);
   const providerDefinition = getProviderDefinition(connectionId, providerConfig);
+  const isLibapi = !params.workflowId && providerDefinition?.id === 'libapi';
   if (providerDefinition?.id === 'cccapi' && !providerConfig?.apiKey?.trim()) {
     const group = providerConfig?.cccGroup ? `「${providerConfig.cccGroup}」分组` : '连接';
     throw new Error(`未配置 CCC API ${group}的 API Key\n请在「设置 → API Key」中配置对应连接`);
@@ -174,6 +176,7 @@ export async function generateImagesBatch(
       { imageSize: params.imageSize, aspectRatio: params.aspectRatio, imageQuality, imageBackground, count: requestedCount }));
   }
   const executionProfile = builtInContract ? undefined : effectiveProfile;
+  const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(modelName, executionProfile);
   const usesStandardImageRequest = !executionProfile
     || executionProfile.preset === 'openai-image'
     || executionProfile.preset === 'openai-gpt-image';
@@ -205,7 +208,7 @@ export async function generateImagesBatch(
   const localMedia = runninghubMedia ?? comfyMedia;
   const { prompt: resolvedPrompt, imageUrls } = localMedia
     ? { prompt: localMedia.prompt, imageUrls: getMediaReferenceUrls(localMedia.references, 'image', 'local') }
-    : await resolvePromptWithImageRefs(rawPrompt, { preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls || providerDefinition?.id === 'toapis' });
+    : await resolvePromptWithImageRefs(rawPrompt, { preferLocalImages: usesImageMultipart || usesCustomImageFiles || usesImageDataUrls || providerDefinition?.id === 'toapis' || isLibapi });
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
 
   // 仅归一同一节点的来源别名；裸 URL 或其他节点仍可能明确需要未标注的原图。
@@ -297,10 +300,12 @@ export async function generateImagesBatch(
   // 参考图传输格式由模型显式配置或已确认的厂商目录决定。
   if (configuredCapability) assertConfiguredImageReferences(configuredCapability, allImageUrls.length);
   if (providerDefinition?.id === 'toapis') assertToapisImageInput(modelName, allImageUrls.length, requestedCount);
+  if (usesLibapiProtocol) assertLibapiImageInput(modelName, allImageUrls.length, requestedCount);
+  const libapiExecutionProfile = usesLibapiProtocol ? libapiImageExecutionProfile(modelName, allImageUrls.length) : undefined;
   // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。
   allImageUrls = provider === 'runninghub' || usesImageMultipart ? allImageUrls : usesImageDataUrls || usesCustomImageFiles
     ? await resolveImageDataUrlArray(allImageUrls, signal)
-    : await resolveImageUrlArray(allImageUrls, providerDefinition?.id === 'toapis' ? connectionId : provider, signal);
+    : await resolveImageUrlArray(allImageUrls, providerDefinition?.id === 'toapis' || isLibapi ? connectionId : provider, signal);
   if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
 
   if (!prompt.trim() && provider !== 'runninghub') throw new Error('提示词不能为空');
@@ -359,27 +364,30 @@ export async function generateImagesBatch(
         && imageReferenceRequestMode !== undefined
         && usesStandardImageRequest;
       if (executionProfile && !hasExplicitStandardRequestMode) {
+        const variables = {
+          model: gm.modelId,
+          prompt,
+          imageSize,
+          imageQuality,
+          imageBackground,
+          aspectRatio,
+          size: `${dimensions.width}x${dimensions.height}`,
+          width: dimensions.width,
+          height: dimensions.height,
+          n: requestedCount,
+          batchCount: requestedCount,
+          imageUrls: providerDefinition?.id === 'toapis' ? toapisImageReferences(modelName, allImageUrls) : allImageUrls,
+          ...(customProtocol && modelProtocolUsesVariable(JSON.stringify(customProtocol.submit), 'googleImageParts')
+            ? { googleImageParts: buildGoogleImageParts(prompt, allImageUrls) } : {}),
+        };
         const urls = await runConfiguredModelProtocol({
-          model: { ...gm, executionProfile, imageCapability: configuredCapability },
+          model: { ...gm,
+            executionProfile: libapiExecutionProfile ?? executionProfile,
+            imageCapability: configuredCapability },
           category: 'image',
           nodeId: params.nodeId,
           signal,
-          variables: {
-            model: gm.modelId,
-            prompt,
-            imageSize,
-            imageQuality,
-            imageBackground,
-            aspectRatio,
-            size: `${dimensions.width}x${dimensions.height}`,
-            width: dimensions.width,
-            height: dimensions.height,
-            n: requestedCount,
-            batchCount: requestedCount,
-            imageUrls: providerDefinition?.id === 'toapis' ? toapisImageReferences(modelName, allImageUrls) : allImageUrls,
-            ...(customProtocol && modelProtocolUsesVariable(JSON.stringify(customProtocol.submit), 'googleImageParts')
-              ? { googleImageParts: buildGoogleImageParts(prompt, allImageUrls) } : {}),
-          },
+          variables: usesLibapiProtocol ? libapiImageVariables(modelName, variables) : variables,
         });
         const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions,
           ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) }));

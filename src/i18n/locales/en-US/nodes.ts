@@ -2,6 +2,10 @@
  * 节点与画布节点组件（nodes）
  */
 const nodes = {
+  '请填写音色 ID': 'Enter a voice ID',
+  '音色 ID': 'Voice ID',
+  '填写平台提供的音色 ID': 'Enter the voice ID provided by the platform',
+  '标题与歌词': 'Title and lyrics',
   // ── 引用展示辅助 ──
   "音乐": "Music",
   "全局创作资产库": "Global creative asset library",

@@ -10,6 +10,8 @@ import { defaultModelGroups, getConfiguredModelGroups, getMediaModelOptions } fr
 import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
 import { parseConnectionShare, serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
+import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
+import { useAppStore } from '../../src/store/useAppStore';
 import type { ApiProviderConfig, AppConfig, ProviderModelSelection } from '../../src/types';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
 
@@ -19,6 +21,110 @@ function jsonResponse(body: unknown): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+describe('LibAPI 内置目录与连接身份', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('注册入口使用邀请码，默认地址与模型合同集中在厂商定义', () => {
+    expect(getProviderDefinition('libapi')).toMatchObject({
+      name: 'LibAPI', defaultBaseUrl: 'https://libapi.cc/v1', modelsPath: '/models',
+      externalUrl: 'https://libapi.cc/signup?ref=HVM4YNC85BR8R97K',
+      catalogAdapter: 'openai-compatible', models: LIBAPI_MODEL_MANIFEST,
+    });
+    expect(createConnectionId('libapi')).toBe('libapi');
+  });
+
+  it('先校验目录凭据，再用公开技能目录排除退役和未适配型号，不加入认证目录未返回的型号', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [
+        { id: 'gt-6.1-sol' }, { id: 'gt-image-2.5-flare', category: 'text' },
+        { id: 'vo-3.1' }, { id: 'happyhorse-1-0' }, { id: 'future-video' },
+      ] }))
+      .mockResolvedValueOnce(jsonResponse({ models: [
+        { name: 'gpt-6.1-sol', type: 'text' }, { name: 'gpt-image-2.5-flare', type: 'image' },
+        { name: 'veo-3.1', type: 'video' }, { name: 'seedance-2-5', type: 'video' },
+        { name: 'future-video', type: 'video' },
+      ] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchProviderModelCatalog({ providerId: 'libapi',
+      config: { name: 'LibAPI', apiKey: 'libapi-fixture', catalogId: 'libapi' },
+      fallbackModels: [...LIBAPI_MODEL_MANIFEST],
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://libapi.cc/v1/models', 'https://libapi.cc/v1/skills/models',
+    ]);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'GET', headers: { Authorization: 'Bearer libapi-fixture' } });
+    expect(fetchMock.mock.calls[1][1]).not.toHaveProperty('headers');
+    expect(result).toMatchObject({ source: 'remote', resolvedBaseUrl: 'https://libapi.cc/v1' });
+    expect(result.models.map(({ id, category, provider }) => ({ id, category, provider }))).toEqual([
+      { id: 'gt-6.1-sol', category: 'text', provider: 'libapi' },
+      { id: 'gt-image-2.5-flare', category: 'image', provider: 'libapi' },
+      { id: 'vo-3.1', category: 'video', provider: 'libapi' },
+    ]);
+    expect(result.models.filter((model) => model.category !== 'text').every((model) => model.executionProfile)).toBe(true);
+    expect(result.warning).toBeTruthy();
+  });
+
+  it.each([401, 503])('目录 HTTP %s 失败不回退静态模型，也不访问公开技能目录', async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchProviderModelCatalog({ providerId: 'libapi', config: { name: 'LibAPI', apiKey: 'fixture', catalogId: 'libapi' },
+      fallbackModels: [...LIBAPI_MODEL_MANIFEST] })).rejects.toThrow();
+    expect(fetchMock.mock.calls.every(([url]) => url === 'https://libapi.cc/v1/models')).toBe(true);
+  });
+
+  it('技能目录失败保留调用方旧选择，不用静态型号冒充已验证目录', async () => {
+    const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!;
+    const config: ApiProviderConfig = { name: 'LibAPI', apiKey: 'fixture', catalogId: 'libapi', selectedModels: [selected] };
+    const original = JSON.stringify(config);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ id: selected.id }] }))
+      .mockResolvedValueOnce(new Response('{}', { status: 503 })));
+    await expect(fetchProviderModelCatalog({ providerId: 'libapi', config, fallbackModels: [...LIBAPI_MODEL_MANIFEST] })).rejects.toThrow();
+    expect(JSON.stringify(config)).toBe(original);
+  });
+
+  it('缺少 Key 不请求公开目录，认证目录没有已适配型号时不借用静态清单', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchProviderModelCatalog({ providerId: 'libapi', config: { name: 'LibAPI', apiKey: '', catalogId: 'libapi' },
+      fallbackModels: [...LIBAPI_MODEL_MANIFEST] })).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: [{ id: 'future-video' }] }))
+      .mockResolvedValueOnce(jsonResponse({ models: [{ name: 'future-video', type: 'video' }] }));
+    const result = await fetchProviderModelCatalog({ providerId: 'libapi', config: { name: 'LibAPI', apiKey: 'fixture', catalogId: 'libapi' },
+      fallbackModels: [...LIBAPI_MODEL_MANIFEST] });
+    expect(result).toMatchObject({ source: 'remote', models: [] });
+    expect(result.warning).toBeTruthy();
+  });
+
+  it('保存和分享导入贯通节点模型，持久化默认地址并保留用户协议及稳定身份', () => {
+    const previous = useAppStore.getState().config;
+    const selected = structuredClone(LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!);
+    selected.executionProfile = { preset: 'custom', protocol: { version: 2, mode: 'sync',
+      submit: { method: 'POST', path: '/user/images', body: { model: '{{model}}', prompt: '{{prompt}}' } },
+      response: { type: 'json', result: { urlPath: 'data.*.url' } },
+    } };
+    selected.imageCapability = undefined;
+    selected.imageReferenceRequestMode = undefined;
+    const config: ApiProviderConfig = { name: 'LibAPI', apiKey: '', catalogId: 'libapi', selectedModels: [selected] };
+    const parsed = parseConnectionShare(serializeConnection(config))!;
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.config.selectedModels?.[0].executionProfile).toEqual(selected.executionProfile);
+    try {
+      useAppStore.setState({ config: { ...previous, providers: {}, generalModels: [] } });
+      useAppStore.getState().saveProviderConfig('libapi', parsed.config);
+      const saved = useAppStore.getState().config;
+      const model = saved.generalModels![0];
+      expect(saved.providers.libapi.baseUrl).toBe('https://libapi.cc/v1');
+      expect(model).toMatchObject({ modelId: selected.id, providerConfigId: 'libapi', category: 'image', executionProfile: selected.executionProfile });
+      useAppStore.getState().saveProviderConfig('libapi', { ...parsed.config, name: 'LibAPI 已编辑' });
+      expect(useAppStore.getState().config.generalModels![0].id).toBe(model.id);
+      expect(selected.executionProfile.protocol!.submit.path).toBe('/user/images');
+    } finally {
+      useAppStore.setState({ config: previous });
+    }
+  });
+});
 
 describe('即梦登录后的模型目录与选择', () => {
   afterEach(() => {

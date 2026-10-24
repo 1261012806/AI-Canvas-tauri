@@ -11,6 +11,7 @@ import { generateImagesBatch } from '../../src/services/ai/generateImage';
 import { generateText } from '../../src/services/ai/generateText';
 import { reversePromptAndTags } from '../../src/services/ai/reversePrompt';
 import { generateVideo } from '../../src/services/ai/generateVideo';
+import { generateAudio } from '../../src/services/ai/generateAudio';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import VideoParamSelector from '../../src/components/nodes/shared/VideoParamSelector';
@@ -23,6 +24,7 @@ import { useAppStore } from '../../src/store/useAppStore';
 import { createImageQuickAdaptTemplate } from '../../src/services/ai/imageModelTemplates';
 import { uploadToRemote } from '../../src/services/uploadService';
 import { getPendingTasksForProject } from '../../src/services/pollManager';
+import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -250,6 +252,235 @@ describe('ToAPIs 参考素材上传与图片提交', () => {
     } } }));
     await expect(uploadToRemote('data:video/mp4;base64,bWlzc2luZy1rZXk=', 'toapis-user', 'video')).rejects.toThrow('当前连接');
     expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('LibAPI 图片原任务与请求合同', () => {
+  function configureLibapiImage() {
+    const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!;
+    useAppStore.getState().saveProviderConfig('libapi-images', {
+      name: 'LibAPI', catalogId: 'libapi', apiKey: 'libapi-image-fixture', baseUrl: 'https://libapi.cc/v1',
+      selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'libapi-images')!;
+    useAppStore.setState({ currentProjectId: 'libapi-image-project', nodes: [{ id: 'libapi-image', type: 'ai-image',
+      position: { x: 0, y: 0 }, data: { type: 'ai-image', label: 'LibAPI 图片', status: 'loading' } }] });
+    return { provider: 'general', model: `general/${model.id}`, nodeId: 'libapi-image', prompt: '透明背景的角色立绘' };
+  }
+
+  it.each([
+    ['image', 'image/png', 'png'], ['video', 'video/mp4', 'mp4'], ['audio', 'audio/mpeg', 'mp3'],
+  ] as const)('LibAPI 本地 %s 只用当前连接向 /v1/files 上传', async (kind, mime, extension) => {
+    configureLibapiImage();
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      apimart: { name: 'APIMart', apiKey: 'unrelated-upload-fixture' },
+    } } }));
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应请求其他图床'));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      id: `file-libapi-${kind}`, url: `https://cdn.example/libapi-upload-${kind}`,
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(uploadToRemote(`data:${mime};base64,bGliYXBpLXVwbG9hZC1maXh0dXJl`, 'libapi-images', kind))
+      .resolves.toBe(`https://cdn.example/libapi-upload-${kind}`);
+
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://libapi.cc/v1/files', expect.objectContaining({
+      method: 'POST', headers: { Authorization: 'Bearer libapi-image-fixture' }, body: expect.any(FormData),
+    }));
+    const form = transportMocks.corsSafeFetch.mock.calls[0][1].body as FormData;
+    expect([...form.keys()]).toEqual(['file']);
+    expect(form.get('file')).toMatchObject({ name: `reference.${extension}`, type: mime });
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it('LibAPI 上传响应没有公网 URL 时明确失败，不重试或回退公共图床', async () => {
+    configureLibapiImage();
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应请求其他图床'));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ id: 'file-without-url' }));
+
+    await expect(uploadToRemote('data:audio/mpeg;base64,bGliYXBpLW1pc3NpbmctdXJs', 'libapi-images', 'audio'))
+      .rejects.toThrow('LibAPI 上传未返回有效公网 URL');
+
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it('LibAPI 未填写 Key 时不借用其他厂商 Key', async () => {
+    configureLibapiImage();
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应请求其他图床'));
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'libapi-images': { ...state.config.providers['libapi-images'], apiKey: '' },
+      apimart: { name: 'APIMart', apiKey: 'unrelated-upload-fixture' },
+    } } }));
+
+    await expect(uploadToRemote('data:video/mp4;base64,bGliYXBpLW5vLWtleQ==', 'libapi-images', 'video'))
+      .rejects.toThrow('当前连接的 Key');
+
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it('LibAPI 不支持的音频格式在发送上传请求前拦截', async () => {
+    configureLibapiImage();
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应请求其他图床'));
+
+    await expect(uploadToRemote('data:audio/ogg;base64,bGliYXBpLW9nZw==', 'libapi-images', 'audio'))
+      .rejects.toThrow('格式不支持');
+
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it('只提交一次统一异步请求，用 task_id 查询并保留交付凭据', async () => {
+    const params = configureLibapiImage();
+    transportMocks.corsSafeFetch
+      .mockResolvedValueOnce(jsonResponse({ mode: 'async', task_id: 'libapi-image-task', status: 'pending' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed', is_final: true,
+        output_url: 'https://cdn.example/libapi-image.png' }));
+
+    const result = await generateImagesBatch({ ...params, imageSize: '2K', aspectRatio: '9:16',
+      imageQuality: 'high', imageBackground: 'transparent', image_urls: ['https://cdn.example/character.png'] }, 1);
+
+    expect(result.results[0].url).toBe('https://cdn.example/libapi-image.png');
+    expect(result.taskReceipt).toMatchObject({ projectId: 'libapi-image-project', nodeId: 'libapi-image', taskId: 'libapi-image-task' });
+    const calls = transportMocks.corsSafeFetch.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      'https://libapi.cc/api/v1/model-runtime/invoke', 'https://libapi.cc/v1/tasks/libapi-image-task',
+    ]);
+    expect(JSON.parse(String(calls[0][1].body))).toMatchObject({ model_id: 'gt-image-2.5-flare', modality: 'image', params: {
+      aspect_ratio: '9:16', resolution: '2K', quality: 'high', background: 'transparent', count: 1,
+      images: ['https://cdn.example/character.png'],
+    } });
+    expect(calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    expect(calls[1][1].headers).toMatchObject({ Authorization: 'Bearer libapi-image-fixture' });
+    const pending = getPendingTasksForProject('libapi-image-project');
+    expect(pending).toEqual([expect.objectContaining({ providerConfigId: 'libapi-images', taskId: 'libapi-image-task',
+      submitted: true, mediaRecoveryState: 'delivery_pending' })]);
+    expect(JSON.stringify(pending)).not.toContain('libapi-image-fixture');
+  });
+
+  it('查询鉴权失败保留原 task_id，不重新提交生成', async () => {
+    const params = configureLibapiImage();
+    transportMocks.corsSafeFetch
+      .mockResolvedValueOnce(jsonResponse({ task_id: 'libapi-retained-task' }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: '权限已变化' } }), { status: 401 }));
+
+    await expect(generateImagesBatch(params, 1)).rejects.toMatchObject({
+      name: 'MediaTaskPausedError', taskReceipt: { taskId: 'libapi-retained-task' },
+    });
+    expect(transportMocks.corsSafeFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    expect(getPendingTasksForProject('libapi-image-project')).toEqual([expect.objectContaining({
+      taskId: 'libapi-retained-task', providerConfigId: 'libapi-images', submitted: true,
+    })]);
+  });
+});
+
+describe('LibAPI 音频合同与原任务交付', () => {
+  function configureAudio(id: string) {
+    const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === id)!;
+    useAppStore.getState().saveProviderConfig('libapi-audio', {
+      name: 'LibAPI', catalogId: 'libapi', apiKey: 'libapi-audio-fixture', selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'libapi-audio')!;
+    useAppStore.setState({ currentProjectId: 'libapi-audio-project', nodes: [{ id: 'libapi-audio-node', type: 'ai-audio',
+      position: { x: 0, y: 0 }, data: { type: 'ai-audio', label: 'LibAPI 音频', status: 'loading' } }] });
+    return { provider: 'general', model: `general/${model.id}`, nodeId: 'libapi-audio-node', prompt: '欢迎来到创作空间' };
+  }
+  function successfulAudio() {
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ task_id: 'libapi-audio-task' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed', output_url: 'https://cdn.example/libapi-audio.wav' }));
+  }
+
+  it.each([
+    { id: 'gt-4o-mini-tts', expected: { voice: 'alloy', response_format: 'mp3', speed: 1 } },
+    { id: 'gm-3.1-flash-tts', expected: { voice: 'Zephyr', response_format: 'wav' } },
+    { id: 'gm-2.5-pro-tts', expected: { voice: 'Zephyr', response_format: 'wav' } },
+  ])('$id 使用本型号默认参数，只提交一次并保留原音频任务', async ({ id, expected }) => {
+    const params = configureAudio(id);
+    successfulAudio();
+    const result = await generateAudio(params);
+    expect(result).toMatchObject({ url: 'https://cdn.example/libapi-audio.wav', taskReceipt: { taskId: 'libapi-audio-task' } });
+    const calls = transportMocks.corsSafeFetch.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      'https://libapi.cc/api/v1/model-runtime/invoke', 'https://libapi.cc/v1/tasks/libapi-audio-task',
+    ]);
+    const body = JSON.parse(String(calls[0][1].body));
+    expect(body).toMatchObject({ model_id: id, modality: 'audio', operation: 'speech', params: { input: params.prompt, ...expected } });
+    expect(body.params).not.toHaveProperty('count');
+    if (id.startsWith('gm-')) expect(body.params).not.toHaveProperty('speed');
+    expect(getPendingTasksForProject('libapi-audio-project')).toEqual([expect.objectContaining({
+      taskId: 'libapi-audio-task', providerConfigId: 'libapi-audio', mediaRecoveryState: 'delivery_pending',
+    })]);
+    expect(JSON.stringify(result.taskReceipt)).not.toContain('libapi-audio-fixture');
+  });
+
+  it.each(['speech-2.8', 'doubao-tts-2.0'])('%s 只传入用户明确填写的声音 ID', async (id) => {
+    const params = configureAudio(id);
+    successfulAudio();
+    await generateAudio({ ...params, audioVoice: 'my-authorized-voice-id', audioSpeed: 1.25 });
+    const body = JSON.parse(String(transportMocks.corsSafeFetch.mock.calls[0][1].body));
+    expect(body.params).toMatchObject({ input: params.prompt, voice: 'my-authorized-voice-id', speed: 1.25 });
+    if (id === 'speech-2.8') expect(body.params).not.toHaveProperty('response_format');
+    else expect(body.params.response_format).toBe('mp3');
+  });
+
+  it('音乐提交标题和歌词，不发送时长或 BPM，也不先提交另一个写词任务', async () => {
+    const params = configureAudio('music');
+    successfulAudio();
+    await generateAudio({ ...params, prompt: '轻快的旅行歌曲', musicTitle: '旅途', musicLyrics: '迎着阳光向前走' });
+    const body = JSON.parse(String(transportMocks.corsSafeFetch.mock.calls[0][1].body));
+    expect(body).toMatchObject({ modality: 'audio', operation: 'generate', params: {
+      prompt: '轻快的旅行歌曲', title: '旅途', lyrics: '迎着阳光向前走',
+    } });
+    for (const name of ['duration', 'bpm', 'count', 'response_format', 'voice']) expect(body.params).not.toHaveProperty(name);
+    expect(transportMocks.corsSafeFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it.each([
+    { id: 'speech-2.8', extra: {}, error: /音色|voice/i },
+    { id: 'doubao-tts-2.0', extra: {}, error: /音色|voice/i },
+    { id: 'gt-4o-mini-tts', extra: { audioFormat: 'pcm' as const }, error: /格式|format/i },
+    { id: 'gm-3.1-flash-tts', extra: { audioSpeed: 1.25 }, error: /语速|速度|speed/i },
+    { id: 'music', extra: { musicDuration: 60 }, error: /时长|duration/i },
+  ])('$id 的不完整或不支持参数在提交前失败', async ({ id, extra, error }) => {
+    const params = configureAudio(id);
+    await expect(generateAudio({ ...params, ...extra })).rejects.toThrow(error);
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it('参考音频不被当作即传即克隆，提交前停止且不上传素材', async () => {
+    const params = configureAudio('gt-4o-mini-tts');
+    useAppStore.setState((state) => ({ nodes: [...state.nodes, { id: 'audio-reference', type: 'source-audio', position: { x: 0, y: 0 },
+      data: { type: 'source-audio', label: '原声', audioUrl: 'data:audio/mpeg;base64,YQ==' } }],
+      edges: [{ id: 'audio-edge', source: 'audio-reference', target: params.nodeId }] }));
+    await expect(generateAudio(params)).rejects.toThrow('不接受参考素材');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['node-image', 'asset-audio', 'drama-image'])('%s 的纯 @ 引用也会在提交前拦截，不把素材地址变成朗读正文', async (kind) => {
+    const params = configureAudio('gt-4o-mini-tts');
+    useAppStore.setState((state) => ({
+      nodes: [...state.nodes, { id: 'image-reference', type: 'source-image', position: { x: 0, y: 0 },
+        data: { type: 'source-image', label: '参考图', imageUrl: 'data:image/png;base64,YQ==' } }],
+      dramaAssets: { ...state.dramaAssets, scenes: [{ id: 'scene-reference', kind: 'scene', name: '参考场景',
+        key: 'scene-reference', summary: '', visualNotes: '', importance: 'main', confirmed: true,
+        source: 'manual', createdAt: 1, updatedAt: 1, imageUrl: 'data:image/png;base64,YQ==' }] },
+      edges: [],
+    }));
+    const reference = kind === 'node-image' ? '@{image-reference:参考图}'
+      : kind === 'asset-audio' ? '@asset{fixtures/reference.mp3}' : '@drama{scene-reference:参考场景}';
+    await expect(generateAudio({ ...params, prompt: `请参考 ${reference} 朗读欢迎词` })).rejects.toThrow('不接受参考素材');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it('音频查询中断保留已有 task_id，避免重复提交扣费', async () => {
+    const params = configureAudio('gt-4o-mini-tts');
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ task_id: 'libapi-retained-audio' }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'Key 权限已变化' } }), { status: 401 }));
+    await expect(generateAudio(params)).rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: { taskId: 'libapi-retained-audio' } });
+    expect(transportMocks.corsSafeFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    expect(getPendingTasksForProject('libapi-audio-project')).toEqual([expect.objectContaining({
+      taskId: 'libapi-retained-audio', submitted: true, providerConfigId: 'libapi-audio',
+    })]);
   });
 });
 

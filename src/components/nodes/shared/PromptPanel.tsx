@@ -37,6 +37,7 @@ import { getRunningHubModel } from '../../../services/ai/providers/runninghubMod
 import QualityRatioSelector from './QualityRatioSelector';
 import VideoParamSelector from './VideoParamSelector';
 import AudioParamSelector from './AudioParamSelector';
+import { getLibapiAudioCapability, usesLibapiModelProtocol } from '../../../services/ai/providers/libapiModelManifest';
 import CharacterVoiceSelector, { type CharacterVoiceChoice } from './CharacterVoiceSelector';
 import { collectAudioSpeechReferences, resolveAudioSpeechWorkflow } from '../../../services/ai/audioSpeechSettings';
 import { listGlobalDramaAssets, resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
@@ -581,6 +582,11 @@ export default function PromptPanel({
     : undefined;
   const imageConnectionId = imageGeneralModel?.providerConfigId ?? selectedProvider;
   const imageConnection = imageConnectionId ? imageModelConfig.providers[imageConnectionId] : undefined;
+  const audioCapability = useMemo(() => nodeType === 'ai-audio' && !selectedWorkflowId && imageGeneralModel?.category === 'audio'
+    && imageConnection && getProviderDefinition(imageGeneralModel.providerConfigId, imageConnection)?.id === 'libapi'
+    && usesLibapiModelProtocol(imageGeneralModel.modelId, imageGeneralModel.executionProfile)
+    ? getLibapiAudioCapability(imageGeneralModel.modelId) : undefined,
+  [nodeType, selectedWorkflowId, imageGeneralModel, imageConnection]);
   const imageModelId = imageGeneralModel?.modelId
     ?? (imageConnectionId && selectedModel?.startsWith(`${imageConnectionId}/`)
       ? selectedModel.slice(imageConnectionId.length + 1) : selectedModel);
@@ -1124,6 +1130,7 @@ export default function PromptPanel({
 
           {nodeType === 'ai-audio' && !runninghubWorkflow && !runninghubModel && !workflowApi && (
             <AudioParamSelector
+              capability={audioCapability}
               purpose={speechControls ? 'speech' : audioPurpose}
               speechControls={speechControls}
               speechSettings={audioSpeechSettings}

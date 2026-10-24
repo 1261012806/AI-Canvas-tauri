@@ -41,7 +41,7 @@ import {
   type MediaPlaceholderLifecycle,
 } from '../mediaPlaceholderLifecycle';
 
-interface GenerateMediaInput {
+interface GenerateMediaInput extends Pick<MediaGenerationIntent, 'audioVoice' | 'audioFormat' | 'audioSpeed' | 'musicTitle' | 'musicLyrics'> {
   kind: MediaKind;
   prompt: string;
   modelRef?: string;
@@ -55,6 +55,13 @@ interface GenerateMediaInput {
 }
 
 const MEDIA_PROMPT_DISPLAY_LIMIT = 1_000;
+const AUDIO_FORMATS = ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'];
+const LEGACY_AUDIO_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+
+function hasAudioSettings(input: GenerateMediaInput): boolean {
+  return [input.audioVoice, input.audioFormat, input.audioSpeed, input.musicTitle, input.musicLyrics]
+    .some((value) => value !== undefined);
+}
 
 function resolveMediaToolInput(
   input: GenerateMediaInput,
@@ -167,6 +174,13 @@ function buildMediaInputDisplay(input: GenerateMediaInput): AgentToolDisplaySnap
         source: input.duration ? 'resolved' : 'model_default',
       },
     );
+  }
+  if (input.kind === 'audio') {
+    if (input.audioVoice !== undefined) fields.push({ label: '音色', value: input.audioVoice });
+    if (input.audioFormat !== undefined) fields.push({ label: '音频格式', value: input.audioFormat });
+    if (input.audioSpeed !== undefined) fields.push({ label: '语速倍率', value: String(input.audioSpeed) });
+    if (input.musicTitle !== undefined) fields.push({ label: '音乐标题', value: input.musicTitle });
+    if (input.musicLyrics !== undefined) fields.push({ label: '歌词', value: input.musicLyrics.slice(0, MEDIA_PROMPT_DISPLAY_LIMIT) });
   }
   return {
     fields,
@@ -288,6 +302,7 @@ export function registerMediaAgentTools(): Array<() => void> {
         '图片 prompt 可以原样包含用户提供的 @{nodeId:label} 或 @asset{path} 引用，',
         '运行时会自动解析为参考图输入；无需先读取节点原 prompt，也不要要求用户重新描述图片。',
         '视频可显式传入 aspectRatio、resolution 和 duration；自定义 API 省略时由模型 capability / 接口默认值决定，内置模型与工作流才锁定项目默认值。',
+        '音频可显式传 audioVoice、audioFormat、audioSpeed，音乐可传 musicTitle 和 musicLyrics；音色使用所选模型公布的真实 ID，省略时沿用模型默认。RunningHub 与工作流仍使用各自参数。',
         '协作模式由 Policy 请求确认，自主模式直接执行。deliveryMode 控制结果显示在对话、画布或两者。',
       ].join(''),
       inputSchema: {
@@ -317,6 +332,11 @@ export function registerMediaAgentTools(): Array<() => void> {
           },
           deliveryMode: { type: 'string', enum: ['chat', 'canvas', 'both'] },
           audioPurpose: { type: 'string', enum: ['music', 'speech'] },
+          audioVoice: { type: 'string', minLength: 1, maxLength: 256, description: '所选语音模型公布的音色 ID，不含控制字符。' },
+          audioFormat: { type: 'string', enum: AUDIO_FORMATS },
+          audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
+          musicTitle: { type: 'string', maxLength: 120 },
+          musicLyrics: { type: 'string', maxLength: 8000 },
           aspectRatio: {
             type: 'string',
             minLength: 1,
@@ -341,6 +361,23 @@ export function registerMediaAgentTools(): Array<() => void> {
       resolveInput: resolveMediaToolInput,
       authorize: (context, input) => {
         const store = useAppStore.getState();
+        if (hasAudioSettings(input) && input.kind !== 'audio') {
+          return { allowed: false, reason: '音频参数只能用于音频生成' };
+        }
+        if (input.audioVoice !== undefined && (typeof input.audioVoice !== 'string' || !input.audioVoice.trim()
+          || input.audioVoice !== input.audioVoice.trim() || input.audioVoice.length > 256
+          || Array.from(input.audioVoice).some((character) => {
+            const code = character.charCodeAt(0);
+            return code < 32 || (code >= 127 && code <= 159);
+          }))) {
+          return { allowed: false, reason: 'audioVoice 必须是 1–256 字符且不含控制字符的音色 ID' };
+        }
+        if (input.audioPurpose === 'speech' && (input.musicTitle !== undefined || input.musicLyrics !== undefined)) {
+          return { allowed: false, reason: '音乐标题和歌词只能用于音乐生成' };
+        }
+        if (input.audioPurpose === 'music' && (input.audioVoice !== undefined || input.audioFormat !== undefined || input.audioSpeed !== undefined)) {
+          return { allowed: false, reason: '音色、格式和语速参数只能用于语音生成' };
+        }
         const task = store.agentTasks.find((item) => item.id === context.taskId);
         const mentionedModel = task ? extractModelMention(task.goal) : undefined;
         if (mentionedModel && mentionedModel !== input.modelRef) {
@@ -358,6 +395,12 @@ export function registerMediaAgentTools(): Array<() => void> {
           );
           if (!option || option.mediaKind !== input.kind) {
             return { allowed: false, reason: '所选模型与本次媒体类型不兼容' };
+          }
+          if (hasAudioSettings(input) && (option.workflowId || option.provider === 'runninghub')) {
+            return { allowed: false, reason: 'RunningHub 和工作流使用自己的参数，请通过 modelParameters 或 workflowInputs 设置音频参数' };
+          }
+          if (input.audioVoice !== undefined && option.provider !== 'general' && !LEGACY_AUDIO_VOICES.includes(input.audioVoice)) {
+            return { allowed: false, reason: '所选模型不支持该音色，请使用当前厂商公布的音色' };
           }
           if (input.modelParameters?.length) {
             const model = option.provider === 'runninghub' ? getRunningHubModel(input.modelRef, true) : undefined;
@@ -485,6 +528,11 @@ export function registerMediaAgentTools(): Array<() => void> {
           modelRef: input.modelRef,
           deliveryMode: input.deliveryMode,
           audioPurpose: input.audioPurpose,
+          audioVoice: input.audioVoice,
+          audioFormat: input.audioFormat,
+          audioSpeed: input.audioSpeed,
+          musicTitle: input.musicTitle,
+          musicLyrics: input.musicLyrics,
           aspectRatio: input.aspectRatio,
           resolution: input.resolution,
           duration: input.duration,

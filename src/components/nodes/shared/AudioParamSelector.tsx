@@ -3,7 +3,7 @@
  */
 import { Icon } from '@iconify/react';
 import { memo, useEffect, useRef, useState } from 'react';
-import type { AudioOutputFormat, AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowControls, AudioTtsVoice } from '../../../types/aiTypes';
+import type { AudioModelCapability, AudioOutputFormat, AudioSpeechReference, AudioSpeechSettings, AudioSpeechWorkflowControls, AudioTtsVoice } from '../../../types/aiTypes';
 import type { AudioGenerationPurpose } from '../../../types/media';
 import AnimatedButton from '../../shared/AnimatedButton';
 import Select from '../../shared/Select';
@@ -12,6 +12,7 @@ import { AUDIO_SPEECH_PACES, AUDIO_SPEECH_VOICES, audioSpeechModeIssue, normaliz
 import { useT } from '../../../i18n';
 
 interface AudioParamSelectorProps {
+  capability?: AudioModelCapability;
   speechControls?: AudioSpeechWorkflowControls;
   speechSettings?: AudioSpeechSettings;
   references?: AudioSpeechReference[];
@@ -50,6 +51,7 @@ const VOICES: Array<{ value: AudioTtsVoice; label: string }> = [
 const FORMATS: AudioOutputFormat[] = ['wav', 'opus', 'aac', 'flac', 'pcm'];
 
 function AudioParamSelector({
+  capability,
   speechControls,
   speechSettings,
   references = [],
@@ -57,9 +59,9 @@ function AudioParamSelector({
   onAddReference,
   onRemoveReference,
   purpose,
-  voice = 'alloy',
-  format = 'wav',
-  speed = 1,
+  voice,
+  format,
+  speed,
   musicTitle = '',
   musicLyrics = '',
   musicBpm,
@@ -99,7 +101,16 @@ function AudioParamSelector({
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [open]);
 
-  if (!purpose) return null;
+  const effectivePurpose = capability?.kind ?? purpose;
+  if (!effectivePurpose) return null;
+
+  const selectedVoice = voice ?? capability?.defaultVoice ?? (capability ? '' : 'alloy');
+  const selectedFormat = format ?? capability?.defaultFormat ?? (capability ? undefined : 'wav');
+  const selectedSpeed = speed ?? capability?.speed?.default ?? (capability ? undefined : 1);
+  const voices = capability?.voices?.map((value) => ({ value, label: value })) ?? VOICES;
+  const formats = capability ? capability.formats ?? [] : FORMATS;
+  const speedControl: AudioModelCapability['speed'] = capability ? capability.speed : { min: 0.25, max: 4, step: 0.05, default: 1 };
+  const musicControls = capability?.musicControls;
 
   const speech = { ...speechSettings, ...normalizeAudioSpeechSettings(speechSettings, speechControls?.duration) };
   const qwen = speechControls?.qwen;
@@ -111,9 +122,10 @@ function AudioParamSelector({
     ? t(qwen.mode === 'clone' ? '原声克隆 · 参数' : qwen.mode === 'design' ? '声音抽卡 · 参数' : '参考音频抽卡 · 参数')
     : speechControls
     ? `${hasReference ? t('参考音色') : t(voiceLabel)} · ${t(AUDIO_SPEECH_PACES[speech.pace].label)} · ${speech.duration}s`
-    : purpose === 'speech'
-    ? `${voice} · ${format.toUpperCase()} · ${speed}x`
-    : `${musicDuration}s${musicBpm ? ` · ${musicBpm} BPM` : ''}`;
+    : effectivePurpose === 'speech'
+    ? [selectedVoice || t('请填写音色 ID'), ...(formats.length && selectedFormat ? [selectedFormat.toUpperCase()] : []),
+      ...(speedControl && selectedSpeed !== undefined ? [`${selectedSpeed}x`] : [])].join(' · ')
+    : musicControls?.duration === false ? t('标题与歌词') : `${musicDuration}s${musicBpm ? ` · ${musicBpm} BPM` : ''}`;
 
   return (
     <div className="ui-schema-renderer" data-ui-schema-placement="audioParams" ref={ref}>
@@ -122,13 +134,13 @@ function AudioParamSelector({
           type="button"
           className="img-pill-btn ui-schema-menu-trigger"
           aria-expanded={open}
-          data-tooltip={purpose === 'speech' ? t('语音参数') : t('音乐参数')}
+          data-tooltip={effectivePurpose === 'speech' ? t('语音参数') : t('音乐参数')}
           onClick={(event) => {
             event.stopPropagation();
             setOpen((value) => !value);
           }}
         >
-          <Icon icon={purpose === 'speech' ? 'mdi:account-voice' : 'mdi:music-note'} width={13} />
+          <Icon icon={effectivePurpose === 'speech' ? 'mdi:account-voice' : 'mdi:music-note'} width={13} />
           <span className="ui-schema-pill-label ui-schema-quality-ratio-label">{triggerLabel}</span>
         </AnimatedButton>
 
@@ -204,69 +216,85 @@ function AudioParamSelector({
                 </>}
                 {modeIssue ? <p role="status" className="text-canvas-text-secondary">{t(modeIssue)}</p> : null}
               </div>
-            ) : purpose === 'speech' ? (
+            ) : effectivePurpose === 'speech' ? (
               <div className="rh-v5-meta-panel">
                 <label className="rh-vram-adv-row">
-                  <span className="rh-vram-adv-label">{t('音色')}</span>
-                  <Select
+                  <span className="rh-vram-adv-label">{capability?.voiceInput === 'id' ? t('音色 ID') : t('音色')}</span>
+                  {capability?.voiceInput === 'id' ? <input
+                    className="ui-input ui-input--sm w-full"
+                    value={selectedVoice}
+                    required
+                    aria-required="true"
+                    maxLength={256}
+                    placeholder={t('填写平台提供的音色 ID')}
+                    onChange={(event) => onChangeVoice?.(event.target.value)}
+                    onBlur={onContinuousEditEnd}
+                  /> : <Select
                     className="w-full"
                     fixedMenu
                     aria-label={t('音色')}
-                    value={voice}
+                    value={selectedVoice}
                     onChange={(value) => onChangeVoice?.(value)}
-                    options={VOICES}
-                  />
+                    options={voices}
+                  />}
                 </label>
 
-                <div className="img-rp-quality-area">
+                {formats.length > 0 ? <div className="img-rp-quality-area">
                   <div className="img-rp-section-label">{t('输出格式')}</div>
                   <div className="img-rp-quality-segmented rh-video-resolution-seg">
-                    {FORMATS.map((item) => (
+                    {formats.map((item) => (
                       <AnimatedButton
                         key={item}
                         type="button"
-                        className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${format === item ? 'active' : ''}`}
+                        className={`img-rp-quality-item rh-v5-res-btn ui-schema-option ${selectedFormat === item ? 'active' : ''}`}
                         onClick={() => onChangeFormat?.(item)}
                       >
                         {item.toUpperCase()}
                       </AnimatedButton>
                     ))}
                   </div>
-                </div>
+                </div> : null}
 
-                <label className="rh-vram-adv-row">
-                  <span className="rh-vram-adv-label">{t('语速 {speed}x', { speed })}</span>
-                  <input
+                {speedControl ? <label className="rh-vram-adv-row">
+                  <span className="rh-vram-adv-label">{t('语速 {speed}x', { speed: selectedSpeed ?? speedControl.default ?? 1 })}</span>
+                  {speedControl.options?.length ? <Select
+                    className="w-full"
+                    fixedMenu
+                    aria-label={t('语速')}
+                    value={String(selectedSpeed ?? speedControl.default ?? 1)}
+                    options={speedControl.options.map((value) => ({ value: String(value), label: `${value}x` }))}
+                    onChange={(value) => { onChangeSpeed?.(Number(value)); onContinuousEditEnd?.(); }}
+                  /> : <input
                     type="range"
                     className="rh-duration-input"
-                    min={0.25}
-                    max={4}
-                    step={0.05}
-                    value={speed}
+                    min={speedControl.min}
+                    max={speedControl.max}
+                    step={speedControl.step ?? 0.05}
+                    value={selectedSpeed ?? speedControl.default ?? 1}
                     onChange={(event) => onChangeSpeed?.(Number(event.target.value))}
                     onBlur={onContinuousEditEnd}
-                  />
-                </label>
+                  />}
+                </label> : null}
               </div>
             ) : (
               <div className="rh-v5-meta-panel">
-                <label className="rh-vram-adv-row">
+                {musicControls?.title !== false ? <label className="rh-vram-adv-row">
                   <span className="rh-vram-adv-label">{t('标题')}</span>
                   <input
-                    className="w-full rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-xs text-canvas-text outline-none focus:border-orange-400"
+                    className="ui-input ui-input--sm w-full"
                     value={musicTitle}
                     maxLength={120}
                     onChange={(event) => onChangeMusicTitle?.(event.target.value)}
                     onBlur={onContinuousEditEnd}
                   />
-                </label>
+                </label> : null}
 
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="rh-vram-adv-row">
+                {musicControls?.bpm !== false || musicControls?.duration !== false ? <div className="grid grid-cols-2 gap-2">
+                  {musicControls?.bpm !== false ? <label className="rh-vram-adv-row">
                     <span className="rh-vram-adv-label">BPM</span>
                     <input
                       type="number"
-                      className="w-full rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-xs text-canvas-text outline-none focus:border-orange-400"
+                      className="ui-input ui-input--sm w-full"
                       min={1}
                       value={musicBpm ?? ''}
                       onChange={(event) => {
@@ -275,8 +303,8 @@ function AudioParamSelector({
                       }}
                       onBlur={onContinuousEditEnd}
                     />
-                  </label>
-                  <label className="rh-vram-adv-row">
+                  </label> : null}
+                  {musicControls?.duration !== false ? <label className="rh-vram-adv-row">
                     <span className="rh-vram-adv-label">{t('时长 {duration}s', { duration: musicDuration })}</span>
                     <input
                       type="range"
@@ -288,10 +316,10 @@ function AudioParamSelector({
                       onChange={(event) => onChangeMusicDuration?.(Number(event.target.value))}
                       onBlur={onContinuousEditEnd}
                     />
-                  </label>
-                </div>
+                  </label> : null}
+                </div> : null}
 
-                <div className="flex items-center justify-between gap-3">
+                {musicControls?.autoGenerateLyrics !== false ? <div className="flex items-center justify-between gap-3">
                   <span className="rh-vram-adv-label">{t('自动生成歌词')}</span>
                   <label className="rh-toggle-switch" data-tooltip={t('先生成歌词，再继续生成音乐')}>
                     <input
@@ -301,13 +329,13 @@ function AudioParamSelector({
                     />
                     <span className="rh-toggle-track"><span className="rh-toggle-knob" /></span>
                   </label>
-                </div>
+                </div> : null}
 
-                {!autoGenerateLyrics ? (
+                {musicControls?.lyrics !== false && (!autoGenerateLyrics || musicControls?.autoGenerateLyrics === false) ? (
                   <label className="rh-vram-adv-row">
                     <span className="rh-vram-adv-label">{t('歌词')}</span>
                     <textarea
-                      className="min-h-24 w-full resize-y rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-xs leading-5 text-canvas-text outline-none focus:border-orange-400"
+                      className="ui-textarea min-h-24 w-full resize-y"
                       value={musicLyrics}
                       onChange={(event) => onChangeMusicLyrics?.(event.target.value)}
                       onBlur={onContinuousEditEnd}

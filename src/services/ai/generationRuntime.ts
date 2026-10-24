@@ -211,6 +211,8 @@ export async function runMediaGeneration(
   runninghubTaskContext?: import('../../types/runninghub').RunningHubTaskContext,
 ): Promise<MediaGenerationResult> {
   throwIfAborted(signal);
+  if (intent.kind !== 'audio' && [intent.audioVoice, intent.audioFormat, intent.audioSpeed, intent.musicTitle, intent.musicLyrics]
+    .some((value) => value !== undefined)) throw new Error('音频参数只能用于音频生成');
   if (!stripModelMentions(intent.prompt)) throw new Error('媒体生成提示词不能为空');
   const model = resolveMediaModel(intent.kind, intent.modelRef);
   ensureMediaMessageRecoveryHandler();
@@ -403,6 +405,11 @@ async function generateMediaArtifact(
     prompt: effectivePrompt,
     model: model.requestModel,
     provider: model.provider,
+    ...(intent.audioVoice !== undefined ? { audioVoice: intent.audioVoice } : {}),
+    ...(intent.audioFormat !== undefined ? { audioFormat: intent.audioFormat } : {}),
+    ...(intent.audioSpeed !== undefined ? { audioSpeed: intent.audioSpeed } : {}),
+    ...(intent.musicTitle !== undefined ? { musicTitle: intent.musicTitle } : {}),
+    ...(intent.musicLyrics !== undefined ? { musicLyrics: intent.musicLyrics } : {}),
     workflowId: model.workflowId,
     workflowInputs: intent.workflowInputs, runninghubModelParameters: model.provider === 'runninghub' ? runninghubModelParameters : undefined,
     nodeId: targetNodeId,

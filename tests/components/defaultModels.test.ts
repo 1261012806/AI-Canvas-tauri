@@ -8,7 +8,7 @@ import {
 } from '../../src/components/nodes/shared/defaultModels';
 import type { AppConfig, ProviderModelSelection } from '../../src/types';
 import { APIMART_OMNI_MODELS, replaceLegacyApimartOmni } from '../../src/services/ai/apimartVideoModels';
-import { isProviderModelVisible } from '../../src/services/ai/providerCatalogService';
+import { getProviderDefinition, isProviderModelVisible } from '../../src/services/ai/providerCatalogService';
 
 function createConfig(selectedModels: ProviderModelSelection[]): AppConfig {
   return {
@@ -427,6 +427,60 @@ describe('ToAPIs 独立模型分组', () => {
     const media = getMediaModelOptions(models, config).filter((model) => model.groupName === 'ToAPIs');
     expect(media.map((model) => model.value)).toEqual(['general/toapis-image', 'general/toapis-video']);
     expect(media.every((model) => model.groupId === 'general-provider-toapis' && model.provider === 'general')).toBe(true);
+  });
+});
+
+describe('LibAPI 独立模型分组', () => {
+  it('仅真实连接和完整内置音频协议声明语音或音乐用途', () => {
+    const catalog = getProviderDefinition('libapi')!.models!;
+    const speech = catalog.find((model) => model.id === 'gm-3.1-flash-tts')!;
+    const music = catalog.find((model) => model.id === 'music')!;
+    const customized = structuredClone(speech);
+    customized.executionProfile!.protocol!.submit.path = '/custom/audio';
+    const config: AppConfig = { theme: 'dark', providers: {
+      libapi: { name: 'LibAPI', apiKey: 'fixture', catalogId: 'libapi' },
+      relay: { name: '其他中转', apiKey: 'other', catalogId: 'custom-openai' },
+    } };
+    const models = [
+      { id: 'speech', name: speech.name, modelId: speech.id, providerConfigId: 'libapi', category: 'audio' as const, executionProfile: speech.executionProfile },
+      { id: 'music', name: music.name, modelId: music.id, providerConfigId: 'libapi', category: 'audio' as const, executionProfile: music.executionProfile },
+      { id: 'customized', name: speech.name, modelId: speech.id, providerConfigId: 'libapi', category: 'audio' as const, executionProfile: customized.executionProfile },
+      { id: 'other', name: speech.name, modelId: speech.id, providerConfigId: 'relay', category: 'audio' as const, executionProfile: speech.executionProfile },
+    ];
+    const options = getMediaModelOptions(models, config);
+    expect(options.find((model) => model.value === 'general/speech')).toMatchObject({ audioPurpose: 'speech', groupName: 'LibAPI' });
+    expect(options.find((model) => model.value === 'general/music')).toMatchObject({ audioPurpose: 'music', groupName: 'LibAPI' });
+    expect(options.find((model) => model.value === 'general/customized')?.audioPurpose).toBeUndefined();
+    expect(options.find((model) => model.value === 'general/other')?.audioPurpose).toBeUndefined();
+  });
+
+  it('文本、图片与视频按连接启用并保留同名厂商的独立身份', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      libapi: { name: 'LibAPI', catalogId: 'libapi', apiKey: 'fixture', visibleModelCategories: ['text', 'image', 'video'] },
+      relay: { name: '自定义', catalogId: 'custom-openai', apiKey: 'other' },
+    } };
+    const models = [
+      { id: 'libapi-text', name: 'GPT 6.1 Sol', modelId: 'gt-6.1-sol', category: 'text' as const, providerConfigId: 'libapi' },
+      { id: 'libapi-image', name: 'GPT Image 2.5 Flare', modelId: 'gt-image-2.5-flare', category: 'image' as const, providerConfigId: 'libapi' },
+      { id: 'libapi-video', name: 'Veo 3.1', modelId: 'vo-3.1', category: 'video' as const, providerConfigId: 'libapi' },
+      { id: 'relay-image', name: 'GPT Image 2.5 Flare', modelId: 'gt-image-2.5-flare', category: 'image' as const, providerConfigId: 'relay' },
+    ];
+    expect(getGeneralModelGroups(models, config, 'ai-text')[0]).toMatchObject({
+      id: 'general-provider-libapi', name: 'LibAPI', badgeText: 'LIB',
+      models: [expect.objectContaining({ value: 'general/libapi-text', provider: 'general' })],
+    });
+    const images = getGeneralModelGroups(models, config, 'ai-image');
+    expect(images.find((group) => group.name === 'LibAPI')?.models.map((model) => model.value))
+      .toEqual(['general/libapi-image']);
+    expect(images.find((group) => group.id === 'general-models')?.models.map((model) => model.value))
+      .toEqual(['general/relay-image']);
+    expect(getMediaModelOptions(models, config).filter((model) => model.groupName === 'LibAPI')
+      .map((model) => ({ value: model.value, groupId: model.groupId, kind: model.mediaKind }))).toEqual([
+      { value: 'general/libapi-image', groupId: 'general-provider-libapi', kind: 'image' },
+      { value: 'general/libapi-video', groupId: 'general-provider-libapi', kind: 'video' },
+    ]);
+    const hidden = { ...config, providers: { ...config.providers, libapi: { ...config.providers.libapi, visibleModelCategories: ['text' as const] } } };
+    expect(getMediaModelOptions(models, hidden).some((model) => model.groupName === 'LibAPI')).toBe(false);
   });
 });
 
