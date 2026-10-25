@@ -537,13 +537,14 @@ export async function completeMediaMessageDelivery(messageId: string, artifact: 
   }
 }
 
-async function recoverMediaMessage(task: PendingTask, urls: string[]): Promise<void> {
+async function recoverMediaMessage(task: PendingTask, urls: string[], signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
   const context = task.mediaContext;
   if (!context?.messageId || !context.conversationId) throw new Error('任务缺少原消息身份');
   const receipt = { projectId: task.projectId, nodeId: task.nodeId, taskId: task.taskId, attemptId: task.attemptId };
   const isCurrent = () => {
     const state = useAppStore.getState();
-    return state.currentProjectId === task.projectId
+    return !signal?.aborted && state.currentProjectId === task.projectId
       && state.messages.some((message) => message.id === context.messageId && message.conversationId === context.conversationId)
       && getPendingTasksForProject(task.projectId).some((saved) => saved.nodeId === task.nodeId
         && saved.taskId === task.taskId && saved.attemptId === task.attemptId);
@@ -590,8 +591,10 @@ async function recoverMediaMessage(task: PendingTask, urls: string[]): Promise<v
       }
       updatePendingTask(task.nodeId, { mediaContext: { ...context, messageId: deliveryMessageId } }, task.taskId, task.attemptId);
     }
+    throwIfAborted(signal);
     const canvasReady = !nodeId || !!guard && isCanvasDerivationFresh(guard, current)
       && current.settleMediaPlaceholder(nodeId, artifact);
+    throwIfAborted(signal);
     current.updateMessage(deliveryMessageId, {
       mediaResult: artifact, mediaStatus: 'succeeded', mediaError: undefined,
       canvasStatus: nodeId ? canvasReady ? 'created' : 'failed' : 'none', canvasNodeId: nodeId,

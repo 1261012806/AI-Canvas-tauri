@@ -9,6 +9,7 @@ import { corsSafeFetch } from './httpTransport';
 import { readModelProtocolFirstScalar } from './modelProtocolResponse';
 import { MIME_TYPE_RE, isRecord, resolveAuthentication, validateHeaderName } from './modelProtocolShared';
 import { applyQueryAuthentication } from './modelProtocolRequest';
+import { PollTaskFailedError, PollTimeoutError } from '../pollTask';
 
 export class ModelProtocolHttpError extends Error {
   readonly status: number;
@@ -26,6 +27,33 @@ export class ModelProtocolHttpError extends Error {
   }
 }
 
+/** 只移除本次连接的凭据，保留错误状态和上游的其他诊断信息。 */
+export function redactModelProtocolErrorText(message: string, apiKey: string): string {
+  if (!apiKey) return message;
+  // 查询鉴权用表单规则编码，空格和部分标点与 encodeURIComponent 不同。
+  const formEncoded = new URLSearchParams({ key: apiKey }).toString().slice('key='.length);
+  const secrets = [...new Set([apiKey, encodeURIComponent(apiKey), formEncoded])]
+    .sort((left, right) => right.length - left.length);
+  return secrets.reduce((text, secret) => text.replaceAll(secret, '[REDACTED]'), message);
+}
+
+/** 验证器也可能回显 Key；重建异常，避免修改冻结对象或带出原始 cause 和堆栈。 */
+export function redactModelProtocolError(error: unknown, apiKey: string): unknown {
+  const exception = typeof DOMException !== 'undefined' && error instanceof DOMException ? error : undefined;
+  const message = error instanceof Error ? error.message : exception?.message ?? (typeof error === 'string' ? error : undefined);
+  if (message === undefined) return error;
+  const safeMessage = redactModelProtocolErrorText(message, apiKey);
+  if (safeMessage === message) return error;
+  if (typeof error === 'string') return safeMessage;
+  if (error instanceof ModelProtocolHttpError) return new ModelProtocolHttpError(error.status, safeMessage, error.retryAfterMs);
+  if (error instanceof PollTaskFailedError) return new PollTaskFailedError(safeMessage);
+  if (error instanceof PollTimeoutError) return new PollTimeoutError(safeMessage);
+  if (exception) return new DOMException(safeMessage, redactModelProtocolErrorText(exception.name, apiKey));
+  const safeError = error instanceof TypeError ? new TypeError(safeMessage) : new Error(safeMessage);
+  if (error instanceof Error) safeError.name = redactModelProtocolErrorText(error.name, apiKey);
+  return safeError;
+}
+
 function parseRetryAfterMs(value: string | null): number | undefined {
   if (!value) return undefined;
   const seconds = Number(value);
@@ -39,6 +67,7 @@ export async function readJsonResponse(
   response: Response,
   label: string,
   errorPath?: string,
+  apiKey = '',
 ): Promise<ProtocolJsonValue> {
   if (!response.ok) {
     const rawText = await response.text().catch(() => '');
@@ -63,7 +92,7 @@ export async function readJsonResponse(
     }
     throw new ModelProtocolHttpError(
       response.status,
-      `${label} (${response.status}): ${message}`,
+      `${label} (${response.status}): ${redactModelProtocolErrorText(message, apiKey)}`,
       parseRetryAfterMs(response.headers.get('Retry-After')),
     );
   }
@@ -78,9 +107,10 @@ export async function ensureSuccessfulRawResponse(
   response: Response,
   label: string,
   errorPath?: string,
+  apiKey = '',
 ): Promise<Response> {
   if (response.ok) return response;
-  await readJsonResponse(response, label, errorPath);
+  await readJsonResponse(response, label, errorPath, apiKey);
   return response;
 }
 
@@ -198,7 +228,7 @@ export async function fetchSameOriginResultUrls(
       applyQueryAuthentication(url.toString(), auth, apiKey),
       { method: 'GET', headers, signal },
     );
-    await ensureSuccessfulRawResponse(response, '模型结果下载失败');
+    await ensureSuccessfulRawResponse(response, '模型结果下载失败', undefined, apiKey);
     const bytes = new Uint8Array(await response.arrayBuffer());
     signal?.throwIfAborted();
     if (bytes.byteLength === 0) throw new Error('模型结果下载内容为空');

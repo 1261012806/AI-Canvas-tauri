@@ -218,7 +218,7 @@ export function registerMediaAgentTools(): Array<() => void> {
           && canResumeMediaTask(task)),
       reason: '只能续取当前项目已保存的同一个媒体任务' }),
       execute: async (context, input) => {
-        if (context.signal.aborted) return { status: 'error', summary: '已停止本次查询', modelContent: '原任务仍保留', errorCode: 'MEDIA_RECOVERY_STOPPED' };
+        if (context.signal.aborted) return { status: 'error', summary: '已停止本次等待', modelContent: '未重新提交生成，也未取消远端任务。', errorCode: 'MEDIA_RECOVERY_STOPPED' };
         const original = getPendingTasksForProject(context.projectId).find((task) => task.nodeId === input.nodeId && task.taskId === input.taskId
           && canResumeMediaTask(task));
         if (useAppStore.getState().currentProjectId !== context.projectId || !original) {
@@ -226,8 +226,10 @@ export function registerMediaAgentTools(): Array<() => void> {
         }
         try {
           ensureMediaMessageRecoveryHandler();
-          await resumeMediaNodeTask(input.nodeId);
+          await resumeMediaNodeTask(input.nodeId, context.signal);
         } catch (error) {
+          if (context.signal.aborted) return { status: 'error', summary: '已停止本次等待',
+            modelContent: '未重新提交生成，也未取消远端任务。', errorCode: 'MEDIA_RECOVERY_STOPPED' };
           const state = useAppStore.getState();
           const message = state.messages.find((item) => item.id === original.mediaContext?.messageId
             && item.conversationId === original.mediaContext?.conversationId);
@@ -241,6 +243,8 @@ export function registerMediaAgentTools(): Array<() => void> {
           }
           return { status: 'error', summary: detail, modelContent: detail, errorCode: 'MEDIA_RECOVERY_FAILED' };
         }
+        if (context.signal.aborted) return { status: 'error', summary: '已停止本次等待',
+          modelContent: '未重新提交生成，也未取消远端任务。', errorCode: 'MEDIA_RECOVERY_STOPPED' };
         const pending = getPendingTasksForProject(context.projectId).some((task) => task.nodeId === input.nodeId && task.taskId === input.taskId);
         return { status: pending ? 'error' : 'success', summary: pending ? '原任务仍保留，查询或保存尚未完成' : '原任务已取回并交付',
           modelContent: pending ? '任务仍保留；请核对原项目、对话及连接后继续查询，不要重新提交生成。' : '已查询并保存原任务结果，没有重新提交生成。',

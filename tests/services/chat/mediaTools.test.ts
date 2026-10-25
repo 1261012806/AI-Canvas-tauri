@@ -7,7 +7,7 @@ import {
   prepareAgentToolCall,
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
-import { savePendingTask } from '../../../src/services/pollManager';
+import { getPendingTasksForProject, savePendingTask } from '../../../src/services/pollManager';
 import * as generationRuntime from '../../../src/services/ai/generationRuntime';
 
 const context: Omit<AgentToolContext, 'signal'> = {
@@ -48,6 +48,26 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('media task recovery tools', () => {
+  it('stops an in-flight recovery with the tool signal and retains the original task', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      recovery: { name: 'Recovery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const receipt = savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'recovery', taskType: 'custom-protocol', taskId: 'original-task', submitted: true,
+      mediaRecoveryState: 'query_paused', protocolPoll: { method: 'GET', url: 'https://gateway.example/tasks/original-task',
+        intervalMs: 1, statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const controller = new AbortController();
+    const pending = getAgentTool('media_resume_task')!.execute({ ...context, signal: controller.signal },
+      { nodeId: receipt.nodeId, taskId: receipt.taskId });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    controller.abort();
+    expect(await pending).toMatchObject({ status: 'error', errorCode: 'MEDIA_RECOVERY_STOPPED' });
+    expect(getPendingTasksForProject('project-1')[0]).toMatchObject(receipt);
+    expect(useAppStore.getState().nodes[0].data.imageUrl).toBe('asset://first-frame.png');
+    finish(new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/late.png' })));
+  });
+
   it('lists original task identities without exposing their polling URLs', async () => {
     savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
       providerConfigId: 'custom', taskType: 'custom-protocol', taskId: 'original-task', submitted: true,

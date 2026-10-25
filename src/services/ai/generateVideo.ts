@@ -245,7 +245,7 @@ async function resolveVideoReferenceInput(
   nodeId: string | undefined,
   /** 调用方直接给定的参考媒体；排在最前，保证首/尾帧角色按调用方的顺序分配 */
   explicitReferences: readonly MediaReference[] = [],
-  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string; provider?: string } = {},
+  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; sortKeyframes?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string; provider?: string } = {},
 ): Promise<VideoGenerationReferenceInput> {
   const promptInput = await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true });
   const connected = collectConnectedReferenceMedia(nodeId);
@@ -266,13 +266,16 @@ async function resolveVideoReferenceInput(
   );
   const collectedReferences = options.promptFirst
     ? mergeMediaReferences(promptInput.references, regularReferences) : regularReferences;
+  // 先按最终传参顺序排好首尾帧，后面的图片编号和角色说明才能对上。
+  const orderedReferences = options.sortKeyframes && hasManualFrameRoles(collectedReferences)
+    ? assignVideoReferenceRoles(collectedReferences) : collectedReferences;
   // 普通 reference 图片不能被偷偷改成 first_frame；内置 Provider 也只接受用户
   // 明确指定的首/尾帧角色，连线与 @ 图片默认保持普通参考语义。
   const references = options.preserveDeclaredRoles || options.promptFirst
-    ? collectedReferences.map((reference) => reference.kind === 'audio'
+    ? orderedReferences.map((reference) => reference.kind === 'audio'
       ? { ...reference, role: 'reference_audio' as const }
       : reference)
-    : assignVideoReferenceRoles(collectedReferences);
+    : assignVideoReferenceRoles(orderedReferences);
   const imageUrls = getMediaReferenceUrls(references, 'image');
   const videoUrls = getMediaReferenceUrls(references, 'video');
   const audioUrls = getMediaReferenceUrls(references, 'audio');
@@ -771,13 +774,18 @@ export async function generateVideo(
     const connection = resolveGeneralModelConnection(model);
     if (!connection) throw new Error(`通用模型 "${gm.name}" 的连接配置不存在`);
     if (!connection.baseUrl) throw new Error(`通用模型 "${gm.name}" 未配置接口地址`);
+    const catalogId = connection.definition?.id ?? resolveProviderCatalogId(connection.providerConfigId, connection.provider);
+    const isToapis = catalogId === 'toapis';
+    const isLibapi = catalogId === 'libapi';
+    const publicUrlProvider = getProviderPolicy(catalogId).upload ? connection.providerConfigId : undefined;
+    const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
     const videoCapability = gm.videoCapability
       ?? getModelProtocolPresetVideoCapability(gm.executionProfile);
     const referenceInput = await resolveVideoReferenceInput(
       rawPrompt,
       params.nodeId,
       params.referenceMedia ?? [],
-      { preserveDeclaredRoles: true, provider },
+      { preserveDeclaredRoles: true, sortKeyframes: usesLibapiProtocol, provider },
     );
     const canonicalParams = {
       ...params,
@@ -790,11 +798,6 @@ export async function generateVideo(
       references: originalReferences,
       capability: videoCapability,
     });
-    const catalogId = connection.definition?.id ?? resolveProviderCatalogId(connection.providerConfigId, connection.provider);
-    const isToapis = catalogId === 'toapis';
-    const isLibapi = catalogId === 'libapi';
-    const publicUrlProvider = getProviderPolicy(catalogId).upload ? connection.providerConfigId : undefined;
-    const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
     if (isToapis) assertToapisVideoInput(preflight);
     if (usesLibapiProtocol) assertLibapiVideoInput(preflight);
     if (resolveModelExecutionProfile(gm.executionProfile)) {

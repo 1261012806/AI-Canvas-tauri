@@ -7,7 +7,7 @@
  *
  * 存储结构按 projectId 隔离，每个节点或消息跟踪 ID 最多一条待续记录。
  */
-import { isPollTimeoutError, pollTask, PollTaskFailedError, PollTimeoutError } from './pollTask';
+import { isPollTimeoutError, pollTask, PollTaskFailedError, PollTimeoutError, withPollRequestDeadline } from './pollTask';
 import { derivedNodePlacement, generateId, getNextDisplayId } from '../store/store.utils';
 import { corsSafeFetch } from './ai/httpTransport';
 import { useAppStore } from '../store/useAppStore';
@@ -20,6 +20,7 @@ import { ComfyPendingError, pollComfyHistory } from './comfyPolling';
 import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from './canvasDerivationGuard';
 import { pollResolvedModelProtocol } from './ai/modelProtocol';
+import { assertModelProtocolResult } from './ai/modelCapabilityValidation';
 import {
   extractFlowMusicLyrics,
   extractFlowMusicTrack,
@@ -40,13 +41,13 @@ import { getGenerationNodeType } from '../utils/nodeGeneration';
 // AbortController 注册表 — 节点删除时取消轮询
 // ═══════════════════════════════════════════
 
-const abortControllers = new Map<string, AbortController>();
+const abortControllers = new Map<string, Pick<AbortController, 'signal' | 'abort'>>();
 const videoResumePromises = new Map<string, Promise<void>>();
 const mediaResumeOutcomes = new Map<string, { receipt: MediaTaskReceipt; delivered: boolean; error?: unknown }>();
 const mediaTaskContexts = new Map<string, MediaTaskContext>();
 const mediaTaskObservers = new Map<string, (receipt: MediaTaskReceipt) => void>();
 const activeMediaOperations = new Map<string, Set<symbol>>();
-type MediaMessageRecoveryHandler = (task: PendingTask, urls: string[]) => Promise<void>;
+type MediaMessageRecoveryHandler = (task: PendingTask, urls: string[], signal?: AbortSignal) => Promise<void>;
 let mediaMessageRecoveryHandler: MediaMessageRecoveryHandler | undefined;
 const mediaTaskListeners = new Set<() => void>();
 export function subscribeMediaTasks(listener: () => void): () => void {
@@ -111,11 +112,14 @@ function abortNodePolling(nodeId: string): void {
 }
 
 /** 为节点注册轮询控制器，返回 AbortSignal 传给 pollTask */
-export function registerNodePolling(nodeId: string): AbortSignal {
+export function registerNodePolling(nodeId: string, parentSignal?: AbortSignal): AbortSignal {
+  // 已经停止的调用不能先中断别人的轮询，再登记一轮新的查询。
+  parentSignal?.throwIfAborted();
   abortNodePolling(nodeId); // 先取消旧轮询，但保留 pending task 以支持恢复
   const controller = new AbortController();
-  abortControllers.set(nodeId, controller);
-  return controller.signal;
+  const signal = parentSignal ? AbortSignal.any([controller.signal, parentSignal]) : controller.signal;
+  abortControllers.set(nodeId, { signal, abort: (reason?: unknown) => controller.abort(reason) });
+  return signal;
 }
 
 /** 取消节点的轮询（节点被删除时调用，同时清理 pending task） */
@@ -839,19 +843,21 @@ async function handleResumeError(
 }
 
 /** 对话任务由消息所属模块确认交付；这里不向当前打开的会话写入结果。 */
-async function deliverMediaMessageResult(task: PendingTask, urls: string[]): Promise<boolean> {
+async function deliverMediaMessageResult(task: PendingTask, urls: string[], signal?: AbortSignal): Promise<boolean> {
   if (!task.mediaContext?.messageId || task.mediaContext.deliveryMode === 'node') return false;
-  if (!isCurrentMediaTask(task)) throw new CanvasResultStaleError();
+  if (!isCurrentMediaTask(task, signal)) throw new CanvasResultStaleError();
   if (!mediaMessageRecoveryHandler) {
     const { ensureMediaMessageRecoveryHandler } = await import('./ai/generationRuntime');
     ensureMediaMessageRecoveryHandler();
   }
   if (!mediaMessageRecoveryHandler) throw new Error('对话任务恢复入口尚未就绪，任务已保留');
-  await mediaMessageRecoveryHandler(task, urls);
+  signal?.throwIfAborted();
+  await mediaMessageRecoveryHandler(task, urls, signal);
   return true;
 }
 
-function markMediaTaskDeliveryPending(task: PendingTask): void {
+function markMediaTaskDeliveryPending(task: PendingTask, signal?: AbortSignal): void {
+  signal?.throwIfAborted();
   if (!loadAll().some((item) => matchesReceipt(item, receiptForTask(task)))) return;
   updatePendingTask(task.nodeId, { mediaRecoveryState: 'delivery_pending' }, task.taskId, task.attemptId);
   if (isCurrentMediaTask(task)) {
@@ -928,7 +934,7 @@ function extractApimartUrls(
   return extractUrls(result.images);
 }
 
-async function resumeApimart(task: PendingTask): Promise<void> {
+async function resumeApimart(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, nodeType } = task;
   const providerConfig = resolveProviderTaskConfig(task, 'apimart', APIMART_BASE_URL);
   const taskIds = (task.taskIds?.length ? task.taskIds : [task.taskId]).filter(Boolean);
@@ -941,7 +947,7 @@ async function resumeApimart(task: PendingTask): Promise<void> {
   const nodeData = node?.data as BaseNodeData | undefined;
   const label = nodeData?.label || '';
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
 
   try {
@@ -973,8 +979,8 @@ async function resumeApimart(task: PendingTask): Promise<void> {
       throw failed?.reason || new Error('任务完成但未返回结果');
     }
     const requestedCount = Math.max(1, task.batchCount ?? 1);
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, urls)) return;
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, urls, signal)) return;
     if (nodeType === 'ai-image' && requestedCount > 1 && nodeData) {
       const imageSize = (nodeData.imageSize as string) || '2K';
       const aspectRatio = (nodeData.aspectRatio as string) || '1:1';
@@ -998,6 +1004,7 @@ async function resumeApimart(task: PendingTask): Promise<void> {
     } else {
       await applyNodeResult(nodeId, urls[0], label, query.isCurrent, undefined, task.videoGeneration);
     }
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
     await handleResumeError(task, err, signal);
@@ -1151,7 +1158,7 @@ async function pollFlowMusicTask(
 }
 
 /** 恢复只取回原阶段；歌词取回后由用户显式发起新的音乐生成。 */
-async function resumeApimartFlowMusic(task: PendingTask): Promise<void> {
+async function resumeApimartFlowMusic(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId } = task;
   const providerConfig = resolveProviderTaskConfig(task, 'apimart', APIMART_BASE_URL);
   if (!providerConfig) {
@@ -1167,7 +1174,7 @@ async function resumeApimartFlowMusic(task: PendingTask): Promise<void> {
     return;
   }
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const taskId = task.taskId;
   const stage = task.audioTaskStage ?? 'music';
   const query = guardVideoTaskQuery(task, signal);
@@ -1183,6 +1190,7 @@ async function resumeApimartFlowMusic(task: PendingTask): Promise<void> {
         musicLyrics: generated.lyrics,
         autoGenerateLyrics: false,
       });
+      signal.throwIfAborted();
       completeMediaNodeTask(receiptForTask(task));
       useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'idle', error: undefined });
       useAppStore.getState().showToast('歌词已取回，请确认后生成音乐');
@@ -1199,14 +1207,15 @@ async function resumeApimartFlowMusic(task: PendingTask): Promise<void> {
       musicTitle: result.title || latestData?.musicTitle,
       musicLyrics: result.lyrics || latestData?.musicLyrics,
     });
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, [result.url])) return;
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, [result.url], signal)) return;
     await applyNodeResult(nodeId, result.url, data.label, query.isCurrent);
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
-    await handleResumeError(task, err);
+    await handleResumeError(task, err, signal);
   } finally {
-    cleanupNodePolling(nodeId);
+    cleanupNodePolling(nodeId, signal);
     query.complete();
   }
 }
@@ -1223,12 +1232,12 @@ interface DreaminaQuery {
   failReason: string;
 }
 
-async function resumeDreamina(task: PendingTask): Promise<void> {
+async function resumeDreamina(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, taskId } = task;
   const node = useAppStore.getState().nodes.find((n) => n.id === nodeId);
   const label = (node?.data as BaseNodeData | undefined)?.label || '';
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
 
   try {
@@ -1246,21 +1255,22 @@ async function resumeDreamina(task: PendingTask): Promise<void> {
     });
 
     const url = out.localPath ? convertFileSrc(out.localPath) : out.url;
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, [url])) return;
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, [url], signal)) return;
     await applyNodeResult(nodeId, url, label, query.isCurrent);
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
-    await handleResumeError(task, err);
+    await handleResumeError(task, err, signal);
   } finally {
-    cleanupNodePolling(nodeId);
+    cleanupNodePolling(nodeId, signal);
     query.complete();
   }
 }
 
 /* ── ComfyUI ── */
 
-async function resumeComfyUI(task: PendingTask): Promise<void> {
+async function resumeComfyUI(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, taskId, baseUrl, nodeType } = task;
   if (!baseUrl) {
     await handleResumeError(task, new Error('任务恢复失败：缺少 ComfyUI 地址'));
@@ -1269,7 +1279,7 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
   const node = useAppStore.getState().nodes.find((n) => n.id === nodeId);
   const label = (node?.data as BaseNodeData | undefined)?.label || '';
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const deliveryGuard = node ? registerCanvasDerivation(useAppStore.getState(), nodeId) : null;
   const isCurrent = () => isCurrentMediaTask(task, signal)
     && (!node || (!!deliveryGuard && isCanvasDerivationFresh(deliveryGuard, useAppStore.getState())));
@@ -1295,7 +1305,7 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
     );
     resultReceived = true;
     updatePendingTask(nodeId, { comfyRecoveryState: 'save_pending' }, taskId, task.attemptId);
-    markMediaTaskDeliveryPending(task);
+    markMediaTaskDeliveryPending(task, signal);
     if (nodeType === 'ai-video') {
       updatePendingTask(nodeId, { videoRecoveryState: 'paused' }, taskId);
     }
@@ -1303,8 +1313,9 @@ async function resumeComfyUI(task: PendingTask): Promise<void> {
       baseUrl,
       useAppStore.getState().config.comfyMemoryPolicy ?? 'smart',
     ).catch(() => {});
-    if (await deliverMediaMessageResult(task, [url])) return;
+    if (await deliverMediaMessageResult(task, [url], signal)) return;
     await applyNodeResult(nodeId, url, label, isCurrent);
+    signal.throwIfAborted();
     if (nodeType === 'ai-video') completeVideoNodeTask(nodeId, taskId);
     else completeComfyNodeTask(nodeId, taskId);
   } catch (err) {
@@ -1362,7 +1373,7 @@ export async function resumeComfyUINodeTask(nodeId: string): Promise<void> {
 
 /* ── 通用异步 ── */
 
-async function resumeGeneral(task: PendingTask): Promise<void> {
+async function resumeGeneral(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, taskId, nodeType } = task;
   const providerConfig = resolveProviderTaskConfig(task);
   if (!providerConfig) {
@@ -1375,7 +1386,7 @@ async function resumeGeneral(task: PendingTask): Promise<void> {
   const resultField =
     nodeType === 'ai-video' ? 'videos' : nodeType === 'ai-audio' ? 'audios' : 'images';
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
 
   try {
@@ -1412,9 +1423,10 @@ async function resumeGeneral(task: PendingTask): Promise<void> {
       onFetchError: 'throw',
       signal,
     });
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, [url])) return;
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, [url], signal)) return;
     await applyNodeResult(nodeId, url, label, query.isCurrent, undefined, task.videoGeneration);
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
     await handleResumeError(task, err, signal);
@@ -1424,7 +1436,7 @@ async function resumeGeneral(task: PendingTask): Promise<void> {
   }
 }
 
-async function resumeCustomProtocol(task: PendingTask): Promise<void> {
+async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, nodeType, providerConfigId, protocolPoll } = task;
   const providerConfig = providerConfigId
     ? useAppStore.getState().config.providers[providerConfigId]
@@ -1441,7 +1453,7 @@ async function resumeCustomProtocol(task: PendingTask): Promise<void> {
     return;
   }
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
   try {
     const polls = task.protocolPolls?.length ? task.protocolPolls : [protocolPoll];
@@ -1457,8 +1469,9 @@ async function resumeCustomProtocol(task: PendingTask): Promise<void> {
       if (failed?.status === 'rejected') throw failed.reason;
       throw new Error('媒体模型任务完成但未返回结果 URL');
     }
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, urls)) return;
+    assertModelProtocolResult(nodeType === 'ai-video' ? 'video' : nodeType === 'ai-audio' ? 'audio' : 'image', { urls });
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, urls, signal)) return;
     const requestedCount = Math.max(1, task.batchCount ?? 1);
     if (nodeType === 'ai-image' && requestedCount > 1) {
       const imageSize = nodeData.imageSize || '2K';
@@ -1485,6 +1498,7 @@ async function resumeCustomProtocol(task: PendingTask): Promise<void> {
       if (!url) throw new Error('任务完成但未返回结果 URL');
       await applyNodeResult(nodeId, url, nodeData.label || '', query.isCurrent, undefined, task.videoGeneration);
     }
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (error) {
     await handleResumeError(task, error, signal);
@@ -1496,7 +1510,7 @@ async function resumeCustomProtocol(task: PendingTask): Promise<void> {
 
 /* ── 火山方舟 Seedance ── */
 
-async function resumeVolcengine(task: PendingTask): Promise<void> {
+async function resumeVolcengine(task: PendingTask, parentSignal?: AbortSignal): Promise<void> {
   const { nodeId, taskId } = task;
   const { findBillingRunByTask, updateBillingRun } = await import('./billing/volcengineBillingService');
   const { quoteVolcengineVideo } = await import('./billing/volcenginePricing');
@@ -1511,7 +1525,7 @@ async function resumeVolcengine(task: PendingTask): Promise<void> {
   const node = useAppStore.getState().nodes.find((n) => n.id === nodeId);
   const label = (node?.data as BaseNodeData | undefined)?.label || '';
 
-  const signal = registerNodePolling(nodeId);
+  const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
   let remoteFailed = false;
   let remoteCancelled = false;
@@ -1567,9 +1581,10 @@ async function resumeVolcengine(task: PendingTask): Promise<void> {
         inputJson: JSON.stringify({ ...input, completionTokens: completionTokens ?? null }) });
     }
     remoteSucceeded = true;
-    markMediaTaskDeliveryPending(task);
-    if (await deliverMediaMessageResult(task, [url])) return;
+    markMediaTaskDeliveryPending(task, signal);
+    if (await deliverMediaMessageResult(task, [url], signal)) return;
     await applyNodeResult(nodeId, url, label, query.isCurrent, undefined, task.videoGeneration);
+    signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
     if (!remoteSucceeded) await updateBillingRun(run, {
@@ -1851,7 +1866,7 @@ export async function resumeWorkflowApiNodeTask(nodeId: string): Promise<void> {
   if (task) await resumeWorkflowApi(task);
 }
 
-const RESUME_MAP: Record<PendingTask['taskType'], (task: PendingTask) => Promise<void>> = {
+const RESUME_MAP: Record<PendingTask['taskType'], (task: PendingTask, signal?: AbortSignal) => Promise<void>> = {
   apimart: resumeApimart,
   'apimart-flow-music': resumeApimartFlowMusic,
   dreamina: resumeDreamina,
@@ -1866,9 +1881,11 @@ const RESUME_MAP: Record<PendingTask['taskType'], (task: PendingTask) => Promise
 };
 
 /** 用户重试只执行已保存任务的查询 / 下载，不走生成提交。 */
-export function resumeMediaNodeTask(nodeId: string): Promise<void> {
+export function resumeMediaNodeTask(nodeId: string, externalSignal?: AbortSignal): Promise<void> {
+  if (externalSignal?.aborted) return Promise.reject(externalSignal.reason);
   const existing = videoResumePromises.get(nodeId);
-  if (existing) return existing;
+  // 旁观已有恢复时只停止自己的等待，不能中断原发起者的查询和保存。
+  if (existing) return externalSignal ? withPollRequestDeadline(() => existing, externalSignal, Infinity) : existing;
   const store = useAppStore.getState();
   const task = loadAll().find((item) => item.nodeId === nodeId && item.projectId === store.currentProjectId);
   if (!task || (!isRecoverableMediaTask(task) && !isRecoverableVideoTask(task))
@@ -1892,16 +1909,28 @@ export function resumeMediaNodeTask(nodeId: string): Promise<void> {
   const outcomeKey = JSON.stringify([task.projectId, task.nodeId]);
   const outcome = { receipt: receiptForTask(task), delivered: false, error: undefined as unknown };
   mediaResumeOutcomes.set(outcomeKey, outcome);
-  const promise = Promise.resolve().then(() => RESUME_MAP[task.taskType](task)).then(() => {
+  const pauseCancelledTask = () => {
+    const pending = loadAll().find((item) => matchesReceipt(item, outcome.receipt));
+    if (pending) pauseMediaTask(outcome.receipt, undefined,
+      pending.mediaRecoveryState === 'delivery_pending' ? 'delivery_pending' : 'query_interrupted');
+  };
+  const promise = Promise.resolve().then(() => {
+    externalSignal?.throwIfAborted();
+    return RESUME_MAP[task.taskType](task, externalSignal);
+  }).then(() => {
+    externalSignal?.throwIfAborted();
     if (outcome.error) throw outcome.error;
     if (!outcome.delivered && !loadAll().some((item) => matchesReceipt(item, outcome.receipt))) {
       throw new Error('任务已停止，尚未确认结果交付');
     }
   }).finally(() => {
+    externalSignal?.removeEventListener('abort', pauseCancelledTask);
     if (videoResumePromises.get(nodeId) === promise) videoResumePromises.delete(nodeId);
     if (mediaResumeOutcomes.get(outcomeKey) === outcome) mediaResumeOutcomes.delete(outcomeKey);
   });
   videoResumePromises.set(nodeId, promise);
+  externalSignal?.addEventListener('abort', pauseCancelledTask, { once: true });
+  if (externalSignal?.aborted) pauseCancelledTask();
   return promise;
 }
 

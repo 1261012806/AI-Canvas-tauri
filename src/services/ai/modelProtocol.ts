@@ -18,6 +18,7 @@ import {
   fetchSameOriginResultUrls,
   normalizeBase64Result,
   readJsonResponse,
+  redactModelProtocolError,
 } from './modelProtocolHttp';
 import {
   getModelProtocolPreset,
@@ -136,13 +137,13 @@ export async function submitModelProtocol(
 
   if (protocol.mode === 'sync') {
     if (responseConfig.type === 'text') {
-      await ensureSuccessfulRawResponse(response, '模型请求失败', responseConfig.errorPath);
+      await ensureSuccessfulRawResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
       const text = await response.text();
       if (!text) throw new Error('模型响应中未找到文本结果');
       return { text };
     }
     if (responseConfig.type === 'binary') {
-      await ensureSuccessfulRawResponse(response, '模型请求失败', responseConfig.errorPath);
+      await ensureSuccessfulRawResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength === 0) throw new Error('模型响应中未找到二进制结果');
       const responseMimeType = response.headers.get('Content-Type')?.split(';')[0]?.trim();
@@ -151,8 +152,12 @@ export async function submitModelProtocol(
         : responseConfig.result?.mimeType ?? 'application/octet-stream';
       return { urls: [`data:${mimeType};base64,${encodeBytesBase64(bytes)}`] };
     }
-    const payload = await readJsonResponse(response, '模型请求失败', responseConfig.errorPath);
-    options.validateResponse?.(payload);
+    const payload = await readJsonResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
+    try {
+      options.validateResponse?.(payload);
+    } catch (error) {
+      throw redactModelProtocolError(error, options.apiKey);
+    }
     const resultConfig = responseConfig.result!;
     let urls = resultConfig.urlPath ? readModelProtocolUrls(payload, resultConfig.urlPath) : [];
     if (resultConfig.fetchUrl) {
@@ -181,8 +186,12 @@ export async function submitModelProtocol(
     };
   }
 
-  const payload = await readJsonResponse(response, '模型请求失败', responseConfig.errorPath);
-  options.validateResponse?.(payload);
+  const payload = await readJsonResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
+  try {
+    options.validateResponse?.(payload);
+  } catch (error) {
+    throw redactModelProtocolError(error, options.apiKey);
+  }
   const taskIdValue = readModelProtocolFirstScalar(payload, responseConfig.taskIdPath!);
   if (taskIdValue === undefined || taskIdValue === null || taskIdValue === '') {
     throw new Error(`模型提交响应中未找到任务 ID：${responseConfig.taskIdPath}`);

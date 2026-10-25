@@ -37,6 +37,27 @@ const options = () => ({
 beforeEach(() => vi.unstubAllGlobals());
 
 describe('declarative task result download', () => {
+  it.each(['download', 'fetch-url'] as const)('redacts credentials from a failed %s result without re-submitting generation', async (mode) => {
+    const config = options();
+    config.apiKey = 'fixture+download/private';
+    if (mode === 'fetch-url') {
+      config.protocol.poll!.response.result = { mimeType: 'video/mp4', urlPath: 'url', fetchUrl: true };
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ id: 'original-task' }))
+      .mockResolvedValueOnce(json({ status: 'completed', url: 'https://gateway.example/v1/content' }))
+      .mockResolvedValueOnce(new Response(`Invalid key ${config.apiKey}; encoded=${encodeURIComponent(config.apiKey)}`, { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await executeModelProtocol(config).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ name: 'ModelProtocolHttpError', status: 403 });
+    expect((error as Error).message).toContain('模型结果下载失败');
+    expect((error as Error).message).toContain('[REDACTED]');
+    expect((error as Error).message).not.toContain(config.apiKey);
+    expect((error as Error).message).not.toContain(encodeURIComponent(config.apiKey));
+    expect((error as Error).stack).not.toContain(config.apiKey);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('downloads binary content after successful polling without requiring a result URL', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(json({ id: 'video-1' }))
       .mockResolvedValueOnce(json({ status: 'completed' })).mockResolvedValueOnce(video());

@@ -255,7 +255,7 @@ export async function createPluginLineArtImage(
   let preview: HTMLCanvasElement | undefined;
   try {
     assertCurrent(options);
-    bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    bitmap = await createImageBitmap(blob);
     assertCurrent(options);
     assertDimensions(bitmap, MAX_INPUT_PIXELS);
     if (bitmap.width !== headerDimensions.width || bitmap.height !== headerDimensions.height) {

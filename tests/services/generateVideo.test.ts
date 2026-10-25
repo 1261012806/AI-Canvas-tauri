@@ -1270,6 +1270,56 @@ describe('general video runtime safety', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 
+  it.each(['builtin', 'libapi', 'custom-openai'] as const)('逆序首尾帧的真实 @ 编号与对应合同的图片顺序一致（%s）', async (contract) => {
+    const params = configureLibapiVideo();
+    if (contract !== 'builtin') {
+      const customProfile: ModelExecutionProfile = { preset: 'custom', protocol: {
+        version: 2, mode: 'sync', submit: {
+          method: 'POST', path: '/generate', pathMode: 'origin', bodyEncoding: 'json',
+          body: { params: { prompt: '{{prompt}}', images: '{{imageUrls}}' } },
+        }, response: { type: 'json', result: { urlPath: 'url' } },
+      } };
+      useAppStore.setState((state) => ({ config: { ...state.config,
+        providers: { ...state.config.providers, 'libapi-video-connection': {
+          ...state.config.providers['libapi-video-connection'], catalogId: contract,
+        } },
+        generalModels: state.config.generalModels!.map((item) => item.providerConfigId === 'libapi-video-connection'
+          ? { ...item, executionProfile: customProfile } : item),
+      } }));
+    }
+    const first = 'https://cdn.example/libapi-first.png';
+    const last = 'https://cdn.example/libapi-last.png';
+    useAppStore.setState({ nodes: [
+      { id: 'libapi-first', type: 'source-image', position: { x: 0, y: 0 },
+        data: { type: 'source-image', label: '首帧', imageUrl: first } },
+      { id: 'libapi-last', type: 'source-image', position: { x: 0, y: 0 },
+        data: { type: 'source-image', label: '尾帧', imageUrl: last } },
+    ] });
+    const fetchMock = vi.fn();
+    if (contract === 'builtin') {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'libapi-ordered-frames-task' })))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed',
+          output_url: 'https://cdn.example/ordered-frames.mp4' })));
+    } else {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ url: 'https://cdn.example/custom-frames.mp4' })));
+    }
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateVideo({ ...params,
+      prompt: '图片1是手写文字：@{libapi-first:首帧} 过渡到 @{libapi-last:尾帧}',
+      referenceMedia: [
+        { kind: 'image', role: 'last_frame', origin: 'connection', url: last },
+        { kind: 'image', role: 'first_frame', origin: 'connection', url: first },
+      ],
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ params: {
+      images: contract === 'builtin' ? [first, last] : [last, first],
+      prompt: contract === 'builtin' ? '图片1是手写文字：图片1 过渡到 图片2' : '图片1是手写文字：图片2 过渡到 图片1',
+    } });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
   it('LibAPI 首帧与普通参考混用时在上传和付费提交前拒绝', async () => {
     const params = configureLibapiVideo();
     const resolve = vi.spyOn(uploadService, 'resolveMediaReferenceUrl');

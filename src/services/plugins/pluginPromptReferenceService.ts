@@ -373,7 +373,7 @@ async function createMentionThumbnail(candidate: Candidate, options: PreviewOpti
     if (!input) return undefined;
     const bytes = new Uint8Array(input); // 校验和解码使用同一份自有快照。
     const header = previewImageHeader(bytes);
-    bitmap = await previewStep(() => createImageBitmap(new Blob([bytes], { type: header.mediaType }), { imageOrientation: 'from-image' }), options, (late) => late.close());
+    bitmap = await previewStep(() => createImageBitmap(new Blob([bytes], { type: header.mediaType })), options, (late) => late.close());
     assertPreviewDimensions(bitmap);
     const matching = bitmap.width === header.width && bitmap.height === header.height;
     const jpegOrientation = header.mediaType === 'image/jpeg' && bitmap.width === header.height && bitmap.height === header.width;

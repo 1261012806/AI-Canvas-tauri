@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiProviderConfig, GeneralModelConfig, WorkflowDefinition } from '../../src/types';
 import type { MediaTaskContext, MediaTaskReceipt } from '../../src/types/aiTypes';
+import type { ChatMessage } from '../../src/types/chat';
+import type { PendingTask } from '../../src/services/pollManager';
 
 const mocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   completeMediaNodeTask: vi.fn(),
   pauseMediaTask: vi.fn(),
   updatePendingTask: vi.fn(),
+  persistMessage: vi.fn(),
   storeState: {
     config: {
       generalModels: [] as GeneralModelConfig[],
@@ -30,6 +33,9 @@ const mocks = vi.hoisted(() => ({
     projects: [] as Array<Record<string, unknown>>,
     customStyles: [] as Array<Record<string, unknown>>,
     workflows: [] as WorkflowDefinition[],
+    messages: [] as ChatMessage[],
+    updateMessage: vi.fn(),
+    addMessage: vi.fn(),
   },
 }));
 
@@ -76,13 +82,14 @@ vi.mock('../../src/services/pollManager', () => ({
   pauseMediaTask: mocks.pauseMediaTask,
   updatePendingTask: mocks.updatePendingTask,
 }));
-vi.mock('../../src/services/chat/chatHistoryService', () => ({ persistMessage: vi.fn() }));
+vi.mock('../../src/services/chat/chatHistoryService', () => ({ persistMessage: mocks.persistMessage }));
 
 import {
   MEDIA_PERSIST_FAILED_MESSAGE,
   retryMediaArtifactPersist,
   runMediaGeneration,
   retryMediaMessageTask,
+  ensureMediaMessageRecoveryHandler,
 } from '../../src/services/ai/generationRuntime';
 import type { MediaGenerationResult } from '../../src/types/media';
 
@@ -95,6 +102,7 @@ beforeEach(() => {
   mocks.storeState.projects = [];
   mocks.storeState.customStyles = [];
   mocks.storeState.workflows = [];
+  mocks.storeState.messages = [];
   mocks.storeState.config.generalModels = [];
   mocks.storeState.config.providers = { openai: { name: 'OpenAI', apiKey: 'secret' } };
   mocks.generateImage.mockResolvedValue({ url: 'https://cdn.example/image.png', width: 1, height: 1 });
@@ -513,6 +521,31 @@ describe('retryMediaArtifactPersist', () => {
 });
 
 describe('async media task identity', () => {
+  it('does not publish a message result when its uncancellable save finishes after cancellation', async () => {
+    const task: PendingTask = { projectId: 'project-1', nodeId: 'message-tracking', nodeType: 'ai-image',
+      provider: 'general', taskType: 'custom-protocol', submitted: true, taskId: 'original-task', attemptId: 'original-attempt',
+      mediaContext: { projectId: 'project-1', conversationId: 'conversation-1', messageId: 'message-1', deliveryMode: 'message' } };
+    mocks.getPendingTasksForProject.mockReturnValue([task]);
+    mocks.storeState.messages = [{ id: 'message-1', conversationId: 'conversation-1', role: 'assistant',
+      content: '', timestamp: 1, status: 'done', mediaStatus: 'paused' }];
+    let finish!: (result: { filePath: string; mediaUrl: string; sourceUrl: string }) => void;
+    mocks.persistMediaUrlToProjectData.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    ensureMediaMessageRecoveryHandler();
+    const handler = mocks.registerMediaMessageRecoveryHandler.mock.calls.at(-1)![0] as
+      (savedTask: PendingTask, urls: string[], signal?: AbortSignal) => Promise<void>;
+    const controller = new AbortController();
+    const pending = handler(task, ['https://cdn.example/image.png'], controller.signal);
+    await vi.waitFor(() => expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledOnce());
+    controller.abort();
+    finish({ filePath: '/projects/project-1/image.png', mediaUrl: 'asset://image.png', sourceUrl: 'https://cdn.example/image.png' });
+    await expect(pending).rejects.toThrow('任务仍保留');
+    expect(mocks.storeState.updateMessage).not.toHaveBeenCalled();
+    expect(mocks.storeState.addMessage).not.toHaveBeenCalled();
+    expect(mocks.persistMessage).not.toHaveBeenCalled();
+    expect(mocks.completeMediaNodeTask).not.toHaveBeenCalled();
+    expect(mocks.getPendingTasksForProject()).toEqual([task]);
+  });
+
   it('captures the receipt from the submission observer when a provider omits it from the result', async () => {
     const receipt = { projectId: 'project-1', nodeId: 'node-1', taskId: 'remote-video', attemptId: 'attempt-video' };
     let observer: ((value: MediaTaskReceipt) => void) | undefined;

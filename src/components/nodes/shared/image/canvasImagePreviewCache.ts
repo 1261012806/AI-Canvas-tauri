@@ -188,8 +188,14 @@ async function readBoundedBlob(source: string, signal: AbortSignal): Promise<Blo
 async function derive(entry: Entry): Promise<Preview | null> {
   let bitmap: ImageBitmap | undefined;
   let canvas: HTMLCanvasElement | undefined;
+  let stage = 'cache';
   const signal = entry.controller.signal;
+  const warn = (errorType: string) => console.warn('[CanvasImagePreviewCache] 图片预览生成失败', {
+    stage, errorType, maxEdge: entry.maxEdge,
+  });
   const timeout = setTimeout(() => {
+    if (signal.aborted) return;
+    warn('TimeoutError');
     entry.controller.abort();
     // 解码/编码无法中止：先结束等待，串行槽仍等 finally 回收资源，不能另开原图解码。
     for (const client of [...entry.clients]) client.release();
@@ -201,9 +207,11 @@ async function derive(entry: Entry): Promise<Preview | null> {
       const { blob, width, height } = disk.cached;
       return { src: URL.createObjectURL(blob), rgbaBytes: width * height * 4 };
     }
+    stage = 'read-source';
     const blob = await readBoundedBlob(entry.source, signal);
+    stage = 'dimensions';
     const dimensions = await readRasterImageDimensions(blob);
-    if (!dimensions) return null;
+    if (!dimensions) throw new Error('Preview dimensions unavailable');
     const estimate = assertEditorSourceBudget(dimensions.width, dimensions.height, '画布预览');
     const edge = Math.max(dimensions.width, dimensions.height);
     // 小图和动图也先检查编码大小及像素预算；只有确认安全后才允许直接显示。
@@ -213,25 +221,35 @@ async function derive(entry: Entry): Promise<Preview | null> {
     const width = Math.max(1, Math.round(dimensions.width * entry.maxEdge / edge));
     const height = Math.max(1, Math.round(dimensions.height * entry.maxEdge / edge));
     signal.throwIfAborted();
+    stage = 'decode';
+    // 方向沿用浏览器默认值，兼容不接受 from-image 选项的 WebKit。
     bitmap = await createImageBitmap(blob, {
       resizeWidth: width,
       resizeHeight: height,
       resizeQuality: 'high',
-      imageOrientation: 'from-image',
     });
     signal.throwIfAborted();
+    stage = 'draw';
     canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) return null;
+    if (!context) throw new Error('Preview drawing context unavailable');
     context.drawImage(bitmap, 0, 0, width, height);
+    stage = 'encode';
     const previewBlob = await new Promise<Blob | null>((resolve) => canvas!.toBlob(resolve, 'image/webp', 0.85));
     signal.throwIfAborted();
+    if (!previewBlob) throw new Error('Preview encoding failed');
     // 先展示内存预览，写盘由文件服务的有界串行队列处理。
-    if (previewBlob) void disk?.persist(previewBlob);
-    return previewBlob ? { src: URL.createObjectURL(previewBlob), rgbaBytes: width * height * 4 } : null;
-  } catch {
+    void disk?.persist(previewBlob);
+    return { src: URL.createObjectURL(previewBlob), rgbaBytes: width * height * 4 };
+  } catch (error) {
+    if (!signal.aborted) {
+      // 只记录固定阶段和错误分类，避免异常属性带出图片地址或本地路径。
+      warn(error instanceof TypeError ? 'TypeError'
+        : error instanceof RangeError ? 'RangeError'
+          : error instanceof Error ? 'Error' : 'UnknownError');
+    }
     return null;
   } finally {
     clearTimeout(timeout);

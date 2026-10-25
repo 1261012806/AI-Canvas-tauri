@@ -42,6 +42,35 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('standard image error credentials', () => {
+  it.each(['json-401', 'multipart-504', 'ccc-401'] as const)('redacts echoed credentials from %s without re-submitting', async (mode) => {
+    const apiKey = 'fixture~! private/key=';
+    const formEncoded = new URLSearchParams({ key: apiKey }).toString().slice('key='.length);
+    const detail = `Invalid API key ${apiKey}; encoded=${encodeURIComponent(apiKey)}; query=${formEncoded}; request denied`;
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: detail } }), {
+      status: mode === 'multipart-504' ? 504 : 401, headers: { 'Content-Type': 'application/json' },
+    }));
+    if (mode === 'multipart-504') {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('reference', { headers: { 'Content-Type': 'image/png' } }));
+    }
+    const error = await generateImageStandard({ apiKey, baseUrl: 'https://gateway.example/v1', modelName: 'gpt-image-2',
+      prompt: 'landscape', dimensions: { width: 1024, height: 1024 },
+      ...(mode === 'multipart-504' ? { imageUrls: ['asset://localhost/reference.png'], imageReferenceRequestMode: 'edits-multipart' as const } : {}),
+      ...(mode === 'ccc-401' ? { asyncTaskProvider: 'cccapi' as const } : {}),
+    }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('[REDACTED]');
+    expect((error as Error).message).toContain('request denied');
+    expect((error as Error).message).not.toContain(apiKey);
+    expect((error as Error).message).not.toContain(encodeURIComponent(apiKey));
+    expect((error as Error).message).not.toContain(formEncoded);
+    expect((error as Error).stack).not.toContain(apiKey);
+    expect((error as Error).cause).toBeUndefined();
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce();
+    expect(transportMocks.corsSafeFetch.mock.calls[0][0]).toBe(`https://gateway.example/v1/images/${mode === 'multipart-504' ? 'edits' : 'generations'}`);
+  });
+});
+
 describe('CCC 图片异步任务与旧同步响应', () => {
   it.each([undefined, ''])('omits background and output format when CCC background is left at interface default (%s)', async (imageBackground) => {
     useAppStore.setState((state) => ({ config: { ...state.config,

@@ -416,24 +416,84 @@ struct ProxyFetchRequest {
 
 type ProxyFetchCancellations = Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>;
 
+fn is_public_proxy_download(req: &ProxyFetchRequest) -> bool {
+    if !matches!(req.method.as_str(), "GET" | "HEAD")
+        || req.body.is_some()
+        || req.text_body.is_some()
+        || !req.headers.is_empty()
+    {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&req.url) else {
+        return false;
+    };
+    // 查询参数也可能承载任意名称的 Key，不能靠参数名猜测是否公开。
+    matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+}
+
+fn proxy_redirect_rejection(
+    target: &reqwest::Url,
+    previous: &[reqwest::Url],
+    same_origin_only: bool,
+) -> Option<&'static str> {
+    // previous 的第一项是初始地址，和 reqwest 默认行为一样允许 10 次跳转。
+    if previous.len() > 10 {
+        return Some("HTTP 重定向次数超过上限");
+    }
+    if !matches!(target.scheme(), "http" | "https")
+        || !target.username().is_empty()
+        || target.password().is_some()
+    {
+        return Some("HTTP 重定向地址不安全");
+    }
+    let (Some(origin), Some(source)) = (previous.first(), previous.last()) else {
+        return Some("HTTP 重定向缺少来源信息");
+    };
+    if source.scheme() == "https" && target.scheme() != "https" {
+        return Some("HTTP 重定向不能降低传输安全级别");
+    }
+    if same_origin_only && target.origin() != origin.origin() {
+        return Some("带凭据或非公开的 HTTP 请求不能跨来源重定向");
+    }
+    None
+}
+
+fn build_proxy_http_client(same_origin_only: bool) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("AI-Canvas/0.1")
+        .connect_timeout(PROXY_HTTP_CONNECT_TIMEOUT)
+        .pool_idle_timeout(PROXY_HTTP_POOL_IDLE_TIMEOUT)
+        .pool_max_idle_per_host(PROXY_HTTP_MAX_IDLE_PER_HOST)
+        // 自动 Referer 会夹带上一跳的查询参数，公共下载也不应自动暴露它们。
+        .referer(false)
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if let Some(reason) = proxy_redirect_rejection(
+                attempt.url(), attempt.previous(), same_origin_only,
+            ) {
+                attempt.error(reason)
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))
+}
+
 struct ProxyHttpState {
     client: reqwest::Client,
+    download_client: reqwest::Client,
     cancellations: ProxyFetchCancellations,
     body_slots: tokio::sync::Semaphore,
 }
 
 impl ProxyHttpState {
     fn new() -> Result<Self, String> {
-        let client = reqwest::Client::builder()
-            .user_agent("AI-Canvas/0.1")
-            .connect_timeout(PROXY_HTTP_CONNECT_TIMEOUT)
-            .pool_idle_timeout(PROXY_HTTP_POOL_IDLE_TIMEOUT)
-            .pool_max_idle_per_host(PROXY_HTTP_MAX_IDLE_PER_HOST)
-            .build()
-            .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
-
         Ok(Self {
-            client,
+            client: build_proxy_http_client(true)?,
+            download_client: build_proxy_http_client(false)?,
             cancellations: Mutex::new(HashMap::new()),
             body_slots: tokio::sync::Semaphore::new(2),
         })
@@ -512,6 +572,9 @@ enum ProxyFetchStreamEvent {
 }
 
 fn proxy_transport_error(error: reqwest::Error) -> String {
+    if error.is_redirect() {
+        return "请求失败：HTTP 重定向被安全策略拒绝，请使用同源地址或最终资源地址。若这是生成提交，请先核对服务商任务记录，不要直接重发。".into();
+    }
     let kind = if error.is_timeout() {
         "网络请求超时"
     } else if error.is_connect() {
@@ -535,8 +598,7 @@ fn proxy_transport_error(error: reqwest::Error) -> String {
 }
 
 async fn send_proxy_request(
-    client: &reqwest::Client,
-    body_slots: &tokio::sync::Semaphore,
+    state: &ProxyHttpState,
     req: ProxyFetchRequest,
 ) -> Result<reqwest::Response, String> {
     if req.body.is_some() && req.text_body.is_some() {
@@ -551,12 +613,18 @@ async fn send_proxy_request(
         return Err("请求内容超过 65 MiB，请减少参考素材后重试".into());
     }
     let _body_slot = if has_body {
-        Some(body_slots.acquire().await.map_err(|_| "请求队列已关闭")?)
+        Some(state.body_slots.acquire().await.map_err(|_| "请求队列已关闭")?)
     } else {
         None
     };
     let method = reqwest::Method::from_bytes(req.method.as_bytes())
         .map_err(|e| format!("无效的 HTTP 方法: {e}"))?;
+    // Key 可以放进任意合法请求头，只有明确无调用方请求头的下载才允许跨来源。
+    let client = if is_public_proxy_download(&req) {
+        &state.download_client
+    } else {
+        &state.client
+    };
     let mut request = client.request(method, &req.url);
     for (key, value) in req.headers {
         request = request.header(key, value);
@@ -654,7 +722,7 @@ async fn proxy_fetch(
     )?;
 
     let request = async {
-        let response = send_proxy_request(&state.client, &state.body_slots, req).await?;
+        let response = send_proxy_request(&state, req).await?;
 
         let status = response.status().as_u16();
         let res_headers: Vec<(String, String)> = response
@@ -698,7 +766,7 @@ async fn proxy_stream_fetch(
     )?;
 
     let request = async {
-        let mut response = send_proxy_request(&state.client, &state.body_slots, req).await?;
+        let mut response = send_proxy_request(&state, req).await?;
         ensure_content_length_within_limit(&response, PROXY_RESPONSE_MAX_BYTES, "代理响应体")?;
         let status = response.status().as_u16();
         let headers = response
@@ -745,12 +813,14 @@ async fn fetch_image_data_url(
     state: tauri::State<'_, ProxyHttpState>,
     url: String,
 ) -> Result<String, String> {
-    let response = state
-        .client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+    let response = send_proxy_request(&state, ProxyFetchRequest {
+        request_id: None,
+        url: url.clone(),
+        method: "GET".into(),
+        headers: Vec::new(),
+        body: None,
+        text_body: None,
+    }).await?;
 
     let status = response.status();
     if !status.is_success() {
@@ -797,6 +867,194 @@ async fn fetch_image_data_url(
 #[cfg(test)]
 mod proxy_http_tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    fn test_request(url: String, method: &str) -> ProxyFetchRequest {
+        ProxyFetchRequest {
+            request_id: None, url, method: method.into(), headers: Vec::new(),
+            body: None, text_body: None,
+        }
+    }
+
+    fn read_test_request(listener: &TcpListener) -> (TcpStream, String) {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "未收到预期测试请求");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("接收测试请求失败: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            bytes.push(byte[0]);
+            assert!(bytes.len() < 16 * 1024, "测试请求头超过上限");
+        }
+        let headers = String::from_utf8(bytes.clone()).unwrap();
+        let body_len = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().unwrap())
+        }).unwrap_or(0);
+        assert!(body_len < 1024, "测试请求体超过上限");
+        let mut body = vec![0; body_len];
+        stream.read_exact(&mut body).unwrap();
+        bytes.extend_from_slice(&body);
+        (stream, String::from_utf8(bytes).unwrap())
+    }
+
+    fn serve_test_responses(
+        listener: TcpListener,
+        responses: Vec<String>,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        std::thread::spawn(move || responses.into_iter().map(|response| {
+            let (mut stream, request) = read_test_request(&listener);
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        }).collect())
+    }
+
+    #[test]
+    fn only_headerless_and_queryless_get_or_head_downloads_are_public() {
+        for method in ["GET", "HEAD"] {
+            let request = test_request("https://cdn.example/image.png".into(), method);
+            assert!(is_public_proxy_download(&request));
+        }
+        for url in [
+            "https://cdn.example/image.png?arbitrary-name=private-key",
+            "https://cdn.example/image.png?",
+            "https://user:secret@cdn.example/image.png",
+            "ftp://cdn.example/image.png",
+            "not a URL",
+        ] {
+            assert!(!is_public_proxy_download(&test_request(url.into(), "GET")));
+        }
+        for header in ["Authorization", "X-API-Key", "X-Goog-Api-Key", "X-Private-Token", "Accept", "Range"] {
+            let mut request = test_request("https://cdn.example/image.png".into(), "GET");
+            request.headers.push((header.into(), "private-key".into()));
+            assert!(!is_public_proxy_download(&request));
+        }
+        let mut request = test_request("https://api.example/generate".into(), "POST");
+        assert!(!is_public_proxy_download(&request));
+        request.method = "GET".into();
+        request.text_body = Some(String::new());
+        assert!(!is_public_proxy_download(&request));
+        request.text_body = None;
+        request.body = Some(String::new());
+        assert!(!is_public_proxy_download(&request));
+    }
+
+    #[test]
+    fn redirect_policy_checks_origins_downgrades_target_credentials_and_hop_limit() {
+        let origin = reqwest::Url::parse("https://api.example/start").unwrap();
+        for strict in [true, false] {
+            for target in [
+                "http://api.example/final", "file:///private/resource",
+                "https://user:secret@api.example/final",
+            ] {
+                let target = reqwest::Url::parse(target).unwrap();
+                assert!(proxy_redirect_rejection(&target, &[origin.clone()], strict).is_some());
+            }
+            let target = reqwest::Url::parse("https://api.example/final").unwrap();
+            assert!(proxy_redirect_rejection(&target, &[], strict).is_some());
+            assert!(proxy_redirect_rejection(&target, &vec![origin.clone(); 11], strict).is_some());
+            assert!(proxy_redirect_rejection(&target, &vec![origin.clone(); 10], strict).is_none());
+        }
+        for target in ["https://other.example/final", "https://api.example:444/final"] {
+            let target = reqwest::Url::parse(target).unwrap();
+            assert!(proxy_redirect_rejection(&target, &[origin.clone()], true).is_some());
+            assert!(proxy_redirect_rejection(&target, &[origin.clone()], false).is_none());
+        }
+        let default_port = reqwest::Url::parse("https://api.example:443/final").unwrap();
+        assert!(proxy_redirect_rejection(&default_port, &[origin], true).is_none());
+        let upgraded = reqwest::Url::parse("https://cdn.example/final").unwrap();
+        let insecure = reqwest::Url::parse("http://download.example/start").unwrap();
+        assert!(proxy_redirect_rejection(&upgraded, &[insecure], false).is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_headers_queries_and_post_bodies_never_reach_a_redirected_origin() {
+        let state = ProxyHttpState::new().unwrap();
+        let mut cases = Vec::new();
+        for header in ["Authorization", "X-API-Key", "X-Goog-Api-Key", "X-Private-Token", "aCcEpT", "Range"] {
+            for status in ["302 Found", "307 Temporary Redirect"] {
+                cases.push((Some(header), "GET", status, false));
+            }
+        }
+        cases.extend([(None, "GET", "302 Found", true), (None, "POST", "307 Temporary Redirect", false)]);
+        for (header, method, status, query) in cases {
+            let target = TcpListener::bind("127.0.0.1:0").unwrap();
+            target.set_nonblocking(true).unwrap();
+            let source = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut request = test_request(format!("http://{}/start", source.local_addr().unwrap()), method);
+            if let Some(header) = header { request.headers.push((header.into(), "private-key".into())); }
+            if query { request.url.push_str("?arbitrary-name=private-key"); }
+            if method == "POST" { request.text_body = Some("private request body".into()); }
+            let server = serve_test_responses(source, vec![format!(
+                "HTTP/1.1 {status}\r\nLocation: http://{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                target.local_addr().unwrap(),
+            )]);
+            let message = send_proxy_request(&state, request).await.unwrap_err();
+            assert!(message.contains("请求失败"));
+            assert!(message.contains("重定向被安全策略拒绝"));
+            assert!(!message.contains("private-key"));
+            assert!(!message.contains("127.0.0.1"));
+            assert_eq!(server.join().unwrap().len(), 1);
+            assert!(matches!(target.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+        }
+    }
+
+    #[tokio::test]
+    async fn public_downloads_follow_cross_origin_redirects_without_automatic_referer() {
+        let state = ProxyHttpState::new().unwrap();
+        for method in ["GET", "HEAD"] {
+            let target = TcpListener::bind("127.0.0.1:0").unwrap();
+            let source = TcpListener::bind("127.0.0.1:0").unwrap();
+            let request = test_request(format!("http://{}/start", source.local_addr().unwrap()), method);
+            let source_server = serve_test_responses(source, vec![format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                target.local_addr().unwrap(),
+            )]);
+            let target_server = serve_test_responses(target, vec![
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into(),
+            ]);
+            let response = send_proxy_request(&state, request).await.unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            assert_eq!(source_server.join().unwrap().len(), 1);
+            let requests = target_server.join().unwrap();
+            assert!(requests[0].starts_with(&format!("{method} /final ")));
+            assert!(!requests[0].to_ascii_lowercase().contains("\r\nreferer:"));
+        }
+    }
+
+    #[tokio::test]
+    async fn same_origin_307_preserves_headers_and_post_body() {
+        let state = ProxyHttpState::new().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut request = test_request(format!("http://{}/start", listener.local_addr().unwrap()), "POST");
+        request.headers.push(("X-Private-Token".into(), "private-key".into()));
+        request.text_body = Some("private request body".into());
+        let server = serve_test_responses(listener, vec![
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into(),
+        ]);
+        assert_eq!(send_proxy_request(&state, request).await.unwrap().status(), reqwest::StatusCode::OK);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].starts_with("POST /final "));
+        assert!(requests[1].to_ascii_lowercase().contains("\r\nx-private-token: private-key\r\n"));
+        assert!(requests[1].ends_with("private request body"));
+        assert!(!requests[1].to_ascii_lowercase().contains("\r\nreferer:"));
+    }
 
     #[tokio::test]
     async fn duplicate_bodies_are_rejected_before_waiting_for_a_slot() {
@@ -804,9 +1062,9 @@ mod proxy_http_tests {
             "url": "http://127.0.0.1:1/", "method": "POST", "headers": [],
             "body": "YQ==", "textBody": "文本"
         })).unwrap();
-        let slots = tokio::sync::Semaphore::new(0);
+        let state = ProxyHttpState { body_slots: tokio::sync::Semaphore::new(0), ..ProxyHttpState::new().unwrap() };
         let result = tokio::time::timeout(
-            Duration::from_millis(200), send_proxy_request(&reqwest::Client::new(), &slots, req),
+            Duration::from_millis(200), send_proxy_request(&state, req),
         ).await.expect("格式错误不应排队或发送");
         assert!(result.unwrap_err().contains("格式重复"));
     }
@@ -817,10 +1075,10 @@ mod proxy_http_tests {
             "url": "http://127.0.0.1:1/", "method": "POST", "headers": [], "body": "invalid!"
         })).unwrap();
         assert!(req.text_body.is_none());
-        let slots = tokio::sync::Semaphore::new(1);
-        let result = send_proxy_request(&reqwest::Client::new(), &slots, req).await;
+        let state = ProxyHttpState { body_slots: tokio::sync::Semaphore::new(1), ..ProxyHttpState::new().unwrap() };
+        let result = send_proxy_request(&state, req).await;
         assert!(result.unwrap_err().contains("base64"));
-        assert_eq!(slots.available_permits(), 1);
+        assert_eq!(state.body_slots.available_permits(), 1);
     }
 
     #[tokio::test]

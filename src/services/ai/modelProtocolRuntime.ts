@@ -28,6 +28,7 @@ import { PollTaskFailedError, isPollTimeoutError } from '../pollTask';
 import { REFERENCE_PROTOCOL_VARIABLES } from './modelProtocolVariables';
 import { readModelProtocolPathValues } from './modelProtocolResponse';
 import { readGoogleImagePartsReferenceUrls } from './imageModelTemplates';
+import { assertModelProtocolResult } from './modelCapabilityValidation';
 
 interface RunConfiguredModelProtocolOptions {
   model: GeneralModelConfig;
@@ -378,7 +379,10 @@ export async function runConfiguredModelProtocol(
       variables: options.variables,
       signal,
     });
-    if (submitted.urls) return submitted.urls;
+    if (submitted.urls) {
+      assertModelProtocolResult(options.category, submitted);
+      return submitted.urls;
+    }
     if (!submitted.poll || !submitted.taskId) throw new Error('异步调用协议未返回轮询配置');
     const poll = { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS };
     if (receipt) receipt = updatePendingTask(receipt.nodeId, { taskId: submitted.taskId, protocolPoll: poll, submitted: true }, receipt.taskId, receipt.attemptId);
@@ -389,6 +393,7 @@ export async function runConfiguredModelProtocol(
       signal,
       baseUrl,
     );
+    assertModelProtocolResult(options.category, result);
     if (!result.urls) throw new Error('媒体模型任务完成但未返回结果 URL');
     if (receipt) updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId);
     // 每类媒体都在本地保存和目标回填后确认，数组携带当次身份而非读取最新节点任务。

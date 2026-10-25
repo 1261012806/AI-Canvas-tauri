@@ -31,7 +31,6 @@ export async function createBudgetedRenderBitmap(
   const targetWidth = Math.max(1, Math.round(dimensions.width * scale));
   const targetHeight = Math.max(1, Math.round(dimensions.height * scale));
   const bitmap = await createImageBitmap(blob, {
-    imageOrientation: 'from-image',
     resizeWidth: targetWidth,
     resizeHeight: targetHeight,
     resizeQuality: 'high',

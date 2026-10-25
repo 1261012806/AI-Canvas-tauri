@@ -19,6 +19,8 @@ import {
   fetchSameOriginResultUrls,
   normalizeBase64Result,
   readJsonResponse,
+  redactModelProtocolError,
+  redactModelProtocolErrorText,
 } from './modelProtocolHttp';
 import { readModelProtocolFirstScalar, readModelProtocolUrls } from './modelProtocolResponse';
 import {
@@ -245,8 +247,12 @@ export async function pollResolvedModelProtocol(
             signal: querySignal,
           },
         );
-        const payload = await readJsonResponse(response, '模型任务查询失败', poll.errorPath);
-        validateResponse?.(payload);
+        const payload = await readJsonResponse(response, '模型任务查询失败', poll.errorPath, apiKey);
+        try {
+          validateResponse?.(payload);
+        } catch (error) {
+          throw redactModelProtocolError(error, apiKey);
+        }
         consecutiveErrors = 0;
         return payload;
       } catch (error) {
@@ -294,7 +300,7 @@ export async function pollResolvedModelProtocol(
       const status = normalizeStatus(readModelProtocolFirstScalar(payload, poll.statusPath));
       if (!failureValues.has(status)) return null;
       const detail = poll.errorPath ? readModelProtocolFirstScalar(payload, poll.errorPath) : undefined;
-      return `模型任务失败：${detail || status}`;
+      return redactModelProtocolErrorText(`模型任务失败：${detail || status}`, apiKey);
     },
     interval: poll.intervalMs,
     maxAttempts: poll.maxAttempts,

@@ -18,6 +18,9 @@ let headMock: ReturnType<typeof vi.fn<typeof fetch>>;
 let bitmapMock: ReturnType<typeof vi.fn<typeof createImageBitmap>>;
 let createUrl: MockInstance;
 let revokeUrl: MockInstance;
+let warnMock: MockInstance;
+let hasDrawingContext: boolean;
+let encodedPreview: Blob | null;
 let canvases: Array<{ width: number; height: number; getContext: ReturnType<typeof vi.fn>; toBlob: ReturnType<typeof vi.fn> }>;
 
 function png(animated = false): Blob {
@@ -66,6 +69,8 @@ beforeEach(async () => {
   dimensions.height = 2048;
   disk.prepare.mockReset().mockResolvedValue(null);
   canvases = [];
+  hasDrawingContext = true;
+  encodedPreview = new Blob(['preview'], { type: 'image/webp' });
   fetchMock = vi.fn<typeof fetch>(async () => new Response(png()));
   headMock = vi.fn<typeof fetch>(async () => new Response(null, { headers: { 'content-length': '100' } }));
   bitmapMock = vi.fn<typeof createImageBitmap>(async () => ({ close: vi.fn() }) as unknown as ImageBitmap);
@@ -78,8 +83,8 @@ beforeEach(async () => {
     createElement: () => {
       const canvas = {
         width: 0, height: 0,
-        getContext: vi.fn(() => ({ drawImage: vi.fn() })),
-        toBlob: vi.fn((callback: BlobCallback) => callback(new Blob(['preview'], { type: 'image/webp' }))),
+        getContext: vi.fn(() => hasDrawingContext ? { drawImage: vi.fn() } : null),
+        toBlob: vi.fn((callback: BlobCallback) => callback(encodedPreview)),
       };
       canvases.push(canvas);
       return canvas;
@@ -88,6 +93,7 @@ beforeEach(async () => {
   let sequence = 0;
   createUrl = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:preview-${++sequence}`);
   revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+  warnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   mode = await import('../../src/services/performanceModeRuntime');
   const cache = await import('../../src/components/nodes/shared/image/canvasImagePreviewCache');
   acquire = cache.acquireCanvasImagePreview;
@@ -99,9 +105,72 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  warnMock.mockRestore();
 });
 
 describe('canvas image preview cache', () => {
+  it('scales large images when WebKit rejects an explicit from-image orientation', async () => {
+    dimensions.width = 1672;
+    dimensions.height = 941;
+    const close = vi.fn();
+    bitmapMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[1] as ImageBitmapOptions | undefined;
+      if (options?.imageOrientation === 'from-image') throw new TypeError('Unsupported image orientation');
+      return { close } as unknown as ImageBitmap;
+    });
+    const preview = await lease('asset://localhost/large.png', 1024);
+    expect(preview.src).toMatch(/^blob:/);
+    expect(canvases[0].getContext.mock.results[0].value.drawImage).toHaveBeenCalledWith(
+      expect.any(Object), 0, 0, 1024, 576,
+    );
+    expect(close).toHaveBeenCalledOnce();
+    preview.release();
+  });
+
+  it('reports decode errors safely and continues with the next queued image', async () => {
+    const source = 'https://example.test/private.png?token=secret';
+    bitmapMock.mockRejectedValueOnce(new TypeError(`Cannot decode ${source} from /Users/private/image.png`));
+    const failed = request(source);
+    const next = request('asset://localhost/next.png');
+    await flush();
+    expect(await failed.promise).toBeNull();
+    expect(warnMock).toHaveBeenCalledExactlyOnceWith('[CanvasImagePreviewCache] 图片预览生成失败', {
+      stage: 'decode', errorType: 'TypeError', maxEdge: 512,
+    });
+    const preview = await next.promise;
+    expect(preview?.src).toMatch(/^blob:/);
+    expect(createUrl).toHaveBeenCalledOnce();
+    preview?.release();
+  });
+
+  it.each(['draw', 'encode'] as const)('reports an empty %s result and releases graphics', async (stage) => {
+    const close = vi.fn();
+    bitmapMock.mockResolvedValueOnce({ close } as unknown as ImageBitmap);
+    if (stage === 'draw') hasDrawingContext = false;
+    else encodedPreview = null;
+    const failed = request();
+    await flush();
+    expect(await failed.promise).toBeNull();
+    expect(warnMock).toHaveBeenCalledExactlyOnceWith('[CanvasImagePreviewCache] 图片预览生成失败', {
+      stage, errorType: 'Error', maxEdge: 512,
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(canvases[0]).toMatchObject({ width: 1, height: 1 });
+    expect(createUrl).not.toHaveBeenCalled();
+  });
+
+  it('uses and persists a PNG fallback when WebP encoding is unavailable', async () => {
+    encodedPreview = png();
+    const persist = vi.fn(async () => undefined);
+    disk.prepare.mockResolvedValue({ cached: null, persist });
+    const preview = await lease();
+    expect(canvases[0].toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 0.85);
+    expect(createUrl).toHaveBeenCalledExactlyOnceWith(encodedPreview);
+    expect(persist).toHaveBeenCalledExactlyOnceWith(encodedPreview);
+    expect(warnMock).not.toHaveBeenCalled();
+    preview.release();
+  });
+
   it('acquires only ready project and source-matching previews during interaction without starting work', async () => {
     const abort = new AbortController();
     const ready = acquire('asset://localhost/image.png?_refresh=1', 256, abort.signal, 'project-a');
@@ -340,10 +409,13 @@ describe('canvas image preview cache', () => {
     expect(await item.promise).toBeNull();
     const signal = fetchMock.mock.calls[0][1]?.signal;
     expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(warnMock).not.toHaveBeenCalled();
     resolveBitmap({ close } as unknown as ImageBitmap);
     await flush();
     expect(close).toHaveBeenCalledOnce();
     expect(createUrl).not.toHaveBeenCalled();
+    expect(warnMock).not.toHaveBeenCalled();
   });
 
   it('does not abort shared work when only one waiting consumer cancels', async () => {
@@ -383,6 +455,9 @@ describe('canvas image preview cache', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(await stalled.promise).toBeNull();
+    expect(warnMock).toHaveBeenCalledExactlyOnceWith('[CanvasImagePreviewCache] 图片预览生成失败', {
+      stage: 'decode', errorType: 'TimeoutError', maxEdge: 512,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(createUrl).not.toHaveBeenCalled();
     resolveBitmap({ close } as unknown as ImageBitmap);

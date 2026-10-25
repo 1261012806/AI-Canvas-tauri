@@ -21,6 +21,7 @@ import type { ImageReferenceRequestMode } from '../../../types';
 import type { BatchImageResult, ImageGenerationResult, MediaTaskReceipt, ResolvedModelProtocolPoll } from '../../../types/aiTypes';
 import { buildStandardImageRequestBody } from '../imageParameterMappings';
 import { prepareReferenceImageUpload } from '../referenceImageUpload';
+import { redactModelProtocolError } from '../modelProtocolHttp';
 
 export interface StandardImageParams {
   apiKey: string;
@@ -297,43 +298,48 @@ export async function generateImageStandardBatch(
   count: number,
   signal?: AbortSignal,
 ): Promise<BatchImageResult> {
-  const requestedCount = Math.max(1, Math.floor(count));
-  if (params.asyncTaskProvider === 'cccapi') return generateCccImagesBatch(params, requestedCount, signal);
-  const initialResponse = await requestStandardImages(params, requestedCount, signal);
+  const apiKey = params.apiKey;
+  try {
+    const requestedCount = Math.max(1, Math.floor(count));
+    if (params.asyncTaskProvider === 'cccapi') return await generateCccImagesBatch(params, requestedCount, signal);
+    const initialResponse = await requestStandardImages(params, requestedCount, signal);
 
-  // User-configured OpenAI-compatible endpoints do not always implement n.
-  if (!initialResponse.ok && requestedCount > 1 && [400, 422].includes(initialResponse.status)) {
-    const fallback = await runBatchTasks(requestedCount, 3, async () => {
+    // User-configured OpenAI-compatible endpoints do not always implement n.
+    if (!initialResponse.ok && requestedCount > 1 && [400, 422].includes(initialResponse.status)) {
+      const fallback = await runBatchTasks(requestedCount, 3, async () => {
+        const response = await requestStandardImages(params, 1, signal);
+        const results = await parseStandardResponse(response, params.dimensions);
+        const result = results[0];
+        if (!result) throw new Error('图片生成返回结果为空');
+        return result;
+      });
+      if (fallback.results.length === 0) {
+        throw new Error('批量图片生成失败：服务不支持批量参数，单图降级请求也全部失败');
+      }
+      return { requestedCount, ...fallback };
+    }
+
+    const initialResults = await parseStandardResponse(initialResponse, params.dimensions);
+    if (initialResults.length === 0) throw new Error('图片生成返回结果为空');
+    if (initialResults.length >= requestedCount) {
+      return { requestedCount, results: initialResults.slice(0, requestedCount), failedCount: 0 };
+    }
+
+    const missingCount = requestedCount - initialResults.length;
+    const supplement = await runBatchTasks(missingCount, 3, async () => {
       const response = await requestStandardImages(params, 1, signal);
       const results = await parseStandardResponse(response, params.dimensions);
       const result = results[0];
       if (!result) throw new Error('图片生成返回结果为空');
       return result;
     });
-    if (fallback.results.length === 0) {
-      throw new Error('批量图片生成失败：服务不支持批量参数，单图降级请求也全部失败');
-    }
-    return { requestedCount, ...fallback };
+
+    return {
+      requestedCount,
+      results: [...initialResults, ...supplement.results].slice(0, requestedCount),
+      failedCount: supplement.failedCount,
+    };
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-
-  const initialResults = await parseStandardResponse(initialResponse, params.dimensions);
-  if (initialResults.length === 0) throw new Error('图片生成返回结果为空');
-  if (initialResults.length >= requestedCount) {
-    return { requestedCount, results: initialResults.slice(0, requestedCount), failedCount: 0 };
-  }
-
-  const missingCount = requestedCount - initialResults.length;
-  const supplement = await runBatchTasks(missingCount, 3, async () => {
-    const response = await requestStandardImages(params, 1, signal);
-    const results = await parseStandardResponse(response, params.dimensions);
-    const result = results[0];
-    if (!result) throw new Error('图片生成返回结果为空');
-    return result;
-  });
-
-  return {
-    requestedCount,
-    results: [...initialResults, ...supplement.results].slice(0, requestedCount),
-    failedCount: supplement.failedCount,
-  };
 }

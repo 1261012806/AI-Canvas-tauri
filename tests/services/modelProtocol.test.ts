@@ -9,6 +9,7 @@ import {
   normalizeFrames8n1,
   parseModelExecutionProtocol,
   pollResolvedModelProtocol,
+  submitModelProtocol,
   previewModelProtocolRequest,
   previewModelProtocolResponse,
   validateModelExecutionProtocol,
@@ -21,6 +22,8 @@ import {
 import { useAppStore } from '../../src/store/useAppStore';
 import { createWorkflowApiDraft } from '../../src/services/workflowApi/workflowApiDefinition';
 import { readModelProtocolPathValues } from '../../src/services/ai/modelProtocolResponse';
+import { ModelProtocolHttpError, redactModelProtocolError } from '../../src/services/ai/modelProtocolHttp';
+import { PollTaskFailedError, PollTimeoutError } from '../../src/services/pollTask';
 import { buildGeneralVideoProtocolVariables } from '../../src/services/ai/generateVideo';
 import { getPendingTasksForProject, MediaTaskPausedError, VideoPollingPausedError } from '../../src/services/pollManager';
 import {
@@ -42,6 +45,193 @@ beforeEach(() => {
 });
 
 describe('declarative model execution protocol', () => {
+  it.each(['sync', 'async'] as const)('rejects HTTP 200 JSON returned as %s binary video output before delivery', async (mode) => {
+    localStorage.clear();
+    const projectId = `runtime-output-${mode}`;
+    useAppStore.setState((state) => ({ currentProjectId: projectId,
+      nodes: [{ id: 'runtime-video', type: 'ai-video', position: { x: 0, y: 0 },
+        data: { type: 'ai-video', label: 'Video', status: 'loading' } }],
+      config: { ...state.config, providers: { ...state.config.providers,
+        output: { name: 'Output', apiKey: 'fixture-output-key', baseUrl: 'https://gateway.example/v1' } } } }));
+    const protocol: ModelExecutionProtocol = mode === 'sync'
+      ? { version: 2, mode: 'sync', submit: { method: 'POST', path: '/videos' },
+        response: { type: 'binary', result: { mimeType: 'video/mp4' } } }
+      : { version: 2, mode: 'async', submit: { method: 'POST', path: '/videos' },
+        response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/videos/{{submit.id}}',
+          intervalMs: 1000, response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'],
+            result: { mimeType: 'video/mp4', download: { method: 'GET', path: '/videos/{{submit.id}}/content' } } } } };
+    let originalAttempt: string | undefined;
+    const fetchMock = vi.fn();
+    if (mode === 'async') {
+      fetchMock.mockImplementationOnce(async () => {
+        originalAttempt = getPendingTasksForProject(projectId)[0].attemptId;
+        return jsonResponse({ id: 'original-binary-task' });
+      }).mockResolvedValueOnce(jsonResponse({ status: 'completed' }));
+    }
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: 'upstream returned an error document' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = runConfiguredModelProtocol({ category: 'video', nodeId: 'runtime-video',
+      model: { id: 'runtime-model', name: 'Runtime model', modelId: 'video-model', category: 'video', providerConfigId: 'output',
+        executionProfile: { preset: 'custom', protocol } }, variables: { model: 'video-model', prompt: 'video' } });
+    if (mode === 'sync') {
+      await expect(pending).rejects.toThrow('MIME');
+      expect(getPendingTasksForProject(projectId)).toEqual([]);
+    } else {
+      await expect(pending).rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: {
+        taskId: 'original-binary-task', attemptId: expect.any(String),
+      } });
+      expect(getPendingTasksForProject(projectId)[0]).toMatchObject({ taskId: 'original-binary-task',
+        attemptId: originalAttempt, submitted: true, mediaRecoveryState: 'query_paused' });
+    }
+    expect(useAppStore.getState().nodes[0].data.status).not.toBe('success');
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(mode === 'sync' ? 1 : 3);
+    localStorage.clear();
+  });
+
+  it('redacts a query key using the same form encoding as the actual request URL', async () => {
+    const apiKey = 'fixture~! private/key=';
+    const formEncoded = new URLSearchParams({ key: apiKey }).toString().slice('key='.length);
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'sync', auth: { type: 'query', name: 'key' },
+      submit: { method: 'GET', path: '/generate' }, response: { type: 'json', result: { urlPath: 'url' } } };
+    const fetchMock = vi.fn(async (url: RequestInfo | URL) => jsonResponse({ message: `Request ${String(url)} denied` }, 401));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await executeModelProtocol({ protocol, apiKey, baseUrl: 'https://gateway.example/v1', variables: {} })
+      .catch((reason: unknown) => reason);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`key=${formEncoded}`);
+    expect(formEncoded).not.toBe(encodeURIComponent(apiKey));
+    expect(error).toBeInstanceOf(ModelProtocolHttpError);
+    expect((error as Error).message).toContain('key=[REDACTED]');
+    expect((error as Error).message).not.toContain(formEncoded);
+    expect((error as Error).message).not.toContain(apiKey);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['sync', 'async', 'poll'] as const)('redacts HTTP 200 %s validator errors without re-submitting generation', async (stage) => {
+    const apiKey = 'fixture~! validation/key=';
+    const formEncoded = new URLSearchParams({ key: apiKey }).toString().slice('key='.length);
+    const payload = { status: 'failed', error: `Rejected ${apiKey}; query=${formEncoded}` };
+    const original = Object.freeze(new Error(payload.error, { cause: new Error(apiKey) }));
+    const validateResponse = vi.fn((value: unknown) => {
+      if ((value as { status?: string }).status === 'failed') throw original;
+    });
+    const protocol: ModelExecutionProtocol = stage === 'sync'
+      ? { version: 2, mode: 'sync', submit: { method: 'POST', path: '/generate' },
+        response: { type: 'json', result: { urlPath: 'url' } } }
+      : { version: 2, mode: 'async', submit: { method: 'POST', path: '/generate' },
+        response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/tasks/{{submit.id}}',
+          intervalMs: 1000, response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'],
+            result: { urlPath: 'url' } } } };
+    const fetchMock = vi.fn();
+    if (stage === 'poll') fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'original-task' }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(payload));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const options = { protocol, apiKey, baseUrl: 'https://gateway.example/v1', variables: {}, validateResponse };
+    const pending = stage === 'poll'
+      ? submitModelProtocol(options).then((submitted) => pollResolvedModelProtocol(
+        submitted.poll!, apiKey, undefined, options.baseUrl, validateResponse,
+      ))
+      : executeModelProtocol(options);
+    const error = await pending.catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBe(original);
+    expect((error as Error).message).toContain('[REDACTED]');
+    expect((error as Error).message).not.toContain(apiKey);
+    expect((error as Error).message).not.toContain(formEncoded);
+    expect((error as Error).stack).not.toContain(apiKey);
+    expect((error as Error).cause).toBeUndefined();
+    expect(original.message).toContain(apiKey);
+    expect(validateResponse).toHaveBeenCalledTimes(stage === 'poll' ? 2 : 1);
+    expect(fetchMock).toHaveBeenCalledTimes(stage === 'poll' ? 2 : 1);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('keeps classified validator errors and safe errors intact while dropping private causes', () => {
+    const apiKey = 'fixture-private-key';
+    const message = `Rejected ${apiKey}`;
+    const http = Object.freeze(new ModelProtocolHttpError(429, message, 2500));
+    const safeHttp = redactModelProtocolError(http, apiKey);
+    expect(safeHttp).toBeInstanceOf(ModelProtocolHttpError);
+    expect(safeHttp).toMatchObject({ status: 429, retryAfterMs: 2500, message: 'Rejected [REDACTED]' });
+    expect(safeHttp).not.toBe(http);
+    for (const original of [new PollTaskFailedError(message), new PollTimeoutError(message), new TypeError(message), new DOMException(message, 'AbortError')]) {
+      const safe = redactModelProtocolError(original, apiKey);
+      expect(safe).toBeInstanceOf(original.constructor);
+      expect(safe).toMatchObject({ name: original.name, message: 'Rejected [REDACTED]' });
+      expect((safe as Error).cause).toBeUndefined();
+      expect((safe as Error).stack).not.toContain(apiKey);
+    }
+    const safeOriginal = Object.freeze(new Error('request denied'));
+    expect(redactModelProtocolError(safeOriginal, apiKey)).toBe(safeOriginal);
+    expect(redactModelProtocolError(message, apiKey)).toBe('Rejected [REDACTED]');
+    expect(redactModelProtocolError('request denied', apiKey)).toBe('request denied');
+  });
+
+  it.each(['json', 'text', 'binary'] as const)('redacts echoed credentials from synchronous %s failures', async (type) => {
+    const apiKey = 'fixture+private/key=';
+    const protocol: ModelExecutionProtocol = {
+      version: 2, mode: 'sync', submit: { method: 'POST', path: '/generate' },
+      response: type === 'json'
+        ? { type, errorPath: 'error.message', result: { urlPath: 'url' } }
+        : { type, errorPath: 'error.message' },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: {
+      message: `Invalid key ${apiKey}; encoded=${encodeURIComponent(apiKey)}; request denied`,
+    } }, 401, { 'Retry-After': '2' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await executeModelProtocol({ protocol, apiKey, baseUrl: 'https://gateway.example/v1', variables: {} })
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ModelProtocolHttpError);
+    expect(error).toMatchObject({ status: 401, retryAfterMs: 2000 });
+    const message = (error as Error).message;
+    expect(message).toContain('request denied');
+    expect(message).toContain('[REDACTED]');
+    expect(message).not.toContain(apiKey);
+    expect(message).not.toContain(encodeURIComponent(apiKey));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('redacts a rejected async submit before a task or caller can retain the error', async () => {
+    const apiKey = 'fixture+async/private';
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'async',
+      submit: { method: 'POST', path: '/generate' }, response: { type: 'json', taskIdPath: 'id' },
+      poll: { method: 'GET', path: '/tasks/{{submit.id}}', response: { statusPath: 'status',
+        successValues: ['completed'], failureValues: ['failed'], result: { urlPath: 'url' } } } };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: `Invalid API key ${apiKey}` }, 401));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await executeModelProtocol({ protocol, apiKey, baseUrl: 'https://gateway.example/v1', variables: {} })
+      .catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ name: 'ModelProtocolHttpError', status: 401 });
+    expect((error as Error).message).toContain('[REDACTED]');
+    expect((error as Error).stack).not.toContain(apiKey);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['http', 'task'] as const)('redacts a resumed %s query failure without re-submitting generation', async (failure) => {
+    const apiKey = 'fixture+rotated/private';
+    const detail = `Rejected ${apiKey}; encoded=${encodeURIComponent(apiKey)}`;
+    const fetchMock = vi.fn().mockResolvedValue(failure === 'http'
+      ? jsonResponse({ message: detail }, 401)
+      : jsonResponse({ status: 'failed', detail }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await pollResolvedModelProtocol({ url: 'https://gateway.example/v1/tasks/original', method: 'GET',
+      statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], errorPath: 'detail', resultUrlPath: 'url',
+      intervalMs: 1, retry: { maxRetries: 0 } }, apiKey, undefined, 'https://gateway.example/v1')
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('[REDACTED]');
+    expect((error as Error).message).not.toContain(apiKey);
+    expect((error as Error).message).not.toContain(encodeURIComponent(apiKey));
+    expect((error as Error).stack).not.toContain(apiKey);
+    if (failure === 'http') expect(error).toMatchObject({ name: 'ModelProtocolHttpError', status: 401 });
+    else expect(error).toMatchObject({ name: 'PollTaskFailedError' });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('https://gateway.example/v1/tasks/original', expect.objectContaining({ method: 'GET' }));
+  });
+
   it('keeps interface-default background distinct from an explicit auto parameter', () => {
     const capability = { backgrounds: ['auto', 'opaque', 'transparent'] };
     expect(resolveConfiguredImageBackground(undefined, 'transparent')).toBeUndefined();
