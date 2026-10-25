@@ -162,7 +162,7 @@ interface CapturedCanvasState {
   nodes: AppState['nodes'];
   edges: AppState['edges'];
   groups: AppState['groups'];
-  viewportTransform: string;
+  viewportKey: string;
 }
 
 interface CaptureProjectSnapshotOptions {
@@ -173,11 +173,17 @@ interface CaptureProjectSnapshotOptions {
 let lastCapturedCanvasState: CapturedCanvasState | null = null;
 const latestSnapshotCaptures = new Map<string, number>();
 let nextSnapshotCaptureId = 1;
+if (import.meta.hot) import.meta.hot.dispose(() => {
+  // 热更新前启动的截图不能再回写到新版本的 Store。
+  latestSnapshotCaptures.clear();
+  lastCapturedCanvasState = null;
+});
 
-function getCanvasViewportTransform(): string {
+function getCanvasViewportKey(): string {
   if (typeof document === 'undefined') return '';
   const viewport = document.querySelector<HTMLElement>('.react-flow__viewport');
-  return viewport?.style.transform ?? '';
+  const bounds = document.querySelector<HTMLElement>('.react-flow')?.getBoundingClientRect();
+  return `${viewport?.style.transform ?? ''}|${bounds?.width ?? 0},${bounds?.height ?? 0}`;
 }
 
 function waitForLoadingPaint(): Promise<void> {
@@ -202,7 +208,7 @@ function isCanvasSnapshotFresh(state: AppState, projectId: string): boolean {
     && lastCapturedCanvasState.nodes === state.nodes
     && lastCapturedCanvasState.edges === state.edges
     && lastCapturedCanvasState.groups === state.groups
-    && lastCapturedCanvasState.viewportTransform === getCanvasViewportTransform();
+    && lastCapturedCanvasState.viewportKey === getCanvasViewportKey();
 }
 
 async function drainProjectSaveQueue(projectId: string, queue: ProjectSaveQueue): Promise<void> {
@@ -904,7 +910,8 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       return projectId;
     }
 
-    if (project.snapshot && isCanvasSnapshotFresh(state, projectId)) {
+    // 离开项目时重新取图，图片解码或视频首帧就绪并不一定会更新 Store。
+    if (!options.allowProjectChange && project.snapshot && isCanvasSnapshotFresh(state, projectId)) {
       latestSnapshotCaptures.delete(projectId);
       if (options.persistSnapshot) {
         try {
@@ -916,8 +923,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       return projectId;
     }
 
-    const viewportTransform = getCanvasViewportTransform();
-    const snapshot = await captureCurrentCanvasSnapshot(projectId, { nodes: state.nodes, edges: state.edges });
+    const viewportKey = getCanvasViewportKey();
+    const snapshot = await captureCurrentCanvasSnapshot(
+      projectId,
+      { nodes: state.nodes, edges: state.edges },
+      { fresh: options.allowProjectChange },
+    );
     if (latestSnapshotCaptures.get(projectId) !== captureId) return undefined;
     latestSnapshotCaptures.delete(projectId);
     const latest = get();
@@ -929,7 +940,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       latest.nodes !== state.nodes
       || latest.edges !== state.edges
       || latest.groups !== state.groups
-      || getCanvasViewportTransform() !== viewportTransform
+      || getCanvasViewportKey() !== viewportKey
     );
     if (currentCanvasChanged || (!isStillCurrent && !options.allowProjectChange)) return undefined;
 
@@ -940,7 +951,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           nodes: state.nodes,
           edges: state.edges,
           groups: state.groups,
-          viewportTransform,
+          viewportKey,
         };
       } else if (lastCapturedCanvasState?.projectId === projectId) {
         lastCapturedCanvasState = null;

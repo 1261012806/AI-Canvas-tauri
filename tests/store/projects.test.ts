@@ -476,6 +476,30 @@ describe('project switching', () => {
     expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it('recaptures when the canvas size changes without changing its transform', async () => {
+    let width = 800;
+    vi.stubGlobal('document', { querySelector: (selector: string) => (
+      selector === '.react-flow'
+        ? { getBoundingClientRect: () => ({ width, height: 450 }) }
+        : { style: { transform: 'translate(0px, 0px) scale(1)' } }
+    ) });
+    snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue('data:image/webp;base64,RESIZED');
+    useAppStore.setState({
+      projects: [{ id: 'resized-preview', name: 'Resized', createdAt: 1, updatedAt: 1 }],
+      currentProjectId: 'resized-preview',
+      nodes: [{ id: 'text', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '文字' } }],
+    });
+    try {
+      await useAppStore.getState().captureCurrentProjectSnapshot();
+      width = 1_200;
+      await useAppStore.getState().captureCurrentProjectSnapshot();
+
+      expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('persists only the preview without serializing the canvas again', async () => {
     snapshotMocks.captureCurrentCanvasSnapshot.mockResolvedValue('data:image/webp;base64,PREVIEW_ONLY');
     useAppStore.setState({
@@ -1229,7 +1253,7 @@ describe('returning to the startup page', () => {
 
     expect(await useAppStore.getState().returnToStartPage()).toBe(true);
     expect(useAppStore.getState().currentProjectId).toBeNull();
-    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledWith('logo-project', { nodes, edges });
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledWith('logo-project', { nodes, edges }, { fresh: true });
     expect(fileMocks.saveProject).toHaveBeenCalledOnce();
 
     finishSnapshot('data:image/webp;base64,LATE_PREVIEW');
@@ -1237,6 +1261,27 @@ describe('returning to the startup page', () => {
     expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', 'data:image/webp;base64,LATE_PREVIEW');
     expect(fileMocks.saveProject).toHaveBeenCalledOnce();
     expect(useAppStore.getState().currentProjectId).toBeNull();
+  });
+
+  it('refreshes the thumbnail on departure even if store references have not changed', async () => {
+    openProject();
+    snapshotMocks.captureCurrentCanvasSnapshot
+      .mockResolvedValueOnce('data:image/webp;base64,BEFORE_MEDIA_READY')
+      .mockResolvedValueOnce('data:image/webp;base64,EXIT_FRAME');
+    await useAppStore.getState().captureCurrentProjectSnapshot();
+
+    expect(await useAppStore.getState().returnToStartPage()).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenCalledTimes(2);
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).toHaveBeenLastCalledWith(
+      'logo-project',
+      { nodes: expect.any(Array), edges: expect.any(Array) },
+      { fresh: true },
+    );
+    expect(useAppStore.getState().projects[0].snapshot).toBe('data:image/webp;base64,EXIT_FRAME');
+    expect(metadataMocks.updateProjectSnapshot).toHaveBeenCalledWith('logo-project', 'data:image/webp;base64,EXIT_FRAME');
+    expect(fileMocks.saveProject).toHaveBeenCalledOnce();
   });
 
   it('queues necessary canvas saving before an immediate empty-preview patch', async () => {

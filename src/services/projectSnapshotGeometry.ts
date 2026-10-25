@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { BaseNodeData } from '../types';
-import type { ProjectSnapshotEdge, ProjectSnapshotNode } from './projectSnapshotWorker';
+import { resolveShotlistColumns, SHOTLIST_COLUMN_LABELS, type ShotlistColumnKey } from '../types/shotlist';
+import type { ProjectSnapshotEdge, ProjectSnapshotNode, ProjectSnapshotPreview } from './projectSnapshotWorker';
 
 export interface ProjectSnapshotGeometryInput {
   nodes: readonly Node<BaseNodeData>[];
@@ -21,6 +22,7 @@ interface SnapshotGeometryNode {
   hidden: boolean;
   collapsed: boolean;
   noteKind?: string;
+  preview?: ProjectSnapshotPreview;
 }
 
 type HandleSide = 'left' | 'right' | 'top' | 'bottom';
@@ -47,13 +49,53 @@ function handleSide(value: string | null | undefined, fallback: HandleSide): Han
   return value === 'left' || value === 'right' || value === 'top' || value === 'bottom' ? value : fallback;
 }
 
-/** Only geometry and a bounded display label cross the worker boundary, never node data. */
+const SHOTLIST_PREVIEW_WEIGHTS: Partial<Record<ShotlistColumnKey, number>> = {
+  shotNo: 0.6, shotSize: 0.9, camera: 1, content: 3, dialogue: 2, duration: 0.8,
+};
+
+/** 只取一小段展示正文；素材地址和本机路径不跟着预览跨进 Worker。 */
+function boundedPreviewText(value: unknown, limit: number): string {
+  if (typeof value !== 'string') return '';
+  return value.slice(0, limit)
+    .replace(/@asset\{[^}]*\}?/g, '[素材]')
+    .replace(/(?:https?|file|asset|tauri):\/\/[^\s<>"']*|(?:blob|data):[^\s<>"']*/gi, '[链接]')
+    .replace(/(?:[a-z]:[\\/]|\\\\)[^\s<>"'，。；）)]+/gi, '[路径]')
+    .replace(/(^|[\s("'=])\/(?!\/)[^\s<>"'，。；）)]+/g, '$1[路径]')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\p{Cc}/gu, (character) => character === '\n' || character === '\t' ? character : '')
+    .slice(0, limit);
+}
+
+function createNodePreview(node: Node<BaseNodeData>): ProjectSnapshotPreview | undefined {
+  if (node.hidden || node.data.hiddenByCharacterLibrary) return undefined;
+  const type = node.type ?? node.data.type;
+  if (type === 'ai-text') {
+    const text = boundedPreviewText(node.data.output, 800);
+    return text ? { kind: 'text', text } : undefined;
+  }
+  if (type !== 'ai-shotlist' || !Array.isArray(node.data.shotlistRows)) return undefined;
+  const columns = resolveShotlistColumns(node.data.shotlistColumns)
+    .filter((column) => SHOTLIST_PREVIEW_WEIGHTS[column] !== undefined).slice(0, 6);
+  return {
+    kind: 'shotlist',
+    columns: columns.map((column) => ({ label: SHOTLIST_COLUMN_LABELS[column], weight: SHOTLIST_PREVIEW_WEIGHTS[column]! })),
+    rows: node.data.shotlistRows.slice(0, 6).map((row, index) => columns.map((column) => {
+      if (column === 'shotNo') return String(index + 1);
+      if (!row || typeof row !== 'object') return '';
+      if (column === 'duration') return typeof row.duration === 'number' && Number.isFinite(row.duration)
+        ? `${Math.round(row.duration * 10) / 10}s` : '';
+      return boundedPreviewText(row[column], 80);
+    })),
+  };
+}
+
+/** 只传几何、短标题和白名单展示片段，不把节点 data 整份交给 Worker。 */
 export function createProjectSnapshotGeometry(input: ProjectSnapshotGeometryInput): ProjectSnapshotGeometry {
   return {
     nodes: input.nodes.map((node) => ({
       id: node.id,
       type: node.type ?? node.data.type,
-      label: String(node.data.label ?? '').slice(0, 48).trim(),
+      label: boundedPreviewText(node.data.label, 48).trim(),
       x: node.position.x,
       y: node.position.y,
       width: positiveSize(node.type === 'ai-audio' ? 260 : 280, node.measured?.width, node.width, node.data.nodeWidth, node.style?.width, node.data.note?.width),
@@ -64,6 +106,7 @@ export function createProjectSnapshotGeometry(input: ProjectSnapshotGeometryInpu
       hidden: node.hidden === true || node.data.hiddenByCharacterLibrary === true,
       collapsed: node.data.groupCollapsed === true,
       noteKind: node.type === 'canvas-note' ? node.data.note?.kind : undefined,
+      preview: createNodePreview(node),
     })),
     edges: input.edges.filter((edge) => !edge.hidden).map((edge) => ({
       source: edge.source,
@@ -135,6 +178,7 @@ export function projectSnapshotGeometry(
       kind: node.type,
       label: node.label,
       noteKind: node.noteKind,
+      preview: node.preview,
     };
     screenNodes.set(node.id, rect);
     if (rect.x < width && rect.x + rect.width > 0 && rect.y < height && rect.y + rect.height > 0) nodes.push(rect);
