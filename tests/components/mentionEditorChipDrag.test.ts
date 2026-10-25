@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildComfyRefmodChipEl, isChipEl, renderPromptToNodes, serializeDOM } from '../../src/components/nodes/shared/mentionEditorDom';
+import {
+  buildComfyRefmodChipEl, buildWorkflowChipEl, ensureCaretSlotAfterChip, isChipEl,
+  normalizeChipSlots, renderPromptToNodes, serializeDOM, ZWSP,
+} from '../../src/components/nodes/shared/mentionEditorDom';
 import { commitMentionChipDrop, findDraggableMentionChip, getMentionChipDropRange, startMentionChipDrag } from '../../src/components/nodes/shared/mentionEditorChipDrag';
 import { buildComfyRefmodMention } from '../../src/utils/comfyRefmodMention';
 
@@ -60,13 +63,18 @@ class TestElement extends TestNode {
     return (match ? this : this.parentNode?.closest(selector) ?? null) as T | null;
   }
   querySelector(selector: string): TestElement | null {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+  querySelectorAll(selector: string): TestElement[] {
+    const matches: TestElement[] = [];
     for (const child of this.childNodes) {
       if (!(child instanceof TestElement)) continue;
-      if (child.classList.contains(selector.slice(1))) return child;
-      const nested = child.querySelector(selector);
-      if (nested) return nested;
+      const match = selector.startsWith('.') ? child.classList.contains(selector.slice(1))
+        : [...selector.matchAll(/\[([^\]]+)\]/g)].some((item) => child.hasAttribute(item[1]));
+      if (match) matches.push(child);
+      matches.push(...child.querySelectorAll(selector));
     }
-    return null;
+    return matches;
   }
   append(...nodes: TestNode[]) { for (const node of nodes) this.insertBefore(node, null); }
   appendChild(node: TestNode) { this.append(node); return node; }
@@ -103,6 +111,7 @@ let doc: EventTarget & {
   defaultView: EventTarget & { getSelection: ReturnType<typeof vi.fn>; cancelAnimationFrame: ReturnType<typeof vi.fn>; requestAnimationFrame: ReturnType<typeof vi.fn> };
   body: TestElement;
   createElement: (tag: string) => TestElement;
+  createElementNS: (namespace: string, tag: string) => TestElement;
   createTextNode: (text: string) => TestNode;
   createRange: () => TestRange;
   caretRangeFromPoint?: ReturnType<typeof vi.fn>;
@@ -136,6 +145,7 @@ beforeEach(() => {
     body,
     defaultView: Object.assign(new EventTarget(), { getSelection: vi.fn(() => ({ removeAllRanges: vi.fn(), addRange: vi.fn() })), cancelAnimationFrame: vi.fn(), requestAnimationFrame: vi.fn(() => 1) }),
     createElement: (tag: string) => Object.assign(new TestElement(tag.toUpperCase()), { ownerDocument: doc }),
+    createElementNS: (_namespace: string, tag: string) => Object.assign(new TestElement(tag.toUpperCase()), { ownerDocument: doc }),
     createTextNode: (text: string) => new TestNode(3, text),
     createRange: () => new TestRange(root),
     caretRangeFromPoint: vi.fn(() => new TestRange(root, root.childNodes.length)),
@@ -148,6 +158,89 @@ beforeEach(() => {
   a = chip('a'); b = chip('b');
   root.append(a, new TestNode(3, '说明'), b);
   change = vi.fn<() => void>();
+});
+
+describe('引用胶囊的文本光标落点', () => {
+  it('只有一个引用时，渲染尾部保留文本落点且不改变提示词', () => {
+    const value = '@{a:A}';
+    root.childNodes = [];
+    for (const node of renderPromptToNodes(value, new Map())) root.append(node as unknown as TestNode);
+
+    const tail = root.childNodes.at(-1)!;
+    expect(tail.nodeType).toBe(Node.TEXT_NODE);
+    expect(tail.textContent).toBe(ZWSP);
+    expect(isChipEl(tail.previousSibling as unknown as Node)).toBe(true);
+    expect(tail.parentNode).toBe(root);
+    expect(prompt()).toBe(value);
+  });
+
+  it('胶囊后已有正文时复用原文本，不插入或改写正文', () => {
+    root.childNodes = [];
+    for (const node of renderPromptToNodes('@{a:A}原有正文', new Map())) root.append(node as unknown as TestNode);
+    const renderedChip = root.childNodes.find((node) => isChipEl(node as unknown as Node))!;
+    const body = renderedChip.nextSibling!;
+    const count = root.childNodes.length;
+
+    expect(ensureCaretSlotAfterChip(renderedChip as unknown as Node)).toBe(body);
+    normalizeChipSlots(html(root));
+
+    expect(root.childNodes).toHaveLength(count);
+    expect(body.textContent).toBe('原有正文');
+    expect(root.childNodes.at(-1)).toBe(body);
+    expect(prompt()).toBe('@{a:A}原有正文');
+  });
+
+  it.each(['空尾文本', '换行', '连续胶囊'])('%s 归一化后两侧都有文本，重复处理不累加占位', (mode) => {
+    root.childNodes = [];
+    const empty = doc.createTextNode('');
+    if (mode === '空尾文本') root.append(a, empty);
+    else if (mode === '换行') root.append(a, doc.createElement('br'), b);
+    else root.append(a, b);
+    const before = prompt();
+
+    normalizeChipSlots(html(root));
+    const nodes = [...root.childNodes];
+    const contents = nodes.map((node) => node.textContent);
+    normalizeChipSlots(html(root));
+    normalizeChipSlots(html(root));
+
+    expect(root.childNodes).toEqual(nodes);
+    expect(root.childNodes.map((node) => node.textContent)).toEqual(contents);
+    expect(prompt()).toBe(before);
+    for (const node of root.childNodes.filter((item) => isChipEl(item as unknown as Node))) {
+      expect(node.previousSibling?.nodeType).toBe(Node.TEXT_NODE);
+      expect(node.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+    }
+    for (const node of root.childNodes.filter((item) => item.nodeType === Node.TEXT_NODE)) expect(node.textContent).toBe(ZWSP);
+    if (mode === '空尾文本') expect(a.nextSibling).toBe(empty);
+    if (mode === '连续胶囊') expect(root.childNodes).toHaveLength(5);
+  });
+
+  it('工作流值区保留可编辑正文和内层引用，外层占位不进入值区', () => {
+    const workflow = buildWorkflowChipEl('1', '提示词', 'prompt') as unknown as TestElement;
+    const value = workflow.querySelector('.prompt-chip-wf-value')!;
+    value.childNodes = [];
+    const body = doc.createTextNode('内部正文');
+    const nested = chip('nested');
+    value.append(body, nested);
+    root.childNodes = [];
+    root.append(workflow);
+    const before = prompt();
+
+    normalizeChipSlots(html(root));
+    const valueNodes = [...value.childNodes];
+    normalizeChipSlots(html(root));
+
+    expect(html(value).contentEditable).toBe('true');
+    expect(value.childNodes[0]).toBe(body);
+    expect(body.textContent).toBe('内部正文');
+    expect(value.childNodes).toEqual(valueNodes);
+    expect(workflow.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(workflow.nextSibling?.parentNode).toBe(root);
+    expect(nested.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(prompt()).toBe(before);
+    expect(prompt()).toBe('@wf{1|提示词|prompt}(内部正文@{nested:NESTED})');
+  });
 });
 
 describe('引用胶囊拖动', () => {
@@ -197,7 +290,7 @@ describe('引用胶囊拖动', () => {
     start(); pointer('pointermove', { [modifier]: true }); pointer('pointerup', { [modifier]: true });
     expect(prompt()).toBe('@{a:A}说明@{b:B}@{a:A}');
     expect(root.childNodes[0]).toBe(a);
-    const clone = root.childNodes.at(-1) as TestElement;
+    const clone = root.childNodes.filter((node) => isChipEl(node as unknown as Node)).at(-1) as TestElement;
     expect(clone).not.toBe(a); expect(clone.attrs).toEqual(a.attrs);
     expect(clone.classList.contains('is-chip-drag-source')).toBe(false);
     expect(change).toHaveBeenCalledOnce(); expect(doc.body.childNodes).toHaveLength(0);

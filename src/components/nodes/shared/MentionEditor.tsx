@@ -49,6 +49,7 @@ import {
   resolveComfyRefmodChipPresentation,
   syncComfyRefmodReferenceChips,
   ensureCaretSlotBeforeChip,
+  ensureCaretSlotAfterChip,
   getNodeMetaMap,
   isBrEl,
   isChipEl,
@@ -131,6 +132,95 @@ export interface MentionEditorProps {
 export interface MentionEditorHandle {
   insertMentionAtCursor: (id: string, label: string) => void;
 }
+
+// ── Cursor save/restore ──
+type CursorPosition = { offset: number; workflowValue?: { index: number; offset: number; focused: boolean } };
+const createCursorWalker = (root: HTMLElement) => document.createTreeWalker(root, NodeFilter.SHOW_ALL, {
+  acceptNode(node) {
+    for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
+      if (!isChipEl(parent)) continue;
+      // 工作流的 value 可以编辑，其余胶囊内部都只是展示，不计入正文偏移。
+      return parent.hasAttribute('data-wf-id') && !!parent.querySelector('.prompt-chip-wf-value')?.contains(node)
+        ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    }
+    return NodeFilter.FILTER_ACCEPT;
+  },
+});
+const saveCursor = (root: HTMLElement): CursorPosition => {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return { offset: 0 };
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.startContainer)) return { offset: 0 };
+  let startContainer = range.startContainer;
+  let startOffset = range.startOffset;
+  if (startContainer === root) {
+    const next = root.childNodes[startOffset];
+    const previous = root.childNodes[startOffset - 1];
+    if (next?.nodeType === Node.TEXT_NODE) { startContainer = next; startOffset = 0; }
+    else if (previous?.nodeType === Node.TEXT_NODE) {
+      startContainer = previous;
+      startOffset = previous.textContent?.length ?? 0;
+    }
+  }
+  const startElement = startContainer.nodeType === Node.ELEMENT_NODE
+    ? startContainer as HTMLElement : startContainer.parentElement;
+  const value = startElement?.closest<HTMLElement>('.prompt-chip-wf-value');
+  let workflowValue: CursorPosition['workflowValue'];
+  if (value && value !== root && root.contains(value)) {
+    workflowValue = { index: Array.from(root.querySelectorAll('.prompt-chip-wf-value')).indexOf(value),
+      offset: saveCursor(value).offset, focused: document.activeElement === value };
+  }
+  const walker = createCursorWalker(root);
+  let offset = 0;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (node === startContainer) return { offset: offset + startOffset, workflowValue };
+    if (node.nodeType === Node.TEXT_NODE) offset += (node.textContent || '').length;
+    else if (isChipEl(node)) offset += 1;
+  }
+  return { offset, workflowValue };
+};
+
+const restoreCursor = (root: HTMLElement, position: CursorPosition): void => {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  const applyRange = () => { range.collapse(true); sel.removeAllRanges(); sel.addRange(range); };
+  if (position.workflowValue) {
+    const value = root.querySelectorAll<HTMLElement>('.prompt-chip-wf-value')[position.workflowValue.index];
+    if (value) {
+      if (position.workflowValue.focused) value.focus({ preventScroll: true });
+      restoreCursor(value, { offset: position.workflowValue.offset });
+      return;
+    }
+  }
+  const walker = createCursorWalker(root);
+  let count = 0;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const nodeLen = node.nodeType === Node.TEXT_NODE ? (node.textContent || '').length : isChipEl(node) ? 1 : 0;
+    if (isChipEl(node) && count + nodeLen >= position.offset) {
+      if (position.offset <= count) {
+        ensureCaretSlotBeforeChip(node);
+        const before = node.previousSibling;
+        if (before?.nodeType === Node.TEXT_NODE) range.setStart(before, before.textContent?.length ?? 0);
+        else range.setStart(ensureCaretSlotAfterChip(node), 0);
+      } else range.setStart(ensureCaretSlotAfterChip(node), 0);
+      applyRange();
+      return;
+    }
+    if (node.nodeType === Node.TEXT_NODE && count + nodeLen >= position.offset) {
+      range.setStart(node, Math.max(0, position.offset - count));
+      applyRange();
+      return;
+    }
+    count += nodeLen;
+  }
+  range.selectNodeContents(root);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+};
 
 // ═══════════════════════════════════════════════
 // Component
@@ -351,6 +441,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       el.appendChild(node);
     }
     syncImageReferenceLabels(el, nodeMetaMap);
+    normalizeChipSlots(el);
     if (cursorOffset !== null) restoreCursor(el, cursorOffset);
     syncHistory();
   }, [compositionRevision, currentProjectId, nodeId, prompt, nodeMetaMap, globalAssets, dramaAssets]);
@@ -359,77 +450,6 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     const root = editorRef.current;
     if (root && !composingRef.current) syncMentionChipLocale(root, nodeMetaMap, t);
   }, [compositionRevision, nodeMetaMap, t]);
-
-  // ── Cursor save/restore ──
-  const saveCursor = (root: HTMLElement): number => {
-    const sel = window.getSelection();
-    if (!sel || !sel.rangeCount) return 0;
-    const range = sel.getRangeAt(0);
-    if (!root.contains(range.startContainer)) return 0;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
-    let offset = 0;
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      if (node === range.startContainer) return offset + range.startOffset;
-      if (node.nodeType === Node.TEXT_NODE) {
-        const parent = node.parentElement;
-        if (parent && parent.closest('[data-ref-id]')) continue;
-        if (parent && parent.closest('[data-skill-id]')) continue;
-        if (parent && parent.closest('[data-wf-id]') && !parent.closest('.prompt-chip-wf-value')) continue;
-        offset += (node.textContent || '').length;
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.hasAttribute('data-ref-id')) offset += 1;
-        else if (el.hasAttribute('data-skill-id')) offset += 1;
-        else if (el.hasAttribute('data-wf-id')) offset += 1;
-      }
-    }
-    return offset;
-  };
-
-  const restoreCursor = (root: HTMLElement, offset: number) => {
-    const sel = window.getSelection();
-    if (!sel) return;
-    const range = document.createRange();
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
-    let count = 0;
-    let node: Node | null;
-    while ((node = walker.nextNode())) {
-      let nodeLen = 0;
-      if (node.nodeType === Node.TEXT_NODE) {
-        const parent = node.parentElement;
-        if (parent && parent.closest('[data-ref-id]')) continue;
-        if (parent && parent.closest('[data-skill-id]')) continue;
-        if (parent && parent.closest('[data-wf-id]') && !parent.closest('.prompt-chip-wf-value')) continue;
-        nodeLen = (node.textContent || '').length;
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.hasAttribute('data-ref-id') || el.hasAttribute('data-wf-id') || el.hasAttribute('data-skill-id')) nodeLen = 1;
-        if (el.classList.contains('prompt-chip-wf-value') && count + nodeLen >= offset) {
-          const firstChild = el.firstChild;
-          if (firstChild) {
-            range.setStart(firstChild, Math.max(0, offset - count));
-            range.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(range);
-            return;
-          }
-        }
-      }
-      if (count + nodeLen >= offset) {
-        range.setStart(node, offset - count);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return;
-      }
-      count += nodeLen;
-    }
-    range.selectNodeContents(root);
-    range.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  };
 
   // ── Emit prompt string to parent ──
   const emitDOM = useCallback((group: string | null = null) => {
@@ -1527,7 +1547,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
     setShowMention(false);
     root.focus({ preventScroll: true });
     const range = document.createRange();
-    range.setStartAfter(source);
+    range.setStart(ensureCaretSlotAfterChip(source), 0);
     range.collapse(true);
     const selection = window.getSelection();
     selection?.removeAllRanges();

@@ -182,9 +182,24 @@ export function ensureCaretSlotBeforeChip(chip: Node): void {
   }
 }
 
+/** 胶囊后也留一个文本落点，避免插入点停在不可编辑的胶囊边界。 */
+export function ensureCaretSlotAfterChip(chip: Node): Text {
+  const next = chip.nextSibling;
+  if (next?.nodeType === Node.TEXT_NODE) {
+    if (!next.textContent) next.textContent = ZWSP;
+    return next as Text;
+  }
+  const slot = document.createTextNode(ZWSP);
+  chip.parentNode?.insertBefore(slot, next);
+  return slot;
+}
+
 export function normalizeChipSlots(root: HTMLElement): void {
   const chips = root.querySelectorAll('[data-ref-id],[data-asset-path],[data-drama-id],[data-wf-id],[data-skill-id],[data-refmod-raw]');
-  for (const chip of Array.from(chips)) ensureCaretSlotBeforeChip(chip);
+  for (const chip of Array.from(chips)) {
+    ensureCaretSlotBeforeChip(chip);
+    ensureCaretSlotAfterChip(chip);
+  }
 }
 
 export function numberMediaReferenceLabels(references: Array<NodeMeta['mediaReference']>): Array<string | undefined> {
@@ -661,5 +676,6 @@ export function renderPromptToNodes(text: string, metaMap: Map<string, NodeMeta>
     }
   }
   pushTextWithBreaks(nodes, text.slice(lastIndex));
+  if (isChipEl(nodes[nodes.length - 1])) nodes.push(document.createTextNode(ZWSP));
   return nodes;
 }
