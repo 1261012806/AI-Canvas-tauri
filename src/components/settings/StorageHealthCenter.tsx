@@ -1,299 +1,108 @@
-/**
- * StorageHealthCenter — 存储健康中心 UI
- * 展示项目空间占用、.trash 残留、孤儿文件、重复文件，提供清理操作
- * 包含 SVG 圆环图和条状图
- */
+/** 存储健康中心：先说明占用和清理范围，再提供逐项核对后的清理入口。 */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
-import { getProjectDataDir } from '../../services/fileService';
+import { getProjectDataDir, isTauriEnv } from '../../services/fileService';
 import {
-  scanStorageHealth,
-  clearTrashDir,
-  deleteOrphanFile,
-  deleteDuplicateFile,
-  collectNodeFilePaths,
-  type StorageHealthReport,
-  type TrashInfo,
-  type OrphanFileInfo,
-  type DuplicateFileGroup,
+  scanStorageHealth, clearTrashDir, deleteOrphanFile, deleteDuplicateFile, collectNodeFilePaths, StorageHealthScanError,
+  type StorageHealthReport, type TrashInfo, type OrphanFileInfo, type DuplicateFileGroup, type CleanupResult,
 } from '../../services/fs/storageHealth';
-import {
-  estimateBrowserStorage,
-  formatBytes,
-  STORAGE_PRESSURE_RATIO,
-  type StorageEstimate,
-} from '../../services/storageQuota';
-import AnimatedButton from '../shared/AnimatedButton';
+import { estimateBrowserStorage, formatBytes, STORAGE_PRESSURE_RATIO, type StorageEstimate } from '../../services/storageQuota';
 import { useT } from '../../i18n';
 import AssetRepairDialog from '../assets/AssetRepairDialog';
 import type { AssetRepairTarget } from '../../services/fs/assetRepair';
+import ModalOverlay from '../shared/ModalOverlay';
+import Tabs from '../shared/Tabs';
 
-// ============================================
-// 颜色映射
-// ============================================
+type Section = 'overview' | 'trash' | 'orphans' | 'duplicates' | 'offline';
+type CleanupSelection = (
+  | { kind: 'trash'; entries: TrashInfo[] }
+  | { kind: 'orphans'; entries: OrphanFileInfo[] }
+  | { kind: 'duplicates'; entries: DuplicateFileGroup['files']; groupKey: string }
+);
+type CleanupRequest = CleanupSelection & { projectId: string | null };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  '图片': '#34d399',
-  '视频': '#60a5fa',
-  '音频': '#fbbf24',
-  '文本': '#a78bfa',
-  '其他': '#94a3b8',
+  '图片': 'var(--node-image)', '视频': 'var(--node-video)', '音频': 'var(--node-audio)',
+  '文本': 'var(--node-text)', '其他': 'var(--theme-text-muted)', '回收站': 'var(--warning)',
+};
+const PROJECT_COLORS = [
+  'var(--brand)', 'var(--node-panorama)', 'var(--node-image)', 'var(--node-audio)',
+  'var(--node-markdown)', 'var(--info)',
+];
+const SCAN_REASON_LABELS: Record<StorageHealthScanError['reason'], string> = {
+  permission: '访问被拒绝', missing: '文件或目录已不存在', symlink: '符号链接未纳入扫描',
+  changed: '文件在扫描时发生变化', unavailable: '读取暂不可用',
 };
 
-const PROJECT_COLORS = [
-  '#6366f1', '#22d3ee', '#34d399', '#f472b6', '#fbbf24',
-  '#a78bfa', '#fb923c', '#38bdf8', '#4ade80', '#facc15',
-];
-
-// ============================================
-// 工具函数
-// ============================================
-
-function formatShortPath(filePath: string, maxLen = 42): string {
-  if (filePath.length <= maxLen) return filePath;
-  const normalized = filePath.replace(/\\/g, '/');
-  const parts = normalized.split('/');
-  if (parts.length <= 2) return filePath;
-  const first = parts.slice(0, 1).join('/');
-  const last = parts.slice(-2).join('/');
-  const short = `${first}/.../${last}`;
-  return short.length > maxLen ? `${first}/.../${parts[parts.length - 1]}` : short;
+function formatPercent(value: number) {
+  if (value <= 0) return '0%';
+  if (value < 0.1) return '<0.1%';
+  if (value < 1) return `${value.toFixed(1)}%`;
+  if (value < 100 && value > 99.9) return '>99.9%';
+  return `${Number(value.toFixed(1))}%`;
 }
 
-// ============================================
-// ECharts 风格 SVG 圆环图
-// ============================================
-
-interface DonutSegment {
-  label: string;
-  value: number;
-  color: string;
-}
-
-/** 极坐标 → 笛卡尔坐标 */
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-/** 生成单个扇叶的 SVG path：四角圆角 + 段间白色间隙 */
-function buildDonutPath(
-  cx: number, cy: number,
-  innerR: number, outerR: number,
-  startAngle: number, endAngle: number,
-  cr: number,
-  gapDeg: number,
-): string {
-  const sa = startAngle + gapDeg / 2;
-  const ea = endAngle - gapDeg / 2;
-  const sweep = ea - sa;
-  if (sweep <= 0) return '';
-
-  const largeArc = sweep > 180 ? 1 : 0;
-
-  // 小扇区需要同步收窄圆角，避免圆角互相穿插。
-  const sweepRad = sweep * (Math.PI / 180);
-  const cornerR = Math.min(cr, (outerR - innerR) / 2, (innerR * sweepRad) / 2);
-  const outDeg = (cornerR / outerR) * (180 / Math.PI);
-  const inDeg = (cornerR / innerR) * (180 / Math.PI);
-
-  const oStart = polarToCartesian(cx, cy, outerR, sa + outDeg);
-  const oEnd = polarToCartesian(cx, cy, outerR, ea - outDeg);
-  const oEndCorner = polarToCartesian(cx, cy, outerR, ea);
-  const oEndSide = polarToCartesian(cx, cy, outerR - cornerR, ea);
-  const iEndSide = polarToCartesian(cx, cy, innerR + cornerR, ea);
-  const iEndCorner = polarToCartesian(cx, cy, innerR, ea);
-  const iEnd = polarToCartesian(cx, cy, innerR, ea - inDeg);
-  const iStart = polarToCartesian(cx, cy, innerR, sa + inDeg);
-  const iStartCorner = polarToCartesian(cx, cy, innerR, sa);
-  const iStartSide = polarToCartesian(cx, cy, innerR + cornerR, sa);
-  const oStartSide = polarToCartesian(cx, cy, outerR - cornerR, sa);
-  const oStartCorner = polarToCartesian(cx, cy, outerR, sa);
-
-  return [
-    `M ${oStart.x} ${oStart.y}`,
-    `A ${outerR} ${outerR} 0 ${largeArc} 1 ${oEnd.x} ${oEnd.y}`,
-    `Q ${oEndCorner.x} ${oEndCorner.y} ${oEndSide.x} ${oEndSide.y}`,
-    `L ${iEndSide.x} ${iEndSide.y}`,
-    `Q ${iEndCorner.x} ${iEndCorner.y} ${iEnd.x} ${iEnd.y}`,
-    `A ${innerR} ${innerR} 0 ${largeArc} 0 ${iStart.x} ${iStart.y}`,
-    `Q ${iStartCorner.x} ${iStartCorner.y} ${iStartSide.x} ${iStartSide.y}`,
-    `L ${oStartSide.x} ${oStartSide.y}`,
-    `Q ${oStartCorner.x} ${oStartCorner.y} ${oStart.x} ${oStart.y}`,
-    'Z',
-  ].join(' ');
-}
-
-function DonutChart({ segments, total, size = 160 }: {
-  segments: DonutSegment[];
-  total: number;
-  size?: number;
+function DonutChart({ segments, total }: {
+  segments: { label: string; value: number; color: string }[]; total: number;
 }) {
   const t = useT();
-  const cx = size / 2;
-  const cy = size / 2;
-  const innerR = size * 0.27;
-  const outerR = size * 0.46;
-  const cornerR = size * 0.02;
-  const gapDeg = 2;
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-
-  if (segments.length === 0 || total === 0) {
-    return (
-      <div className="flex flex-col items-center gap-3">
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-          <circle cx={cx} cy={cy} r={outerR} fill="none" stroke="#1a1a26" strokeWidth={outerR - innerR} />
-          <text x={cx} y={cy} textAnchor="middle" fill="#e8e8ed" fontSize="13" fontWeight="600">0 B</text>
-        </svg>
-        <div className="text-[11px] text-canvas-text-muted">{t('暂无数据')}</div>
-      </div>
-    );
-  }
-
-  // 计算每个扇叶的角度范围（用循环累加，不在 map 回调里改写外层变量）
-  let cursor = 0;
+  const circumference = 2 * Math.PI * 42;
+  let offset = 0;
   const slices = [];
-  for (const seg of segments) {
-    const sweep = (seg.value / total) * 360;
-    slices.push({ ...seg, start: cursor, sweep, pct: (seg.value / total) * 100 });
-    cursor += sweep;
+  for (const segment of segments) {
+    if (segment.value <= 0) continue;
+    const length = total > 0 ? segment.value / total * circumference : 0;
+    slices.push({ ...segment, length, offset });
+    offset += length;
   }
-
-  return (
-    <div className="flex flex-col items-center gap-3">
-      {/* 图例 — 居中放在顶部 */}
-      <div className="flex flex-wrap justify-center gap-x-3 gap-y-1">
-        {slices.map((s, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-1.5 text-[11px] cursor-default"
-            onMouseEnter={() => setHoverIdx(i)}
-            onMouseLeave={() => setHoverIdx(null)}
-          >
-            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
-            <span className="text-canvas-text-secondary">{t(s.label)}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* 圆环 */}
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        {slices.map((s, i) => (
-          <path
-            key={i}
-            d={buildDonutPath(cx, cy, innerR, outerR, s.start, s.start + s.sweep, cornerR, gapDeg)}
-            fill={s.color}
-            onMouseEnter={() => setHoverIdx(i)}
-            onMouseLeave={() => setHoverIdx(null)}
-            style={{
-              cursor: 'pointer',
-              opacity: hoverIdx === null || hoverIdx === i ? 0.92 : 0.4,
-              transition: 'opacity 0.2s ease',
-              filter: hoverIdx === i ? 'drop-shadow(0 0 3px rgba(0,0,0,0.3))' : undefined,
-            }}
-          />
-        ))}
-        {/* 中心文字 */}
-        {hoverIdx !== null ? (
-          <>
-            <text x={cx} y={cy - 12} textAnchor="middle" fill="#e8e8ed" fontSize="20" fontWeight="bold">
-              {slices[hoverIdx].pct.toFixed(0)}%
-            </text>
-            <text x={cx} y={cy + 8} textAnchor="middle" fill="#e8e8ed" fontSize="15" fontWeight="600">
-              {formatBytes(slices[hoverIdx].value)}
-            </text>
-          </>
-        ) : (
-          <>
-            <text x={cx} y={cy - 4} textAnchor="middle" dominantBaseline="middle"
-              fill="#e8e8ed" fontSize="15" fontWeight="600">
-              {formatBytes(total).split(' ')[0]}
-            </text>
-            <text x={cx} y={cy + 13} textAnchor="middle" dominantBaseline="middle"
-              fill="#8888a0" fontSize="11">
-              / {formatBytes(total).split(' ')[1] || 'B'}
-            </text>
-          </>
-        )}
-      </svg>
-    </div>
-  );
+  return <div className="flex flex-wrap items-center gap-3">
+    <svg width="112" height="112" viewBox="0 0 112 112" role="img" aria-label={t('项目文件占用构成')} className="shrink-0">
+      <circle cx="56" cy="56" r="42" fill="none" stroke="var(--theme-hover)" strokeWidth="14" />
+      {slices.map((slice) => <circle key={slice.label} cx="56" cy="56" r="42" fill="none" stroke={slice.color}
+        strokeWidth="14" strokeDasharray={`${slice.length} ${circumference}`} strokeDashoffset={-slice.offset}
+        transform="rotate(-90 56 56)">
+        <title>{`${t(slice.label)} · ${formatBytes(slice.value)} · ${formatPercent(total > 0 ? slice.value / total * 100 : 0)}`}</title>
+      </circle>)}
+      <text x="56" y="60" textAnchor="middle" fill="var(--theme-text)" fontSize="12" fontWeight="500">
+        {total > 0 ? t('占用构成') : t('暂无文件')}
+      </text>
+    </svg>
+    <ul className="min-w-0 flex-1 space-y-1.5 text-xs">
+      {slices.map((slice) => <li key={slice.label} className="flex items-center gap-2">
+        <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: slice.color }} />
+        <span className="text-canvas-text-secondary">{t(slice.label)}</span>
+        <span className="ml-auto tabular-nums text-canvas-text">{formatBytes(slice.value)}</span>
+      </li>)}
+      {slices.length === 0 && <li className="text-canvas-text-muted">{t('尚无可统计的文件')}</li>}
+    </ul>
+  </div>;
 }
 
-// ============================================
-// SVG 条状图 (Bar Chart) 组件
-// ============================================
-
-interface BarItem {
-  label: string;
-  value: number;
-  color: string;
-}
-
-function StackedBar({ items }: { items: BarItem[] }) {
+function StackedBar({ projects }: { projects: StorageHealthReport['projects'] }) {
   const t = useT();
-  const total = items.reduce((s, i) => s + i.value, 0);
-
-  if (items.length === 0 || total === 0) {
-    return (
-      <div className="flex items-center justify-center py-8 text-xs text-canvas-text-muted">
-        {t('暂无项目数据')}
-      </div>
-    );
-  }
-
-  // 过滤掉占比小于 2% 的段，防止标签重叠
-  const segments = items.map((item) => ({
-    ...item,
-    pct: (item.value / total) * 100,
-  }));
-
-  return (
-    <div className="space-y-3">
-      {/* 占比条 */}
-      <div className="flex h-6 rounded-lg overflow-hidden bg-canvas-surface border border-canvas-border">
-        {segments.map((seg, i) => {
-          const isFirst = i === 0;
-          const isLast = i === segments.length - 1;
-          return (
-            <div
-              key={i}
-              className="h-full transition-[width] duration-500 ease-out motion-reduce:transition-none relative group min-w-[3px]"
-              style={{
-                width: `${seg.pct}%`,
-                backgroundColor: seg.color,
-                opacity: 0.88,
-                borderRadius: isFirst
-                  ? '7px 0 0 7px'
-                  : isLast
-                    ? '0 7px 7px 0'
-                    : undefined,
-              }}
-              title={`${t(seg.label)}: ${formatBytes(seg.value)} (${seg.pct.toFixed(1)}%)`}
-            />
-          );
-        })}
-      </div>
-
-      {/* 图例 */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-        {segments.map((seg, i) => (
-          <div key={i} className="flex items-center gap-1.5 text-[11px]">
-            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: seg.color }} />
-            <span className="text-canvas-text-secondary truncate max-w-[80px]" title={t(seg.label)}>{t(seg.label)}</span>
-            <span className="text-canvas-text-muted tabular-nums">{seg.pct.toFixed(0)}%</span>
-            <span className="text-canvas-text-muted tabular-nums">{formatBytes(seg.value)}</span>
-          </div>
-        ))}
-      </div>
+  const total = projects.reduce((sum, project) => sum + project.fileSize, 0);
+  const items = projects.map((project, index) => ({ ...project, color: PROJECT_COLORS[index % PROJECT_COLORS.length] }))
+    .sort((a, b) => b.fileSize - a.fileSize);
+  return <div className="space-y-2">
+    <div className="flex h-3 overflow-hidden rounded-full bg-canvas-hover" role="img" aria-label={t('各项目素材占用比例')}>
+      {items.filter((item) => item.fileSize > 0).map((item) => <div key={item.projectId} className="h-full shrink-0"
+        style={{ width: `${item.fileSize / total * 100}%`, backgroundColor: item.color }}
+        title={`${item.projectName} · ${formatBytes(item.fileSize)} · ${formatPercent(item.fileSize / total * 100)}`} />)}
     </div>
-  );
+    <ul className="space-y-2">
+      {items.map((item) => <li key={item.projectId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
+        <span className="min-w-0 flex-1 truncate text-canvas-text" title={item.projectName}>{item.projectName}</span>
+        <span className="tabular-nums text-canvas-text-secondary">{formatPercent(total > 0 ? item.fileSize / total * 100 : 0)}</span>
+        <span className="w-24 text-right tabular-nums text-canvas-text">{formatBytes(item.fileSize)}</span>
+        {!!item.sharedWith?.length && <span className="basis-full pl-4 text-[11px] text-canvas-text-muted">
+          {t('与 {names} 共用目录，文件仅计一次', { names: item.sharedWith.join('、') })}
+        </span>}
+      </li>)}
+    </ul>
+  </div>;
 }
-
-// ============================================
-// 主组件
-// ============================================
 
 async function collectLiveReferences(projectId = useAppStore.getState().currentProjectId): Promise<Set<string>> {
   const root = projectId ? await getProjectDataDir(projectId) : undefined;
@@ -307,591 +116,415 @@ async function collectLiveReferences(projectId = useAppStore.getState().currentP
 
 export default function StorageHealthCenter() {
   const t = useT();
-  const { showToast } = useAppStore(
-    useShallow((s) => ({
-      showToast: s.showToast,
-    })),
-  );
-
+  const { showToast } = useAppStore(useShallow((state) => ({ showToast: state.showToast })));
+  const desktop = isTauriEnv();
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<{
+    cancelled: boolean; references: boolean; reason: StorageHealthScanError['reason'];
+  } | null>(null);
   const [report, setReport] = useState<StorageHealthReport | null>(null);
   const [browserStorage, setBrowserStorage] = useState<StorageEstimate | null>(null);
-  const [activeSection, setActiveSection] = useState<string>('overview');
-  const [deleting, setDeleting] = useState<Set<string>>(new Set());
-  const scannedRef = useRef(false);
+  const [activeSection, setActiveSection] = useState<Section>('overview');
   const [repairTarget, setRepairTarget] = useState<AssetRepairTarget | null>(null);
+  const [pendingCleanup, setPendingCleanup] = useState<CleanupRequest | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<(CleanupResult & { failedNames: string[] }) | null>(null);
+  const mounted = useRef(true);
+  const scanLock = useRef(false);
+  const cleanupLock = useRef(false);
+  const scanRun = useRef(0);
+  const scanController = useRef<AbortController | null>(null);
+  const cleanupController = useRef<AbortController | null>(null);
 
-  // 执行扫描
   const handleScan = useCallback(async () => {
+    if (scanLock.current) return;
+    scanLock.current = true;
+    const run = ++scanRun.current;
+    const controller = new AbortController();
+    scanController.current = controller;
     setScanning(true);
+    setScanError(null);
     try {
-      // 浏览器配额（IndexedDB 里的画布数据）和磁盘占用是两笔账，都要看
-      void estimateBrowserStorage().then(setBrowserStorage);
-
-      // 收集所有节点的 filePath 引用
       const projectId = useAppStore.getState().currentProjectId;
-      const nodeFilePaths = () => collectLiveReferences(projectId);
-      const assetFolders = (useAppStore.getState().config.assetFolders ?? []).map((path) => ({ path, label: path.replace(/\\/g, '/').split('/').pop() || path }));
-
-      const result = await scanStorageHealth(useAppStore.getState().projects, nodeFilePaths, assetFolders);
-      if (useAppStore.getState().currentProjectId !== projectId) throw new Error('项目已切换，请重新扫描');
+      const folders = (useAppStore.getState().config.assetFolders ?? []).map((path) => ({
+        path, label: path.replace(/\\/g, '/').split('/').pop() || '外部文件夹',
+      }));
+      const [, result] = await Promise.all([
+        estimateBrowserStorage().then((quota) => {
+          if (mounted.current && run === scanRun.current) setBrowserStorage(quota);
+        }),
+        desktop ? scanStorageHealth(useAppStore.getState().projects, () => collectLiveReferences(projectId), folders, { signal: controller.signal }) : null,
+      ]);
+      if (!mounted.current || run !== scanRun.current) return;
+      if (controller.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      if (useAppStore.getState().currentProjectId !== projectId) throw new Error('项目已切换');
       setReport(result);
-      scannedRef.current = true;
-
-      const totalLabel = formatBytes(result.totalSize);
-      const reclaimLabel = formatBytes(result.reclaimableSize);
-      const issueCount =
-        result.trashes.length +
-        result.orphans.length +
-        result.duplicates.length +
-        result.offlineFolders.length;
-
-      if (issueCount > 0) {
-        showToast(
-          t('总占用 {total}，可释放 {reclaim}，发现 {count} 个问题', { total: totalLabel, reclaim: reclaimLabel, count: issueCount }),
-          result.reclaimableSize > 0 ? 'info' : 'success',
-        );
-      } else {
-        showToast(t('总占用 {total}，一切正常', { total: totalLabel }));
+    } catch (error) {
+      if (mounted.current && run === scanRun.current) {
+        setReport(null);
+        const known = error instanceof StorageHealthScanError;
+        const reason = known ? error.reason : 'unavailable';
+        setScanError({ cancelled: controller.signal.aborted, references: known && error.area === 'references', reason });
+        if (!controller.signal.aborted) console.warn('[storage-health] scan failed', { area: known ? error.area : 'scan', reason });
       }
-    } catch {
-      setReport(null);
-      console.error('Storage scan failed');
-      showToast(t('扫描失败，请重试'), 'error');
     } finally {
-      setScanning(false);
+      if (mounted.current && run === scanRun.current) {
+        scanLock.current = false;
+        scanController.current = null;
+        setScanning(false);
+      }
     }
-  }, [showToast, t]);
+  }, [desktop]);
 
-  // 打开时自动扫描一次
   useEffect(() => {
-    if (!scannedRef.current) {
-      handleScan();
-    }
-    return () => { scannedRef.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    mounted.current = true;
+    void handleScan();
+    return () => {
+      mounted.current = false;
+      scanLock.current = false;
+      scanController.current?.abort();
+      cleanupController.current?.abort();
+    };
+  }, [handleScan]);
 
-  // 清空 .trash
-  const handleClearTrash = useCallback(async (trash: TrashInfo) => {
-    setDeleting((prev) => new Set(prev).add(trash.trashDir));
-    try {
-      await clearTrashDir(trash.trashDir);
-      showToast(t('已清空「{name}」的回收站缓存', { name: trash.projectName }));
-      // 重置扫描标记以触发重新扫描
-      scannedRef.current = false;
-      await handleScan();
-    } catch {
-      showToast(t('清理失败'), 'error');
-    } finally {
-      setDeleting((prev) => {
-        const next = new Set(prev);
-        next.delete(trash.trashDir);
-        return next;
+  const requestCleanup = (request: CleanupSelection) => {
+    if (scanLock.current || cleanupLock.current || !report?.complete || !request.entries.length) return;
+    setPendingCleanup({ ...request, projectId: useAppStore.getState().currentProjectId });
+  };
+
+  const applyCleanup = async () => {
+    if (!pendingCleanup || cleanupLock.current || scanLock.current) return;
+    if (useAppStore.getState().currentProjectId !== pendingCleanup.projectId) {
+      setPendingCleanup(null);
+      showToast(t('项目已切换，请重新扫描后再清理'), 'error');
+      return;
+    }
+    cleanupLock.current = true;
+    const controller = new AbortController();
+    cleanupController.current = controller;
+    setCleaning(true);
+    setCleanupResult(null);
+    const result: CleanupResult & { failedNames: string[] } = { deletedCount: 0, failedCount: 0, reclaimedSize: 0, failedNames: [] };
+    const request = pendingCleanup;
+    // 确认窗口打开后引用仍可能变化，每个文件真正删除前都再核对一次。
+    let verifiedSize = 0;
+    const verifyUnreferenced = async (path: string) => {
+      if (!mounted.current || useAppStore.getState().currentProjectId !== request.projectId) return false;
+      const fresh = await scanStorageHealth(useAppStore.getState().projects, () => collectLiveReferences(request.projectId), [], {
+        includeDuplicates: request.kind === 'duplicates', signal: controller.signal,
       });
-    }
-  }, [showToast, handleScan, t]);
-
-  // 不信任旧报告：每次清理都重新读取所有项目与当前未保存的画布。
-  const verifyUnreferenced = useCallback(async (path: string) => {
-    const projectId = useAppStore.getState().currentProjectId;
-    const fresh = await scanStorageHealth(
-      useAppStore.getState().projects,
-      () => collectLiveReferences(projectId),
-    );
-    const key = [...collectNodeFilePaths([{ data: { filePath: path } }])][0];
-    return !(await collectLiveReferences(projectId)).has(key) && fresh.orphans.some((file) => file.path === path);
-  }, []);
-
-  // 删除孤儿文件
-  const handleDeleteOrphan = useCallback(async (orphan: OrphanFileInfo) => {
-    setDeleting((prev) => new Set(prev).add(orphan.path));
+      if (!fresh.complete) return false;
+      const key = [...collectNodeFilePaths([{ data: { filePath: path } }])][0];
+      const live = await collectLiveReferences(request.projectId);
+      const orphan = fresh.orphans.find((file) => file.path === path);
+      const expected = request.kind === 'trash' ? undefined : request.entries.find((file) => file.path === path);
+      const duplicateEligible = request.kind !== 'duplicates'
+        || fresh.duplicates.some((group) => group.key === request.groupKey
+          && group.files.some((file) => file.path === path && file.canDelete));
+      verifiedSize = orphan?.size ?? 0;
+      return mounted.current && useAppStore.getState().currentProjectId === request.projectId
+        && !live.has(key) && !!orphan && orphan.size === expected?.size && duplicateEligible;
+    };
     try {
-      const ok = await deleteOrphanFile(orphan.path, verifyUnreferenced);
-      if (ok) {
-        showToast(t('已删除：{name}', { name: orphan.name }));
-        scannedRef.current = false;
-        await handleScan();
-      } else {
-        showToast(t('删除失败'), 'error');
+      for (const entry of request.entries) {
+        const name = 'name' in entry ? entry.name : entry.projectName;
+        if (!mounted.current || useAppStore.getState().currentProjectId !== request.projectId) {
+          result.failedCount += 'fileCount' in entry ? entry.fileCount : 1;
+          result.failedNames.push(name);
+          continue;
+        }
+        try {
+          if (request.kind === 'trash' && 'trashDir' in entry) {
+            const fresh = await scanStorageHealth(useAppStore.getState().projects, () => collectLiveReferences(request.projectId), [], {
+              includeDuplicates: false, signal: controller.signal,
+            });
+            if (!fresh.complete || !fresh.trashes.some((trash) => trash.trashDir === entry.trashDir)) {
+              result.failedCount += Math.max(1, entry.fileCount);
+              result.failedNames.push(name);
+              continue;
+            }
+            const cleared = await clearTrashDir(entry.trashDir);
+            result.deletedCount += cleared.deletedCount;
+            result.failedCount += cleared.failedCount;
+            result.reclaimedSize += cleared.reclaimedSize;
+            if (cleared.failedCount) result.failedNames.push(name);
+          } else if ('path' in entry) {
+            const removed = request.kind === 'duplicates'
+              ? await deleteDuplicateFile(entry.path, verifyUnreferenced)
+              : await deleteOrphanFile(entry.path, verifyUnreferenced);
+            if (removed) { result.deletedCount++; result.reclaimedSize += verifiedSize; }
+            else { result.failedCount++; result.failedNames.push(name); }
+          }
+        } catch {
+          result.failedCount += 'fileCount' in entry ? Math.max(1, entry.fileCount) : 1;
+          result.failedNames.push(name);
+        }
       }
-    } catch {
-      showToast(t('删除失败'), 'error');
     } finally {
-      setDeleting((prev) => {
-        const next = new Set(prev);
-        next.delete(orphan.path);
-        return next;
-      });
-    }
-  }, [showToast, handleScan, t, verifyUnreferenced]);
-
-  // 删除重复文件
-  const handleDeleteDuplicate = useCallback(async (file: DuplicateFileGroup['files'][0]) => {
-    setDeleting((prev) => new Set(prev).add(file.path));
-    try {
-      const ok = await deleteDuplicateFile(file.path, verifyUnreferenced);
-      if (ok) {
-        showToast(t('已删除：{name}', { name: file.name }));
-        scannedRef.current = false;
+      cleanupLock.current = false;
+      cleanupController.current = null;
+      if (mounted.current) {
+        setCleaning(false);
+        setPendingCleanup(null);
+        setCleanupResult(result);
+        showToast(t('已清理 {count} 个文件，未清理 {failed} 项', { count: result.deletedCount, failed: result.failedCount }), result.failedCount ? 'error' : 'success');
         await handleScan();
-      } else {
-        showToast(t('删除失败'), 'error');
       }
-    } catch {
-      showToast(t('删除失败'), 'error');
-    } finally {
-      setDeleting((prev) => {
-        const next = new Set(prev);
-        next.delete(file.path);
-        return next;
-      });
     }
-  }, [showToast, handleScan, t, verifyUnreferenced]);
+  };
 
-  // 清空所有 .trash
-  const handleClearAllTrash = useCallback(async () => {
-    if (!report) return;
-    for (const trash of report.trashes) {
-      await clearTrashDir(trash.trashDir);
-    }
-    showToast(t('已清空所有回收站缓存'));
-    scannedRef.current = false;
-    await handleScan();
-  }, [report, showToast, handleScan, t]);
-
-  // 删除所有孤儿文件
-  const handleDeleteAllOrphans = useCallback(async () => {
-    if (!report) return;
-    let count = 0;
-    for (const orphan of report.orphans) {
-      const ok = await deleteOrphanFile(orphan.path, verifyUnreferenced);
-      if (ok) count++;
-    }
-    showToast(t('已删除 {count} 个孤儿文件', { count }));
-    scannedRef.current = false;
-    await handleScan();
-  }, [report, showToast, handleScan, t, verifyUnreferenced]);
-
-  // 汇总数据
   const overview = useMemo(() => {
     if (!report) return null;
-
-    const categoryTotals: Record<string, number> = {};
-    for (const p of report.projects) {
-      for (const [cat, info] of Object.entries(p.categories)) {
-        categoryTotals[cat] = (categoryTotals[cat] || 0) + info.size;
-      }
+    const categories = new Map<string, number>();
+    for (const project of report.projects) {
+      for (const [category, info] of Object.entries(project.categories)) categories.set(category, (categories.get(category) ?? 0) + info.size);
     }
-
-    const donutSegments: DonutSegment[] = Object.entries(categoryTotals)
-      .map(([cat, size]) => ({
-        label: cat,
-        value: size,
-        color: CATEGORY_COLORS[cat] || '#94a3b8',
-      }))
+    if (report.trashSize > 0) categories.set('回收站', report.trashSize);
+    return [...categories].map(([label, value]) => ({ label, value, color: CATEGORY_COLORS[label] ?? 'var(--theme-text-muted)' }))
       .sort((a, b) => b.value - a.value);
+  }, [report]);
+  const busy = scanning || cleaning;
+  const canClean = !!report?.complete && !busy;
+  const quotaRatio = Math.max(0, Math.min(1, browserStorage?.ratio ?? 0));
+  const pressured = quotaRatio >= STORAGE_PRESSURE_RATIO;
+  const cleanupEntries = pendingCleanup?.entries.map((entry) => ({
+    key: 'path' in entry ? entry.path : entry.trashDir,
+    name: 'name' in entry ? entry.name : t('项目回收站'),
+    projectName: entry.projectName,
+    size: 'size' in entry ? entry.size : entry.trashSize,
+    count: 'fileCount' in entry ? entry.fileCount : 1,
+  })) ?? [];
+  const cleanupCount = cleanupEntries.reduce((sum, entry) => sum + entry.count, 0);
+  const cleanupSize = cleanupEntries.reduce((sum, entry) => sum + entry.size, 0);
 
-    const projectBars: BarItem[] = report.projects
-      .map((p, i) => ({
-        label: p.projectName,
-        value: p.fileSize,
-        color: PROJECT_COLORS[i % PROJECT_COLORS.length],
-      }))
-      .sort((a, b) => b.value - a.value);
-
-    const issueSections = [
-      {
-        id: 'trash',
-        label: t('回收站残留'),
-        count: report.trashes.length,
-        totalSize: report.trashes.reduce((s, t) => s + t.trashSize, 0),
-        color: '#fbbf24',
-      },
-      {
-        id: 'orphans',
-        label: t('孤儿文件'),
-        count: report.orphans.length,
-        totalSize: report.orphans.reduce((s, o) => s + o.size, 0),
-        color: '#f472b6',
-      },
-      {
-        id: 'duplicates',
-        label: t('重复文件'),
-        count: report.duplicates.length,
-        totalSize: report.duplicates.reduce((s, d) => s + d.reclaimableSize, 0),
-        color: '#fb923c',
-      },
-      {
-        id: 'offline',
-        label: t('离线文件夹'),
-        count: report.offlineFolders.length,
-        totalSize: 0,
-        color: '#ef4444',
-      },
-    ].filter((s) => s.count > 0);
-
-    return { donutSegments, projectBars, issueSections };
-  }, [report, t]);
-
-  const isEmpty = !report || (report.projects.length === 0 && report.trashes.length === 0);
-
-  return (
-    <div className="space-y-5">
-      {/* 标题栏 + 扫描按钮 */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-canvas-text">{t('存储健康中心')}</h3>
-          <p className="text-[11px] text-canvas-text-muted mt-0.5">
-            {t('检测各项目的存储占用与可优化空间')}
-          </p>
-        </div>
-        <AnimatedButton
-          type="button"
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25 transition-colors"
-          onClick={handleScan}
-          disabled={scanning}
-        >
-          {scanning ? (
-            <>
-              <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8" />
-              </svg>
-              {t('扫描中…')}
-            </>
-          ) : (
-            <>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="1 4 1 10 7 10" />
-                <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
-              </svg>
-              {t('重新扫描')}
-            </>
-          )}
-        </AnimatedButton>
+  return <div className="space-y-3" aria-busy={busy}>
+    <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-canvas-text">{t('存储健康中心')}</h3>
+        <p className="ui-hint mt-1">{t('查看项目素材与回收站，清理前会重新核对文件引用')}</p>
+        {report && <p className="ui-hint mt-1">{t('上次扫描：{time}', { time: new Date(report.scannedAt).toLocaleString() })}</p>}
       </div>
-
-      <div className="ui-card p-3 flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2"><p className="text-xs text-canvas-text">{t('失效素材与目录')}</p>
-          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={scanning} onClick={() => setRepairTarget({ kind: 'all' })}>{t('修复失效素材')}</button></div>
-        {report?.offlineFolders.map((folder) => <div key={folder.path} className="flex items-center justify-between gap-2">
-          <span className="text-xs text-canvas-text-secondary truncate">{folder.label}</span>
-          <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setRepairTarget({ kind: 'folder', path: folder.path, name: folder.label })}>{t('重新定位文件夹')}</button>
-        </div>)}
+      <div className="flex items-center gap-2">
+        {scanning && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => scanController.current?.abort()}>{t('取消扫描')}</button>}
+        <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={busy || !!pendingCleanup} onClick={() => void handleScan()}>
+          {scanning ? t('扫描中…') : t('重新扫描')}
+        </button>
       </div>
-      {repairTarget && <AssetRepairDialog target={repairTarget} onClose={() => setRepairTarget(null)} onRepaired={() => { void handleScan(); }} />}
-
-      {/* 浏览器存储配额 — 画布数据存在 IndexedDB 里，配额用尽会导致自动保存失败 */}
-      {browserStorage && browserStorage.quota > 0 && (() => {
-        const ratio = Math.min(1, browserStorage.ratio);
-        const pressured = ratio >= STORAGE_PRESSURE_RATIO;
-        return (
-          <div className={`rounded-[10px] p-3 border ${pressured ? 'border-amber-500/40 bg-amber-500/10' : 'border-canvas-border bg-canvas-card'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-medium text-canvas-text">{t('浏览器存储配额')}</div>
-              <div className="text-[11px] text-canvas-text-secondary">
-                {formatBytes(browserStorage.usage)} / {formatBytes(browserStorage.quota)}（{(ratio * 100).toFixed(1)}%）
-              </div>
-            </div>
-            <div className="h-2 rounded-full bg-canvas-hover overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-[width] ${pressured ? 'bg-amber-400' : 'bg-indigo-400'}`}
-                style={{ width: `${Math.max(2, ratio * 100)}%` }}
-              />
-            </div>
-            <p className="text-[11px] text-canvas-text-muted mt-1.5">
-              {pressured
-                ? t('配额即将用尽，自动保存可能失败，建议清理下方可释放空间或导出并删除旧项目')
-                : t('项目画布数据存放在浏览器存储中，配额用尽会导致自动保存失败')}
-            </p>
-          </div>
-        );
-      })()}
-
-      {scanning && !report && (
-        <div className="flex flex-col items-center justify-center py-8 gap-3">
-          <svg className="animate-spin text-indigo-400" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8" />
-          </svg>
-          <p className="text-xs text-canvas-text-secondary">{t('正在分析存储状况…')}</p>
-        </div>
-      )}
-
-      {report && !isEmpty && overview && (
-        <div className="space-y-5">
-          {/* 总览卡片 */}
-          <div className="bg-canvas-card border border-canvas-border rounded-[10px] p-3">
-            <div className="flex items-center gap-6">
-              {/* 圆环图 */}
-              <DonutChart
-                segments={overview.donutSegments}
-                total={report.totalSize}
-                size={160}
-              />
-
-              {/* 右侧统计 */}
-              <div className="flex-1 space-y-2.5">
-                <div>
-                  <div className="text-[11px] text-canvas-text-muted mb-0.5">{t('总占用空间')}</div>
-                  <div className="text-lg font-semibold text-canvas-text">{formatBytes(report.totalSize)}</div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-canvas-text-muted mb-0.5">{t('可释放空间')}</div>
-                  <div className={`text-lg font-semibold ${report.reclaimableSize > 0 ? 'text-emerald-400' : 'text-canvas-text'}`}>
-                    {formatBytes(report.reclaimableSize)}
-                  </div>
-                </div>
-                <div className="flex gap-3 text-[11px] text-canvas-text-muted">
-                  <span>{t('{count} 个项目', { count: report.projects.length })}</span>
-                  <span>{t('{count} 个文件', { count: report.projects.reduce((s, p) => s + p.fileCount, 0) })}</span>
-                </div>
-                {/* 问题标签 */}
-                {overview.issueSections.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {overview.issueSections.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setActiveSection(s.id)}
-                        className={`storage-health-selection inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-[color,background-color,box-shadow]
-                          ${activeSection === s.id
-                            ? 'is-active'
-                            : 'bg-canvas-hover text-canvas-text-secondary hover:text-canvas-text'
-                          }`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.color }} />
-                        {s.label}
-                        <span className="opacity-60">{s.count}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* 条状图 — 各项目存储占用 */}
-          <div className="bg-canvas-card border border-canvas-border rounded-[10px] p-3">
-            <h4 className="text-sm font-medium text-canvas-text mb-4">{t('各项目占用空间')}</h4>
-            <StackedBar items={overview.projectBars} />
-          </div>
-
-          {/* 详情区域切换按钮 */}
-          <div className="flex gap-1.5 border-b border-canvas-border pb-1">
-            {[
-              { id: 'overview', label: t('概览') },
-              { id: 'trash', label: `${t('回收站残留')} ${report.trashes.length > 0 ? `(${report.trashes.length})` : ''}` },
-              { id: 'orphans', label: `${t('孤儿文件')} ${report.orphans.length > 0 ? `(${report.orphans.length})` : ''}` },
-              { id: 'duplicates', label: `${t('重复文件')} ${report.duplicates.length > 0 ? `(${report.duplicates.length})` : ''}` },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`storage-health-selection px-3 py-1.5 text-xs rounded-md transition-[color,background-color,box-shadow] ${
-                  activeSection === tab.id
-                    ? 'is-active font-medium'
-                    : 'text-canvas-text-secondary hover:text-canvas-text hover:bg-canvas-hover'
-                }`}
-                onClick={() => setActiveSection(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* === 概览详情 === */}
-          {activeSection === 'overview' && (
-            <div className="space-y-3">
-              {report.projects.map((p) => (
-                <div key={p.projectId} className="bg-canvas-hover rounded-lg p-3 border border-canvas-border">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-canvas-text">{p.projectName}</span>
-                    <span className="text-[11px] text-canvas-text-secondary">{formatBytes(p.fileSize)}</span>
-                  </div>
-                  <div className="flex gap-2 flex-wrap">
-                    {Object.entries(p.categories).map(([cat, info]) => (
-                      <span
-                        key={cat}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-canvas-surface text-canvas-text-secondary"
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[cat] || '#94a3b8' }} />
-                        {t(cat)} {info.count}{t('个')} · {formatBytes(info.size)}
-                      </span>
-                    ))}
-                    {Object.keys(p.categories).length === 0 && (
-                      <span className="text-[10px] text-canvas-text-muted">{t('暂无文件')}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* === .trash 残留 === */}
-          {activeSection === 'trash' && (
-            <div className="space-y-3">
-              {report.trashes.length === 0 ? (
-                <div className="text-center py-4 text-xs text-canvas-text-muted">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 opacity-40">
-                    <path d="M9 9l6 6m0-6l-6 6m-7 3h20L19 4H5L2 18z" />
-                  </svg>
-                  {t('没有发现回收站残留，很好！')}
-                </div>
-              ) : (
-                <>
-                  <div className="flex justify-end">
-                    <AnimatedButton
-                      type="button"
-                      className="text-[11px] text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-red-400/10 transition-colors"
-                      onClick={handleClearAllTrash}
-                    >
-                      {t('清空全部')}
-                    </AnimatedButton>
-                  </div>
-                  {report.trashes.map((trash) => (
-                    <div key={trash.trashDir} className="bg-canvas-hover rounded-lg p-3 border border-canvas-border">
-                      <div className="flex items-center justify-between">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-medium text-canvas-text">{trash.projectName}</div>
-                          <div className="text-[10px] text-canvas-text-secondary truncate mt-0.5" title={trash.trashDir}>
-                            {formatShortPath(trash.trashDir)}
-                          </div>
-                          <div className="text-[11px] text-amber-400 mt-1">
-                            {formatBytes(trash.trashSize)} · {t('{count} 个文件', { count: trash.fileCount })}
-                          </div>
-                        </div>
-                        <AnimatedButton
-                          type="button"
-                          className="shrink-0 ml-3 text-[11px] text-red-400 hover:text-red-300 px-2.5 py-1.5 rounded hover:bg-red-400/10 transition-colors"
-                          onClick={() => handleClearTrash(trash)}
-                          disabled={deleting.has(trash.trashDir)}
-                        >
-                          {deleting.has(trash.trashDir) ? t('清理中…') : t('清空')}
-                        </AnimatedButton>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* === 孤儿文件 === */}
-          {activeSection === 'orphans' && (
-            <div className="space-y-3">
-              {report.orphans.length === 0 ? (
-                <div className="text-center py-4 text-xs text-canvas-text-muted">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 opacity-40">
-                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
-                  </svg>
-                  {t('没有发现孤儿文件，所有文件均有引用')}
-                </div>
-              ) : (
-                <>
-                  <div className="flex justify-between text-[11px] text-canvas-text-muted mb-1">
-                    <span>{t('共 {count} 个孤儿文件，可释放 {size}', { count: report.orphans.length, size: formatBytes(report.orphans.reduce((s, o) => s + o.size, 0)) })}</span>
-                    <AnimatedButton
-                      type="button"
-                      className="text-red-400 hover:text-red-300 px-2 py-0.5 rounded hover:bg-red-400/10 transition-colors"
-                      onClick={handleDeleteAllOrphans}
-                    >
-                      {t('全部清理')}
-                    </AnimatedButton>
-                  </div>
-                  <div className="max-h-[300px] overflow-y-auto space-y-1.5">
-                    {report.orphans.map((orphan) => (
-                      <div key={orphan.path} className="flex items-center justify-between bg-canvas-hover rounded-lg px-3 py-2 border border-canvas-border group">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-[11px] text-canvas-text truncate" title={orphan.path}>
-                            {orphan.name}
-                          </div>
-                          <div className="text-[10px] text-canvas-text-muted mt-0.5">
-                            {orphan.projectName} · {formatBytes(orphan.size)}
-                          </div>
-                        </div>
-                        <AnimatedButton
-                          type="button"
-                          className="shrink-0 ml-2 text-[10px] text-canvas-text-muted hover:text-red-400 px-2 py-1 rounded hover:bg-red-400/10 transition-colors opacity-0 group-hover:opacity-100"
-                          onClick={() => handleDeleteOrphan(orphan)}
-                          disabled={deleting.has(orphan.path)}
-                        >
-                          {deleting.has(orphan.path) ? '…' : t('删除')}
-                        </AnimatedButton>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* === 重复文件 === */}
-          {activeSection === 'duplicates' && (
-            <div className="space-y-3">
-              {report.duplicates.length === 0 ? (
-                <div className="text-center py-4 text-xs text-canvas-text-muted">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 opacity-40">
-                    <rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" />
-                  </svg>
-                  {t('没有发现重复文件')}
-                </div>
-              ) : (
-                <div className="max-h-[300px] overflow-y-auto space-y-2">
-                  {report.duplicates.map((group) => (
-                    <div key={group.key} className="bg-canvas-hover rounded-lg p-3 border border-canvas-border">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-[11px] font-medium text-canvas-text truncate max-w-[280px]" title={group.files[0]?.name}>
-                          {group.files[0]?.name || t('未知文件')}
-                        </div>
-                        <span className="text-[10px] text-orange-400 shrink-0 ml-2">
-                          {t('{count} 份 · 可释放 {size}', { count: group.files.length, size: formatBytes(group.reclaimableSize) })}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        {group.files.map((file, fi) => (
-                          <div key={file.path} className="flex items-center justify-between text-[10px] pl-2 border-l-2 border-canvas-border">
-                            <span className="text-canvas-text-secondary truncate min-w-0 flex-1" title={file.path}>
-                              {file.projectName} / {file.name}
-                            </span>
-                            <span className="text-canvas-text-muted shrink-0 ml-2">{formatBytes(file.size)}</span>
-                            {fi > 0 && (
-                              <AnimatedButton
-                                type="button"
-                                className="shrink-0 ml-2 text-[10px] text-canvas-text-muted hover:text-red-400 px-1.5 py-0.5 rounded hover:bg-red-400/10 transition-colors"
-                                onClick={() => handleDeleteDuplicate(file)}
-                                disabled={deleting.has(file.path)}
-                              >
-                                {deleting.has(file.path) ? '…' : t('删除')}
-                              </AnimatedButton>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {report && isEmpty && (
-        <div className="text-center py-6">
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-3 text-canvas-text-muted opacity-40">
-            <path d="M4 19.5A2.5 2.5 0 016.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-          </svg>
-          <p className="text-sm text-canvas-text-secondary mb-1">{t('暂无存储数据')}</p>
-          <p className="text-[11px] text-canvas-text-muted mb-4">{t('尚未创建项目或项目目录为空')}</p>
-          <AnimatedButton
-            type="button"
-            className="text-xs px-3 py-1.5 rounded-lg bg-canvas-hover text-canvas-text-secondary hover:text-canvas-text transition-colors"
-            onClick={handleScan}
-          >
-            {t('重新扫描')}
-          </AnimatedButton>
-        </div>
-      )}
     </div>
-  );
+
+    {!desktop && <p className="ui-alert ui-alert--info">{t('Web 演示仅展示应用数据配额；项目文件扫描与清理请在桌面端使用。')}</p>}
+    {scanError && <p role="alert" className={`ui-alert ${scanError.cancelled ? 'ui-alert--info' : 'ui-alert--danger'}`}>
+      {scanError.cancelled ? t('扫描已取消，尚未完成核对。重新扫描后可查看清理建议。')
+        : scanError.references
+          ? t('项目引用读取未完成（{reason}），暂不提供清理操作。请重新扫描。', { reason: t(SCAN_REASON_LABELS[scanError.reason]) })
+          : t('扫描未完成（{reason}），暂不提供清理操作。请重新扫描。', { reason: t(SCAN_REASON_LABELS[scanError.reason]) })}
+    </p>}
+    {report && !report.complete && <div role="status" className="ui-alert ui-alert--warning">
+      <div className="ui-alert__body">
+        <p>{t('部分文件或目录未能检查，下方仅展示已读取的占用。完整扫描前暂不提供清理操作。')}</p>
+        <details className="mt-1">
+          <summary className="cursor-pointer">{t('查看未完成项（{count}）', { count: report.issues.length })}</summary>
+          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">
+            {report.issues.map((issue, index) => <li key={index} className="break-words">
+              {issue.projectName} · {t(issue.area === 'trash' ? '回收站' : issue.area === 'duplicates' ? '重复文件核对' : '项目文件')}
+              {issue.name ? ` / ${issue.name}` : ''} · {t(SCAN_REASON_LABELS[issue.reason])}
+            </li>)}
+          </ul>
+        </details>
+      </div>
+    </div>}
+    {scanning && <p role="status" className="ui-hint">{t('正在核对项目引用与文件内容，文件较多时可能需要一些时间…')}</p>}
+    {cleanupResult && <div role="status" className={`ui-alert ${cleanupResult.failedCount ? 'ui-alert--warning' : 'ui-alert--success'}`}>
+      <div className="ui-alert__body">
+        <p>{t('已清理 {count} 个文件，释放 {size}；未清理 {failed} 项', {
+          count: cleanupResult.deletedCount, size: formatBytes(cleanupResult.reclaimedSize), failed: cleanupResult.failedCount,
+        })}</p>
+        {cleanupResult.failedNames.length > 0 && <details className="mt-1">
+          <summary className="cursor-pointer">{t('查看未清理项')}</summary>
+          <p className="mt-1 text-xs">{t('文件可能仍被引用、已发生变化或无法访问；请重新扫描后核对。')}</p>
+          <ul className="mt-1 max-h-32 overflow-y-auto text-xs">
+            {cleanupResult.failedNames.map((name, index) => <li key={index} className="break-words">{name}</li>)}
+          </ul>
+        </details>}
+      </div>
+    </div>}
+
+    {report && overview && <>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="ui-stat">
+          <span className="ui-stat__label">{report.complete ? t('项目文件占用') : t('已读取文件占用')}</span>
+          <span className="ui-stat__value">{formatBytes(report.totalSize)}</span>
+          <span className="ui-hint mt-1">{t(report.complete ? '素材 {files} · 回收站 {trash}' : '已读取素材 {files} · 已读取回收站 {trash}', {
+            files: formatBytes(report.projectSize), trash: formatBytes(report.trashSize),
+          })}</span>
+        </div>
+        <div className="ui-stat">
+          <span className="ui-stat__label">{t('预计可释放')}</span>
+          <span className="ui-stat__value">{report.complete ? formatBytes(report.reclaimableSize) : t('待完整扫描')}</span>
+          <span className="ui-hint mt-1">{report.complete ? t('未引用文件与回收站；重复文件不重复计入') : t('未扫描项不视为零占用或无引用')}</span>
+        </div>
+      </div>
+      <p className="ui-hint">{t('{projects} 个项目 · {files} 个文件；共享目录按文件去重', {
+        projects: report.projects.length,
+        files: report.projects.reduce((sum, project) => sum + project.fileCount, 0) + report.trashes.reduce((sum, trash) => sum + trash.fileCount, 0),
+      })}</p>
+
+      <div className="space-y-3">
+        <Tabs<Section> size="sm" value={activeSection} onChange={setActiveSection} aria-label={t('存储检查分类')} items={[
+          { value: 'overview', label: t('概览') },
+          { value: 'trash', label: t('回收站'), count: report.complete ? report.trashes.reduce((sum, trash) => sum + trash.fileCount, 0) : undefined },
+          { value: 'orphans', label: t('未引用文件'), count: report.complete ? report.orphans.length : undefined },
+          { value: 'duplicates', label: t('重复文件'), count: report.complete ? report.duplicates.length : undefined },
+          { value: 'offline', label: t('不可用目录'), count: report.offlineFolders.length },
+        ]} />
+        {activeSection === 'overview' && <div className="space-y-3">
+          <div className="grid gap-3 lg:grid-cols-2">
+            <section className="ui-card p-3">
+              <h4 className="text-xs font-medium text-canvas-text mb-2">{t('占用构成')}</h4>
+              <DonutChart segments={overview} total={report.totalSize} />
+            </section>
+            <section className="ui-card p-3">
+              <h4 className="text-xs font-medium text-canvas-text mb-3">{t('各项目素材占用')}</h4>
+              {report.projects.length ? <StackedBar projects={report.projects} /> : <p className="ui-hint">{t('暂无项目')}</p>}
+            </section>
+          </div>
+          <p className="ui-hint">{t('统计不含应用数据库、本地模型和外部素材目录。未引用文件仍需人工核对用途后清理。')}</p>
+        </div>}
+
+        {activeSection === 'trash' && <section className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="ui-hint">{t('回收站 {size}；清空后无法通过应用恢复', { size: formatBytes(report.trashSize) })}</p>
+            <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={!canClean || !report.trashes.length}
+              onClick={() => requestCleanup({ kind: 'trash', entries: report.trashes })}>{t('清空全部')}</button>
+          </div>
+          {report.trashes.length === 0 && <p className="ui-hint py-3">{report.complete ? t('回收站为空') : t('已读取范围内暂无回收站文件')}</p>}
+          {report.trashes.map((trash) => <div key={trash.trashDir} className="ui-card p-2">
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-canvas-text">{trash.projectName}</p>
+                <p className="ui-hint mt-1">{t('{count} 个文件 · {size}', { count: trash.fileCount, size: formatBytes(trash.trashSize) })}</p>
+              </div>
+              <button type="button" className="ui-btn ui-btn--danger ui-btn--sm shrink-0" disabled={!canClean}
+                onClick={() => requestCleanup({ kind: 'trash', entries: [trash] })}>{t('清空')}</button>
+            </div>
+          </div>)}
+        </section>}
+
+        {activeSection === 'orphans' && <section className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="ui-hint">{t('未发现应用内引用，不代表文件没有其他用途；删除前请核对。')}</p>
+            <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={!canClean || !report.orphans.length}
+              onClick={() => requestCleanup({ kind: 'orphans', entries: report.orphans })}>{t('清理全部未引用文件')}</button>
+          </div>
+          {report.orphans.length === 0 && <p className="ui-hint py-3">{report.complete ? t('未发现可清理的未引用文件') : t('完整扫描后才能确认未引用文件')}</p>}
+          <ul className="space-y-2">
+            {report.orphans.map((file) => <li key={file.path} className="ui-card p-2">
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs text-canvas-text" title={file.path}>{file.name}</p>
+                  <p className="ui-hint mt-1 truncate">{file.projectName} · {formatBytes(file.size)}</p>
+                </div>
+                <button type="button" className="ui-btn ui-btn--danger ui-btn--sm shrink-0" disabled={!canClean}
+                  onClick={() => requestCleanup({ kind: 'orphans', entries: [file] })}>{t('删除')}</button>
+              </div>
+            </li>)}
+          </ul>
+        </section>}
+
+        {activeSection === 'duplicates' && <section className="space-y-2">
+          <p className="ui-hint">{t('以下文件已核对内容摘要。仍被引用的副本受保护；可删除项已包含在未引用文件中。')}</p>
+          {report.duplicates.length === 0 && <p className="ui-hint py-3">{report.complete ? t('未发现内容相同的重复文件') : t('已核对范围内暂无重复文件')}</p>}
+          {report.duplicates.map((group) => <div key={group.key} className="ui-card p-3 gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              <h4 className="min-w-0 truncate text-xs font-medium text-canvas-text" title={group.files[0]?.name}>{group.files[0]?.name}</h4>
+              <span className="ui-badge ui-badge--outline">{t('{count} 份 · 可删除 {size}', { count: group.files.length, size: formatBytes(group.reclaimableSize) })}</span>
+            </div>
+            <ul className="space-y-2">
+              {group.files.map((file) => <li key={file.path} className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate text-canvas-text-secondary" title={file.path}>{file.projectName} / {file.name}</span>
+                <span className={`ui-badge ${file.referenced ? 'ui-badge--info' : 'ui-badge--outline'}`}>
+                  {file.referenced ? t('仍被引用') : file.canDelete ? t('未引用') : t('保留副本')}
+                </span>
+                <span className="tabular-nums text-canvas-text-secondary">{formatBytes(file.size)}</span>
+                {file.canDelete && <button type="button" className="ui-btn ui-btn--danger ui-btn--sm" disabled={!canClean}
+                  onClick={() => requestCleanup({ kind: 'duplicates', entries: [file], groupKey: group.key })}>{t('删除')}</button>}
+              </li>)}
+            </ul>
+          </div>)}
+        </section>}
+
+        {activeSection === 'offline' && <section className="space-y-2">
+          <p className="ui-hint">{t('仅检查设置中登记的外部素材目录；文件级失效请使用下方检查入口。')}</p>
+          {report.offlineFolders.length === 0 && <p className="ui-hint py-3">{t('未发现不可用的外部目录')}</p>}
+          {report.offlineFolders.map((folder) => <div key={folder.path} className="ui-card p-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs text-canvas-text" title={folder.path}>{folder.label}</span>
+              <span className="ui-badge ui-badge--warning">{t('不可用')}</span>
+              <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm shrink-0" disabled={busy}
+                onClick={() => setRepairTarget({ kind: 'folder', path: folder.path, name: folder.label })}>{t('重新定位')}</button>
+            </div>
+          </div>)}
+        </section>}
+      </div>
+    </>}
+
+    <section className="ui-card p-3 gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-xs font-medium text-canvas-text">{t('失效素材与目录')}</h4>
+          <p className="ui-hint mt-1">{scanning ? t('正在检查外部目录…') : scanError ? t('目录检查未完成') : !desktop ? t('需在桌面端检查')
+            : report ? t('不可用外部目录：{count} 个', { count: report.offlineFolders.length }) : t('尚未检查')}</p>
+        </div>
+        <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" disabled={busy || !desktop}
+          onClick={() => setRepairTarget({ kind: 'all' })}>{t('检查并修复素材')}</button>
+      </div>
+      <p className="ui-hint">{t('文件级失效需单独检查；可查看缺失记录，并选择文件或目录重新定位。')}</p>
+    </section>
+
+    {browserStorage && browserStorage.quota > 0 && <details className="ui-card p-3" open={pressured ? true : undefined}>
+      <summary className="cursor-pointer text-xs font-medium text-canvas-text">
+        {t('应用数据配额')} · {formatBytes(browserStorage.usage)} / {formatBytes(browserStorage.quota)}（{formatPercent(quotaRatio * 100)}）
+      </summary>
+      <div className="mt-3 space-y-2">
+        <div role="progressbar" aria-label={t('应用数据配额使用率')} aria-valuemin={0} aria-valuemax={100}
+          aria-valuenow={quotaRatio * 100} aria-valuetext={formatPercent(quotaRatio * 100)} className="h-2 overflow-hidden rounded-full bg-canvas-hover">
+          <div className={`h-full rounded-full ${pressured ? 'bg-warning' : 'bg-brand'}`} style={{ width: `${quotaRatio * 100}%` }} />
+        </div>
+        <p className="ui-hint">{t('这是浏览器内核管理的应用数据配额，包含项目与对话等数据，不是磁盘总容量；上方素材清理不直接释放这部分配额。')}</p>
+        {pressured && <p role="alert" className="ui-alert ui-alert--warning">{t('应用数据配额即将用尽，自动保存可能失败。请先导出备份，再删除不再需要的旧项目或对话。')}</p>}
+      </div>
+    </details>}
+
+    {repairTarget && <AssetRepairDialog target={repairTarget} onClose={() => setRepairTarget(null)} onRepaired={() => { void handleScan(); }} />}
+    {pendingCleanup && <ModalOverlay isOpen onClose={() => { if (!cleaning) setPendingCleanup(null); }} closeOnBackdrop={!cleaning}
+      ariaLabel={t('确认永久清理')} zIndex={400} className="ui-dialog-surface w-[min(560px,calc(100vw-24px))] max-h-[80vh]">
+      <header className="ui-card__header shrink-0">
+        <div>
+          <h3 className="ui-card__title">{t('确认永久清理')}</h3>
+          <p className="ui-card__desc">{t('{count} 个文件 · 预计释放 {size}', { count: cleanupCount, size: formatBytes(cleanupSize) })}</p>
+        </div>
+      </header>
+      <div className="ui-card__body ui-scroll min-h-0 space-y-3">
+        <p className="ui-alert ui-alert--warning">{pendingCleanup.kind === 'trash'
+          ? t('清空后无法通过应用恢复。请确认这些回收站文件已不再需要。')
+          : t('文件将从磁盘永久删除，不进入回收站。执行前会再次核对引用，仍被引用或无法确认的文件会保留。')}</p>
+        <ul className="space-y-2">
+          {cleanupEntries.map((entry) => <li key={entry.key} className="ui-card p-2">
+            <p className="break-words text-xs text-canvas-text">{entry.name}</p>
+            <p className="ui-hint mt-1 break-words">{entry.projectName} · {formatBytes(entry.size)}
+              {pendingCleanup.kind === 'trash' ? ` · ${t('{count} 个文件', { count: entry.count })}` : ''}</p>
+            <p className="ui-hint mt-1 break-all">{entry.key}</p>
+          </li>)}
+        </ul>
+      </div>
+      <footer className="ui-card__footer shrink-0">
+        <div className="ui-card__footer-actions">
+          <button type="button" className="ui-btn ui-btn--ghost" disabled={cleaning} onClick={() => setPendingCleanup(null)}>{t('取消')}</button>
+          <button type="button" className="ui-btn ui-btn--danger" disabled={cleaning} onClick={() => void applyCleanup()}>
+            {cleaning ? t('正在清理…') : t('确认永久删除')}
+          </button>
+        </div>
+      </footer>
+    </ModalOverlay>}
+  </div>;
 }

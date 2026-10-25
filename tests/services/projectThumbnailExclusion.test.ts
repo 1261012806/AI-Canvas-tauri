@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   sizes: new Map<string, number>(),
   readDir: vi.fn(),
   stat: vi.fn(),
+  lstat: vi.fn(),
+  fingerprintAssetImage: vi.fn(),
   identifyAsset: vi.fn(),
   getHistoryEntriesPage: vi.fn(),
   getProjectConversations: vi.fn(),
@@ -21,6 +23,7 @@ vi.mock('@tauri-apps/plugin-fs', async (importOriginal) => ({
   remove: mocks.remove,
   readDir: mocks.readDir,
   stat: mocks.stat,
+  lstat: mocks.lstat,
   exists: async (path: string) => mocks.directories.has(path) || mocks.sizes.has(path),
 }));
 vi.mock('../../src/services/indexedDbService', () => ({
@@ -43,6 +46,10 @@ vi.mock('../../src/services/fs/core', async (importOriginal) => ({
 vi.mock('../../src/services/fs/assetIndex', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/services/fs/assetIndex')>(),
   identifyAsset: mocks.identifyAsset,
+}));
+vi.mock('../../src/services/fs/assetImageMetadata', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/fs/assetImageMetadata')>(),
+  fingerprintAssetImage: mocks.fingerprintAssetImage,
 }));
 
 import { listExternalFolderContents, listExternalFolderFiles, walkDirectoryFiles } from '../../src/services/fs/assetLibrary';
@@ -73,6 +80,9 @@ describe('project thumbnail directories stay outside asset scans', () => {
     mocks.sizes.clear();
     mocks.readDir.mockImplementation(async (path: string) => mocks.directories.get(path) ?? []);
     mocks.stat.mockImplementation(async (path: string) => ({ size: mocks.sizes.get(path) ?? 1, mtime: new Date(0) }));
+    mocks.lstat.mockImplementation(async (path: string) => ({ ...await mocks.stat(path),
+      isDirectory: mocks.directories.has(path), isFile: !mocks.directories.has(path), isSymlink: false }));
+    mocks.fingerprintAssetImage.mockImplementation(async (path: string) => ({ digest: 'a'.repeat(64), bytes: mocks.sizes.get(path) ?? 1 }));
     mocks.identifyAsset.mockImplementation(async (path: string, options: { rootPath: string }) => ({
       assetId: `asset-${path}`,
       relativePath: path.slice(options.rootPath.length + 1),
@@ -217,7 +227,9 @@ describe('project thumbnail directories stay outside asset scans', () => {
     expect(report.orphans.map(({ path }) => path)).toEqual(['/project/group/.thumbnail/user.png']);
     expect(report.duplicates).toEqual([]);
     expect(report.trashes[0]).toMatchObject({ trashSize: 5, fileCount: 1 });
-    expect(report.totalSize).toBe(30);
+    expect(report.projectSize).toBe(30);
+    expect(report.trashSize).toBe(5);
+    expect(report.totalSize).toBe(35);
     expect(report.reclaimableSize).toBe(25);
     expect(mocks.readDir).not.toHaveBeenCalledWith('/project/.thumbnail');
     expect(mocks.readDir).not.toHaveBeenCalledWith('/second/.thumbnail');
@@ -236,6 +248,9 @@ describe('storage health cross-project deletion protection', () => {
     mocks.sizes.clear();
     mocks.readDir.mockImplementation(async (path: string) => mocks.directories.get(path) ?? []);
     mocks.stat.mockResolvedValue({ size: 10 });
+    mocks.lstat.mockImplementation(async (path: string) => ({ size: 10,
+      isDirectory: mocks.directories.has(path), isFile: !mocks.directories.has(path), isSymlink: false }));
+    mocks.fingerprintAssetImage.mockResolvedValue({ digest: 'a'.repeat(64), bytes: 10 });
     mocks.remove.mockResolvedValue(undefined);
     mocks.getAllProjects.mockResolvedValue([project('a'), project('b')]);
     mocks.getProjectById.mockImplementation(async (id: string) => ({
@@ -304,7 +319,7 @@ describe('storage health cross-project deletion protection', () => {
     const collectLive = async (): Promise<Set<string>> => {
       throw new Error('项目已切换');
     };
-    await expect(scanStorageHealth([], collectLive)).rejects.toThrow('项目已切换');
+    await expect(scanStorageHealth([], collectLive)).rejects.toMatchObject({ area: 'references', reason: 'changed' });
     expect(await deleteOrphanFile('/b/unused.png', async () => {
       await scanStorageHealth([], collectLive);
       return true;
@@ -320,7 +335,7 @@ describe('storage health cross-project deletion protection', () => {
 
   it('fails closed on database read errors', async () => {
     mocks.getProjectById.mockRejectedValue(new Error('unavailable'));
-    await expect(scanStorageHealth([], new Set())).rejects.toThrow('unavailable');
+    await expect(scanStorageHealth([], new Set())).rejects.toMatchObject({ area: 'references', reason: 'unavailable' });
   });
 
   it('retains files referenced only by output history or conversation attachments', async () => {
