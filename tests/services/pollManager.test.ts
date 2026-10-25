@@ -3,6 +3,7 @@ import type { BaseNodeData } from '../../src/types';
 import {
   getPendingTaskCoveredNodeIds,
   getPendingTasksForProject,
+  createOrReusePollManagerRuntime,
   canResumeMediaTask,
   resumePendingTasks,
   savePendingTask,
@@ -14,6 +15,8 @@ import {
   discardMediaTask,
   getMediaTaskReceipt,
   pauseMediaTask,
+  isMediaTaskPausedError,
+  MediaTaskPausedError,
   prepareMediaNodeGeneration,
   registerMediaMessageRecoveryHandler,
   registerMediaNodeOperation,
@@ -41,6 +44,62 @@ beforeEach(async () => {
   localStorage.clear();
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({ currentProjectId: 'project-1' });
+});
+
+describe('polling runtime hot reload identity', () => {
+  it('keeps controllers, promises and mutable recovery state together without waiting for dispose', async () => {
+    const hotData = {};
+    const oldRuntime = createOrReusePollManagerRuntime(hotData);
+    const controller = new AbortController();
+    const receipt = { projectId: 'project-1', nodeId: 'hot-node', taskId: 'original-task', attemptId: 'original-attempt' };
+    const error = new MediaTaskPausedError(receipt, 'query_interrupted');
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    oldRuntime.abortControllers.set(receipt.nodeId, controller);
+    oldRuntime.videoResumePromises.set(receipt.nodeId, pending);
+    oldRuntime.mediaResumeOutcomes.set('outcome', { receipt, delivered: false });
+    oldRuntime.mediaTaskContexts.set(receipt.nodeId, { projectId: receipt.projectId, messageId: 'original-message' });
+    oldRuntime.mediaTaskObservers.set(receipt.nodeId, vi.fn());
+    oldRuntime.activeMediaOperations.set('lease', new Set([Symbol()]));
+    const listener = vi.fn();
+    oldRuntime.mediaTaskListeners.add(listener);
+    oldRuntime.runninghubMessageWaiters.set('runninghub', vi.fn());
+    oldRuntime.workflowApiMessageWaiters.set('workflow-api', vi.fn());
+    oldRuntime.activeComfyDeliveries.set('delivery', { projectId: receipt.projectId, nodeId: receipt.nodeId, taskId: receipt.taskId });
+    oldRuntime.comfyDeliveryListeners.add(listener);
+    oldRuntime.pausedErrors.add(error);
+    const oldHandler = vi.fn(async () => {});
+    oldRuntime.mediaMessageRecoveryHandler = oldHandler;
+
+    const refreshed = createOrReusePollManagerRuntime(hotData);
+    expect(refreshed).toBe(oldRuntime);
+    expect(refreshed.videoResumePromises.get(receipt.nodeId)).toBe(pending);
+    expect(refreshed.pausedErrors.has(error)).toBe(true);
+    const replacementHandler = vi.fn(async () => {});
+    refreshed.mediaMessageRecoveryHandler = replacementHandler;
+    expect(oldRuntime.mediaMessageRecoveryHandler).toBe(replacementHandler);
+    refreshed.abortControllers.get(receipt.nodeId)?.abort();
+    expect(controller.signal.aborted).toBe(true);
+    oldRuntime.mediaTaskListeners.forEach((notify) => notify());
+    expect(listener).toHaveBeenCalledOnce();
+    oldRuntime.activeMediaOperations.delete('lease');
+    expect(refreshed.activeMediaOperations.size).toBe(0);
+    finish();
+    await refreshed.videoResumePromises.get(receipt.nodeId);
+    expect(localStorage.length).toBe(0);
+  });
+
+  it('isolates cold runtimes and only recognizes actual pause errors', () => {
+    const left = createOrReusePollManagerRuntime();
+    const right = createOrReusePollManagerRuntime();
+    left.activeMediaOperations.set('private', new Set([Symbol()]));
+    left.mediaTaskListeners.add(vi.fn());
+    expect(right.activeMediaOperations.size).toBe(0);
+    expect(right.mediaTaskListeners.size).toBe(0);
+    const receipt = { projectId: 'project-1', nodeId: 'paused', taskId: 'original' };
+    expect(isMediaTaskPausedError(new MediaTaskPausedError(receipt, 'query_timeout'))).toBe(true);
+    expect(isMediaTaskPausedError(Object.assign(new Error('not a paused task'), { name: 'MediaTaskPausedError', taskReceipt: receipt }))).toBe(false);
+  });
 });
 
 describe('pending generation task recovery', () => {
@@ -78,6 +137,58 @@ describe('pending generation task recovery', () => {
     expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBe('submit_unknown');
   });
 
+  it.each([false, true])('does not pause or duplicate a live async submission during recovery scanning (has ID: %s)', async (submitted) => {
+    const nodeId = 'live-async';
+    useAppStore.setState((state) => ({ nodes: [{ id: nodeId, type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Live image', status: 'loading' } }],
+    config: { ...state.config, providers: { ...state.config.providers,
+      recovery: { name: 'Recovery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const receipt = savePendingTask({ nodeId, projectId: 'project-1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'recovery', taskType: 'custom-protocol', submitted, taskId: submitted ? 'original-task' : '',
+      protocolPoll: { method: 'GET', url: 'https://gateway.example/tasks/original-task', intervalMs: 1,
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    const release = registerMediaNodeOperation(nodeId);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/original.png' })));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(fileService, 'persistMediaUrlToProjectData').mockResolvedValue({
+      mediaUrl: 'asset://original.png', sourceUrl: 'https://cdn.example/original.png',
+    });
+    try {
+      await resumePendingTasks('project-1');
+      expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'loading' });
+      expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBeUndefined();
+      expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ taskId: receipt.taskId, submitted });
+      expect(getPendingTasksForProject('project-1')[0].mediaRecoveryState).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally { release(); }
+
+    await resumePendingTasks('project-1');
+    if (submitted) {
+      await vi.waitFor(() => expect(useAppStore.getState().nodes[0].data.status).toBe('success'));
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0]).toMatchObject(['https://gateway.example/tasks/original-task', { method: 'GET' }]);
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } else {
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ taskId: '', submitted: false, mediaRecoveryState: 'submit_unknown' });
+      await expect(resumeMediaNodeTask(nodeId)).rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: receipt });
+    }
+  });
+
+  it('keeps a registered query visible to recovery scanning until its matching cleanup runs', async () => {
+    useAppStore.setState({ nodes: [{ id: 'controller-only', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: 'Controller image', status: 'loading' } }] });
+    const oldSignal = registerNodePolling('controller-only');
+    const currentSignal = registerNodePolling('controller-only');
+    expect(oldSignal.aborted).toBe(true);
+    expect(cleanupNodePolling('controller-only', oldSignal)).toBe(false);
+    await resumePendingTasks('project-1');
+    expect(useAppStore.getState().nodes[0].data.status).toBe('loading');
+    expect(cleanupNodePolling('controller-only', currentSignal)).toBe(true);
+    await resumePendingTasks('project-1');
+    expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBe('submit_unknown');
+  });
+
   it('requires the original attempt receipt to pause, discard, or acknowledge a task', () => {
     const task: PendingTask = { nodeId: 'receipt-node', projectId: 'project-1', nodeType: 'ai-image',
       provider: 'general', taskType: 'general', submitted: true, taskId: 'same-remote-id' };
@@ -93,8 +204,11 @@ describe('pending generation task recovery', () => {
   });
 
   it('observes the captured submit receipt without serializing callbacks or affecting another project with the same node ID', () => {
+    const oldObserver = vi.fn();
+    const releaseOld = bindMediaTaskContext('shared-node', { projectId: 'project-1', messageId: 'old-message' }, oldObserver);
     const observer = vi.fn();
     const release = bindMediaTaskContext('shared-node', { projectId: 'project-1', messageId: 'original-message' }, observer);
+    releaseOld();
     const receipt = savePendingTask({ nodeId: 'shared-node', projectId: 'project-2', nodeType: 'ai-video',
       provider: 'comfyui', taskType: 'comfyui', submitted: false, taskId: '' });
     const accepted = updatePendingTask(receipt.nodeId, { submitted: true, taskId: 'original-prompt' }, '', receipt.attemptId)!;
@@ -107,6 +221,7 @@ describe('pending generation task recovery', () => {
     expect(getPendingTasksForProject('project-1')).toEqual([]);
     expect(getPendingTasksForProject('project-2')[0].taskId).toBe('other-project-task');
     expect(observer).toHaveBeenCalledTimes(2);
+    expect(oldObserver).not.toHaveBeenCalled();
     expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('observer');
   });
 
@@ -144,12 +259,16 @@ describe('pending generation task recovery', () => {
       expect(getPendingTasksForProject('project-1')).toHaveLength(1);
       completeMediaNodeTask(receipt);
     });
+    const oldHandler = vi.fn(async () => {});
+    const unregisterOld = registerMediaMessageRecoveryHandler(oldHandler);
     const unregister = registerMediaMessageRecoveryHandler(handler);
+    unregisterOld();
     try {
       await resumePendingTasks('project-1');
       expect(handler).not.toHaveBeenCalled();
       await resumeMediaNodeTask('media-message-original');
       expect(handler).toHaveBeenCalledOnce();
+      expect(oldHandler).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(useAppStore.getState().nodes).toEqual([]);
       expect(getPendingTasksForProject('project-1')).toEqual([]);

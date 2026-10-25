@@ -3,6 +3,7 @@ import {
   cancelCanvasDerivation,
   cancelProjectCanvasDerivations,
   completeCanvasDerivation,
+  createOrReuseCanvasDerivationRuntime,
   isCanvasDerivationFresh,
   registerCanvasDerivation,
   registerCanvasImport,
@@ -83,5 +84,67 @@ describe('canvasDerivationGuard', () => {
     cancelCanvasDerivation(guard!);
 
     expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an in-flight result valid after hot reload and lets the old executor complete it', () => {
+    const hotData = {};
+    const oldExecutor = createOrReuseCanvasDerivationRuntime(hotData);
+    const { state } = createState();
+    const guard = oldExecutor.registerCanvasDerivation(state, 'source')!;
+    const refreshed = createOrReuseCanvasDerivationRuntime(hotData);
+    expect(refreshed.isCanvasDerivationFresh(guard, state)).toBe(true);
+    oldExecutor.completeCanvasDerivation(guard);
+    expect(refreshed.isCanvasDerivationFresh(guard, state)).toBe(false);
+  });
+
+  it('lets refreshed project cancellation stop old generation and import operations once', () => {
+    const hotData = {};
+    const oldExecutor = createOrReuseCanvasDerivationRuntime(hotData);
+    const { state } = createState();
+    const generationCancelled = vi.fn();
+    const importCancelled = vi.fn();
+    const guard = oldExecutor.registerCanvasDerivation(state, 'source', { onCancel: generationCancelled })!;
+    const imported = oldExecutor.registerCanvasImport(state, importCancelled)!;
+    const refreshed = createOrReuseCanvasDerivationRuntime(hotData);
+    refreshed.cancelProjectCanvasDerivations('project-a');
+    oldExecutor.cancelCanvasDerivation(guard);
+    refreshed.cancelCanvasDerivation(imported);
+    expect(generationCancelled).toHaveBeenCalledOnce();
+    expect(importCancelled).toHaveBeenCalledOnce();
+    expect(oldExecutor.isCanvasDerivationFresh(guard, state)).toBe(false);
+    expect(refreshed.isCanvasDerivationFresh(imported, state)).toBe(false);
+  });
+
+  it('keeps unique operation identities when old and refreshed executors register in the same millisecond', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    try {
+      const hotData = {};
+      const oldExecutor = createOrReuseCanvasDerivationRuntime(hotData);
+      const { state } = createState();
+      const first = oldExecutor.registerCanvasDerivation(state, 'source')!;
+      const refreshed = createOrReuseCanvasDerivationRuntime(hotData);
+      const second = refreshed.registerCanvasDerivation(state, 'source')!;
+      const third = oldExecutor.registerCanvasDerivation(state, 'source')!;
+      expect(new Set([first.operationId, second.operationId, third.operationId]).size).toBe(3);
+      refreshed.completeCanvasDerivation(second);
+      expect(oldExecutor.isCanvasDerivationFresh(first, state)).toBe(true);
+      expect(refreshed.isCanvasDerivationFresh(second, state)).toBe(false);
+      expect(refreshed.isCanvasDerivationFresh(third, state)).toBe(true);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('keeps fresh document runtimes isolated and retains revision and placeholder checks across hot reload', () => {
+    const hotData = {};
+    const oldExecutor = createOrReuseCanvasDerivationRuntime(hotData);
+    const { state, setRevision } = createState();
+    const guard = oldExecutor.registerCanvasDerivation(state, 'source', { placeholderNodeId: 'placeholder' })!;
+    const refreshed = createOrReuseCanvasDerivationRuntime(hotData);
+    expect(createOrReuseCanvasDerivationRuntime().isCanvasDerivationFresh(guard, state)).toBe(false);
+    expect(createOrReuseCanvasDerivationRuntime({}).isCanvasDerivationFresh(guard, state)).toBe(false);
+    setRevision(4);
+    expect(refreshed.isCanvasDerivationFresh(guard, state)).toBe(false);
+    setRevision(3);
+    state.nodes = [{ id: 'source' }];
+    expect(refreshed.isCanvasDerivationFresh(guard, state)).toBe(false);
   });
 });

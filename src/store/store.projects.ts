@@ -46,6 +46,8 @@ import { isWebviewRecovery } from '../services/webviewRecoveryService';
 type ProjectLoadStatus = 'loading' | 'ready' | 'error';
 let activeProjectMetadataWrite: Promise<void> = Promise.resolve();
 const EMPTY_SERIES_CANVAS: readonly never[] = [];
+const projectInitializations: WeakMap<() => AppState, Promise<void>> = import.meta.hot?.data.projectInitializations ?? new WeakMap();
+if (import.meta.hot) import.meta.hot.data.projectInitializations = projectInitializations;
 
 function getProjectGroups(data: { groups?: unknown } | null | undefined): NodeGroup[] {
   return Array.isArray(data?.groups) ? (data.groups as NodeGroup[]) : [];
@@ -417,6 +419,8 @@ export interface ProjectSlice {
   currentProjectId: string | null;
   projectName: string;
   projectLoadStatus: ProjectLoadStatus;
+  /** 当前 Store 已完成启动加载；重挂载和热更新不能重读磁盘覆盖当前画布。 */
+  projectInitialized: boolean;
   isCreatingProject: boolean;
   isReturningToStartPage: boolean;
   /** 正在切换到的画布名；非 null 时显示切换遮罩 */
@@ -632,13 +636,19 @@ async function patchProjectRecord(
   }
 }
 
-export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = (set, get) => ({
+export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = (set, get) => {
+  const live: AppState | undefined = get();
+  // 首次应用这次热更新时，旧 Store 还没有标记；已就绪的画布要沿用内存。
+  const initialized = live?.projectInitialized
+    ?? (live?.projectLoadStatus === 'ready' && typeof live?.initFromDb === 'function');
+  return {
   projects: [
     { id: 'default', name: '默认画布', createdAt: Date.now(), updatedAt: Date.now() },
   ],
   currentProjectId: 'default',
   projectName: '新项目',
   projectLoadStatus: 'loading',
+  projectInitialized: initialized,
   isCreatingProject: false,
   isReturningToStartPage: false,
   switchingProjectName: null,
@@ -1684,68 +1694,34 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     }
   },
 
-  initFromDb: async () => {
-    set({ currentProjectId: null, projectLoadStatus: 'loading' });
-    try {
-      await Promise.all([get().loadConfig(), get().loadWorkflows(), get().loadPresets(), get().loadSkills(), get().loadSubAgentProfiles(), get().loadCustomStyles(), get().loadToolbarLayouts(), get().loadPlugins()]);
-      await get().loadAppearanceThemes();
+  initFromDb: () => {
+    if (get().projectInitialized) return Promise.resolve();
+    const pending = projectInitializations.get(get);
+    if (pending) return pending;
+    // get 与 API.getState 是同一稳定引用，首次创建和 HMR 的绑定 Store 都能共用。
+    const initialization: Promise<void> = Promise.resolve().then(async () => {
+      set({ currentProjectId: null, projectLoadStatus: 'loading' });
+      try {
+        await Promise.all([get().loadConfig(), get().loadWorkflows(), get().loadPresets(), get().loadSkills(), get().loadSubAgentProfiles(), get().loadCustomStyles(), get().loadToolbarLayouts(), get().loadPlugins()]);
+        await get().loadAppearanceThemes();
 
-      const allProjects = await fileService.loadProjectsList();
-      const valid = allProjects.filter((p) => p.id !== 'default');
-      if (valid.length < allProjects.length) {
-        fileService.deleteProjectData('default').catch((e) => console.warn('[初始化] 清理默认项目数据失败:', e));
-      }
-      let activeProjectId: string | null = null;
-      const mapped: CanvasProject[] = withInheritedDataFolders(valid.map((p) => ({
-        id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt,
-        snapshot: p.snapshot, dataFolder: p.dataFolder, settings: p.settings,
-        parentId: p.parentId, episodeNo: p.episodeNo, episodeOutline: p.episodeOutline,
-        episodeScript: p.episodeScript, episodeCreative: p.episodeCreative,
-        series: p.series,
-      })));
-      fileService.registerProjectFolders(mapped);
-      mapped.sort((a, b) => b.updatedAt - a.updatedAt);
-      if (get().config.startupView === 'project-library' || isWebviewRecovery()) {
-        // 启动页只读摘要；选定项目后才通过既有切换流程加载画布及项目域数据。
-        set({
-          projects: mapped,
-          currentProjectId: null,
-          projectName: '',
-          nodes: [],
-          edges: [],
-          groups: [],
-          history: [],
-          historyIndex: -1,
-          selectedNodeIds: [],
-          projectLoadStatus: 'ready',
-        });
-      } else if (valid.length > 0) {
-        const rememberedProjectId = await getLastActiveProjectId().catch(() => null);
-        const targetId = resolveOpenTargetId(mapped, rememberedProjectId
-          && mapped.some((project) => project.id === rememberedProjectId)
-          ? rememberedProjectId
-          : mapped[0].id);
-
-        const data = await fileService.loadProjectData(targetId);
-        const { emptyDramaAssetLibrary } = await import('../types/dramaAssets');
-        if (hasProjectCanvasData(data)) {
-          activeProjectId = targetId;
-          const ownerId = seriesOwnerId(mapped, targetId);
-          const ownerData = ownerId === targetId ? data : await fileService.loadProjectData(ownerId);
-          set({
-            projects: mapped.map((project) => (
-              project.id === targetId ? { ...project, settings: data.settings } : project
-            )),
-            currentProjectId: targetId,
-            projectName: data.name || '新项目',
-            nodes: data.nodes as Node<BaseNodeData>[],
-            edges: data.edges as Edge[],
-            groups: getProjectGroups(data),
-            dramaAssets: ownerData?.dramaAssets ?? emptyDramaAssetLibrary(),
-            projectLoadStatus: 'ready',
-          });
-          rememberActiveProject(targetId);
-        } else {
+        const allProjects = await fileService.loadProjectsList();
+        const valid = allProjects.filter((p) => p.id !== 'default');
+        if (valid.length < allProjects.length) {
+          fileService.deleteProjectData('default').catch((e) => console.warn('[初始化] 清理默认项目数据失败:', e));
+        }
+        let activeProjectId: string | null = null;
+        const mapped: CanvasProject[] = withInheritedDataFolders(valid.map((p) => ({
+          id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt,
+          snapshot: p.snapshot, dataFolder: p.dataFolder, settings: p.settings,
+          parentId: p.parentId, episodeNo: p.episodeNo, episodeOutline: p.episodeOutline,
+          episodeScript: p.episodeScript, episodeCreative: p.episodeCreative,
+          series: p.series,
+        })));
+        fileService.registerProjectFolders(mapped);
+        mapped.sort((a, b) => b.updatedAt - a.updatedAt);
+        if (get().config.startupView === 'project-library' || isWebviewRecovery()) {
+          // 启动页只读摘要；选定项目后才通过既有切换流程加载画布及项目域数据。
           set({
             projects: mapped,
             currentProjectId: null,
@@ -1753,51 +1729,97 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
             nodes: [],
             edges: [],
             groups: [],
-            dramaAssets: emptyDramaAssetLibrary(),
-            projectLoadStatus: 'error',
+            history: [],
+            historyIndex: -1,
+            selectedNodeIds: [],
+            projectLoadStatus: 'ready',
           });
-          get().showToast('项目加载失败，已阻止空画布覆盖原数据', 'error');
+        } else if (valid.length > 0) {
+          const rememberedProjectId = await getLastActiveProjectId().catch(() => null);
+          const targetId = resolveOpenTargetId(mapped, rememberedProjectId
+            && mapped.some((project) => project.id === rememberedProjectId)
+            ? rememberedProjectId
+            : mapped[0].id);
+
+          const data = await fileService.loadProjectData(targetId);
+          const { emptyDramaAssetLibrary } = await import('../types/dramaAssets');
+          if (hasProjectCanvasData(data)) {
+            activeProjectId = targetId;
+            const ownerId = seriesOwnerId(mapped, targetId);
+            const ownerData = ownerId === targetId ? data : await fileService.loadProjectData(ownerId);
+            set({
+              projects: mapped.map((project) => (
+                project.id === targetId ? { ...project, settings: data.settings } : project
+              )),
+              currentProjectId: targetId,
+              projectName: data.name || '新项目',
+              nodes: data.nodes as Node<BaseNodeData>[],
+              edges: data.edges as Edge[],
+              groups: getProjectGroups(data),
+              dramaAssets: ownerData?.dramaAssets ?? emptyDramaAssetLibrary(),
+              projectLoadStatus: 'ready',
+            });
+            rememberActiveProject(targetId);
+          } else {
+            set({
+              projects: mapped,
+              currentProjectId: null,
+              projectName: '',
+              nodes: [],
+              edges: [],
+              groups: [],
+              dramaAssets: emptyDramaAssetLibrary(),
+              projectLoadStatus: 'error',
+            });
+            get().showToast('项目加载失败，已阻止空画布覆盖原数据', 'error');
+          }
+          fileService.ensureProjectDataDir(targetId).catch((e) => console.warn('[初始化] 数据目录初始化失败:', e));
+        } else {
+          const id = generateProjectId();
+          activeProjectId = id;
+          const now = Date.now();
+          const dataFolder = fileService.buildProjectFolderName('默认画布', id);
+          fileService.registerProjectFolder(id, dataFolder);
+          const defaultProject = { id, name: '默认画布', createdAt: now, updatedAt: now, dataFolder, nodes: [], edges: [] };
+          set({
+            projects: [{ id, name: '默认画布', createdAt: now, updatedAt: now, dataFolder }],
+            currentProjectId: id,
+            projectName: '默认画布',
+            nodes: [],
+            edges: [],
+            groups: [],
+            projectLoadStatus: 'ready',
+          });
+          await fileService.saveProject(defaultProject).catch((e) => console.warn('[初始化] 创建默认项目失败:', e));
+          fileService.ensureProjectDataDir(id).catch((e) => console.warn('[初始化] 数据目录初始化失败:', e));
+          rememberActiveProject(id);
         }
-        fileService.ensureProjectDataDir(targetId).catch((e) => console.warn('[初始化] 数据目录初始化失败:', e));
-      } else {
-        const id = generateProjectId();
-        activeProjectId = id;
-        const now = Date.now();
-        const dataFolder = fileService.buildProjectFolderName('默认画布', id);
-        fileService.registerProjectFolder(id, dataFolder);
-        const defaultProject = { id, name: '默认画布', createdAt: now, updatedAt: now, dataFolder, nodes: [], edges: [] };
-        set({
-          projects: [{ id, name: '默认画布', createdAt: now, updatedAt: now, dataFolder }],
-          currentProjectId: id,
-          projectName: '默认画布',
-          nodes: [],
-          edges: [],
-          groups: [],
-          projectLoadStatus: 'ready',
-        });
-        await fileService.saveProject(defaultProject).catch((e) => console.warn('[初始化] 创建默认项目失败:', e));
-        fileService.ensureProjectDataDir(id).catch((e) => console.warn('[初始化] 数据目录初始化失败:', e));
-        rememberActiveProject(id);
+        // 恢复当前项目的待续轮询任务
+        if (activeProjectId) {
+          resumePendingTasks(activeProjectId).catch((e) => console.warn('[初始化] 恢复待续任务失败:', e));
+          // 加载聊天会话
+          get().loadConversationsForProject(activeProjectId).catch((e) => console.warn('[初始化] 加载会话失败:', e));
+          get().repairInterruptedForProject(activeProjectId).catch((e) => console.warn('[初始化] 修复中断消息失败:', e));
+          get().loadProjectMemoriesForProject(seriesOwnerId(get().projects, activeProjectId))
+            .catch((e) => console.warn('[初始化] 加载项目记忆失败:', e));
+        }
+        // 即使停留在启动页，也修复所有项目的遗留 Agent 任务，禁止打开项目时自动续跑。
+        await Promise.all([
+          ...get().projects.map((project) => get().repairInterruptedAgentTasksForProject(project.id)),
+          get().repairInterruptedAgentTasksForProject(GENERAL_ASSISTANT_SCOPE_ID),
+          get().repairInterruptedForProject(GENERAL_ASSISTANT_SCOPE_ID),
+        ]);
+        if (get().projectLoadStatus === 'ready') set({ projectInitialized: true });
+      } catch (error) {
+        console.error('Init from IndexedDB failed:', error);
+        set({ currentProjectId: null, projectLoadStatus: 'error' });
+        get().showToast('项目数据读取失败，未创建空项目', 'error');
       }
-      // 恢复当前项目的待续轮询任务
-      if (activeProjectId) {
-        resumePendingTasks(activeProjectId).catch((e) => console.warn('[初始化] 恢复待续任务失败:', e));
-        // 加载聊天会话
-        get().loadConversationsForProject(activeProjectId).catch((e) => console.warn('[初始化] 加载会话失败:', e));
-        get().repairInterruptedForProject(activeProjectId).catch((e) => console.warn('[初始化] 修复中断消息失败:', e));
-        get().loadProjectMemoriesForProject(seriesOwnerId(get().projects, activeProjectId))
-          .catch((e) => console.warn('[初始化] 加载项目记忆失败:', e));
-      }
-      // 即使停留在启动页，也修复所有项目的遗留 Agent 任务，禁止打开项目时自动续跑。
-      await Promise.all([
-        ...get().projects.map((project) => get().repairInterruptedAgentTasksForProject(project.id)),
-        get().repairInterruptedAgentTasksForProject(GENERAL_ASSISTANT_SCOPE_ID),
-        get().repairInterruptedForProject(GENERAL_ASSISTANT_SCOPE_ID),
-      ]);
-    } catch (error) {
-      console.error('Init from IndexedDB failed:', error);
-      set({ currentProjectId: null, projectLoadStatus: 'error' });
-      get().showToast('项目数据读取失败，未创建空项目', 'error');
-    }
+    }).finally(() => {
+      if (projectInitializations.get(get) === initialization) projectInitializations.delete(get);
+    });
+    projectInitializations.set(get, initialization);
+    return initialization;
   },
-});
+  };
+};

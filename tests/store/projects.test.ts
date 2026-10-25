@@ -52,6 +52,9 @@ vi.mock('../../src/services/indexedDbService', async () => {
 });
 
 import { useAppStore } from '../../src/store/useAppStore';
+import { createProjectSlice } from '../../src/store/store.projects';
+import { createOrRefreshHotStore } from '../../src/store/store.hotReload';
+import type { AppState } from '../../src/store/useAppStore';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -82,8 +85,8 @@ beforeEach(() => {
   metadataMocks.updateProjectSnapshot.mockClear();
 });
 
-function stubInitializationActions() {
-  useAppStore.setState({
+function stubInitializationActions(store = useAppStore) {
+  store.setState({
     loadConfig: vi.fn(async () => undefined),
     loadWorkflows: vi.fn(async () => undefined),
     loadPresets: vi.fn(async () => undefined),
@@ -99,6 +102,124 @@ function stubInitializationActions() {
     repairInterruptedAgentTasksForProject: vi.fn(async () => []),
   });
 }
+
+function refreshProjectInitializer() {
+  const fresh = createProjectSlice(useAppStore.setState, useAppStore.getState, useAppStore);
+  useAppStore.setState({ projectInitialized: fresh.projectInitialized, initFromDb: fresh.initFromDb });
+  return fresh.initFromDb;
+}
+
+describe('project bootstrap lifetime', () => {
+  const storedProject = { id: 'boot-project', name: 'Stored', createdAt: 1, updatedAt: 1 };
+
+  it('shares an in-flight bootstrap across an action refresh using the same store API', async () => {
+    stubInitializationActions();
+    let release!: () => void;
+    const loadConfig = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    useAppStore.setState({ loadConfig });
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    const originalAction = useAppStore.getState().initFromDb;
+    const first = originalAction();
+    const refreshedAction = refreshProjectInitializer();
+    expect(refreshedAction).not.toBe(originalAction);
+    const second = refreshedAction();
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(loadConfig).toHaveBeenCalledOnce();
+    expect(fileMocks.loadProjectsList).not.toHaveBeenCalled();
+    release();
+    await Promise.all([first, second]);
+    expect(fileMocks.loadProjectsList).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().projectInitialized).toBe(true);
+  });
+
+  it('keeps the open project and unsaved canvas after a completed bootstrap is called again', async () => {
+    stubInitializationActions();
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    await useAppStore.getState().initFromDb();
+    useAppStore.setState({ currentProjectId: storedProject.id, projectName: 'Unsaved name', nodes: [{
+      id: 'unsaved-node', type: 'ai-text', position: { x: 12, y: 34 },
+      data: { type: 'ai-text', label: 'Unsaved draft', status: 'loading' },
+    }] });
+    const live = useAppStore.getState();
+    await refreshProjectInitializer()();
+    expect(useAppStore.getState()).toMatchObject({
+      currentProjectId: storedProject.id, projectName: 'Unsaved name', projectLoadStatus: 'ready', projectInitialized: true,
+    });
+    expect(useAppStore.getState().nodes).toBe(live.nodes);
+    expect(useAppStore.getState().edges).toBe(live.edges);
+    expect(fileMocks.loadProjectsList).toHaveBeenCalledOnce();
+    expect(fileMocks.loadProjectData).not.toHaveBeenCalled();
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it('seeds the first hot patch from an already ready legacy store without a bootstrap flag', async () => {
+    stubInitializationActions();
+    useAppStore.setState({ currentProjectId: storedProject.id, projectName: 'Live legacy', projects: [storedProject], nodes: [{
+      id: 'legacy-draft', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: 'Live' },
+    }] });
+    const legacy: Partial<AppState> = { ...useAppStore.getState() };
+    delete legacy.projectInitialized;
+    useAppStore.setState(legacy as AppState, true);
+    const nodes = useAppStore.getState().nodes;
+    await refreshProjectInitializer()();
+    expect(useAppStore.getState().projectInitialized).toBe(true);
+    expect(useAppStore.getState().currentProjectId).toBe(storedProject.id);
+    expect(useAppStore.getState().nodes).toBe(nodes);
+    expect(fileMocks.loadProjectsList).not.toHaveBeenCalled();
+    expect(useAppStore.getState().loadConfig).not.toHaveBeenCalled();
+  });
+
+  it('allows a failed bootstrap to retry after the action has been refreshed', async () => {
+    stubInitializationActions();
+    fileMocks.loadProjectsList.mockRejectedValueOnce(new Error('list temporarily unavailable')).mockResolvedValueOnce([storedProject]);
+    await useAppStore.getState().initFromDb();
+    expect(useAppStore.getState()).toMatchObject({ projectInitialized: false, projectLoadStatus: 'error' });
+    await refreshProjectInitializer()();
+    expect(fileMocks.loadProjectsList).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState()).toMatchObject({ projectInitialized: true, projectLoadStatus: 'ready', currentProjectId: null });
+  });
+
+  it('does not mark a failed last-project canvas load as initialized', async () => {
+    stubInitializationActions();
+    useAppStore.setState((state) => ({ config: { ...state.config, startupView: 'last-project' } }));
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    fileMocks.loadProjectData.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...storedProject, nodes: [], edges: [] });
+    await useAppStore.getState().initFromDb();
+    expect(useAppStore.getState()).toMatchObject({ projectInitialized: false, projectLoadStatus: 'error' });
+    await useAppStore.getState().initFromDb();
+    expect(fileMocks.loadProjectData).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState()).toMatchObject({ projectInitialized: true, projectLoadStatus: 'ready', currentProjectId: storedProject.id });
+  });
+
+  it.each(['project-library', 'last-project'] as const)('a cold store still initializes with startup preference %s', async (startupView) => {
+    const cold = createOrRefreshHotStore<AppState>((set, get, api) => ({
+      ...useAppStore.getInitialState(), ...createProjectSlice(set, get, api),
+    }));
+    stubInitializationActions(cold);
+    cold.setState((state) => ({ projectLoadStatus: 'ready', config: { ...state.config, startupView } }));
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    fileMocks.loadProjectData.mockResolvedValue({ ...storedProject, nodes: [], edges: [] });
+    expect(cold.getState().projectInitialized).toBe(false);
+    await cold.getState().initFromDb();
+    expect(cold.getState().projectInitialized).toBe(true);
+    expect(cold.getState().currentProjectId).toBe(startupView === 'last-project' ? storedProject.id : null);
+    expect(fileMocks.loadProjectsList).toHaveBeenCalledOnce();
+  });
+
+  it('initial-state reset clears completion for a new session on the same store API', async () => {
+    stubInitializationActions();
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    await useAppStore.getState().initFromDb();
+    expect(useAppStore.getState().projectInitialized).toBe(true);
+    useAppStore.setState(useAppStore.getInitialState(), true);
+    stubInitializationActions();
+    expect(useAppStore.getState().projectInitialized).toBe(false);
+    await useAppStore.getState().initFromDb();
+    expect(fileMocks.loadProjectsList).toHaveBeenCalledTimes(2);
+    expect(useAppStore.getState().projectInitialized).toBe(true);
+  });
+});
 
 describe('project creation', () => {
   it('saves the current project and persists the new project before switching', async () => {

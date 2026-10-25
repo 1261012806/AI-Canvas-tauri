@@ -41,15 +41,39 @@ import { getGenerationNodeType } from '../utils/nodeGeneration';
 // AbortController 注册表 — 节点删除时取消轮询
 // ═══════════════════════════════════════════
 
-const abortControllers = new Map<string, Pick<AbortController, 'signal' | 'abort'>>();
-const videoResumePromises = new Map<string, Promise<void>>();
-const mediaResumeOutcomes = new Map<string, { receipt: MediaTaskReceipt; delivered: boolean; error?: unknown }>();
-const mediaTaskContexts = new Map<string, MediaTaskContext>();
-const mediaTaskObservers = new Map<string, (receipt: MediaTaskReceipt) => void>();
-const activeMediaOperations = new Map<string, Set<symbol>>();
 type MediaMessageRecoveryHandler = (task: PendingTask, urls: string[], signal?: AbortSignal) => Promise<void>;
-let mediaMessageRecoveryHandler: MediaMessageRecoveryHandler | undefined;
-const mediaTaskListeners = new Set<() => void>();
+
+function createPollManagerRuntime() {
+  return {
+    abortControllers: new Map<string, Pick<AbortController, 'signal' | 'abort'>>(),
+    videoResumePromises: new Map<string, Promise<void>>(),
+    mediaResumeOutcomes: new Map<string, { receipt: MediaTaskReceipt; delivered: boolean; error?: unknown }>(),
+    mediaTaskContexts: new Map<string, MediaTaskContext>(),
+    mediaTaskObservers: new Map<string, (receipt: MediaTaskReceipt) => void>(),
+    activeMediaOperations: new Map<string, Set<symbol>>(),
+    mediaMessageRecoveryHandler: undefined as MediaMessageRecoveryHandler | undefined,
+    mediaTaskListeners: new Set<() => void>(),
+    runninghubMessageWaiters: new Map<string, () => void>(),
+    workflowApiMessageWaiters: new Map<string, () => void>(),
+    // 只描述本进程仍在消费的交付操作，不作为任务或画布写入授权。
+    activeComfyDeliveries: new Map<string, { projectId: string; nodeId: string; taskId: string }>(),
+    comfyDeliveryListeners: new Set<() => void>(),
+    pausedErrors: new WeakSet<Error>(),
+  };
+}
+
+/** 热更新继续使用同一份运行时，旧请求的清理闭包也必须能找到它。 */
+export function createOrReusePollManagerRuntime(hotData?: { pollManagerRuntime?: ReturnType<typeof createPollManagerRuntime> }) {
+  const runtime = hotData?.pollManagerRuntime ?? createPollManagerRuntime();
+  // 依赖重新求值时不保证先触发 dispose，首次载入就要保留引用。
+  if (hotData) hotData.pollManagerRuntime = runtime;
+  return runtime;
+}
+
+const runtime = createOrReusePollManagerRuntime(import.meta.hot?.data);
+const { abortControllers, videoResumePromises, mediaResumeOutcomes, mediaTaskContexts, mediaTaskObservers,
+  activeMediaOperations, mediaTaskListeners, runninghubMessageWaiters, workflowApiMessageWaiters,
+  activeComfyDeliveries, comfyDeliveryListeners, pausedErrors } = runtime;
 export function subscribeMediaTasks(listener: () => void): () => void {
   mediaTaskListeners.add(listener);
   return () => { mediaTaskListeners.delete(listener); };
@@ -69,11 +93,6 @@ export async function settleMediaTaskQueries<T>(
     }
   }));
 }
-const runninghubMessageWaiters = new Map<string, () => void>();
-const workflowApiMessageWaiters = new Map<string, () => void>();
-// 只描述本进程仍在消费的交付操作；不持久化，也不作为任务或画布写入授权。
-const activeComfyDeliveries = new Map<string, { projectId: string; nodeId: string; taskId: string }>();
-const comfyDeliveryListeners = new Set<() => void>();
 const notifyComfyDeliveries = () => comfyDeliveryListeners.forEach((listener) => listener());
 
 export function subscribeComfyDeliveries(listener: () => void): () => void {
@@ -210,6 +229,7 @@ export class VideoPollingPausedError extends Error {
     super(message);
     this.name = 'VideoPollingPausedError';
     this.taskReceipt = taskReceipt;
+    pausedErrors.add(this);
   }
 }
 
@@ -229,7 +249,7 @@ export class MediaTaskPausedError extends VideoPollingPausedError {
 }
 
 export function isMediaTaskPausedError(error: unknown): error is VideoPollingPausedError {
-  return error instanceof VideoPollingPausedError;
+  return error instanceof Error && pausedErrors.has(error);
 }
 
 export function bindMediaTaskContext(trackingId: string, context: MediaTaskContext,
@@ -254,8 +274,8 @@ function notifyMediaReceipt(task: PendingTask): void {
 }
 
 export function registerMediaMessageRecoveryHandler(handler: MediaMessageRecoveryHandler): () => void {
-  mediaMessageRecoveryHandler = handler;
-  return () => { if (mediaMessageRecoveryHandler === handler) mediaMessageRecoveryHandler = undefined; };
+  runtime.mediaMessageRecoveryHandler = handler;
+  return () => { if (runtime.mediaMessageRecoveryHandler === handler) runtime.mediaMessageRecoveryHandler = undefined; };
 }
 
 /** 覆盖同步等待和交付阶段；不把运行时租约写入持久化。 */
@@ -847,13 +867,13 @@ async function handleResumeError(
 async function deliverMediaMessageResult(task: PendingTask, urls: string[], signal?: AbortSignal): Promise<boolean> {
   if (!task.mediaContext?.messageId || task.mediaContext.deliveryMode === 'node') return false;
   if (!isCurrentMediaTask(task, signal)) throw new CanvasResultStaleError();
-  if (!mediaMessageRecoveryHandler) {
+  if (!runtime.mediaMessageRecoveryHandler) {
     const { ensureMediaMessageRecoveryHandler } = await import('./ai/generationRuntime');
     ensureMediaMessageRecoveryHandler();
   }
-  if (!mediaMessageRecoveryHandler) throw new Error('对话任务恢复入口尚未就绪，任务已保留');
+  if (!runtime.mediaMessageRecoveryHandler) throw new Error('对话任务恢复入口尚未就绪，任务已保留');
   signal?.throwIfAborted();
-  await mediaMessageRecoveryHandler(task, urls, signal);
+  await runtime.mediaMessageRecoveryHandler(task, urls, signal);
   return true;
 }
 
