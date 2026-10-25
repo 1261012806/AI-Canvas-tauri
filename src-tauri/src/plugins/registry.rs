@@ -11,8 +11,12 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, Runtime, Webview};
@@ -20,9 +24,11 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_fs::FsExt;
 
 const REGISTRY_SCHEMA_VERSION: u32 = 1;
-const PRIVATE_DIR_NAME: &str = "Plugin";
+const PRIVATE_DIR_NAME: &str = crate::plugin_install_permissions::DIRECTORY_NAME;
 const LEGACY_PRIVATE_DIR_NAME: &str = "plugin-private";
-const MIGRATION_DIR_NAME: &str = "Plugin.installing";
+const MIGRATION_DIR_NAME: &str = crate::plugin_install_permissions::STAGING_DIRECTORY_NAME;
+const PREPARED_MIGRATION_DIR_NAME: &str = ".permissions-migration";
+const STORAGE_PERMISSION_ERROR: &str = "插件目录权限不足：";
 const REGISTRY_FILE_NAME: &str = "registry.json";
 const REGISTRY_TEMP_FILE_NAME: &str = "registry.json.tmp";
 const REGISTRY_BACKUP_FILE_NAME: &str = "registry.json.bak";
@@ -63,6 +69,8 @@ const SUPPORTED_PERMISSIONS: [&str; 12] = [
 
 static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
 static STORAGE_MIGRATION_LOCK: Mutex<()> = Mutex::new(());
+static STORAGE_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static STORAGE_AUTHORIZATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 // 这里只缓存校验过的不可变字节，不缓存权限；每次分段读取仍先检查活动 revision。
 const MAX_VERIFIED_RESOURCE_CACHE_BYTES: usize = 32 * 1024 * 1024;
@@ -1108,8 +1116,13 @@ pub(crate) fn plugin_private_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathB
     let _guard = STORAGE_MIGRATION_LOCK
         .lock()
         .map_err(|_| "插件目录迁移锁异常")?;
-    if !private_directory_exists(&directory)? {
-        migrate_legacy_plugin_directory_at(&legacy_plugin_dir(app)?, &directory)?;
+    let legacy = legacy_plugin_dir(app)?;
+    if private_directory_exists(&directory)? {
+        if prepared_plugin_directory(&directory)? {
+            return Err("插件目录初始化尚未完成，请在设置中重新安装或启用以继续；后台未读取或执行插件".into());
+        }
+    } else {
+        migrate_legacy_plugin_directory_at(&legacy, &directory)?;
     }
     Ok(directory)
 }
@@ -1145,7 +1158,353 @@ fn private_directory_exists(path: &Path) -> Result<bool, String> {
         }
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(_) => Err("插件私有目录不可访问，请检查目录权限".into()),
+        Err(error) => Err(storage_io_error("无法访问插件私有目录", &error)),
+    }
+}
+
+/// 不把本机路径或系统错误正文写入提示，只保留可判定的类别和错误码。
+fn storage_io_error(action: &str, error: &io::Error) -> String {
+    let prefix = if error.kind() == io::ErrorKind::PermissionDenied {
+        STORAGE_PERMISSION_ERROR
+    } else {
+        ""
+    };
+    let kind = match error.kind() {
+        io::ErrorKind::PermissionDenied => "拒绝访问",
+        io::ErrorKind::NotFound => "目录或文件不存在",
+        io::ErrorKind::AlreadyExists => "目标已存在",
+        io::ErrorKind::InvalidInput => "路径或参数无效",
+        _ => "文件系统操作失败",
+    };
+    match error.raw_os_error() {
+        Some(code) => format!("{prefix}{action}（{kind}，系统错误码 {code}）"),
+        None => format!("{prefix}{action}（{kind}）"),
+    }
+}
+
+fn storage_permission_denied(error: &str) -> bool {
+    error.starts_with(STORAGE_PERMISSION_ERROR)
+}
+
+fn source_storage_error(error: String) -> String {
+    // UAC 只修复安装目录，不能以另一管理员身份读取不可访问的旧用户数据。
+    error.strip_prefix(STORAGE_PERMISSION_ERROR).unwrap_or(&error).to_string()
+}
+
+/// 只由显式安装/更新、重新启用调用；状态读取和后台执行不会申请提升。
+async fn prepare_plugin_storage_for_mutation(
+    app: &AppHandle,
+    plugin_id: &str,
+    revision_digest: Option<&str>,
+) -> Result<(), String> {
+    // 并发安装共用一次目录准备；后到操作重新探测，不重复申请已修复的权限。
+    let _authorization_guard = STORAGE_AUTHORIZATION_LOCK.lock().await;
+    async fn prepare(
+        app: &AppHandle,
+        plugin_id: &str,
+        revision_digest: Option<&str>,
+        require_prepared_marker: bool,
+    ) -> Result<(), String> {
+        let app = app.clone();
+        let plugin_id = plugin_id.to_string();
+        let revision_digest = revision_digest.map(str::to_string);
+        tauri::async_runtime::spawn_blocking(move || {
+            let installed = installed_plugin_dir()?;
+            {
+                let _guard = STORAGE_MIGRATION_LOCK.lock().map_err(|_| "插件目录迁移锁异常".to_string())?;
+                let prepared = private_directory_exists(&installed)? && prepared_plugin_directory(&installed)?;
+                if require_prepared_marker && !prepared {
+                    return Err("插件目录授权未返回完整初始化标记，未继续本次操作；请检查该目录".into());
+                }
+                if prepared {
+                    finish_prepared_plugin_directory_at(&legacy_plugin_dir(&app)?, &installed)?;
+                }
+            }
+            let directory = plugin_private_dir(&app)?;
+            ensure_private_directory(&directory)?;
+            probe_plugin_storage_writable(&directory, &plugin_id, revision_digest.as_deref())
+        })
+        .await
+        .map_err(|_| "插件目录写入检测未完成".to_string())?
+    }
+
+    let error = match prepare(app, plugin_id, revision_digest, false).await {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    if !cfg!(windows) || !storage_permission_denied(&error) {
+        return Err(error);
+    }
+    let require_prepared_marker = match fs::symlink_metadata(installed_plugin_dir()?) {
+        Ok(metadata) if metadata.is_dir() && !is_link_or_reparse(&metadata) => false,
+        Ok(_) => return Err("插件目录必须是普通目录，未申请管理员授权".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        // 原权限不允许确认旧根时不能猜测“初始化已完成”。
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => true,
+        Err(error) => return Err(storage_io_error("无法确认插件目录授权目标", &error)),
+    };
+
+    // 对话框、UAC 与进程等待均不持有迁移锁或注册表锁。
+    let dialog_app = app.clone();
+    let approved = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .message("应用安装目录中的 Plugin 无法写入。是否请求 Windows 管理员授权？\n\n仅为当前用户准备 Plugin 目录及必要的修改权限；不修改整个应用目录，应用和 Python 插件仍以普通权限运行。\n\n接下来 Windows 可能要求管理员确认或凭据。取消将停止本次操作，保留已有插件。")
+            .title("授权创建插件目录")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("申请授权".into(), "取消".into()))
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| "无法显示插件目录授权提示".to_string())?;
+    if !approved {
+        return Err("已取消插件目录授权，未继续本次操作".into());
+    }
+    tauri::async_runtime::spawn_blocking(crate::plugin_install_permissions::request_directory_access)
+        .await
+        .map_err(|_| "插件目录授权未完成".to_string())??;
+    // 成功以原普通用户的实际写入为准，不信任提升进程的退出本身。
+    prepare(app, plugin_id, revision_digest, require_prepared_marker).await.map_err(|error| {
+        format!("授权后插件目录仍不可写，未继续本次操作；{error}")
+    })
+}
+
+fn probe_plugin_storage_writable(directory: &Path, plugin_id: &str, revision_digest: Option<&str>) -> Result<(), String> {
+    let mut paths = vec![directory.to_path_buf()];
+    for name in [REVISIONS_DIR_NAME, UI_REVISIONS_DIR_NAME, "settings", "window-profiles", "media-jobs"] {
+        let path = directory.join(name);
+        if private_directory_exists(&path)? {
+            paths.push(path);
+        }
+    }
+    for path in [
+        directory.join(REVISIONS_DIR_NAME).join(plugin_id),
+        directory.join(UI_REVISIONS_DIR_NAME).join(plugin_id),
+    ] {
+        if private_directory_exists(&path)? { paths.push(path); }
+    }
+    if let Some(digest) = revision_digest {
+        let revision = directory.join(REVISIONS_DIR_NAME).join(plugin_id).join(digest);
+        for path in [revision.clone(), revision.join("resources")] {
+            if private_directory_exists(&path)? { paths.push(path); }
+        }
+    }
+    for path in paths {
+        let probe = path.join(format!(".write-probe-{}-{}", std::process::id(), STORAGE_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir(&probe).map_err(|error| storage_io_error("无法创建插件目录写入探针", &error))?;
+        let file_path = probe.join("write");
+        let result = (|| {
+            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&file_path)?;
+            file.write_all(b"AI Canvas plugin storage probe\n")?;
+            file.sync_all()
+        })();
+        let cleanup_file = fs::remove_file(&file_path);
+        let cleanup_directory = fs::remove_dir(&probe);
+        result.map_err(|error| storage_io_error("无法写入插件目录", &error))?;
+        cleanup_file.map_err(|error| storage_io_error("无法删除插件目录写入探针", &error))?;
+        cleanup_directory.map_err(|error| storage_io_error("无法删除插件目录写入探针", &error))?;
+    }
+    #[cfg(windows)]
+    for name in [REGISTRY_FILE_NAME, REGISTRY_BACKUP_FILE_NAME, REGISTRY_TEMP_FILE_NAME] {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_OPEN_REPARSE_POINT};
+        let path = directory.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.is_file() || is_link_or_reparse(&metadata) => {
+                return Err("插件注册表必须是普通文件，不能使用链接".into());
+            }
+            Ok(_) => {
+                // 只申请打开权限，不改动注册表内容；原子替换需要现有文件允许 DELETE。
+                fs::OpenOptions::new().access_mode(DELETE.0).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                    .open(path).map_err(|error| storage_io_error("无法替换插件注册表文件", &error))?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(storage_io_error("无法检查插件注册表文件", &error)),
+        }
+    }
+    Ok(())
+}
+
+fn persistent_plugin_entries() -> [&'static str; 5] {
+    [REGISTRY_FILE_NAME, REGISTRY_BACKUP_FILE_NAME, REVISIONS_DIR_NAME, UI_REVISIONS_DIR_NAME, "settings"]
+}
+
+fn migration_entry_limit() -> usize {
+    MAX_PLUGIN_REGISTRATIONS * (3 * (MAX_PACKAGE_RESOURCES + 5) + 4)
+}
+
+fn prepared_plugin_directory(directory: &Path) -> Result<bool, String> {
+    use crate::plugin_install_permissions::{PREPARED_MARKER, PREPARED_MARKER_CONTENT};
+    let marker = directory.join(PREPARED_MARKER);
+    let metadata = match fs::symlink_metadata(&marker) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(storage_io_error("无法读取插件目录初始化状态", &error)),
+    };
+    if !metadata.is_file() || is_link_or_reparse(&metadata)
+        || metadata.len() != PREPARED_MARKER_CONTENT.len() as u64
+    {
+        return Err("插件目录初始化标记异常，未读取插件数据".into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(marker)
+        .and_then(|file| file.take(PREPARED_MARKER_CONTENT.len() as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|error| storage_io_error("无法读取插件目录初始化状态", &error))?;
+    if bytes.as_slice() != PREPARED_MARKER_CONTENT {
+        return Err("插件目录初始化标记异常，未读取插件数据".into());
+    }
+    Ok(true)
+}
+
+/// UAC 只发布带标记的空根；复制与提交始终在原普通用户权限下进行。
+/// 最后删除标记才开放读取。崩溃后只接受已发布且逐字节相同的条目，不覆盖或合并。
+fn finish_prepared_plugin_directory_at(legacy: &Path, directory: &Path) -> Result<(), String> {
+    use crate::plugin_install_permissions::PREPARED_MARKER;
+    if !private_directory_exists(directory)? {
+        return Err("插件初始化目录不存在，未读取迁移数据".into());
+    }
+    if !prepared_plugin_directory(directory)? {
+        return Ok(());
+    }
+    let entries = persistent_plugin_entries();
+    if !private_directory_exists(legacy).map_err(source_storage_error)? {
+        for name in entries {
+            match fs::symlink_metadata(directory.join(name)) {
+                Ok(_) => return Err("插件目录初始化尚未完成，原迁移来源不可用；已保留现有数据".into()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                Err(error) => return Err(storage_io_error("无法检查插件初始化数据", &error)),
+            }
+        }
+        return fs::remove_file(directory.join(PREPARED_MARKER))
+            .map_err(|error| storage_io_error("无法完成插件目录初始化", &error));
+    }
+
+    let staging_root = directory.join(PREPARED_MIGRATION_DIR_NAME);
+    ensure_private_directory(&staging_root)?;
+    let staging = staging_root.join(format!("stage-{}-{}", std::process::id(), unix_now_millis()));
+    fs::create_dir(&staging)
+        .map_err(|error| storage_io_error("无法创建插件迁移暂存目录", &error))?;
+    let result = (|| {
+        let mut remaining_entries = migration_entry_limit();
+        for name in entries {
+            let source = legacy.join(name);
+            match fs::symlink_metadata(&source) {
+                Ok(_) => copy_legacy_plugin_entry(&source, &staging.join(name), 0, &mut remaining_entries)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    match fs::symlink_metadata(directory.join(name)) {
+                        Ok(_) => return Err("插件迁移来源与已暂存内容不一致；未覆盖现有数据".into()),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                        Err(error) => return Err(storage_io_error("无法检查插件迁移目标", &error)),
+                    }
+                }
+                Err(error) => return Err(source_storage_error(storage_io_error("无法读取旧插件迁移数据", &error))),
+            }
+        }
+        // 源码、UI 和偏好先到位，注册表最后发布；标记在整个提交期间保持存在。
+        for name in [REVISIONS_DIR_NAME, UI_REVISIONS_DIR_NAME, "settings", REGISTRY_BACKUP_FILE_NAME, REGISTRY_FILE_NAME] {
+            let staged = staging.join(name);
+            match fs::symlink_metadata(&staged) {
+                Ok(_) => {},
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(storage_io_error("无法检查插件暂存数据", &error)),
+            }
+            let target = directory.join(name);
+            match fs::symlink_metadata(&target) {
+                Ok(_) => {
+                    let mut remaining = migration_entry_limit();
+                    if !migration_entries_equal(&staged, &target, 0, &mut remaining)? {
+                        return Err("插件目录初始化存在内容冲突，未覆盖或合并已有数据".into());
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    publish_prepared_entry(&staged, &target)?;
+                }
+                Err(error) => return Err(storage_io_error("无法检查插件迁移目标", &error)),
+            }
+        }
+        fs::remove_file(directory.join(PREPARED_MARKER))
+            .map_err(|error| storage_io_error("无法提交插件目录初始化", &error))
+    })();
+    // 提升进程从不进入这里；只回收本次普通用户创建的暂存，不删除旧来源或已发布条目。
+    if fs::symlink_metadata(&staging).is_ok_and(|metadata| metadata.is_dir() && !is_link_or_reparse(&metadata)) {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    let _ = fs::remove_dir(&staging_root);
+    result
+}
+
+fn publish_prepared_entry(source: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{core::PCWSTR, Win32::Storage::FileSystem::{MoveFileExW, MOVE_FILE_FLAGS}};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        // 不使用 REPLACE_EXISTING；并发创建的目标也不能被覆盖。
+        unsafe { MoveFileExW(PCWSTR(source.as_ptr()), PCWSTR(target.as_ptr()), MOVE_FILE_FLAGS(0)) }
+            .map_err(|error| storage_io_error("无法发布插件迁移条目", &io::Error::from_raw_os_error(error.code().0 & 0xffff)))
+    }
+    #[cfg(not(windows))]
+    {
+        // 授权辅助模式仅在 Windows 使用；保留可移植的定向回归入口。
+        if fs::symlink_metadata(target).is_ok() {
+            return Err("插件迁移目标已存在，未覆盖已有数据".into());
+        }
+        fs::rename(source, target).map_err(|error| storage_io_error("无法发布插件迁移条目", &error))
+    }
+}
+
+fn migration_entries_equal(left: &Path, right: &Path, depth: usize, remaining: &mut usize) -> Result<bool, String> {
+    if depth > 4 || *remaining == 0 {
+        return Err("插件迁移比对超过目录深度或文件数量限制".into());
+    }
+    *remaining -= 1;
+    let a = fs::symlink_metadata(left).map_err(|error| storage_io_error("无法读取插件迁移条目", &error))?;
+    let b = fs::symlink_metadata(right).map_err(|error| storage_io_error("无法读取插件迁移目标", &error))?;
+    if is_link_or_reparse(&a) || is_link_or_reparse(&b) {
+        return Err("插件迁移数据不能包含符号链接或目录联接".into());
+    }
+    if a.is_dir() && b.is_dir() {
+        fn names(path: &Path, limit: usize) -> Result<BTreeSet<std::ffi::OsString>, String> {
+            let mut names = BTreeSet::new();
+            for entry in fs::read_dir(path).map_err(|error| storage_io_error("无法读取插件迁移目录", &error))? {
+                if names.len() >= limit {
+                    return Err("插件迁移比对超过文件数量限制".into());
+                }
+                names.insert(entry.map_err(|error| storage_io_error("无法读取插件迁移目录项", &error))?.file_name());
+            }
+            Ok(names)
+        }
+        let left_names = names(left, *remaining)?;
+        if left_names != names(right, *remaining)? {
+            return Ok(false);
+        }
+        for name in left_names {
+            if !migration_entries_equal(&left.join(&name), &right.join(&name), depth + 1, remaining)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    } else if a.is_file() && b.is_file() && a.len() == b.len() && a.len() <= MAX_PACKAGE_RESOURCE_BYTES as u64 {
+        fn digest(path: &Path) -> Result<Vec<u8>, String> {
+            let mut file = fs::File::open(path).map_err(|error| storage_io_error("无法读取插件迁移文件", &error))?;
+            let mut hash = Sha256::new();
+            let mut buffer = [0u8; 8192];
+            let mut total = 0;
+            loop {
+                let count = file.read(&mut buffer).map_err(|error| storage_io_error("无法读取插件迁移文件", &error))?;
+                if count == 0 { break; }
+                total += count;
+                if total > MAX_PACKAGE_RESOURCE_BYTES {
+                    return Err("插件迁移文件在比对期间超出大小限制".into());
+                }
+                hash.update(&buffer[..count]);
+            }
+            Ok(hash.finalize().to_vec())
+        }
+        Ok(digest(left)? == digest(right)?)
+    } else {
+        Ok(false)
     }
 }
 
@@ -1159,14 +1518,15 @@ fn copy_legacy_plugin_entry(
         return Err("旧插件数据的目录深度或文件数量超过迁移限制".into());
     }
     *remaining_entries -= 1;
-    let metadata = fs::symlink_metadata(source).map_err(|_| "无法读取旧插件迁移数据")?;
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| source_storage_error(storage_io_error("无法读取旧插件迁移数据", &error)))?;
     if is_link_or_reparse(&metadata) {
         return Err("旧插件迁移数据不能包含符号链接或目录联接".into());
     }
     if metadata.is_dir() {
-        fs::create_dir(target).map_err(|_| "无法创建插件迁移子目录，请检查安装目录权限")?;
-        for entry in fs::read_dir(source).map_err(|_| "无法读取旧插件迁移目录")? {
-            let entry = entry.map_err(|_| "无法读取旧插件迁移目录项")?;
+        fs::create_dir(target).map_err(|error| storage_io_error("无法创建插件迁移子目录", &error))?;
+        for entry in fs::read_dir(source).map_err(|error| source_storage_error(storage_io_error("无法读取旧插件迁移目录", &error)))? {
+            let entry = entry.map_err(|error| source_storage_error(storage_io_error("无法读取旧插件迁移目录项", &error)))?;
             copy_legacy_plugin_entry(
                 &entry.path(),
                 &target.join(entry.file_name()),
@@ -1175,7 +1535,25 @@ fn copy_legacy_plugin_entry(
             )?;
         }
     } else if metadata.is_file() && metadata.len() <= MAX_PACKAGE_RESOURCE_BYTES as u64 {
-        let bytes = fs::copy(source, target).map_err(|_| "无法复制插件数据，请检查安装目录权限")?;
+        // 分开源读取与目标写入错误，不能为读取另一个用户的数据申请提升。
+        let mut input = fs::File::open(source)
+            .map_err(|error| source_storage_error(storage_io_error("无法读取旧插件迁移文件", &error)))?;
+        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(target)
+            .map_err(|error| storage_io_error("无法创建插件迁移文件", &error))?;
+        let mut buffer = [0u8; 8192];
+        let mut bytes = 0u64;
+        loop {
+            let count = input.read(&mut buffer)
+                .map_err(|error| source_storage_error(storage_io_error("无法读取旧插件迁移文件", &error)))?;
+            if count == 0 { break; }
+            bytes += count as u64;
+            if bytes > metadata.len() || bytes > MAX_PACKAGE_RESOURCE_BYTES as u64 {
+                return Err("旧插件数据在迁移期间发生变化，请重试".into());
+            }
+            output.write_all(&buffer[..count])
+                .map_err(|error| storage_io_error("无法写入插件迁移文件", &error))?;
+        }
+        output.sync_all().map_err(|error| storage_io_error("无法保存插件迁移文件", &error))?;
         if bytes != metadata.len() {
             return Err("旧插件数据在迁移期间发生变化，请重试".into());
         }
@@ -1186,7 +1564,7 @@ fn copy_legacy_plugin_entry(
 }
 
 fn migrate_legacy_plugin_directory_at(legacy: &Path, target: &Path) -> Result<bool, String> {
-    if private_directory_exists(target)? || !private_directory_exists(legacy)? {
+    if private_directory_exists(target)? || !private_directory_exists(legacy).map_err(source_storage_error)? {
         return Ok(false);
     }
     // 与最终目录同卷暂存，再原子发布；旧目录保留为备份，兼容跨盘安装。
@@ -1197,16 +1575,10 @@ fn migrate_legacy_plugin_directory_at(legacy: &Path, target: &Path) -> Result<bo
         std::process::id(),
         unix_now_millis(),
     ));
-    fs::create_dir(&staging).map_err(|_| "无法创建插件迁移目录，请检查安装目录权限")?;
+    fs::create_dir(&staging).map_err(|error| storage_io_error("无法创建插件迁移目录", &error))?;
     let result = (|| {
-        let mut remaining_entries = MAX_PLUGIN_REGISTRATIONS * (3 * (MAX_PACKAGE_RESOURCES + 5) + 4);
-        for name in [
-            REGISTRY_FILE_NAME,
-            REGISTRY_BACKUP_FILE_NAME,
-            REVISIONS_DIR_NAME,
-            UI_REVISIONS_DIR_NAME,
-            "settings",
-        ] {
+        let mut remaining_entries = migration_entry_limit();
+        for name in persistent_plugin_entries() {
             let source = legacy.join(name);
             match fs::symlink_metadata(&source) {
                 Ok(_) => copy_legacy_plugin_entry(
@@ -1216,13 +1588,13 @@ fn migrate_legacy_plugin_directory_at(legacy: &Path, target: &Path) -> Result<bo
                     &mut remaining_entries,
                 )?,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err("旧插件数据不可访问，迁移未完成".to_string()),
+                Err(error) => return Err(source_storage_error(storage_io_error("旧插件数据不可访问，迁移未完成", &error))),
             }
         }
         if private_directory_exists(target)? {
             return Err("Plugin 目录在迁移期间已创建，未覆盖已有数据".into());
         }
-        fs::rename(&staging, target).map_err(|_| "无法提交插件目录迁移，请检查安装目录权限")?;
+        fs::rename(&staging, target).map_err(|error| storage_io_error("无法提交插件目录迁移", &error))?;
         Ok(true)
     })();
     if result.is_err() {
@@ -1286,7 +1658,7 @@ pub(crate) fn is_plugin_private_path_overlap<R: Runtime>(
 
 fn ensure_private_directory(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path)
-        .map_err(|_| "无法创建插件私有数据目录，请检查安装目录 Plugin 的写入权限".to_string())?;
+        .map_err(|error| storage_io_error("无法创建插件私有数据目录", &error))?;
     if !private_directory_exists(path)? {
         return Err("插件私有数据目录不存在".into());
     }
@@ -1522,6 +1894,9 @@ fn restore_registry_backup(
 }
 
 fn read_registry_at(private_dir: &Path) -> Result<PluginRegistry, String> {
+    if prepared_plugin_directory(private_dir)? {
+        return Err("插件目录初始化尚未完成，未读取或执行插件；请重新安装以继续初始化".into());
+    }
     let primary = registry_file(private_dir);
     let backup = registry_backup_file(private_dir);
     let temporary = registry_temp_file(private_dir);
@@ -2436,6 +2811,7 @@ pub async fn stage_plugin_revision(
     if !apply_native_stage_approval(&mut revision, native_approval) {
         return Err("用户已取消插件原生高风险授权，未写入任何插件数据".to_string());
     }
+    prepare_plugin_storage_for_mutation(&app, &plugin_id, Some(&revision.revision_digest)).await?;
     let private_dir = plugin_private_dir(&app)?;
     let _guard = REGISTRY_LOCK
         .lock()
@@ -2458,11 +2834,16 @@ pub async fn activate_plugin_revision(
     source_digest: String,
     revision_digest: String,
     enabled: bool,
+    request_directory_access: Option<bool>,
 ) -> Result<PluginRegistrationStatus, String> {
     ensure_trusted_caller(&webview)?;
     validate_plugin_id(&plugin_id)?;
     validate_source_digest(&source_digest)?;
     validate_source_digest(&revision_digest)?;
+    // 自动激活和补偿调用默认不申请授权，只有设置页显式“启用”传入 true。
+    if enabled && request_directory_access == Some(true) {
+        prepare_plugin_storage_for_mutation(&app, &plugin_id, Some(&revision_digest)).await?;
+    }
     let private_dir = plugin_private_dir(&app)?;
     let (expected_record, expected_slot, candidate) = {
         let _guard = REGISTRY_LOCK
@@ -2576,6 +2957,9 @@ pub async fn set_plugin_registration_enabled(
 ) -> Result<PluginRegistrationStatus, String> {
     ensure_trusted_caller(&webview)?;
     validate_plugin_id(&plugin_id)?;
+    if enabled {
+        prepare_plugin_storage_for_mutation(&app, &plugin_id, None).await?;
+    }
     let private_dir = plugin_private_dir(&app)?;
     let (expected_record, candidate) = {
         let _guard = REGISTRY_LOCK
@@ -4168,6 +4552,141 @@ mod tests {
         assert!(legacy.exists());
         assert!(plugin_private_paths_overlap(&target, &directory));
         assert!(!plugin_private_paths_overlap(&target, &directory.join("theme")));
+        fs::remove_dir_all(directory).ok();
+    }
+
+    fn mark_permission_prepared(directory: &Path) {
+        ensure_private_directory(directory).unwrap();
+        fs::write(
+            directory.join(crate::plugin_install_permissions::PREPARED_MARKER),
+            crate::plugin_install_permissions::PREPARED_MARKER_CONTENT,
+        ).unwrap();
+    }
+
+    #[test]
+    fn prepared_storage_keeps_registry_closed_until_ordinary_user_migration_finishes() {
+        let directory = temporary_directory("permission-migration");
+        let legacy = directory.join(LEGACY_PRIVATE_DIR_NAME);
+        let target = directory.join(PRIVATE_DIR_NAME);
+        let source = "definePlugin({ tools: {} }); // 权限迁移\n";
+        let (id, revision) = parse_revision(&manifest("javascript"), source, None).unwrap();
+        stage_revision_at(&legacy, id.clone(), revision.clone(), source, None).unwrap();
+        ensure_private_directory(&legacy.join("settings")).unwrap();
+        fs::write(legacy.join("settings/example.plugin.json"), br#"{"ready":true}"#).unwrap();
+        ensure_private_directory(&legacy.join("window-profiles")).unwrap();
+        mark_permission_prepared(&target);
+
+        assert!(read_registry_at(&target).unwrap_err().contains("初始化尚未完成"));
+        finish_prepared_plugin_directory_at(&legacy, &target).unwrap();
+        assert!(!prepared_plugin_directory(&target).unwrap());
+        assert_eq!(read_registry_at(&target).unwrap().plugins, read_registry_at(&legacy).unwrap().plugins);
+        assert_eq!(read_verified_source_at(&target, &id, &revision).unwrap(), source);
+        assert_eq!(fs::read(target.join("settings/example.plugin.json")).unwrap(), br#"{"ready":true}"#);
+        assert!(!target.join("window-profiles").exists());
+        assert!(legacy.exists());
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn prepared_storage_without_legacy_becomes_writable_without_extra_data() {
+        let directory = temporary_directory("permission-fresh");
+        let target = directory.join(PRIVATE_DIR_NAME);
+        mark_permission_prepared(&target);
+        finish_prepared_plugin_directory_at(&directory.join(LEGACY_PRIVATE_DIR_NAME), &target).unwrap();
+        probe_plugin_storage_writable(&target, "example.plugin", None).unwrap();
+        assert!(fs::read_dir(&target).unwrap().next().is_none());
+        assert!(read_registry_at(&target).unwrap().plugins.is_empty());
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn storage_probe_checks_the_current_plugin_ancestors_without_modifying_conflicting_files() {
+        let directory = temporary_directory("permission-plugin-ancestor");
+        ensure_private_directory(&directory.join(REVISIONS_DIR_NAME)).unwrap();
+        let conflict = directory.join(REVISIONS_DIR_NAME).join("example.plugin");
+        fs::write(&conflict, "keep this file").unwrap();
+        assert!(probe_plugin_storage_writable(&directory, "example.plugin", Some("revision"))
+            .unwrap_err().contains("必须是普通目录"));
+        assert_eq!(fs::read_to_string(&conflict).unwrap(), "keep this file");
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn prepared_storage_resumes_equal_published_entries_without_reimporting_after_completion() {
+        let directory = temporary_directory("permission-resume");
+        let legacy = directory.join(LEGACY_PRIVATE_DIR_NAME);
+        let target = directory.join(PRIVATE_DIR_NAME);
+        ensure_private_directory(&legacy.join("settings")).unwrap();
+        fs::write(legacy.join("settings/example.plugin.json"), "original").unwrap();
+        mark_permission_prepared(&target);
+        let mut remaining = migration_entry_limit();
+        copy_legacy_plugin_entry(&legacy.join("settings"), &target.join("settings"), 0, &mut remaining).unwrap();
+        finish_prepared_plugin_directory_at(&legacy, &target).unwrap();
+        fs::write(legacy.join("settings/example.plugin.json"), "stale source changed").unwrap();
+        finish_prepared_plugin_directory_at(&legacy, &target).unwrap();
+        assert_eq!(fs::read_to_string(target.join("settings/example.plugin.json")).unwrap(), "original");
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn prepared_storage_conflict_preserves_both_versions_and_blocks_execution() {
+        let directory = temporary_directory("permission-conflict");
+        let legacy = directory.join(LEGACY_PRIVATE_DIR_NAME);
+        let target = directory.join(PRIVATE_DIR_NAME);
+        ensure_private_directory(&legacy.join("settings")).unwrap();
+        fs::write(legacy.join("settings/example.plugin.json"), "legacy").unwrap();
+        mark_permission_prepared(&target);
+        ensure_private_directory(&target.join("settings")).unwrap();
+        fs::write(target.join("settings/example.plugin.json"), "different").unwrap();
+        assert!(finish_prepared_plugin_directory_at(&legacy, &target).unwrap_err().contains("内容冲突"));
+        assert!(prepared_plugin_directory(&target).unwrap());
+        assert!(read_registry_at(&target).is_err());
+        assert_eq!(fs::read_to_string(target.join("settings/example.plugin.json")).unwrap(), "different");
+        assert_eq!(fs::read_to_string(legacy.join("settings/example.plugin.json")).unwrap(), "legacy");
+        // 冲突不会自动覆盖；用户明确恢复一致内容后，同一初始化可以继续。
+        fs::write(target.join("settings/example.plugin.json"), "legacy").unwrap();
+        finish_prepared_plugin_directory_at(&legacy, &target).unwrap();
+        assert!(!prepared_plugin_directory(&target).unwrap());
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn prepared_storage_rejects_invalid_marker_or_disappearing_source() {
+        let directory = temporary_directory("permission-invalid-state");
+        let target = directory.join(PRIVATE_DIR_NAME);
+        mark_permission_prepared(&target);
+        let marker = target.join(crate::plugin_install_permissions::PREPARED_MARKER);
+        fs::write(&marker, "invalid").unwrap();
+        assert!(prepared_plugin_directory(&target).is_err());
+        mark_permission_prepared(&target);
+        ensure_private_directory(&target.join("settings")).unwrap();
+        assert!(finish_prepared_plugin_directory_at(&directory.join("missing"), &target).is_err());
+        assert!(prepared_plugin_directory(&target).unwrap());
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn permission_classification_only_requests_elevation_for_target_access_denied() {
+        let denied = storage_io_error("无法创建插件目录", &io::Error::new(io::ErrorKind::PermissionDenied, "private/local/path"));
+        assert!(storage_permission_denied(&denied));
+        assert!(!denied.contains("private/local/path"));
+        assert!(!storage_permission_denied(&source_storage_error(denied)));
+        assert!(!storage_permission_denied(&storage_io_error("无法创建插件目录", &io::Error::from(io::ErrorKind::AlreadyExists))));
+        assert!(!storage_permission_denied(&storage_io_error("无法创建插件目录", &io::Error::from(io::ErrorKind::NotFound))));
+        assert!(!storage_permission_denied("插件私有目录必须是普通目录，不能使用符号链接或目录联接"));
+    }
+
+    #[test]
+    fn prepared_publish_never_replaces_existing_file() {
+        let directory = temporary_directory("permission-publish");
+        ensure_private_directory(&directory).unwrap();
+        let source = directory.join("source");
+        let target = directory.join("target");
+        fs::write(&source, "new").unwrap();
+        fs::write(&target, "existing").unwrap();
+        assert!(publish_prepared_entry(&source, &target).is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "existing");
         fs::remove_dir_all(directory).ok();
     }
 

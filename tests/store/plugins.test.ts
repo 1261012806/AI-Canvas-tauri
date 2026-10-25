@@ -231,6 +231,48 @@ describe('可信 Python 插件状态边界', () => {
     expect(getState().installedPlugins).toHaveLength(0);
   });
 
+  it.each([
+    '已取消插件目录授权，未继续本次操作',
+    '已取消 Windows 插件目录授权，未继续安装',
+  ])('does not request directory access again when restoring after cancellation: %s', async (message) => {
+    const previous = {
+      ...createInstalledPluginFixture('com.example.python-tool'),
+      source: pythonSource,
+      manifest: JSON.parse(pythonManifestText),
+    } as InstalledPlugin;
+    nativeMocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'stage_plugin_revision') {
+        throw new Error(message);
+      }
+      return null;
+    });
+    const { slice, getState } = createSlice([previous]);
+
+    await expect(slice.installPluginBundle(
+      pythonManifestText,
+      `${pythonSource}\n# updated`,
+      { trustedPythonConfirmed: true },
+    )).rejects.toThrow(message);
+
+    expect(nativeMocks.invoke.mock.calls).toEqual([
+      ['stage_plugin_revision', {
+        manifest: expect.objectContaining({ id: previous.id }),
+        source: `${pythonSource}\n# updated`,
+        uiSource: undefined,
+        resourcePayloads: [],
+      }],
+      ['activate_plugin_revision', {
+        pluginId: previous.id,
+        sourceDigest: previous.sourceDigest,
+        revisionDigest: previous.revisionDigest,
+        enabled: previous.enabled,
+      }],
+    ]);
+    expect(dbMocks.savePluginToDb).toHaveBeenCalledExactlyOnceWith(previous);
+    expect(getState().installedPlugins).toEqual([previous]);
+    expect(resourceMocks.clearPluginResources).not.toHaveBeenCalled();
+  });
+
   it('cleans staged native state and restores the previous DB record when saving the update fails', async () => {
     const previous = {
       ...createInstalledPluginFixture('com.example.python-tool'),
@@ -549,6 +591,34 @@ describe('可信 Python 插件状态边界', () => {
       sourceDigest: plugin.sourceDigest,
       revisionDigest: plugin.revisionDigest,
       enabled: true,
+      requestDirectoryAccess: true,
+    });
+  });
+
+  it('requests directory access for an explicit user enable without changing the persisted identity', async () => {
+    const plugin = { ...createInstalledPluginFixture('explicit-enable'), enabled: false };
+    const { slice, getState } = createSlice([plugin]);
+
+    await slice.setPluginEnabled(plugin.id, true);
+
+    expect(nativeMocks.invoke).toHaveBeenCalledExactlyOnceWith('activate_plugin_revision', {
+      pluginId: plugin.id,
+      sourceDigest: plugin.sourceDigest,
+      revisionDigest: plugin.revisionDigest,
+      enabled: true,
+      requestDirectoryAccess: true,
+    });
+    expect(dbMocks.savePluginToDb).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      id: plugin.id,
+      sourceDigest: plugin.sourceDigest,
+      revisionDigest: plugin.revisionDigest,
+      enabled: true,
+    }));
+    expect(getState().installedPlugins[0]).toMatchObject({
+      id: plugin.id,
+      sourceDigest: plugin.sourceDigest,
+      revisionDigest: plugin.revisionDigest,
+      enabled: true,
     });
   });
 
@@ -846,6 +916,7 @@ describe('可信 Python 插件状态边界', () => {
       sourceDigest: SOURCE_DIGEST_B,
       revisionDigest: REVISION_DIGEST_B,
       enabled: true,
+      requestDirectoryAccess: true,
     });
     expect(nativeMocks.invoke).not.toHaveBeenCalledWith(
       'set_plugin_registration_enabled',

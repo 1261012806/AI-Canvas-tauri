@@ -152,6 +152,8 @@ mod path_policy;
 // 源文件按领域归类；crate 根模块名保持稳定，避免改变 IPC、测试与安全调用路径。
 #[path = "plugins/registry.rs"]
 mod plugin_registry;
+#[path = "plugins/install_permissions.rs"]
+pub mod plugin_install_permissions;
 #[path = "plugins/runtime.rs"]
 mod plugin_runtime;
 #[path = "plugins/host_effects.rs"]

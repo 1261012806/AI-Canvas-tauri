@@ -108,7 +108,10 @@ async function stagePluginRevision(
   };
 }
 
-async function activatePluginRevision(plugin: InstalledPlugin): Promise<void> {
+async function activatePluginRevision(
+  plugin: InstalledPlugin,
+  requestDirectoryAccess = false,
+): Promise<void> {
   if (!plugin.sourceDigest) throw new Error('插件源码摘要缺失');
   if (!plugin.revisionDigest) throw new Error('插件 revision 摘要缺失');
   await invoke('activate_plugin_revision', {
@@ -116,6 +119,8 @@ async function activatePluginRevision(plugin: InstalledPlugin): Promise<void> {
     sourceDigest: plugin.sourceDigest,
     revisionDigest: plugin.revisionDigest,
     enabled: plugin.enabled,
+    // 仅显式启用可请求目录授权；安装后的激活和失败补偿不重复提示。
+    ...(requestDirectoryAccess ? { requestDirectoryAccess: true } : {}),
   });
 }
 
@@ -281,7 +286,7 @@ export const createPluginSlice: StateCreator<AppState, [], [], PluginSlice> = (s
     }
     try {
       if (enabled) {
-        await activatePluginRevision(updated);
+        await activatePluginRevision(updated, true);
       } else {
         await invoke('set_plugin_registration_enabled', { pluginId: id, enabled: false });
       }
