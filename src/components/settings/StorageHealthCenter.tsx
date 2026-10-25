@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../../store/useAppStore';
-import { getProjectDataDir, isTauriEnv } from '../../services/fileService';
+import { getProjectDataDir, isTauriEnv, revealFileInFolder } from '../../services/fileService';
 import {
   scanStorageHealth, clearTrashDir, deleteOrphanFile, deleteDuplicateFile, collectNodeFilePaths, StorageHealthScanError,
   type StorageHealthReport, type TrashInfo, type OrphanFileInfo, type DuplicateFileGroup, type CleanupResult,
@@ -424,6 +424,13 @@ export default function StorageHealthCenter() {
                   <p className="truncate text-xs text-canvas-text" title={file.path}>{file.name}</p>
                   <p className="ui-hint mt-1 truncate">{file.projectName} · {formatBytes(file.size)}</p>
                 </div>
+                <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm shrink-0" disabled={busy || !desktop}
+                  aria-label={t('打开 {name} 所在位置', { name: file.name })}
+                  onClick={() => {
+                    void revealFileInFolder(file.path).catch(() => {
+                      showToast(t('打开文件所在位置失败，请确认文件仍存在且可访问'), 'error');
+                    });
+                  }}>{t('打开所在位置')}</button>
                 <button type="button" className="ui-btn ui-btn--danger ui-btn--sm shrink-0" disabled={!canClean}
                   onClick={() => requestCleanup({ kind: 'orphans', entries: [file] })}>{t('删除')}</button>
               </div>

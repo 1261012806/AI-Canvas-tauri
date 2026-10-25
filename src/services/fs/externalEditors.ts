@@ -52,12 +52,7 @@ export async function revealFileInFolder(filePath: string): Promise<void> {
     return;
   }
 
-  try {
-    await invoke('reveal_in_file_manager', { path: filePath, select: true });
-  } catch (error) {
-    console.error('[fileService] revealFileInFolder 失败:', filePath, error);
-    throw error;
-  }
+  await invoke('reveal_in_file_manager', { path: filePath, select: true });
 }
 
 /** 在系统文件管理器中打开目录。 */
