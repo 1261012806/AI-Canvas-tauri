@@ -482,8 +482,9 @@ async function captureVisibleCanvasInWorker(
     media,
   }, diagnostics);
   const snapshot = arrayBufferToDataUrl(response.buffer, response.mimeType);
+  const snapshotLength = snapshot.length;
   if (isProjectSnapshotDataUrl(snapshot)) return snapshot;
-  noteFailure(diagnostics, 'encode-size', snapshot.length > PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH ? 'oversize' : 'invalid-data-url');
+  noteFailure(diagnostics, 'encode-size', snapshotLength > PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH ? 'oversize' : 'invalid-data-url');
   return null;
 }
 

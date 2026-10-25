@@ -32,7 +32,8 @@ function installMediaCapture(count = 4, mode: 'hold' | 'blocked' | 'transfer-err
   let mounted = true;
   const originalReads = vi.fn(() => { if (!mounted) throw new Error('source unmounted'); });
   class SnapshotImage {
-    constructor(private readonly index: number) {}
+    private readonly index: number;
+    constructor(index: number) { this.index = index; }
     complete = true;
     get currentSrc() { originalReads(); return `https://private.example/image-${this.index}.png?token=private-token`; }
     get src() { return this.currentSrc; }
@@ -80,7 +81,7 @@ function installMediaCapture(count = 4, mode: 'hold' | 'blocked' | 'transfer-err
       const canvas = new SnapshotCanvas(); surfaces.push(canvas); return canvas;
     },
   });
-  vi.stubGlobal('window', { setTimeout, clearTimeout });
+  vi.stubGlobal('window', { setTimeout, clearTimeout, btoa });
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: (name: string) => variables[name] ?? '', objectFit: 'contain' }));
   vi.stubGlobal('OffscreenCanvas', class {});
   vi.stubGlobal('createImageBitmap', createBitmap);
@@ -154,7 +155,14 @@ async function renderWithSnapshotWorker(convertToBlob: (options: ImageEncodeOpti
   const surfaces: Array<{ width: number; height: number }> = [];
   vi.stubGlobal('self', scope);
   vi.stubGlobal('ImageData', class {
-    constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    data: Uint8ClampedArray;
+    width: number;
+    height: number;
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
+      this.data = data;
+      this.width = width;
+      this.height = height;
+    }
   });
   vi.stubGlobal('OffscreenCanvas', class {
     width: number;

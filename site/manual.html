@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="AI Canvas 0.10.16 操作说明书：素材复用与多厂商生成，LibAPI 四类预置模型、视频参数保持、快捷指令 JSON 分享与依赖并发、创作资产包、失效记录清理、四语界面和 MCP 工具发现。">
-<title>AI Canvas 0.10.16 · 操作说明书</title>
+<meta name="description" content="AI Canvas 0.10.17 操作说明书：图片无损压缩与画布修复，PNG / JPEG 独立压缩副本、存储健康与安全清理、未引用文件定位、分镜等宽预览和 Mac 输入与项目缩略图修复。">
+<title>AI Canvas 0.10.17 · 操作说明书</title>
 <style>
 /* Standalone document: a small copy of the application's base.css color tokens. */
 :root{color-scheme:dark;--theme-bg:#0a0a0f;--theme-surface:#14141c;--theme-card:#1a1a26;--theme-border:#2a2a3a;--theme-hover:#252535;--theme-text:#dddde4;--theme-text-secondary:#8888a0;--brand:#6366f1;--brand-light:#818cf8;--brand-pale:#a5b4fc;--node-markdown:#a855f7;--success:#22c55e;--success-bg:rgba(16,185,129,.15);--warning:#f97316;--warning-bg:rgba(249,115,22,.15);--danger:#ef4444;--white:#fff;--black-alpha-30:rgba(0,0,0,.3)}
@@ -34,7 +34,7 @@ dialog .character-actions-shot{width:1912px}
 <body>
 <a class="skip" href="#main">跳到正文</a>
 <nav class="toc" aria-label="说明书目录">
-<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.16 · 操作说明书<br>从素材整理到逐镜制作</small>
+<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.17 · 操作说明书<br>从素材整理到逐镜制作</small>
 <a class="back" href="index.html">← 返回软件首页</a>
 <label for="search">查找章节或操作</label><input id="search" type="search" placeholder="如：文件夹、回收站、视频批次" autocomplete="off" aria-describedby="search-status" aria-controls="search-results toc-links">
 <p id="search-status" class="search-status" role="status">支持空格分隔关键词；Ctrl + F 查找全文。</p>
@@ -47,6 +47,8 @@ dialog .character-actions-shot{width:1912px}
 <a href="#connection">06 · 添加厂商与模型</a><a href="#provider-sites">↳ 国内 / 国际站切换</a><a href="#image-quick-templates">↳ 图片快速模板</a><a href="#connection-transfer">↳ JSON 文件导入导出</a><a href="#import">07 · 接口说明与手动配置</a><a href="#protocol">08 · 调用协议与视频预设</a><a href="#protocol-json-editor">↳ JSON 变量插入与预览</a><a href="#variables">09 · 变量与结果路径</a><a href="#sync">10 · 同步图像接口示例</a><a href="#async">11 · 异步视频接口示例</a><a href="#async-download">↳ 完成后同源下载</a><a href="#api-check">12 · 验证与接口排错</a>
 <div class="group">日常制作与维护</div>
 <a href="#comfy">13 · 本地与云端工作流</a><a href="#comfy-install">↳ 安装官方 ComfyUI</a><a href="#assets">14 · 资源库、文件夹与创作资产</a><a href="#asset-image-batch-reverse">↳ 批量反推提示词与标签</a><a href="#assistant">15 · AI 助手与任务</a><a href="#ai-app">↳ AI 应用节点</a><a href="#director">16 · 分镜制作与 3D 导演台</a><a href="#plugins">17 · 插件与 MCP 控制</a><a href="#mcp-ai-app">↳ 调用 AI 应用动作</a><a href="#storage">18 · 保存、备份与迁移</a><a href="#shortcuts">19 · 快捷键速查</a><a href="#faq">20 · 常见问题</a><a href="#checklist">21 · 使用前检查单</a><a href="#appearance">22 · 外观主题与预设</a><a href="#about">说明书范围与版本</a>
+<div class="group">0.10.17 更新入口</div>
+<a href="#image-lossless-compression">↳ 图片节点无损压缩</a><a href="#storage-health">↳ 存储健康与清理确认</a><a href="#shotlist-create">↳ 分镜画面与成片等宽</a><a href="#prompt-input-updates">↳ Mac 引用后的光标输入</a><a href="#project-thumbnails">↳ 返回启动页的项目预览</a>
 <div class="group">0.10.16 更新入口</div>
 <a href="#libapi-models">↳ LibAPI 四类预置模型</a><a href="#video-parameters">↳ 切模型保留视频参数</a><a href="#preset-sharing">↳ 快捷指令编排与 JSON 分享</a><a href="#creative-asset-transfer">↳ 创作资产包导入导出</a><a href="#creative-asset-selection">↳ 多选、搜索与排序</a><a href="#visual-asset-references">↳ 场景 / 道具多参考图</a><a href="#asset-usage">↳ 查看使用位置</a><a href="#asset-repair">↳ 失效素材重连</a><a href="#asset-cleanup">↳ 清理失效记录</a><a href="#interface-language">↳ 切换界面语言</a><a href="#mcp-discovery">↳ MCP 分页发现工具</a>
 <div class="group">0.10.15 更新入口</div>
@@ -60,9 +62,10 @@ dialog .character-actions-shot{width:1912px}
 <div class="eyebrow">AI CANVAS · USER MANUAL</div>
 <h1>AI Canvas 操作说明书<br>从首次生成到完整创作</h1>
 <p>从启动页选择项目，在资源库整理素材，再用无限画布连接文本、图像、视频与音频。按步骤完成首次出图、剧本分集、逐镜生成和剪辑；需要接入自己的服务时，查阅接口与工作流示例。</p>
-<span class="badge">0.10.16 说明书</span><span class="badge">2026-10-24 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
+<span class="badge">0.10.17 说明书</span><span class="badge">2026-10-25 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
 </header>
 <div class="actions"><button class="action" id="print" type="button">打印 / 保存为 PDF</button><button class="action" id="theme" type="button" aria-pressed="false">切换深色阅读</button><a class="action" href="#project-settings">先看项目设置 →</a><a class="action" href="#connection">直接看自定义接口 →</a></div>
+<aside class="tip"><b>0.10.17 · 图片无损压缩与画布修复：</b>图片节点新增<a href="#image-lossless-compression">PNG / JPEG 无损压缩</a>，只有体积变小时才另建副本，保留原图；<a href="#storage-health">存储健康</a>区分文件占用与应用数据配额，支持清理前确认和打开未引用文件所在位置。分镜的<a href="#shotlist-create">画面与生成视频列保持等宽</a>，并修复 Mac 中<a href="#prompt-input-updates">引用胶囊后的光标</a>及<a href="#project-thumbnails">返回启动页的缩略图更新</a>。页面说明源码能力，安装包与验收范围以<a href="#about">文末记录</a>为准。</aside>
 <aside class="tip"><b>0.10.16 · 素材复用与多厂商生成：</b>新增 <a href="#libapi-models">LibAPI 四类预置模型</a>，切换视频型号时<a href="#video-parameters">保留已有比例和兼容参数</a>；快捷指令可<a href="#preset-sharing">参考原图、按依赖并发并通过 JSON 分享</a>。创作资产支持<a href="#creative-asset-selection">多选、搜索和排序</a>、<a href="#creative-asset-transfer">资产包迁移</a>与<a href="#visual-asset-references">单图精确引用</a>。失效素材可<a href="#asset-repair">重连</a>或确认后<a href="#asset-cleanup">清理记录</a>；同时补齐<a href="#interface-language">四语界面</a>和<a href="#mcp-discovery">MCP 分页发现</a>。数据库沿用 v23，安装包公开状态和验收边界见<a href="#about">文末说明</a>。</aside>
 <aside class="tip"><b>0.10.15 · 创作资产与媒体生成恢复：</b>在<a href="#global-creative-assets">全局资产</a>管理人物、场景与道具，按<a href="#asset-sorting">名称、时间、大小或最近使用排序</a>；异步图片、视频和音频可<a href="#media-task-recovery">续取原任务</a>。图片参数增加<a href="#image-quality-background">质量与透明背景</a>；分镜表的<a href="#shotlist-generated-video">生成视频列</a>独立保存成片，时间轴只采用该列的就绪视频。<b>0.10.15 数据库升至 v23，从更早版本升级前请先<a href="#upgrade-0-10-15">备份项目与全局资料</a>。</b>即梦样片模式尚未接入，具体范围与待验收项见<a href="#about">文末说明</a>。</aside>
 <aside class="tip"><b>0.10.14 新增与修复：</b>本地 H3 视频工作流可使用<a href="#comfy-refmod">ComfyUI 角色参考包（RefMod）</a>，工作流输入可按媒体类型筛选；视频生成可<a href="#asset-media-references">直接引用视频和音频文件资产</a>。自定义接口增加<a href="#protocol-test-resume">试跑暂停与续查</a>、<a href="#protocol-draft-protection">未保存草稿保护</a>，ComfyUI 图片、音频结果保存失败时保留原任务供继续取回。已有项目与凭据沿用原存储。</aside>
@@ -142,6 +145,8 @@ dialog .character-actions-shot{width:1912px}
 <p>默认启动视图是<b>项目列表</b>。先选项目再进入画布，也可在启动页下方的<b>资源库 → 最近使用</b>查看近期素材。想直接恢复上次工作时，在<b>设置 → 常规 → 启动时打开</b>选择<b>上次画布</b>；已有设置以实际选项为准。</p>
 <ol class="steps"><li>用<b>搜索项目</b>按名称查找，按<b>最近更新 / 创建时间 / 项目名称</b>排序；点击<b>新建</b>建立项目，或点击已有卡片打开。</li><li>查看“最近使用”中的素材。点击图片打开图片与生成信息，点击视频打开播放器；其他类型可进入资源库查看。</li><li>点击<b>进入资源库</b>打开整页浏览；没有最近记录时，也可点<b>浏览资源库</b>或已登记的文件夹入口。</li><li>需要把素材放进画布时，先打开目标项目，再从资产侧栏或资产管理面板拖入。整页资源库适合集中浏览文件。</li></ol>
 <p class="small">最近使用按素材的预览或成功拖入画布等使用行为记录，不是磁盘修改时间排行榜。列表为空时仍可进入资源库，不能据此判断文件丢失。资源卡片也支持<a href="#asset-file-actions">右键文件操作</a>。</p>
+<h4 id="project-thumbnails">返回启动页后的项目预览</h4>
+<p>返回启动页时，项目卡片按离开时可见的画布范围重新生成缩略图，媒体和正文预览可能稍后更新。缩略图是有界概览，不是整张画布的完整截图；素材无法读取或预览生成失败时保留旧图。项目正文保存与封面生成分别处理，不能只用封面判断正文是否已保存。</p>
 <h4>新建、切换与整理项目</h4>
 <ol class="steps"><li>打开左上角<b>画布 / 项目</b>入口，进入项目库。新建画布后，为它起一个容易辨认的名字，例如“短片 · 第一次测试”。</li><li>在项目库点击卡片进入项目；最近打开的项目可通过顶部标签快速切换。</li><li>项目卡片菜单可<b>重命名、复制、导出项目包或删除</b>。需要试不同方案时，先复制项目再继续编辑。</li><li>点击当前项目名称右侧的设置图标，按<a href="#project-settings">第 01 章</a>确认画风、母图、后缀及默认模型。</li></ol>
 <p>点击左上角<b>返回启动页</b>会先保存当前项目；保存失败时保留画布，处理提示后再重试。项目预览图可稍后更新，不作为正文保存成功的依据；关闭应用后重开，预览可能仍是上一张，应以实际画布内容为准。</p>
@@ -234,6 +239,9 @@ dialog .character-actions-shot{width:1912px}
 <p>参考图可以来自上传、画布上的已有图片或角色库。添加后检查缩略图是否正确。普通图像模型支持批量且未选择工作流时，<b>长按生成按钮</b>可选择 2–8 张；不满足这些条件时，以当前按钮提供的选项为准。</p>
 <p>同一节点可以多次生成，使用输出历史比较结果。实际失败或超时时，先检查服务端任务状态与输出历史，再决定是否重新提交，避免重复计费。</p>
 <p>图片与视频生成时显示<b>已等待</b>时长，表示已经等待多久，不是预计完成时间。macOS 中仅选中视频节点时保持封面，需要播放时再加载；媒体预览超出资源预算时显示占位，可减少同时播放或展开的大图后再试。</p>
+<h3 id="image-lossless-compression">图片节点：PNG / JPEG 无损压缩</h3>
+<ol class="steps"><li>在桌面端选择已有图片的图像节点，在浮动工具栏或<b>更多</b>菜单中点击<b>无损压缩</b>。</li><li>确认源文件为 PNG 或 JPEG。应用读取原图并进行无损压缩，不用缩略图代替原文件。</li><li>只有文件体积确实减小时，才保存独立文件并在画布新增压缩副本；原图及原节点保持不变。根据完成提示核对节省比例与新节点。</li><li>没有体积收益时不会创建副本；格式不支持、读取或保存失败时，先处理提示，原图仍保留。</li></ol>
+<p class="small">该工具仅支持桌面端的 PNG / JPEG，源图上限为 32 MiB、2400 万像素及单边 16384 像素。不支持的格式不会自动改成有损压缩；它也不等同于上传参考图时的素材准备。</p>
 <h3 id="image-quality-background">图片质量、透明背景与比例</h3>
 <ol class="steps"><li>在图像节点或提示词窗口打开参数入口，分别核对<b>分辨率、质量、背景和比例</b>。选项按当前厂商的准确型号提供，同名模型在不同渠道的档位可能不同。</li><li>需要透明图时，选择支持该能力的型号，将背景设为<b>透明</b>。<b>接口默认</b>表示省略背景参数；<b>自动</b>是服务商明确提供的另一选项，两者不同。</li><li>切换模型后，用户选择的比例与节点尺寸会保留；重新检查新型号能否接受该组合。不支持的质量或背景应先改为合法值，再提交。</li><li>生成后检查实际透明区域及保存文件。透明结果沿用原始图片保存；若接口要求输出格式，透明背景只使用该渠道支持的 PNG / WebP，不能与显式 JPEG 配置共存。</li></ol>
 <p>自定义连接在<b>图片参数能力</b>中明确声明质量、背景及所需默认值；未声明时不会自动发送。调用协议分别映射 <code>{{imageQuality}}</code> 和 <code>{{imageBackground}}</code>，不要把质量写成分辨率。GPT Image 2.5 官方与 APIMart 快速模板包含已确认的背景合同；未知 JSON 中转需按自身文档补能力，GPT Image 2 不自动获得背景能力。</p>
@@ -876,6 +884,7 @@ dialog .character-actions-shot{width:1912px}
 <h3 id="shotlist-create">16.1 · 创建分镜表并核对镜头</h3>
 <ol class="steps"><li>从<b>剧本创作工作台 → 生成本集分镜</b>开始。软件先保存当前集，再创建剧本来源快照和空表，打开文本模型生成弹窗。也可在画布按 <kbd>Alt + 6</kbd> 手动建表。</li><li>检查当前分集、引用的剧本、文本模型和目标时长，点击生成。手动制作时使用<b>加一镜</b>；按需要用<b>列</b>控制显示字段。</li><li>逐镜核对镜号、画面内容、对白、时长、景别、运镜等字段。AI 拆分只是初稿，尤其要核对人物关系、剧情顺序、镜头连续性和总时长。</li><li>在镜头画面栏选择真实图片或视频节点。已有绑定需要调整时使用<b>换画面</b>；仅在描述中写一个文件名不会建立素材绑定。</li></ol>
 <p>一张表最多 200 镜。使用工作台创建的表会保留本集剧本快照，便于后续复核；手动创建或旧表没有明确来源时，不会自动猜测它对应哪一集。</p>
+<p><b>画面</b>与<b>生成视频</b>列统一固定为 96px，沿用相同的 16:9 预览，普通与全屏视图共用；这两列不能拖宽，旧媒体列宽设置也不再影响展示。镜号与时长仍为固定列；其他列可拖动表头或在<b>列</b>菜单中按比例调整。</p>
 
 <h3 id="shotlist-frames">16.2 · 为没有画面的镜头补图</h3>
 <ol class="steps"><li>先写好有效的镜头描述，并按第 01 章确认项目画风、母图与生成参数。</li><li>点击<b>补齐空镜</b>，选择图片模型，核对这批镜头数量。每批最多 12 镜，按顺序逐镜调用图片模型。</li><li>开始后查看进度；完成的结果会保存为真实图片节点并绑定对应镜头。</li><li>需要停止时点击<b>取消补图</b>。已经完成的图片保留；再次补图只处理仍未绑定画面的镜头。</li></ol>
@@ -959,8 +968,10 @@ dialog .character-actions-shot{width:1912px}
 <h3 id="upgrade-0-10-15">0.10.15 升级：先备份，再升级数据库</h3>
 <p>0.10.15 将本地数据库从 <b>v22 升至 v23</b>，新增全局场景 / 道具资料存储，人物继续使用原全局角色记录。升级前导出重要项目包，另外备份全局创作资料、受管素材、外部目录和需要保留的配置；项目包不包含整个全局资源库。</p>
 <p><b>已升级的数据库不能直接交给 schema v22 的旧安装包打开。</b>需要回退时使用升级前备份和兼容的恢复方案，不降低数据库版本、不清库。升级后先检查旧项目、全局人物、新场景 / 道具及素材引用，再继续制作。</p>
-<h3>文件目录、外部软件与存储健康</h3><p>在<b>设置 → 文件与应用</b>配置文件根目录，以及 Photoshop、剪映专业版、Premiere Pro 等外部应用；配置后，本地媒体节点右键会提供适用入口。移动电脑或更换安装位置后，需要重新核对这些路径。</p>
-<p><b>存储健康</b>用于查看空间、回收站残留、孤儿/重复文件和离线文件夹。清理前逐项核对用途。删除单集不会清理整部剧共用素材目录；处理共享素材时，应先检查其他分集是否仍在引用。</p>
+<h3 id="storage-health">文件目录、外部软件与存储健康</h3><p>在<b>设置 → 文件与应用</b>配置文件根目录，以及 Photoshop、剪映专业版、Premiere Pro 等外部应用；配置后，本地媒体节点右键会提供适用入口。移动电脑或更换安装位置后，需要重新核对这些路径。</p>
+<p>进入<b>设置 → 存储健康</b>，先查看扫描时间及结果。<b>项目文件占用</b>包含素材与回收站；<b>应用数据配额</b>是浏览器内核管理的数据额度，不是磁盘总容量，清理素材文件不会直接释放这部分配额。</p>
+<ol class="steps"><li>点击<b>重新扫描</b>，按概览、回收站、未引用文件、重复文件与不可用目录核对；扫描未完成时，只显示已读取范围，暂不提供清理。</li><li>在<b>未引用文件</b>中先点<b>打开所在位置</b>检查文件。没有应用内引用不代表没有其他用途，不要只凭分类就删除。</li><li>清理前审阅确认窗口中的项目、文件和预计空间；执行前会重新核对引用，仍被引用或无法确认的文件保留，完成后查看实际清理结果与未清理项。</li></ol>
+<aside class="hold"><b>永久清理不可撤销。</b>清空回收站后无法通过应用恢复；未引用文件与可删重复副本会从磁盘直接删除，不进入回收站。它与资源库中“清理失效记录但保留文件”是不同操作。删除单集不会清理整部剧共用素材目录，处理共享素材前仍应检查其他分集。</aside>
 <h3 id="interface-language">切换界面语言，保留用户内容</h3>
 <ol class="steps"><li>进入<b>设置 → 常规</b>，选择<b>简体中文、English、日本語或한국어</b>，检查设置、项目栏、素材库与助手中的菜单和筛选标签更新；等待设置保存完成。</li><li>有编辑草稿时切换语言，界面标签随之更新，项目、文件、角色名称，提示词、对白、消息正文和已有草稿保持原内容。重新打开应用后核对保存的语言选择。</li><li>外部插件自行绘制的界面、模型或原生运行时的详细诊断及终端输出可能保留来源语言；切换语言不会重命名已有资料，也不代表这些原始文本已被翻译。</li></ol>
 <h3 id="settings-save">设置未保存、冲突或凭据读取失败</h3>
@@ -974,6 +985,7 @@ dialog .character-actions-shot{width:1912px}
 <p>在<b>设置 → 快捷键</b>选择节点提示词的发送方式：<kbd>Enter</kbd>、<kbd>Shift+Enter</kbd>、<kbd>Ctrl+Enter</kbd>或<kbd>Alt+Enter</kbd>；也可右键发送按钮修改。使用 Enter 发送时，Shift+Enter 换行；使用组合键发送时，Enter 换行。输入框底部会显示当前提示。</p>
 <p>点击模型名称重新选择模型，点击右侧<b>×</b>清除当前节点选择；清除后生成前需重新选择。输入 <b>@</b> 可按人物、场景、道具等分类查看完整素材列表，缩略图随滚动按需加载。音频、视频和文本引用使用对应图标。</p>
 <p>按住引用胶囊拖动，可调整它在提示词中的位置，也可插入文字之间或移到其他行。按住 <kbd>Ctrl</kbd> 或 <kbd>Alt</kbd> 拖动并松开鼠标，会在目标位置复制一份，原胶囊保留；拖动时显示插入线。按 <kbd>Esc</kbd>、移出输入框后松开或窗口失焦会取消操作。工作流值区仍支持正常选择文字，拖动其前缀可移动整枚胶囊。</p>
+<p>在 Mac 中，引用胶囊后继续输入或恢复光标时，插入点保持在可编辑的正文区域；工作流胶囊内部的值区仍可独立编辑。此修复不改变引用内容、拖动与复制的规则。</p>
 <h4 id="prompt-polish">AI 润色：单独选择文本模型与参考要求</h4>
 <p>放大节点编辑器后，点击发送按钮旁的<b>AI 润色</b>。面板默认带入助手文本模型，也可独立选择另一个已配置文本模型；这次选择不改节点生成模型或助手默认模型。润色要求可用 <b>@</b> 引用节点与资产，先核对素材，再开始润色。</p>
 <p>引用候选中 Enter 用于选择，Ctrl + Enter 开始润色。先查看完整预览，再点击应用；原文、项目或画布已变化时应重新核对，不能把旧结果覆盖回去。关闭会停止本地等待并保留原文，应用后的撤销仍受后续编辑状态保护。</p>
@@ -1039,8 +1051,10 @@ dialog .character-actions-shot{width:1912px}
 </section>
 
 <section id="about"><h2>说明书范围与版本</h2>
-<p>本说明书面向 <b>0.10.16「素材复用与多厂商生成」</b>，<b>2026-10-24</b> 按源码补充 LibAPI 四类预置型号、视频兼容参数保持、快捷指令 JSON 分享与依赖并发，以及创作资产包、多选管理、使用位置、失效重连与记录清理、场景 / 道具多参考图、四语界面和 MCP 工具发现。页面描述源码能力，安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.16">对应 GitHub Release</a>为准。顶部保留历史变化；截图用于辨认位置，不代表所有按钮与最新界面完全一致。</p>
-<p>发版门禁及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-24-release-0.10.16.md">0.10.16 发布计划</a>，旧版门禁不作为本轮通过证据。本文不替代桌面验收；LibAPI 各类模型与真实素材、视频参数、快捷指令分享与执行、资产包往返、失效记录清理、各平台安装与升级仍需按计划核对，不据文档更新声称真实付费调用已经验证。</p>
+<p>本说明书面向 <b>0.10.17「图片无损压缩与画布修复」</b>，<b>2026-10-25</b> 按源码补充图片节点 PNG / JPEG 无损压缩、存储健康统计与清理确认、未引用文件定位、分镜等宽预览，以及 Mac 引用输入与项目缩略图修复。0.10.16 和此前的能力及兼容提示继续保留。页面描述源码能力，安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.17">对应 GitHub Release</a>为准；截图用于辨认位置，不代表所有按钮与最新界面完全一致。</p>
+<p>发版门禁及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-25-release-0.10.17.md">0.10.17 发布计划</a>，旧版门禁不作为本轮通过证据。用户已确认 Mac 开发窗口返回启动页后的缩略图更新正常，这不代表完整桌面或跨平台验收通过。图片压缩、永久清理、旧项目重开、引用编辑、真实模型调用及各平台安装升级仍按计划核对。</p>
+<h3 id="source-updates-0-10-17">0.10.17「图片无损压缩与画布修复」范围与兼容提示</h3>
+<ul><li>图片无损压缩仅为确实变小的 PNG / JPEG 创建独立副本，保留原图，不保证每张图片都能进一步减小。</li><li>存储健康的文件清理会永久删除磁盘文件；失效记录清理则保留文件。两类操作都应先审阅影响，不能混用。</li><li>分镜画面与生成视频列固定同宽，旧媒体列宽不再生效；其他列的比例设置与素材绑定继续保留。</li><li>Mac 引用输入与项目缩略图修复不扩大系统解码、素材访问或模型权限；缩略图失败时保留旧预览。</li><li>数据库仍为 v23，从更早版本升级继续遵守<a href="#upgrade-0-10-15">备份与回退限制</a>。包是否已公开及完整门禁结果以发布计划和 Release 为准。</li></ul>
 <h3 id="source-updates">0.10.16「素材复用与多厂商生成」范围与兼容提示</h3>
 <ul><li>创作资产包与项目包分别管理；资产包只迁移所选条目及关联媒体，不覆盖同名卡片，也不搬迁模型凭据或原项目节点链接。</li><li>场景与道具的旧单主图保持兼容。精确引用按单图身份解析，删除该图后必须重新选择，不能用另一张主图冒充原引用。</li><li>使用位置读取失败不等于未使用；失效重连需明确核对文件或目录。失效记录清理不可撤销，会删除关联信息和对应输出历史，但不删除磁盘文件、画布节点或对话正文。</li><li>LibAPI 预置 67 种已适配型号，不自动启用，不证明账号权限或余额有效；可选拉取以当前真实目录更新。普通 TTS / 音乐不支持即传素材克隆，MiniMax / 豆包需填写已有音色 ID。</li><li>视频切换型号保留已有比例和兼容参数；输入模式及所选渠道的能力仍须核对。快捷指令导入只新增独立配置，不搬迁模型凭据或引用文件，也不会自行运行。</li><li>界面支持简体中文、English、日本語和한국어；用户内容和外部来源原文保留原值。MCP 工具目录分页不改变调用权限与确认策略。</li><li>数据库继续使用 v23，未因本版素材管理功能新增 schema 升级；从更早版本升级仍须遵守<a href="#upgrade-0-10-15">0.10.15 的备份与旧版回退限制</a>。</li></ul>
 <h3 id="source-updates-0-10-15">0.10.15 增量范围与兼容提示</h3>
@@ -1050,7 +1064,7 @@ dialog .character-actions-shot{width:1912px}
 <p>内容依据当前版本的启动页、资源库、设置界面、应用帮助与相关操作实现核对。接口示例用于本地配置校验，<b>未调用真实厂商接口</b>；所有 example.com 地址与示例模型 ID 均为占位内容。按钮准备草稿、创建节点、实际模型生成和媒体保存是不同步骤，请按各章检查实际结果。</p>
 <p class="small">页面所需样式、脚本和十一张截图均在当前 HTML 内，无外部字体或 CDN 依赖。可直接双击离线打开；点击“返回软件首页”需同时保留 site 目录中的首页。打印按钮使用浏览器打印功能，可选择保存为 PDF。</p>
 </section>
-<footer>AI Canvas · 0.10.16 操作说明书 · 2026-10-24 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
+<footer>AI Canvas · 0.10.17 操作说明书 · 2026-10-25 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
 </main>
 <dialog id="zoom" aria-label="放大界面截图"><button class="action" id="zoom-close" type="button">关闭放大图（Esc）</button><div class="zoom-box"></div></dialog>
 <script>

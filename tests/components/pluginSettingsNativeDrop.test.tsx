@@ -84,6 +84,7 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
   vi.doMock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: subscribe }) }));
   const globalListen = vi.fn().mockResolvedValue(vi.fn());
   vi.doMock('@tauri-apps/api/event', () => ({ listen: globalListen }));
+  vi.stubGlobal('navigator', { platform: 'Win32' });
   vi.stubGlobal('window', { devicePixelRatio: 2, setTimeout: vi.fn(), clearTimeout: vi.fn() });
   const { default: PluginSettings } = await import('../../src/components/settings/PluginSettings');
   const { isExternalDropCaptured } = await import('../../src/utils/dropCapture');

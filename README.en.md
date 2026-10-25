@@ -14,7 +14,7 @@
 
 AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, Markdown, shot lists, 360° panoramas and hand-drawn notes into connectable canvas nodes. In a single project you can orchestrate generation pipelines, manage characters, scenes, props and local media assets, run ComfyUI workflows, and use the conversational assistant to query or modify the canvas, generate media, dispatch read-only sub-agents, read authorized files, and accumulate project memory. Projects can also be split into series and episodes — each episode of an AI short drama gets its own canvas, while the character library and assets are shared across the whole series.
 
-![Version](https://img.shields.io/badge/version-0.10.16-6366f1)
+![Version](https://img.shields.io/badge/version-0.10.17-6366f1)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![React Flow](https://img.shields.io/badge/React_Flow-12-ff0072)
@@ -49,7 +49,8 @@ AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, 
 | AI app nodes | Create interactive apps through the Agent or MCP. Apps access only bound canvas assets, run read-only actions and save results. |
 | Characters & creative assets | Manage project and global characters, scenes and props, with character voices and actions, multiple scene/prop reference images and precise references to individual images. |
 | External MCP control | Let external AI tools control the canvas, media and editing projects through local stdio or Streamable HTTP. Disabled by default; remote access requires confirmation to enable. |
-| Local storage | Save projects and media locally, and manage API keys in a separate credential store. |
+| Local storage | Save projects and media locally, and manage API keys in a separate credential store. Storage health separates file usage from app data quota, confirms cleanup and rechecks references, and can reveal unreferenced files in their folders. |
+| Lossless image compression | Compress PNG / JPEG images from an image node. Create a separate copy only when it is smaller, keeping the original image. |
 | Series & episodes | Give each episode its own canvas while sharing characters, project memory and assets across the series. |
 | Asset library & editing | Preview and edit media, prompts, tags, text and Markdown, with batch prompt extraction from images. Select creative assets in bulk, copy them between projects and the global library, transfer asset packages, find usage locations, reconnect missing files and explicitly clean up missing records. Record cleanup cannot be undone and keeps disk files. |
 | Multilingual interface | Use Simplified Chinese, English, Japanese or Korean while keeping user content and editing drafts when switching the interface language. |

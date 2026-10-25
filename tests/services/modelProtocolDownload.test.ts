@@ -153,9 +153,11 @@ describe('declarative task result download', () => {
   it('does not deliver content when cancelled while reading the download', async () => {
     const controller = new AbortController();
     const response = video();
-    vi.spyOn(response, 'arrayBuffer').mockImplementationOnce(async () => {
+    const reader = response.body!.getReader();
+    vi.spyOn(response.body!, 'getReader').mockReturnValue(reader);
+    vi.spyOn(reader, 'read').mockImplementationOnce(async () => {
       controller.abort();
-      return new Uint8Array([1, 2, 3]).buffer;
+      return { done: false, value: new Uint8Array([1, 2, 3]) };
     });
     const fetchMock = vi.fn().mockResolvedValueOnce(json({ id: 'video-7' }))
       .mockResolvedValueOnce(json({ status: 'completed' })).mockResolvedValueOnce(response);
@@ -173,7 +175,9 @@ describe('declarative task result download', () => {
         .mockImplementationOnce(async (_url, init) => {
           downloadSignal = init.signal;
           const response = video();
-          vi.spyOn(response, 'arrayBuffer').mockReturnValue(new Promise<ArrayBuffer>(() => {}));
+          const reader = response.body!.getReader();
+          vi.spyOn(response.body!, 'getReader').mockReturnValue(reader);
+          vi.spyOn(reader, 'read').mockReturnValue(new Promise<ReadableStreamReadResult<Uint8Array<ArrayBuffer>>>(() => {}));
           return response;
         });
       vi.stubGlobal('fetch', fetchMock);

@@ -786,7 +786,6 @@ const nodes = {
   '道具': 'prop',
   '{kind}简介已提取并入库 · 「资产管理 > 短剧资产」可查看':
     '{kind} summary extracted and saved · view under "Asset management > Drama assets"',
-  '已提取，但 JSON 未完全规范化，请检查输出': 'Extracted, but the JSON was not fully normalized; check the output',
   '生成失败': 'Generation failed',
   '已终止 ComfyUI 任务': 'ComfyUI task terminated',
   '无法终止 ComfyUI 任务': 'Cannot terminate the ComfyUI task',

@@ -191,6 +191,8 @@ describe('引用胶囊的文本光标落点', () => {
   });
 
   it.each(['空尾文本', '换行', '连续胶囊'])('%s 归一化后两侧都有文本，重复处理不累加占位', (mode) => {
+    a.remove();
+    b.remove();
     root.childNodes = [];
     const empty = doc.createTextNode('');
     if (mode === '空尾文本') root.append(a, empty);

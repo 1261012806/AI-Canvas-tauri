@@ -137,7 +137,7 @@ export interface MentionEditorHandle {
 type CursorPosition = { offset: number; workflowValue?: { index: number; offset: number; focused: boolean } };
 const createCursorWalker = (root: HTMLElement) => document.createTreeWalker(root, NodeFilter.SHOW_ALL, {
   acceptNode(node) {
-    for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
+    for (let parent = node.parentNode; parent && parent !== root; parent = parent.parentNode) {
       if (!isChipEl(parent)) continue;
       // 工作流的 value 可以编辑，其余胶囊内部都只是展示，不计入正文偏移。
       return parent.hasAttribute('data-wf-id') && !!parent.querySelector('.prompt-chip-wf-value')?.contains(node)
