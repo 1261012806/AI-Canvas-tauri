@@ -938,6 +938,7 @@ export default function PresetManager() {
                   <PresetAdvancedEditor
                     config={advancedConfig}
                     defaultNodeType={activeTab}
+                    disabled={saving || folderBusy}
                     onChange={setAdvancedConfig}
                   />
                 )}

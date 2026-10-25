@@ -24,6 +24,7 @@ import {
 } from '../../../services/presetTemplateService';
 import { isAdvancedPreset, runPresetSequence } from '../../../services/presetSequenceService';
 import PopupCloseButton from '../../shared/PopupCloseButton';
+import { getPresetParameterLabel } from '../../../utils/presetParameterPresentation';
 
 const EMPTY_PARAMETERS: PresetParameterDefinition[] = [];
 // ponytail: 只记在内存，重启清空；要跨会话记住再落到 preset 里
@@ -87,7 +88,7 @@ function ParameterInput({
       <textarea
         className="preset-manager-input preset-runner-textarea"
         value={String(value ?? '')}
-        placeholder={t('输入{label}', { label: parameter.label })}
+        placeholder={t('输入{label}', { label: getPresetParameterLabel(parameter, t) })}
         onChange={(event) => onChange(event.target.value)}
       />
     );
@@ -98,7 +99,7 @@ function ParameterInput({
       className="preset-manager-input"
       type={parameter.type === 'number' ? 'number' : 'text'}
       value={String(value ?? '')}
-      placeholder={t('输入{label}', { label: parameter.label })}
+      placeholder={t('输入{label}', { label: getPresetParameterLabel(parameter, t) })}
       onChange={(event) => onChange(event.target.value)}
     />
   );
@@ -129,7 +130,11 @@ function PresetRunnerContent({
   });
   const showToast = useAppStore((state) => state.showToast);
   const errors = useMemo(
-    () => validatePresetParameterValues(parameters, values, t),
+    () => validatePresetParameterValues(
+      parameters.map((parameter) => ({ ...parameter, label: getPresetParameterLabel(parameter, t) })),
+      values,
+      t,
+    ),
     [parameters, values, t],
   );
 
@@ -200,7 +205,7 @@ function PresetRunnerContent({
                       key={parameter.id}
                     >
                       <span className="preset-manager-label">
-                        {parameter.label}
+                        {getPresetParameterLabel(parameter, t)}
                         {parameter.required ? <em>{t('必填')}</em> : null}
                       </span>
                       <ParameterInput

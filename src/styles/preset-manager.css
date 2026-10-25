@@ -687,44 +687,8 @@
   font-size: 11px;
 }
 
-.preset-advanced-key-input {
-  display: grid;
-  min-width: 0;
-  min-height: 33px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px;
-  padding: 0 8px;
-  border: 1px solid var(--theme-border);
-  border-radius: 7px;
-  background: var(--theme-surface);
-  color: var(--brand-pale);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-}
-
-.preset-advanced-key-input:focus-within {
-  border-color: var(--brand);
-}
-
-.preset-advanced-key-input input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--theme-text);
-  font: inherit;
-}
-
 .preset-advanced-compact-input {
   min-width: 0;
-}
-
-.preset-advanced-select-config {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 104px;
-  gap: 5px;
 }
 
 .preset-advanced-checkbox,
