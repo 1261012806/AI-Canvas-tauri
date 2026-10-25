@@ -8,6 +8,9 @@ import { isLocalMediaUrl, isRemoteMediaUrl } from '../utils/mediaUrl';
 import { assertMediaDataUrlWithinLimitAsync, isMediaDataUrl, readFileToDataUrl } from './fileService';
 import { pollTask } from './pollTask';
 import { splitCommaSeparatedUrls } from './ai/helpers';
+import { redactModelProtocolError, redactModelProtocolErrorText } from './ai/modelProtocolHttp';
+import { prepareApimartImageUpload } from './ai/referenceImageUpload';
+import { corsSafeFetch } from './ai/httpTransport';
 const APIMART_BASE = APIMART_BASE_URL;
 
 interface TaskResult {
@@ -61,12 +64,13 @@ async function uploadToApimart(sourceUrl: string, apiKey: string): Promise<strin
     : await readFileToDataUrl(sourceUrl, { kind: 'image', label: '扩图参考图' });
   if (!dataUrl) throw new Error('无法读取扩图参考图');
   await assertMediaDataUrlWithinLimitAsync(dataUrl, 'image', '扩图参考图');
-  const blob = dataUrlToBlob(dataUrl);
+  const blob = await prepareApimartImageUpload(dataUrlToBlob(dataUrl));
   const formData = new FormData();
-  const fileName = `canvas-image-${Date.now()}.png`;
+  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : blob.type === 'image/gif' ? 'gif' : 'png';
+  const fileName = `canvas-image-${Date.now()}.${extension}`;
   formData.append('file', blob, fileName);
 
-  const resp = await fetch(`${APIMART_BASE}/uploads/images`, {
+  const resp = await corsSafeFetch(`${APIMART_BASE}/uploads/images`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -74,7 +78,7 @@ async function uploadToApimart(sourceUrl: string, apiKey: string): Promise<strin
 
   if (!resp.ok) {
     const errBody = await resp.text();
-    throw new Error(`图片上传失败 (${resp.status}): ${errBody}`);
+    throw new Error(`图片上传失败 (${resp.status}): ${redactModelProtocolErrorText(errBody, apiKey).slice(0, 200)}`);
   }
 
   const result: UploadResponse = await resp.json();
@@ -92,7 +96,7 @@ async function submitGeneration(
   imageUrl: string,
   size: string = '4:3',
 ): Promise<string> {
-  const resp = await fetch(`${APIMART_BASE}/images/generations`, {
+  const resp = await corsSafeFetch(`${APIMART_BASE}/images/generations`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -110,7 +114,7 @@ async function submitGeneration(
 
   if (!resp.ok) {
     const errBody = await resp.text();
-    throw new Error(`生成提交失败 (${resp.status}): ${errBody}`);
+    throw new Error(`生成提交失败 (${resp.status}): ${redactModelProtocolErrorText(errBody, apiKey).slice(0, 200)}`);
   }
 
   const result: SubmitResponse = await resp.json();
@@ -129,12 +133,12 @@ async function pollApimartTask(
 ): Promise<TaskData> {
   return pollTask<TaskResponse | TaskData, TaskData>({
     fetchState: async () => {
-      const resp = await fetch(`${APIMART_BASE}/tasks/${taskId}?language=zh`, {
+      const resp = await corsSafeFetch(`${APIMART_BASE}/tasks/${taskId}?language=zh`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!resp.ok) {
         const errBody = await resp.text();
-        throw new Error(`任务查询失败 (${resp.status}): ${errBody}`);
+        throw new Error(`任务查询失败 (${resp.status}): ${redactModelProtocolErrorText(errBody, apiKey).slice(0, 200)}`);
       }
       return (await resp.json()) as TaskResponse | TaskData;
     },
@@ -191,38 +195,42 @@ export async function generateOutpaintImage(
 ): Promise<OutpaintGenerateResult> {
   const { apiKey, model, imageUrl, size, prompt } = params;
 
-  // 步骤 1: 本地参考图先上传到 APIMart，使用本次扩图调用的凭据。
-  let publicUrl: string;
-  if (isLocalMediaUrl(imageUrl)) {
-    onProgress?.(5);
-    publicUrl = await uploadToApimart(imageUrl, apiKey);
-    onProgress?.(15);
-  } else if (isRemoteMediaUrl(imageUrl)) {
-    publicUrl = imageUrl;
-    onProgress?.(10);
-  } else {
-    throw new Error('扩图参考图地址无效');
+  try {
+    // 步骤 1: 本地参考图先上传到 APIMart，使用本次扩图调用的凭据。
+    let publicUrl: string;
+    if (isLocalMediaUrl(imageUrl)) {
+      onProgress?.(5);
+      publicUrl = await uploadToApimart(imageUrl, apiKey);
+      onProgress?.(15);
+    } else if (isRemoteMediaUrl(imageUrl)) {
+      publicUrl = imageUrl;
+      onProgress?.(10);
+    } else {
+      throw new Error('扩图参考图地址无效');
+    }
+
+    // 步骤 2: 构建提示词并提交生成任务
+    const fullPrompt = buildOutpaintPrompt(prompt);
+    onProgress?.(20);
+    const taskId = await submitGeneration(apiKey, model, fullPrompt, publicUrl, size);
+    onProgress?.(25);
+
+    // 步骤 3: 轮询任务结果
+    const taskData = await pollApimartTask(apiKey, taskId, (p) => {
+      onProgress?.(25 + Math.round(p * 0.7));
+    });
+
+    onProgress?.(95);
+
+    // 步骤 4: 提取图片 URL
+    const imageUrls = taskData.result?.images?.flatMap((img) => splitCommaSeparatedUrls(img.url)) ?? [];
+    if (imageUrls.length === 0) {
+      throw new Error('扩图完成但未返回图片');
+    }
+
+    onProgress?.(100);
+    return { imageUrls };
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-
-  // 步骤 2: 构建提示词并提交生成任务
-  const fullPrompt = buildOutpaintPrompt(prompt);
-  onProgress?.(20);
-  const taskId = await submitGeneration(apiKey, model, fullPrompt, publicUrl, size);
-  onProgress?.(25);
-
-  // 步骤 3: 轮询任务结果
-  const taskData = await pollApimartTask(apiKey, taskId, (p) => {
-    onProgress?.(25 + Math.round(p * 0.7));
-  });
-
-  onProgress?.(95);
-
-  // 步骤 4: 提取图片 URL
-  const imageUrls = taskData.result?.images?.flatMap((img) => splitCommaSeparatedUrls(img.url)) ?? [];
-  if (imageUrls.length === 0) {
-    throw new Error('扩图完成但未返回图片');
-  }
-
-  onProgress?.(100);
-  return { imageUrls };
 }

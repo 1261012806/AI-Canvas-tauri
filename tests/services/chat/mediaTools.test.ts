@@ -7,7 +7,7 @@ import {
   prepareAgentToolCall,
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
-import { getPendingTasksForProject, savePendingTask } from '../../../src/services/pollManager';
+import { getPendingTasksForProject, registerMediaNodeOperation, savePendingTask } from '../../../src/services/pollManager';
 import * as generationRuntime from '../../../src/services/ai/generationRuntime';
 
 const context: Omit<AgentToolContext, 'signal'> = {
@@ -48,6 +48,27 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('media task recovery tools', () => {
+  it('does not advertise or run recovery while the original result is being saved', async () => {
+    const receipt = savePendingTask({ projectId: 'project-1', nodeId: 'n1', nodeType: 'ai-image', provider: 'general',
+      taskType: 'custom-protocol', taskId: 'saving-task', submitted: true, mediaRecoveryState: 'delivery_pending' });
+    const release = registerMediaNodeOperation(receipt.nodeId);
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    try {
+      const toolContext = { ...context, signal: new AbortController().signal };
+      const listed = await getAgentTool('media_pending_tasks')!.execute(toolContext, {});
+      expect(JSON.parse(listed.modelContent)).toEqual([expect.objectContaining({ taskId: receipt.taskId, canResume: false })]);
+      const definition = getAgentTool('media_resume_task')!;
+      const input = { nodeId: receipt.nodeId, taskId: receipt.taskId };
+      expect(definition.authorize?.(context, input).allowed).toBe(false);
+      expect(await definition.execute(toolContext, input)).toMatchObject({ status: 'error', errorCode: 'MEDIA_RECOVERY_STALE' });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(getPendingTasksForProject('project-1')[0]).toMatchObject(receipt);
+      release();
+      const available = await getAgentTool('media_pending_tasks')!.execute(toolContext, {});
+      expect(JSON.parse(available.modelContent)[0].canResume).toBe(true);
+    } finally { release(); }
+  });
+
   it('stops an in-flight recovery with the tool signal and retains the original task', async () => {
     useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
       recovery: { name: 'Recovery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));

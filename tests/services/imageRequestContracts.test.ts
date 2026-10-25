@@ -10,16 +10,17 @@ function contractFor(model: string, size = '2K', ratio = '16:9') {
 }
 
 describe('built-in image request contracts', () => {
-  it.each(['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'])(
+  it.each(['gpt-image-2-vip', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'])(
     'maps only documented transparent background for GRSAI %s', (model) => {
       const definition = getProviderDefinition('grsai');
-      const transparent = resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', 'high', 'transparent');
+      const quality = model === 'gpt-image-2-vip' ? 'medium' : 'high';
+      const transparent = resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', quality, 'transparent');
       expect(transparent?.kind === 'protocol' && transparent.protocol.submit.body).toMatchObject({
-        background: 'transparent', quality: 'high', aspectRatio: '2048x1152',
+        background: 'transparent', quality, aspectRatio: '2048x1152',
       });
       expect(transparent?.kind === 'protocol' && transparent.protocol.submit.body).not.toHaveProperty('output_format');
       expect(contractFor(model).protocol.submit.body).not.toHaveProperty('background');
-      expect(() => resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', 'high', 'opaque'))
+      expect(() => resolveBuiltInImageRequestContract(definition, model, '2K', '16:9', quality, 'opaque'))
         .toThrow('不支持背景');
     },
   );

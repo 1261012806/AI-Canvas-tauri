@@ -9,7 +9,17 @@ import { corsSafeFetch } from './httpTransport';
 import { readModelProtocolFirstScalar } from './modelProtocolResponse';
 import { MIME_TYPE_RE, isRecord, resolveAuthentication, validateHeaderName } from './modelProtocolShared';
 import { applyQueryAuthentication } from './modelProtocolRequest';
-import { PollTaskFailedError, PollTimeoutError } from '../pollTask';
+import { PollTaskFailedError, PollTimeoutError, withPollRequestDeadline } from '../pollTask';
+import { parseRasterImageDimensions } from '../rasterImageDimensions';
+
+const RESULT_MAX_BYTES = 64 * 1024 * 1024;
+const RESULT_TOTAL_MAX_BYTES = 128 * 1024 * 1024;
+const RESULT_MAX_COUNT = 32;
+
+interface BinaryResultBudget {
+  usedBytes: number;
+  maxBytes: number;
+}
 
 export class ModelProtocolHttpError extends Error {
   readonly status: number;
@@ -182,6 +192,118 @@ export function normalizeBase64Result(
   return `data:${mimeType};base64,${encodeBytesBase64(decodeBase64Bytes(value))}`;
 }
 
+async function resolveBinaryMimeType(
+  bytes: Uint8Array,
+  contentType: string | null,
+  fallbackMimeType?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const responseMime = contentType?.split(';')[0]?.trim().toLowerCase();
+  const declaredMime = responseMime && MIME_TYPE_RE.test(responseMime)
+    && !['application/octet-stream', 'binary/octet-stream', 'application/binary'].includes(responseMime)
+    ? responseMime : undefined;
+  const header = bytes.subarray(0, 1024 * 1024);
+  let textStart = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  while (textStart < bytes.length && [9, 10, 13, 32].includes(bytes[textStart])) textStart += 1;
+  const prefix = new TextDecoder().decode(bytes.subarray(textStart, textStart + 4096)).trimStart();
+  // 有些网关返回 200，甚至沿用媒体头；错误正文仍不能作为生成结果保存。
+  if (/^[{["]/.test(prefix) || /^(?:true|false|null)(?:\s|$)|^-?\d/.test(prefix)
+    || /^(?:<\?xml\b[^>]*>\s*)?(?:<!doctype\s+html\b|<(?:html|head|body|script|error)\b)/i.test(prefix)
+    || (declaredMime && /^(?:application\/(?:[^/]+\+)?json|text\/html)$/.test(declaredMime))) {
+    throw new Error('模型二进制结果实际返回了 JSON 或 HTML，请检查厂商响应的 MIME 与结果映射');
+  }
+
+  if (parseRasterImageDimensions(header)) {
+    const ascii = (start: number, length: number) => String.fromCharCode(...header.subarray(start, start + length));
+    if (ascii(1, 3) === 'PNG') return 'image/png';
+    if (header[0] === 0xff && header[1] === 0xd8) return 'image/jpeg';
+    if (ascii(0, 3) === 'GIF') return 'image/gif';
+    if (ascii(0, 4) === 'RIFF') return 'image/webp';
+    if (ascii(0, 2) === 'BM') return 'image/bmp';
+    if (/^(?:<\?xml\b[^>]*>\s*)?<svg\b/i.test(prefix)) return 'image/svg+xml';
+  }
+  // 通用 MIME 只按真实内容识别；只探测本地字节，不解析会再次联网的 HLS 清单。
+  const { Input, BufferSource, ALL_FORMATS, HLS } = await import('mediabunny');
+  signal?.throwIfAborted();
+  const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS.filter((format) => format !== HLS) });
+  const cancel = () => input.dispose();
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const tracks = await input.getTracks();
+    const mimeType = tracks.length ? (await input.getMimeType()).split(';')[0].trim().toLowerCase() : '';
+    signal?.throwIfAborted();
+    if (/^(?:audio|video)\//.test(mimeType)) return mimeType;
+  } catch {
+    signal?.throwIfAborted();
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    input.dispose();
+  }
+  if (declaredMime) return declaredMime;
+  if (fallbackMimeType && /^(?:image|audio|video)\//i.test(fallbackMimeType)) {
+    throw new Error('无法从模型二进制内容识别媒体类型，不能仅按配置 MIME 交付结果');
+  }
+  return fallbackMimeType ?? 'application/octet-stream';
+}
+
+/** 成功和失败响应共用字节预算；不相信 Content-Length，也不先整包读入内存。 */
+async function readBinaryResultBytes(
+  response: Response,
+  signal?: AbortSignal,
+  budget: BinaryResultBudget = { usedBytes: 0, maxBytes: RESULT_MAX_BYTES },
+): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) { signal?.throwIfAborted(); return new Uint8Array(); }
+  const cancel = () => { void reader.cancel(signal?.reason).catch(() => undefined); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  let complete = false;
+  try {
+    signal?.throwIfAborted();
+    const assertSize = (size: number) => {
+      if (size > RESULT_MAX_BYTES) throw new Error('模型单个二进制结果超过 64 MiB，请改用结果 URL 或原生文件下载');
+      if (budget.usedBytes + size > budget.maxBytes) throw new Error('模型二进制结果累计超过下载预算，请减少结果数量或改用结果 URL');
+    };
+    const contentLength = Number(response.headers.get('Content-Length'));
+    if (Number.isSafeInteger(contentLength) && contentLength >= 0) assertSize(contentLength);
+    const parts: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      signal?.throwIfAborted();
+      if (done) break;
+      if (totalBytes + value.byteLength > RESULT_MAX_BYTES) assertSize(RESULT_MAX_BYTES + 1);
+      assertSize(value.byteLength);
+      totalBytes += value.byteLength;
+      budget.usedBytes += value.byteLength;
+      parts.push(value);
+    }
+    complete = true;
+    const bytes = parts.length === 1 ? parts[0] : new Uint8Array(totalBytes);
+    if (parts.length > 1) {
+      let offset = 0;
+      for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+    }
+    return bytes;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    if (!complete) cancel();
+    reader.releaseLock();
+  }
+}
+
+export async function readBinaryModelProtocolResult(
+  response: Response,
+  fallbackMimeType?: string,
+  signal?: AbortSignal,
+  budget?: BinaryResultBudget,
+): Promise<string> {
+  const bytes = await readBinaryResultBytes(response, signal, budget);
+  if (!bytes.length) throw new Error('模型二进制结果内容为空');
+  const mimeType = await resolveBinaryMimeType(bytes, response.headers.get('Content-Type'), fallbackMimeType, signal);
+  signal?.throwIfAborted();
+  return `data:${mimeType};base64,${encodeBytesBase64(bytes)}`;
+}
+
 function buildResultAuthenticationHeaders(
   auth: ModelProtocolAuthConfig | undefined,
   apiKey: string,
@@ -217,25 +339,55 @@ export async function fetchSameOriginResultUrls(
   extraHeaders?: Record<string, string>,
 ): Promise<string[]> {
   signal?.throwIfAborted();
+  if (urls.length > RESULT_MAX_COUNT) throw new Error('模型结果下载数量超过 32 个，请收窄结果 URL 映射');
   const headers = buildResultAuthenticationHeaders(auth, apiKey, extraHeaders);
   const allowedOrigin = new URL(baseUrl).origin;
-  return Promise.all(urls.map(async (rawUrl) => {
+  const resultUrls = urls.map((rawUrl) => {
     const url = new URL(rawUrl);
-    if (url.origin !== allowedOrigin) {
+    if (url.origin !== allowedOrigin || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
       throw new Error('模型结果下载地址与厂商连接地址不同源');
     }
-    const response = await corsSafeFetch(
-      applyQueryAuthentication(url.toString(), auth, apiKey),
-      { method: 'GET', headers, signal },
-    );
-    await ensureSuccessfulRawResponse(response, '模型结果下载失败', undefined, apiKey);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    signal?.throwIfAborted();
-    if (bytes.byteLength === 0) throw new Error('模型结果下载内容为空');
-    const responseMimeType = response.headers.get('Content-Type')?.split(';')[0]?.trim();
-    const mimeType = responseMimeType && MIME_TYPE_RE.test(responseMimeType)
-      ? responseMimeType
-      : fallbackMimeType ?? 'application/octet-stream';
-    return `data:${mimeType};base64,${encodeBytesBase64(bytes)}`;
-  }));
+    return applyQueryAuthentication(url.toString(), auth, apiKey);
+  });
+  const controller = new AbortController();
+  const downloadSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const budget = { usedBytes: 0, maxBytes: RESULT_TOTAL_MAX_BYTES };
+  const results = new Array<string>(urls.length);
+  let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
+  const worker = async () => {
+    while (!failed && nextIndex < resultUrls.length) {
+      const index = nextIndex++;
+      try {
+        downloadSignal.throwIfAborted();
+        const request = corsSafeFetch(resultUrls[index], { method: 'GET', headers, signal: downloadSignal });
+        void request.then((response) => {
+          if (downloadSignal.aborted) void response.body?.cancel().catch(() => undefined);
+        }, () => undefined);
+        const response = await withPollRequestDeadline(() => request, downloadSignal, Infinity);
+        if (downloadSignal.aborted) {
+          void response.body?.cancel().catch(() => undefined);
+          downloadSignal.throwIfAborted();
+        }
+        if (!response.ok) {
+          const bytes = await readBinaryResultBytes(response, downloadSignal, budget);
+          downloadSignal.throwIfAborted();
+          await ensureSuccessfulRawResponse(new Response(bytes.length ? Uint8Array.from(bytes) : null, {
+            status: response.status, headers: response.headers,
+          }), '模型结果下载失败', undefined, apiKey);
+        } else results[index] = await readBinaryModelProtocolResult(response, fallbackMimeType, downloadSignal, budget);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = downloadSignal.aborted ? downloadSignal.reason : error;
+          controller.abort(failure);
+        }
+      }
+    }
+  };
+  await Promise.allSettled(Array.from({ length: Math.min(2, urls.length) }, worker));
+  if (failed) throw failure;
+  downloadSignal.throwIfAborted();
+  return results;
 }

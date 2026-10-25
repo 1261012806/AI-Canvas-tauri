@@ -3,6 +3,7 @@ import type { BaseNodeData } from '../../src/types';
 import {
   getPendingTaskCoveredNodeIds,
   getPendingTasksForProject,
+  canResumeMediaTask,
   resumePendingTasks,
   savePendingTask,
   pauseVideoNodeTaskOnTimeout,
@@ -153,6 +154,80 @@ describe('pending generation task recovery', () => {
       expect(useAppStore.getState().nodes).toEqual([]);
       expect(getPendingTasksForProject('project-1')).toEqual([]);
     } finally { unregister(); }
+  });
+
+  it.each([false, true])('recovers an auth:none task without a key, including batch polling (%s)', async (batch) => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      public: { name: 'Public', apiKey: '', baseUrl: 'https://gateway.example' } } } }));
+    const poll = { method: 'GET' as const, url: 'https://gateway.example/tasks/public', auth: { type: 'none' as const },
+      intervalMs: 1, statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' };
+    const receipt = savePendingTask({ nodeId: 'public-message', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'general', providerConfigId: 'public', taskType: 'custom-protocol', submitted: true, taskId: 'public-task',
+      mediaContext: { projectId: 'project-1', conversationId: 'conversation', messageId: 'message', deliveryMode: 'message' },
+      protocolPoll: poll, ...(batch ? { protocolPolls: [poll, { ...poll, url: `${poll.url}-second` }] } : {}) });
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      status: 'completed', url: 'https://cdn.example/public.png',
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = vi.fn(async () => { completeMediaNodeTask(receipt); });
+    const unregister = registerMediaMessageRecoveryHandler(handler);
+    try {
+      await resumeMediaNodeTask(receipt.nodeId);
+      expect(fetchMock).toHaveBeenCalledTimes(batch ? 2 : 1);
+      for (const [, init] of fetchMock.mock.calls) expect(init.headers).not.toHaveProperty('Authorization');
+      expect(handler).toHaveBeenCalledOnce();
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } finally { unregister(); }
+  });
+
+  it.each([
+    undefined, { type: 'bearer' }, { type: 'header', name: 'X-Api-Key' }, { type: 'query', name: 'api_key' },
+  ] as const)('keeps a keyless task when any batch poll needs authentication (%j)', async (auth) => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      protected: { name: 'Protected', apiKey: '', baseUrl: 'https://gateway.example' } } } }));
+    const poll = { method: 'GET' as const, url: 'https://gateway.example/tasks/protected', auth: { type: 'none' as const },
+      intervalMs: 1, statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' };
+    const receipt = savePendingTask({ nodeId: 'protected-message', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'general', providerConfigId: 'protected', taskType: 'custom-protocol', submitted: true, taskId: 'protected-task',
+      mediaContext: { projectId: 'project-1', messageId: 'message', deliveryMode: 'message' },
+      protocolPoll: poll, protocolPolls: [poll, { ...poll, auth }] });
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await resumeMediaNodeTask(receipt.nodeId);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getMediaTaskReceipt(receipt.nodeId)).toEqual(receipt);
+    expect(getPendingTasksForProject('project-1')[0].mediaRecoveryState).toBe('query_paused');
+  });
+
+  it('refuses manual recovery until the original delivery operation releases its lease', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      delivery: { name: 'Delivery', apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } } } }));
+    const receipt = savePendingTask({ nodeId: 'original-delivery', projectId: 'project-1', nodeType: 'ai-image',
+      provider: 'general', providerConfigId: 'delivery', taskType: 'custom-protocol', submitted: true, taskId: 'delivery-task',
+      mediaRecoveryState: 'delivery_pending',
+      mediaContext: { projectId: 'project-1', messageId: 'message', deliveryMode: 'message' },
+      protocolPoll: { method: 'GET', url: 'https://gateway.example/tasks/delivery', intervalMs: 1,
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url' } });
+    const release = registerMediaNodeOperation(receipt.nodeId);
+    const original = getPendingTasksForProject('project-1')[0];
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      status: 'completed', url: 'https://cdn.example/original.png',
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = vi.fn(async () => { completeMediaNodeTask(receipt); });
+    const unregister = registerMediaMessageRecoveryHandler(handler);
+    try {
+      expect(canResumeMediaTask(original)).toBe(false);
+      await expect(resumeMediaNodeTask(receipt.nodeId)).rejects.toThrow('仍在处理或保存');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+      expect(getPendingTasksForProject('project-1')).toEqual([original]);
+      release();
+      expect(canResumeMediaTask(original)).toBe(true);
+      await resumeMediaNodeTask(receipt.nodeId);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(getPendingTasksForProject('project-1')).toEqual([]);
+    } finally { release(); unregister(); }
   });
 
   it('keeps the old image batch targets when its source starts a new single-image generation', async () => {

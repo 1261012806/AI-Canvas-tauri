@@ -21,6 +21,7 @@ import {
 import { DEFAULT_BASE_URLS } from '../../constants/api';
 import { extractModelName, resolveGeneralModelConnection } from './helpers';
 import { corsSafeFetch } from './httpTransport';
+import { redactModelProtocolError, redactModelProtocolErrorText } from './modelProtocolHttp';
 import { buildAssistantToolGuidance, buildMediaPrompt } from '../chat/agentPromptGuidance';
 import {
   buildModelProtocolRequest,
@@ -256,7 +257,7 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
     systemPrompt,
     userMessage,
     toolContextMessage,
-    onEvent,
+    onEvent: emitEvent,
     signal,
     nonStream,
     messages: providedMessages,
@@ -264,6 +265,11 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
     trackAbort = true,
     projectId,
   } = options;
+
+  // 解析器会先发错误事件，再抛异常；两条出口都要在交给消息层前脱敏。
+  const onEvent = (event: AssistantStreamEvent) => emitEvent(event.type === 'error'
+    ? { ...event, message: redactModelProtocolErrorText(event.message, modelConfig.apiKey) }
+    : event);
 
   const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   onEvent({ type: 'start', requestId, modelId: modelConfig.modelName });
@@ -279,15 +285,15 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
 
   // 设置 AbortController
   const controller = new AbortController();
-  const mergedSignal = signal;
-  if (mergedSignal) {
-    mergedSignal.addEventListener('abort', () => controller.abort());
-  }
+  const cancelFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) cancelFromCaller();
+  else signal?.addEventListener('abort', cancelFromCaller, { once: true });
   if (trackAbort) useAppStore.getState().setActiveRequestAbort(controller);
 
   const tools = providedTools ?? buildAssistantTools(toolContextMessage ?? userMessage);
 
   try {
+    controller.signal.throwIfAborted();
     const state = useAppStore.getState();
     const requestMessages = await prepareAssistantVisualMessages({
       messages,
@@ -325,27 +331,31 @@ export async function streamAssistantReply(options: StreamingCallOptions): Promi
       ? modelConfig.chatApiProtocol
       : 'openai-compatible';
 
-    if (nonStream) {
-      return await parseNonStream(response, { onEvent, protocol: responseProtocol });
-    }
-
-    return await parseStream(response, {
-      requestId,
-      modelId: modelConfig.modelName,
-      onEvent,
-      signal: controller.signal,
-      protocol: responseProtocol,
-    });
+    // 非流式 JSON 可能在取消后才读完；兼容接口的 JSON 回退也经过同一道事件守卫。
+    const parserOptions = { signal: controller.signal, protocol: responseProtocol,
+      onEvent: (event: AssistantStreamEvent) => {
+        controller.signal.throwIfAborted();
+        onEvent(event);
+      } };
+    const result = nonStream
+      ? await parseNonStream(response, parserOptions)
+      : await parseStream(response, { ...parserOptions, requestId, modelId: modelConfig.modelName });
+    controller.signal.throwIfAborted();
+    return result;
   } catch (error: unknown) {
-    if ((error as { name?: string }).name === 'AbortError') {
+    if (controller.signal.aborted || (error as { name?: string } | null)?.name === 'AbortError') {
       onEvent({ type: 'done', finishReason: 'canceled' });
-      throw new Error('请求已取消', { cause: error });
+      // 原始取消异常可能含 Key，只交付固定文案，不能把 cause 带入消息层。
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error('请求已取消');
     }
-    const msg = error instanceof Error ? error.message : '未知错误';
+    const safeError = redactModelProtocolError(error, modelConfig.apiKey);
+    const msg = safeError instanceof Error ? safeError.message : typeof safeError === 'string' ? safeError : '未知错误';
     onEvent({ type: 'error', code: 'FETCH_ERROR', message: msg, retryable: true });
     onEvent({ type: 'done', finishReason: 'error' });
-    throw error;
+    throw safeError;
   } finally {
+    signal?.removeEventListener('abort', cancelFromCaller);
     const currentCtrl = useAppStore.getState().activeRequestAbort;
     if (currentCtrl === controller) {
       useAppStore.getState().setActiveRequestAbort(null);

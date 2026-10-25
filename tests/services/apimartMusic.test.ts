@@ -24,10 +24,94 @@ const mocks = vi.hoisted(() => {
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.state } }));
 vi.mock('../../src/services/pollManager', () => mocks);
 
-import { submitSunoGeneration, submitFlowMusicGeneration } from '../../src/services/ai/apimartAudio';
+import {
+  fetchFlowMusicTask, generateApimartSpeech, submitFlowMusicLyrics,
+  submitSunoGeneration, submitFlowMusicGeneration, transcribeApimartAudio,
+} from '../../src/services/ai/apimartAudio';
 import { apimartMediaProviderAdapter } from '../../src/services/ai/providers/apimartMedia';
 
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
+
+describe('APIMart 音频错误脱敏', () => {
+  const apiKey = 'fixture~! private/key=';
+  const echoed = () => [apiKey, encodeURIComponent(apiKey), new URLSearchParams({ key: apiKey }).toString().slice(4)].join(' | ');
+  const calls = {
+    suno: () => submitSunoGeneration(apiKey, 'https://api.example/v1', { version: 'v6', prompt: 'song' }),
+    lyrics: () => submitFlowMusicLyrics(apiKey, 'https://api.example/v1', 'lyrics'),
+    tts: () => generateApimartSpeech(apiKey, 'https://api.example/v1', { model: 'tts-1', input: 'hello', voice: 'alloy', format: 'wav', speed: 1 }),
+    whisper: () => transcribeApimartAudio(apiKey, 'https://api.example/v1', { file: new Blob(['audio']), fileName: 'sample.wav' }),
+    query: () => fetchFlowMusicTask(apiKey, 'https://api.example/v1', 'original-task'),
+  };
+  beforeEach(() => { vi.clearAllMocks(); mocks.receipts.clear(); });
+  afterEach(() => { vi.unstubAllGlobals(); mocks.state.config.providers.apimart.apiKey = 'test-key'; });
+
+  it.each(['suno', 'lyrics', 'tts', 'whisper', 'query'] as const)('%s 的 HTTP 错误只输出脱敏文案', async (kind) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: echoed() } }), {
+      status: 401, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await calls[kind]().catch((value: unknown) => value);
+    expect(error).toMatchObject({ message: '[REDACTED] | [REDACTED] | [REDACTED]' });
+    if (kind === 'suno' || kind === 'lyrics') expect(error).toMatchObject({ name: 'ModelProtocolHttpError', status: 401 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['suno', 'lyrics', 'tts', 'whisper', 'query'] as const)('%s 的网络异常保留类型并移除全部凭据编码', async (kind) => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError(`Failed to fetch ${echoed()}`));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await calls[kind]().catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe('Failed to fetch [REDACTED] | [REDACTED] | [REDACTED]');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['suno', 'lyrics', 'tts', 'whisper', 'query'] as const)('%s 的纯文本错误在截断之前移除 Key', async (kind) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(`${'x'.repeat(197)}${apiKey}`, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await calls[kind]().catch((value: unknown) => value);
+    expect((error as Error).message).toContain(`${'x'.repeat(197)}[RE`);
+    expect((error as Error).message).not.toContain('fixture');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['object', 'string'] as const)('音乐 HTTP 200 的 %s 终态错误在返回和抛出前都脱敏', async (shape) => {
+    mocks.state.config.providers.apimart.apiKey = apiKey;
+    const task = { status: 'failed', error: shape === 'object'
+      ? { message: echoed(), code: apiKey, type: 'task_failed', private: apiKey } : echoed() };
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ data: task }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchFlowMusicTask(apiKey, 'https://api.example/v1', 'original-task');
+    expect(JSON.stringify(result.error)).not.toContain(apiKey);
+    expect(JSON.stringify(result.error)).not.toContain(encodeURIComponent(apiKey));
+    expect(result.error).not.toHaveProperty('private');
+    fetchMock.mockResolvedValueOnce(json({ data: [{ task_id: 'original-task' }] })).mockResolvedValueOnce(json({ data: task }));
+    await expect(apimartMediaProviderAdapter.generateAudio?.({ params: {
+      provider: 'apimart', model: 'apimart/suno-v6', nodeId: 'music-node', prompt: 'song',
+    }, prompt: 'song', referenceAudioUrls: [] })).rejects.toMatchObject({
+      name: 'PollTaskFailedError', message: expect.stringContaining('[REDACTED]'),
+    });
+    expect(mocks.removePendingTask).toHaveBeenCalledWith('music-node', 'original-task', 'attempt');
+    expect(mocks.pauseMediaTask).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('音乐查询网络异常在原任务暂停边界也不携带 Key', async () => {
+    mocks.state.config.providers.apimart.apiKey = apiKey;
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ data: [{ task_id: 'original-task' }] }))
+      .mockRejectedValueOnce(new TypeError(echoed()));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(apimartMediaProviderAdapter.generateAudio?.({ params: {
+      provider: 'apimart', model: 'apimart/suno-v6', nodeId: 'music-node', prompt: 'song',
+    }, prompt: 'song', referenceAudioUrls: [] })).rejects.toMatchObject({
+      name: 'MediaTaskPausedError', taskReceipt: { taskId: 'original-task', attemptId: 'attempt' },
+    });
+    const detail = mocks.pauseMediaTask.mock.calls[0][1] as Error;
+    expect(detail).toBeInstanceOf(TypeError);
+    expect(detail.message).toBe('[REDACTED] | [REDACTED] | [REDACTED]');
+    expect(mocks.receipts.get('music-node')).toMatchObject({ taskId: 'original-task', attemptId: 'attempt' });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
 
 describe('APIMart 音乐版本协议', () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.receipts.clear(); });

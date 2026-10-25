@@ -48,6 +48,73 @@ beforeEach(() => {
 });
 
 describe('assistant custom protocol boundary', () => {
+  it.each(['http', 'json', 'sse'] as const)('redacts credentials before emitting or throwing %s errors', async (mode) => {
+    configureAssistant();
+    const apiKey = 'assistant~! private/key=';
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      ...state.config.providers, 'custom-assistant': { ...state.config.providers['custom-assistant'], apiKey },
+    } } }));
+    const encoded = encodeURIComponent(apiKey);
+    const form = new URLSearchParams({ key: apiKey }).toString().slice(4);
+    const detail = `Invalid key ${apiKey}; encoded ${encoded}; query ${form}; permission denied`;
+    const payload = { error: { message: detail } };
+    const response = mode === 'sse'
+      ? new Response(`data: ${JSON.stringify(payload)}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+      : new Response(JSON.stringify(payload), { status: mode === 'http' ? 401 : 200,
+        headers: { 'Content-Type': 'application/json' } });
+    const fetchMock = vi.fn().mockResolvedValueOnce(response);
+    vi.stubGlobal('fetch', fetchMock);
+    const onEvent = vi.fn();
+    const error = await streamAssistantReply({ systemPrompt: '', userMessage: '你好', onEvent,
+      nonStream: mode === 'http' }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('[REDACTED]');
+    const errors = onEvent.mock.calls.map(([event]) => event).filter((event) => event.type === 'error');
+    expect(errors.length).toBeGreaterThan(0);
+    for (const secret of [apiKey, encoded, form]) {
+      expect((error as Error).stack).not.toContain(secret);
+      expect(JSON.stringify(errors)).not.toContain(secret);
+    }
+    expect((error as Error).cause).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('does not send an already cancelled text request', async () => {
+    configureAssistant();
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(streamAssistantReply({ systemPrompt: '', userMessage: '你好', signal: controller.signal,
+      onEvent: vi.fn() })).rejects.toThrow('请求已取消');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('discards JSON text and tools cancelled during body reading with nonStream=%s', async (nonStream) => {
+    configureAssistant();
+    const controller = new AbortController();
+    let finishBody!: (value: unknown) => void;
+    const response = new Response(null, { headers: { 'Content-Type': 'application/json' } });
+    const readBody = vi.spyOn(response, 'json').mockImplementation(() => new Promise((resolve) => { finishBody = resolve; }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(response);
+    vi.stubGlobal('fetch', fetchMock);
+    const onEvent = vi.fn();
+    const pending = streamAssistantReply({ systemPrompt: '', userMessage: '你好', nonStream, signal: controller.signal, onEvent });
+    await vi.waitFor(() => expect(readBody).toHaveBeenCalledOnce());
+    controller.abort(nonStream ? new Error('secret must not survive cancellation') : null);
+    finishBody({ choices: [{ message: { content: 'late reply', reasoning_content: 'late reasoning', tool_calls: [{
+      id: 'late-call', type: 'function', function: { name: 'canvas_query', arguments: '{}' },
+    }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+    const error = await pending.catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ message: '请求已取消' });
+    expect((error as Error).cause).toBeUndefined();
+    expect((error as Error).stack).not.toContain('secret');
+    expect(onEvent.mock.calls.map(([event]) => event.type)).toEqual(['start', 'done']);
+    expect(onEvent).toHaveBeenLastCalledWith({ type: 'done', finishReason: 'canceled' });
+    expect(useAppStore.getState().activeRequestAbort).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('uses the explicitly selected text model without changing the assistant default', async () => {
     configureAssistant();
     useAppStore.setState((state) => ({ config: { ...state.config, generalModels: [

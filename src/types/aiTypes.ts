@@ -297,6 +297,8 @@ export interface VideoModelCapability {
   maxVideoReferences?: number;
   /** 参考音频数量上限。 */
   maxAudioReferences?: number;
+  /** 参考视频与音频共用的数量上限；未声明时只检查各自上限。 */
+  maxVideoAudioReferences?: number;
   /** 付费请求提交前执行的输入校验规则。 */
   inputConstraints?: VideoInputConstraints;
 }

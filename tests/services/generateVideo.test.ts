@@ -1198,6 +1198,57 @@ describe('离散时长校验', () => {
 });
 
 describe('general video runtime safety', () => {
+  function configureSavedSora2u(catalogId: string, modelId: string, maximum?: number) {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, sora2u: { name: 'Saved connection', catalogId,
+        apiKey: 'fixture-key', baseUrl: 'https://gateway.example' } },
+      generalModels: [{ id: 'saved-sora2u', name: 'Saved video', modelId, category: 'video', providerConfigId: 'sora2u',
+        videoCapability: { maxImageReferences: 9, maxVideoReferences: 3, maxAudioReferences: 3,
+          ...(maximum === undefined ? {} : { maxVideoAudioReferences: maximum }) },
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync', auth: { type: 'bearer' },
+          submit: { method: 'POST', path: '/api/v1/videos', body: { model: '{{model}}', prompt: '{{prompt}}', references: '{{referenceUrls}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } } } },
+      }],
+    } }));
+    return { model: 'general/saved-sora2u', provider: 'general', prompt: '按参考素材保持连续自然运镜', referenceMedia: [
+      { kind: 'image' as const, role: 'reference' as const, origin: 'connection' as const, url: 'https://cdn.example/image.png' },
+      ...[0, 1].map((index) => ({ kind: 'video' as const, role: 'reference' as const, origin: 'connection' as const, url: `https://cdn.example/video-${index}.mp4` })),
+      ...[0, 1].map((index) => ({ kind: 'audio' as const, role: 'reference_audio' as const, origin: 'connection' as const, url: `https://cdn.example/audio-${index}.mp3` })),
+    ] };
+  }
+
+  it.each(['seedance-2.0', 'seedance-2.0-character'])('旧 Sora2U %s 配置在上传或付费提交前拦截联合超限', async (modelId) => {
+    const params = configureSavedSora2u('sora2u', modelId);
+    const images = vi.spyOn(imageUtils, 'resolveImageUrlArray');
+    const media = vi.spyOn(uploadService, 'resolveMediaReferenceUrl');
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const beforeSubmit = vi.fn();
+    try {
+      await expect(generateVideo(params, undefined, beforeSubmit)).rejects.toThrow('参考视频和音频（合计）');
+      expect(images).not.toHaveBeenCalled();
+      expect(media).not.toHaveBeenCalled();
+      expect(beforeSubmit).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(useAppStore.getState().config.generalModels![0].videoCapability).not.toHaveProperty('maxVideoAudioReferences');
+    } finally { images.mockRestore(); media.mockRestore(); }
+  });
+
+  it.each([
+    { catalogId: 'custom-openai', modelId: 'seedance-2.0', maximum: undefined },
+    { catalogId: 'sora2u', modelId: 'seedance-2.0', maximum: 4 },
+    { catalogId: 'sora2u', modelId: 'seedance-2.0-character-mono', maximum: undefined },
+  ])('保留显式联合名额与精确厂商/型号边界（$catalogId/$modelId/$maximum）', async ({ catalogId, modelId, maximum }) => {
+    const params = configureSavedSora2u(catalogId, modelId, maximum);
+    const constraints = vi.spyOn(videoInputValidation, 'assertVideoInputConstraints').mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'https://cdn.example/result.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(generateVideo(params)).resolves.toEqual({ url: 'https://cdn.example/result.mp4' });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).references).toHaveLength(5);
+    } finally { constraints.mockRestore(); }
+  });
+
   function configureLibapiVideo() {
     const selected = LIBAPI_MODEL_MANIFEST.find((item) => item.id === 'seedance-2-5')!;
     useAppStore.getState().saveProviderConfig('libapi-video-connection', {

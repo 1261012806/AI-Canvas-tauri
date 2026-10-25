@@ -6,7 +6,7 @@ import type {
 } from '../../types/aiTypes';
 import { buildAuthHeaders, parseResponseError } from './httpUtils';
 import { corsSafeFetch } from './httpTransport';
-import { ModelProtocolHttpError } from './modelProtocolHttp';
+import { ModelProtocolHttpError, redactModelProtocolError, redactModelProtocolErrorText } from './modelProtocolHttp';
 import {
   getAudioCapability,
   type AudioCapabilityKind,
@@ -52,7 +52,7 @@ export interface FlowMusicLyrics {
 
 export interface FlowMusicTaskState {
   status?: string;
-  error?: string | { message?: string };
+  error?: string | { message?: string; code?: string; type?: string };
   progress?: number;
   result?: {
     music?: FlowMusicTrack[];
@@ -76,6 +76,14 @@ function readTaskId(payload: unknown): string {
   return typeof taskId === 'string' ? taskId : '';
 }
 
+/** 通用解析器会截断纯文本错误，先脱敏，避免留下跨截断位置的 Key 前缀。 */
+async function throwApimartResponseError(response: Response, label: string, apiKey: string): Promise<never> {
+  const body = await response.text().catch(() => '');
+  return parseResponseError(new Response(redactModelProtocolErrorText(body, apiKey), {
+    status: response.status, headers: response.headers,
+  }), label);
+}
+
 async function submitFlowMusicTask(
   apiKey: string,
   baseUrl: string,
@@ -84,22 +92,27 @@ async function submitFlowMusicTask(
   errorLabel: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const response = await corsSafeFetch(endpoint(baseUrl, path), {
-    method: 'POST',
-    headers: buildAuthHeaders(apiKey),
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok) {
-    try {
-      await parseResponseError(response, `${errorLabel} (${response.status})`);
-    } catch (error) {
-      throw new ModelProtocolHttpError(response.status, error instanceof Error ? error.message : errorLabel);
+  try {
+    const response = await corsSafeFetch(endpoint(baseUrl, path), {
+      method: 'POST',
+      headers: buildAuthHeaders(apiKey),
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) {
+      try {
+        await throwApimartResponseError(response, `${errorLabel} (${response.status})`, apiKey);
+      } catch (error) {
+        throw new ModelProtocolHttpError(response.status,
+          redactModelProtocolErrorText(error instanceof Error ? error.message : errorLabel, apiKey));
+      }
     }
+    const taskId = readTaskId(await response.json());
+    if (!taskId) throw new Error(`${errorLabel}：未返回 task_id`);
+    return taskId;
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-  const taskId = readTaskId(await response.json());
-  if (!taskId) throw new Error(`${errorLabel}：未返回 task_id`);
-  return taskId;
 }
 
 export async function generateApimartSpeech(
@@ -114,26 +127,30 @@ export async function generateApimartSpeech(
   },
   signal?: AbortSignal,
 ): Promise<AudioGenerationResult> {
-  if (!params.input.trim()) throw new Error('TTS 文本不能为空');
-  if (params.input.length > 4096) throw new Error('TTS 文本不能超过 4096 个字符');
-  if (params.speed < 0.25 || params.speed > 4) throw new Error('TTS 语速必须在 0.25 到 4 之间');
+  try {
+    if (!params.input.trim()) throw new Error('TTS 文本不能为空');
+    if (params.input.length > 4096) throw new Error('TTS 文本不能超过 4096 个字符');
+    if (params.speed < 0.25 || params.speed > 4) throw new Error('TTS 语速必须在 0.25 到 4 之间');
 
-  const response = await corsSafeFetch(endpoint(baseUrl, '/audio/speech'), {
-    method: 'POST',
-    headers: buildAuthHeaders(apiKey),
-    body: JSON.stringify(buildAudioSpeechRequestBody(params)),
-    signal,
-  });
-  if (!response.ok) {
-    await parseResponseError(response, `APIMart TTS 生成失败 (${response.status})`);
+    const response = await corsSafeFetch(endpoint(baseUrl, '/audio/speech'), {
+      method: 'POST',
+      headers: buildAuthHeaders(apiKey),
+      body: JSON.stringify(buildAudioSpeechRequestBody(params)),
+      signal,
+    });
+    if (!response.ok) {
+      await throwApimartResponseError(response, `APIMart TTS 生成失败 (${response.status})`, apiKey);
+    }
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length === 0) throw new Error('APIMart TTS 生成完成但未返回音频数据');
+    const blob = new Blob([bytes], {
+      type: response.headers.get('Content-Type') || `audio/${params.format}`,
+    });
+    return { url: URL.createObjectURL(blob), bytes, format: params.format };
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length === 0) throw new Error('APIMart TTS 生成完成但未返回音频数据');
-  const blob = new Blob([bytes], {
-    type: response.headers.get('Content-Type') || `audio/${params.format}`,
-  });
-  return { url: URL.createObjectURL(blob), bytes, format: params.format };
 }
 
 export async function transcribeApimartAudio(
@@ -141,40 +158,44 @@ export async function transcribeApimartAudio(
   baseUrl: string,
   request: WhisperTranscriptionRequest,
 ): Promise<string> {
-  const responseFormat = request.responseFormat ?? 'json';
-  if (request.temperature !== undefined && (request.temperature < 0 || request.temperature > 1)) {
-    throw new Error('Whisper temperature 必须在 0 到 1 之间');
-  }
+  try {
+    const responseFormat = request.responseFormat ?? 'json';
+    if (request.temperature !== undefined && (request.temperature < 0 || request.temperature > 1)) {
+      throw new Error('Whisper temperature 必须在 0 到 1 之间');
+    }
 
-  const formData = new FormData();
-  formData.append('file', request.file, request.fileName);
-  formData.append('model', 'whisper-1');
-  formData.append('response_format', responseFormat);
-  if (request.language?.trim()) formData.append('language', request.language.trim());
-  if (request.prompt?.trim()) formData.append('prompt', request.prompt.trim());
-  if (request.temperature !== undefined) {
-    formData.append('temperature', String(request.temperature));
-  }
+    const formData = new FormData();
+    formData.append('file', request.file, request.fileName);
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', responseFormat);
+    if (request.language?.trim()) formData.append('language', request.language.trim());
+    if (request.prompt?.trim()) formData.append('prompt', request.prompt.trim());
+    if (request.temperature !== undefined) {
+      formData.append('temperature', String(request.temperature));
+    }
 
-  const response = await corsSafeFetch(endpoint(baseUrl, '/audio/transcriptions'), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
-  });
-  if (!response.ok) {
-    await parseResponseError(response, `APIMart Whisper 转录失败 (${response.status})`);
-  }
+    const response = await corsSafeFetch(endpoint(baseUrl, '/audio/transcriptions'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+    });
+    if (!response.ok) {
+      await throwApimartResponseError(response, `APIMart Whisper 转录失败 (${response.status})`, apiKey);
+    }
 
-  if (responseFormat === 'json' || responseFormat === 'verbose_json') {
-    const payload = await response.json() as { text?: unknown };
-    const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+    if (responseFormat === 'json' || responseFormat === 'verbose_json') {
+      const payload = await response.json() as { text?: unknown };
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      if (!text) throw new Error('APIMart Whisper 转录完成但未返回文本');
+      return text;
+    }
+
+    const text = (await response.text()).trim();
     if (!text) throw new Error('APIMart Whisper 转录完成但未返回文本');
     return text;
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-
-  const text = (await response.text()).trim();
-  if (!text) throw new Error('APIMart Whisper 转录完成但未返回文本');
-  return text;
 }
 
 export function submitFlowMusicLyrics(
@@ -261,15 +282,27 @@ export async function fetchFlowMusicTask(
   taskId: string,
   signal?: AbortSignal,
 ): Promise<FlowMusicTaskState> {
-  const response = await corsSafeFetch(endpoint(baseUrl, `/music/tasks/${encodeURIComponent(taskId)}?language=zh`), {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal,
-  });
-  if (!response.ok) {
-    await parseResponseError(response, `APIMart 音乐任务查询失败 (${response.status})`);
+  try {
+    const response = await corsSafeFetch(endpoint(baseUrl, `/music/tasks/${encodeURIComponent(taskId)}?language=zh`), {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal,
+    });
+    if (!response.ok) {
+      await throwApimartResponseError(response, `APIMart 音乐任务查询失败 (${response.status})`, apiKey);
+    }
+    const raw = await response.json() as { data?: FlowMusicTaskState } & FlowMusicTaskState;
+    const task = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+    // 失败详情还会进入轮询回执和消息，不能等界面显示时再移除凭据。
+    return { ...task, ...(task.error ? { error: typeof task.error === 'string'
+      ? redactModelProtocolErrorText(task.error, apiKey)
+      : {
+        ...(typeof task.error.message === 'string' ? { message: redactModelProtocolErrorText(task.error.message, apiKey) } : {}),
+        ...(typeof task.error.code === 'string' ? { code: redactModelProtocolErrorText(task.error.code, apiKey) } : {}),
+        ...(typeof task.error.type === 'string' ? { type: redactModelProtocolErrorText(task.error.type, apiKey) } : {}),
+      } } : {}) };
+  } catch (error) {
+    throw redactModelProtocolError(error, apiKey);
   }
-  const raw = await response.json() as { data?: FlowMusicTaskState } & FlowMusicTaskState;
-  return raw.data && typeof raw.data === 'object' ? raw.data : raw;
 }
 
 export function extractFlowMusicLyrics(task: FlowMusicTaskState): Required<FlowMusicLyrics> {

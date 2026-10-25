@@ -751,6 +751,19 @@ describe('Sora2U 远端模型能力目录', () => {
     vi.restoreAllMocks();
   });
 
+  it.each([undefined, 0, 3, 4])('保留远端联合名额 %s，缺省时保留内置补充', async (maximum) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ object: 'list', data: [{
+      id: 'seedance-2.0', reference_limits: { image: 9, video: 3, audio: 3,
+        ...(maximum === undefined ? {} : { videoAudioCombined: maximum }) },
+    }] })));
+    const result = await fetchProviderModelCatalog({ providerId: 'sora2u',
+      config: { name: 'Sora2U', apiKey: 'fixture-key', baseUrl: 'https://sora2u.com', catalogId: 'sora2u' },
+      fallbackModels: [...SORA2U_MODEL_MANIFEST] });
+    expect(result.models.find((model) => model.id === 'seedance-2.0')?.videoCapability)
+      .toMatchObject({ maxImageReferences: 9, maxVideoReferences: 3, maxAudioReferences: 3,
+        maxVideoAudioReferences: maximum ?? 3 });
+  });
+
   it('隐藏 Sora2U 的三个 Seedance 2.5 变体，并保留其他远端新增模型', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
       object: 'list',

@@ -43,6 +43,124 @@ afterEach(() => {
 });
 
 describe('standard image error credentials', () => {
+  it('APIMart upload checks its own credentials without borrowing another provider key', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey: '' }, unrelated: { name: '其他连接', apiKey: 'unrelated-key-fixture' },
+    } } }));
+    await expect(uploadToRemote('data:image/png;base64,YXBpbWFydC1uby1rZXk=', 'apimart'))
+      .rejects.toThrow('未配置 APIMart');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it('APIMart upload redacts complete echoed credentials before truncating errors and logging', async () => {
+    const apiKey = 'upload~! private/key=';
+    const form = new URLSearchParams({ key: apiKey }).toString().slice(4);
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey, baseUrl: 'https://apimart-upload.example/v1' },
+    } } }));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const body = `${'x'.repeat(190)}${apiKey}; ${encodeURIComponent(apiKey)}; ${form}`;
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(new Response(body, { status: 401 }));
+    const error = await uploadToRemote('data:image/png;base64,YXBpbWFydC1lcnJvci1rZXk=', 'apimart')
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain(apiKey.slice(0, 8));
+    for (const secret of [apiKey, encodeURIComponent(apiKey), form]) {
+      expect((error as Error).stack).not.toContain(secret);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    }
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce();
+  });
+
+  it('APIMart rejects an oversized non-PNG before uploading or submitting generation', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey: 'oversized-fixture', baseUrl: 'https://apimart-upload.example/v1' },
+    } } }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(new Blob([new Uint8Array(20_000_001)], {
+      type: 'image/gif',
+    }), { headers: { 'Content-Type': 'image/gif', 'Content-Length': '20000001' } }));
+    await expect(uploadToRemote('asset://localhost/oversized-animated.gif', 'apimart')).rejects.toThrow('20 MB');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+
+  it('changing an upload connection key invalidates reusable content without persisting credentials', async () => {
+    const setKey = (apiKey: string) => useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey, baseUrl: 'https://apimart-upload.example/v1' },
+    } } }));
+    setKey('first-upload-key-fixture');
+    transportMocks.corsSafeFetch
+      .mockResolvedValueOnce(jsonResponse({ url: 'https://cdn.example/first-upload-account.png' }))
+      .mockResolvedValueOnce(jsonResponse({ url: 'https://cdn.example/second-upload-account.png' }));
+    const source = 'data:image/png;base64,YXBpbWFydC1rZXktcm90YXRpb24=';
+    expect(await uploadToRemote(source, 'apimart')).toBe('https://cdn.example/first-upload-account.png');
+    expect(await uploadToRemote(source, 'apimart')).toBe('https://cdn.example/first-upload-account.png');
+    setKey('second-upload-key-fixture');
+    expect(await uploadToRemote(source, 'apimart')).toBe('https://cdn.example/second-upload-account.png');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+    const persisted = localStorage.getItem('canvas-upload-cache-v4') ?? '';
+    expect(persisted).not.toContain('first-upload-key-fixture');
+    expect(persisted).not.toContain('second-upload-key-fixture');
+  });
+
+  it('rejects queued and in-flight uploads when the connection changes without caching either result', async () => {
+    const setKey = (apiKey: string) => useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey, baseUrl: 'https://apimart-upload.example/v1' },
+    } } }));
+    setKey('queued-original-fixture');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let finishFirst!: (response: Response) => void;
+    transportMocks.corsSafeFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { finishFirst = resolve; }));
+    const first = uploadToRemote('data:image/png;base64,cXVldWVkLWZpcnN0', 'apimart').catch((error: unknown) => error);
+    await vi.waitFor(() => expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce());
+    const controller = new AbortController();
+    const listen = vi.spyOn(controller.signal, 'addEventListener');
+    const source = 'data:image/png;base64,cXVldWVkLXNlY29uZA==';
+    const second = uploadToRemote(source, 'apimart', 'image', controller.signal).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(listen).toHaveBeenCalledWith('abort', expect.any(Function), { once: true }));
+    setKey('queued-replacement-fixture');
+    finishFirst(jsonResponse({ url: 'https://cdn.example/obsolete-queued.png' }));
+    for (const error of await Promise.all([first, second])) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('连接配置已变化');
+    }
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce();
+    setKey('queued-original-fixture');
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ url: 'https://cdn.example/retried-queued.png' }));
+    expect(await uploadToRemote(source, 'apimart')).toBe('https://cdn.example/retried-queued.png');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['network', 'json'] as const)('redacts the captured upload key when %s fails after key rotation', async (mode) => {
+    const oldKey = `in-flight~! ${mode}/key=`;
+    const encoded = encodeURIComponent(oldKey);
+    const formEncoded = new URLSearchParams({ key: oldKey }).toString().slice(4);
+    const setKey = (apiKey: string) => useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      apimart: { name: 'APIMart', apiKey, baseUrl: 'https://apimart-upload.example/v1' },
+    } } }));
+    setKey(`  ${oldKey}  `);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let fail!: (error: Error) => void;
+    const delayed = new Promise<Response>((_, reject) => { fail = reject; });
+    if (mode === 'network') transportMocks.corsSafeFetch.mockReturnValueOnce(delayed);
+    else {
+      const response = jsonResponse({});
+      vi.spyOn(response, 'json').mockImplementation(() => delayed);
+      transportMocks.corsSafeFetch.mockResolvedValueOnce(response);
+    }
+    const pending = uploadToRemote(`data:image/png;base64,${btoa(`in-flight-${mode}`)}`, 'apimart')
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce());
+    expect(transportMocks.corsSafeFetch.mock.calls[0][1].headers).toMatchObject({ Authorization: `Bearer ${oldKey}` });
+    setKey('replacement-key-fixture');
+    fail(new Error(`Echo ${oldKey}; ${encoded}; ${formEncoded}`));
+    const error = await pending;
+    expect(error).toBeInstanceOf(Error);
+    for (const secret of [oldKey, encoded, formEncoded]) {
+      expect((error as Error).stack).not.toContain(secret);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    }
+  });
+
   it.each(['json-401', 'multipart-504', 'ccc-401'] as const)('redacts echoed credentials from %s without re-submitting', async (mode) => {
     const apiKey = 'fixture~! private/key=';
     const formEncoded = new URLSearchParams({ key: apiKey }).toString().slice('key='.length);

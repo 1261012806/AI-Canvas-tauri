@@ -4,6 +4,8 @@ description = "Allows registered AI Canvas application commands for trusted firs
 commands.allow = [
   "download_app_update",
   "store_theme_image",
+  "optimize_reference_png",
+  "optimize_reference_jpeg",
   "billing_upsert",
   "billing_query",
   "billing_get_by_task",

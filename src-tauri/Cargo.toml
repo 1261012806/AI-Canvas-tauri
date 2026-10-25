@@ -63,6 +63,10 @@ tar = "0.4"
 zip = { version = "=2.4.2", default-features = false, features = ["deflate-flate2"] }
 sevenz-rust = { version = "=0.6.1", default-features = false }
 image = "0.25"
+# 参考 PNG 只做无损重编码，不启用命令行、并行或 Zopfli 功能。
+oxipng = { version = "=10.2.1", default-features = false }
+# JPEG 直接优化原始 DCT 系数；使用内置源码静态编译，不依赖系统动态库。
+turbojpeg-sys = { version = "=1.2.0", default-features = false, features = ["cmake"] }
 rquickjs = "0.12.2"
 # 本地语音转文本：解码 mp3 / wav / m4a / flac / ogg。默认已含 wav、flac、ogg、vorbis、pcm
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }

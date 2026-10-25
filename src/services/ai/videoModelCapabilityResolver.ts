@@ -6,7 +6,8 @@ import { getVolcengineSeedanceCapability } from './volcengineVideoModels';
 import { getDreaminaVideoCapability } from './dreaminaModels';
 import { getGrsaiVideoCapability } from './grsaiModels';
 import { getModelProtocolPresetVideoCapability } from './modelProtocolPresets';
-import { SORA2U_MODEL_MANIFEST } from './providers/sora2uModelManifest';
+import { SORA2U_MODEL_MANIFEST, withSora2uReferenceLimits } from './providers/sora2uModelManifest';
+import { resolveProviderCatalogId } from './providerPolicies';
 
 function safeRange(range: NumericInputConstraint | undefined): NumericInputConstraint | undefined {
   return range === undefined ? undefined : {
@@ -52,6 +53,7 @@ function safeCapability(capability: VideoModelCapability): VideoModelCapability 
     allowFrameAndReferenceMix: capability.allowFrameAndReferenceMix,
     maxImageReferences: capability.maxImageReferences, maxVideoReferences: capability.maxVideoReferences,
     maxAudioReferences: capability.maxAudioReferences,
+    maxVideoAudioReferences: capability.maxVideoAudioReferences,
     inputConstraints: constraints ? {
       promptMinCharacters: constraints.promptMinCharacters, maxBase64DecodedBytes: constraints.maxBase64DecodedBytes,
       referenceVideo: constraints.referenceVideo ? {
@@ -101,7 +103,9 @@ export function resolveVideoModelCapability(
   if (modelId.startsWith('general/')) {
     const general = config.generalModels?.find((model) => model.id === modelId.slice('general/'.length));
     if (!general || general.category !== 'video') return undefined;
-    const capability = general.videoCapability ?? getModelProtocolPresetVideoCapability(general.executionProfile);
+    const configured = general.videoCapability ?? getModelProtocolPresetVideoCapability(general.executionProfile);
+    const catalogId = resolveProviderCatalogId(general.providerConfigId, config.providers[general.providerConfigId]);
+    const capability = catalogId === 'sora2u' ? withSora2uReferenceLimits(general.modelId, configured) : configured;
     return capability ? safeCapability(capability) : undefined;
   }
 
@@ -109,6 +113,7 @@ export function resolveVideoModelCapability(
   if (separator <= 0) return undefined;
   const provider = modelId.slice(0, separator);
   const rawId = modelId.slice(separator + 1);
+  const catalogId = resolveProviderCatalogId(provider, config.providers[provider]);
   let capability: VideoModelCapability | undefined;
   if (provider === 'apimart' || provider === 'volcengine') {
     const native = provider === 'apimart'
@@ -136,9 +141,10 @@ export function resolveVideoModelCapability(
       model.category === 'video' && (model.id === rawId || model.id === modelId)
     ));
     capability = selected?.videoCapability ?? getModelProtocolPresetVideoCapability(selected?.executionProfile);
-    if (!capability && provider === 'sora2u') {
+    if (!capability && catalogId === 'sora2u') {
       capability = SORA2U_MODEL_MANIFEST.find((model) => model.category === 'video' && model.id === rawId)?.videoCapability;
     }
   }
+  if (catalogId === 'sora2u') capability = withSora2uReferenceLimits(rawId, capability);
   return capability ? safeCapability(capability) : undefined;
 }

@@ -78,6 +78,7 @@ import { quoteVolcengineVideo } from '../billing/volcenginePricing';
 import { createBillingRun, updateBillingRun } from '../billing/volcengineBillingService';
 import { assertToapisVideoInput, toapisVideoVariables } from './providers/toapisModelManifest';
 import { assertLibapiVideoInput, libapiVideoVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
+import { withSora2uReferenceLimits } from './providers/sora2uModelManifest';
 
 export { compileVideoReferencePrompt } from './referencePrompt';
 
@@ -779,8 +780,10 @@ export async function generateVideo(
     const isLibapi = catalogId === 'libapi';
     const publicUrlProvider = getProviderPolicy(catalogId).upload ? connection.providerConfigId : undefined;
     const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
-    const videoCapability = gm.videoCapability
+    const configuredVideoCapability = gm.videoCapability
       ?? getModelProtocolPresetVideoCapability(gm.executionProfile);
+    const videoCapability = catalogId === 'sora2u'
+      ? withSora2uReferenceLimits(gm.modelId, configuredVideoCapability) : configuredVideoCapability;
     const referenceInput = await resolveVideoReferenceInput(
       rawPrompt,
       params.nodeId,

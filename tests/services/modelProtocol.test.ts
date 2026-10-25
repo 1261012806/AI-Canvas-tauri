@@ -22,7 +22,10 @@ import {
 import { useAppStore } from '../../src/store/useAppStore';
 import { createWorkflowApiDraft } from '../../src/services/workflowApi/workflowApiDefinition';
 import { readModelProtocolPathValues } from '../../src/services/ai/modelProtocolResponse';
-import { ModelProtocolHttpError, redactModelProtocolError } from '../../src/services/ai/modelProtocolHttp';
+import {
+  fetchSameOriginResultUrls, ModelProtocolHttpError, pcmS16LeToWav,
+  readBinaryModelProtocolResult, redactModelProtocolError,
+} from '../../src/services/ai/modelProtocolHttp';
 import { PollTaskFailedError, PollTimeoutError } from '../../src/services/pollTask';
 import { buildGeneralVideoProtocolVariables } from '../../src/services/ai/generateVideo';
 import { getPendingTasksForProject, MediaTaskPausedError, VideoPollingPausedError } from '../../src/services/pollManager';
@@ -44,8 +47,197 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
+const pngResult = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/vYkAAAAASUVORK5CYII='), (char) => char.charCodeAt(0));
+const wavResult = Uint8Array.from(pcmS16LeToWav(new Uint8Array([0, 0]), 24000, 1));
+const encodedResult = (bytes: Uint8Array, mime: string) => `data:${mime};base64,${btoa(String.fromCharCode(...bytes))}`;
+
+async function mp4Result(): Promise<Uint8Array<ArrayBuffer>> {
+  const { Output, BufferTarget, Mp4OutputFormat, EncodedVideoPacketSource, EncodedPacket } = await import('mediabunny');
+  const target = new BufferTarget();
+  const output = new Output({ target, format: new Mp4OutputFormat({ fastStart: 'in-memory' }) });
+  const video = new EncodedVideoPacketSource('vp9');
+  output.addVideoTrack(video);
+  await output.start();
+  await video.add(new EncodedPacket(new Uint8Array([0x82, 0x49, 0x83, 0x42, 0, 0, 0]), 'key', 0, 1), {
+    decoderConfig: { codec: 'vp09.00.10.08', codedWidth: 16, codedHeight: 16 },
+  });
+  video.close();
+  await output.finalize();
+  return new Uint8Array(target.buffer!);
+}
+
+describe('binary model result boundaries', () => {
+  it.each(['sync', 'download', 'fetchUrl'] as const)('recognizes actual media with generic or missing MIME through %s', async (mode) => {
+    const video = await mp4Result();
+    for (const [bytes, mime] of [[pngResult, 'image/png'], [wavResult, 'audio/wav'], [video, 'video/mp4']] as const) {
+      for (const contentType of ['application/octet-stream', undefined]) {
+        const binaryResponse = () => new Response(bytes, { headers: contentType ? { 'Content-Type': contentType } : {} });
+        const protocol: ModelExecutionProtocol = mode === 'sync'
+          ? { version: 2, mode: 'sync', submit: { method: 'POST', path: '/render' },
+            response: { type: 'binary', result: { mimeType: mime } } }
+          : { version: 2, mode: 'async', submit: { method: 'POST', path: '/render' },
+            response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/tasks/{{submit.id}}',
+              response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], result: {
+                mimeType: mime, ...(mode === 'download' ? { download: { method: 'GET', path: '/tasks/{{submit.id}}/content' } }
+                  : { urlPath: 'urls', fetchUrl: true }),
+              } } } };
+        const fetchMock = vi.fn();
+        if (mode !== 'sync') fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'original-task' }))
+          .mockResolvedValueOnce(jsonResponse({ status: 'completed', urls: ['https://gateway.example/v1/content'] }));
+        fetchMock.mockResolvedValueOnce(binaryResponse());
+        vi.stubGlobal('fetch', fetchMock);
+        const result = await executeModelProtocol({ apiKey: 'secret', baseUrl: 'https://gateway.example/v1', protocol, variables: {} });
+        expect(result.urls).toEqual([encodedResult(bytes, mime)]);
+        expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+      }
+    }
+  });
+
+  it.each([
+    ['application/octet-stream', '{"error":{"message":"denied"}}'],
+    ['video/mp4', `\ufeff${' '.repeat(5000)}{"error":"denied"}`],
+    ['image/png', '<!doctype html><html><body>denied</body></html>'],
+    ['audio/wav', '<?xml version="1.0"?><html><body>denied</body></html>'],
+    ['video/mp4', '"request denied"'],
+  ])('rejects an error document disguised as %s', async (contentType, body) => {
+    await expect(readBinaryModelProtocolResult(new Response(body, { headers: { 'Content-Type': contentType } }), 'video/mp4'))
+      .rejects.toThrow('JSON 或 HTML');
+  });
+
+  it('does not promote unknown bytes using only a configured media MIME', async () => {
+    await expect(readBinaryModelProtocolResult(new Response(new Uint8Array([0, 1, 2, 3])), 'video/mp4'))
+      .rejects.toThrow('不能仅按配置 MIME');
+    await expect(readBinaryModelProtocolResult(new Response(wavResult), 'video/mp4'))
+      .resolves.toBe(encodedResult(wavResult, 'audio/wav'));
+    await expect(readBinaryModelProtocolResult(new Response(wavResult, { headers: { 'Content-Type': 'image/png' } }), 'image/png'))
+      .resolves.toBe(encodedResult(wavResult, 'audio/wav'));
+  });
+
+  it('rejects excessive declared bytes before consuming a result body', async () => {
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    await expect(readBinaryModelProtocolResult(new Response(body, { headers: { 'Content-Length': String(64 * 1024 * 1024 + 1) } })))
+      .rejects.toThrow('64 MiB');
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  });
+
+  it.each([undefined, '1'])('counts actual chunks against one shared budget with Content-Length %s', async (contentLength) => {
+    const budget = { usedBytes: 0, maxBytes: wavResult.byteLength * 2 - 1 };
+    await readBinaryModelProtocolResult(new Response(wavResult), 'audio/wav', undefined, budget);
+    const cancelled = vi.fn();
+    let chunk = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunk++ === 0) controller.enqueue(wavResult.subarray(0, wavResult.length - 1));
+        else controller.enqueue(wavResult.subarray(wavResult.length - 1));
+      }, cancel: cancelled,
+    });
+    await expect(readBinaryModelProtocolResult(new Response(body, {
+      headers: contentLength ? { 'Content-Length': contentLength } : {},
+    }), 'audio/wav', undefined, budget)).rejects.toThrow('累计超过下载预算');
+    expect(budget.usedBytes).toBe(budget.maxBytes);
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  });
+
+  it('cancels a pending body read and releases its reader', async () => {
+    const controller = new AbortController();
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    const pending = readBinaryModelProtocolResult(new Response(body), 'video/mp4', controller.signal);
+    controller.abort(new DOMException('stopped', 'AbortError'));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+  });
+
+  it('validates every URL and the result count before issuing any GET', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchSameOriginResultUrls(Array.from({ length: 33 }, (_, index) => `https://gateway.example/${index}`),
+      'https://gateway.example/v1', undefined, 'secret')).rejects.toThrow('32');
+    await expect(fetchSameOriginResultUrls(['https://gateway.example/first', 'https://elsewhere.example/second'],
+      'https://gateway.example/v1', undefined, 'secret')).rejects.toThrow('不同源');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the byte limit to failed result downloads before reading error bodies', async () => {
+    const cancelled = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({ cancel: cancelled }), {
+      status: 401, headers: { 'Content-Length': String(64 * 1024 * 1024 + 1) },
+    })));
+    await expect(fetchSameOriginResultUrls(['https://gateway.example/result'], 'https://gateway.example/v1', undefined, 'secret'))
+      .rejects.toThrow('64 MiB');
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a hanging result error body and releases its reader', async () => {
+    const controller = new AbortController();
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = fetchSameOriginResultUrls(['https://gateway.example/result'], 'https://gateway.example/v1',
+      undefined, 'secret', undefined, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(body.locked).toBe(true));
+    controller.abort(new DOMException('stopped', 'AbortError'));
+    await rejected;
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the HTTP error classification for empty failed result downloads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 304 })));
+    await expect(fetchSameOriginResultUrls(['https://gateway.example/result'], 'https://gateway.example/v1', undefined, 'secret'))
+      .rejects.toMatchObject({ name: 'ModelProtocolHttpError', status: 304 });
+  });
+
+  it('downloads at most two results concurrently and preserves result order', async () => {
+    const requests: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { requests.push(resolve); }));
+    vi.stubGlobal('fetch', fetchMock);
+    const urls = [0, 1, 2].map((index) => `https://gateway.example/${index}`);
+    const results = [0, 1, 2].map((value) => Uint8Array.from(pcmS16LeToWav(new Uint8Array([value, 0]), 24000, 1)));
+    const pending = fetchSameOriginResultUrls(urls, 'https://gateway.example/v1', undefined, 'secret');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    requests[1](new Response(results[1]));
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    requests[2](new Response(results[2]));
+    requests[0](new Response(results[0]));
+    await expect(pending).resolves.toEqual(results.map((bytes) => encodedResult(bytes, 'audio/wav')));
+  });
+
+  it.each(['cancel', 'failure'] as const)('stops queued downloads on %s and discards an uncooperative late response', async (mode) => {
+    const controller = new AbortController();
+    const requests: Array<{ resolve: (response: Response) => void; signal: AbortSignal }> = [];
+    const fetchMock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve) => {
+      requests.push({ resolve, signal: init!.signal! });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = fetchSameOriginResultUrls([0, 1, 2].map((index) => `https://gateway.example/${index}`),
+      'https://gateway.example/v1', undefined, 'secret', 'video/mp4', controller.signal);
+    const rejected = expect(pending).rejects.toThrow(mode === 'cancel' ? 'stopped' : 'JSON 或 HTML');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    if (mode === 'cancel') controller.abort(new DOMException('stopped', 'AbortError'));
+    else requests[0].resolve(jsonResponse({ error: 'denied' }));
+    await rejected;
+    expect(requests.every((request) => request.signal.aborted)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+    requests[1].resolve(new Response(body));
+    if (mode === 'cancel') requests[0].resolve(new Response(pngResult));
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('declarative model execution protocol', () => {
-  it.each(['sync', 'async'] as const)('rejects HTTP 200 JSON returned as %s binary video output before delivery', async (mode) => {
+  it.each([['sync', 'json'], ['async', 'json'], ['sync', 'size'], ['async', 'size']] as const)(
+    'rejects HTTP 200 %s binary video output with %s failure before delivery', async (mode, failure) => {
     localStorage.clear();
     const projectId = `runtime-output-${mode}`;
     useAppStore.setState((state) => ({ currentProjectId: projectId,
@@ -68,13 +260,15 @@ describe('declarative model execution protocol', () => {
         return jsonResponse({ id: 'original-binary-task' });
       }).mockResolvedValueOnce(jsonResponse({ status: 'completed' }));
     }
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: 'upstream returned an error document' } }));
+    fetchMock.mockResolvedValueOnce(failure === 'json'
+      ? jsonResponse({ error: { message: 'upstream returned an error document' } })
+      : new Response(wavResult, { headers: { 'Content-Length': String(64 * 1024 * 1024 + 1) } }));
     vi.stubGlobal('fetch', fetchMock);
     const pending = runConfiguredModelProtocol({ category: 'video', nodeId: 'runtime-video',
       model: { id: 'runtime-model', name: 'Runtime model', modelId: 'video-model', category: 'video', providerConfigId: 'output',
         executionProfile: { preset: 'custom', protocol } }, variables: { model: 'video-model', prompt: 'video' } });
     if (mode === 'sync') {
-      await expect(pending).rejects.toThrow('MIME');
+      await expect(pending).rejects.toThrow(failure === 'json' ? 'MIME' : '64 MiB');
       expect(getPendingTasksForProject(projectId)).toEqual([]);
     } else {
       await expect(pending).rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: {

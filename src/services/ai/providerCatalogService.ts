@@ -631,6 +631,7 @@ function parseVideoCapability(
   const durations = readNumberArray(record.durations);
   const durationRange = readRecord(record.duration_range ?? record.durationRange);
   const referenceLimits = readRecord(record.reference_limits ?? record.referenceLimits);
+  const maxVideoAudioReferences = readFiniteNumber(referenceLimits?.videoAudioCombined);
   const capability: NonNullable<ProviderModelSelection['videoCapability']> = {
     durations,
     minDuration: readFiniteNumber(durationRange?.min) ?? (durations ? Math.min(...durations) : undefined),
@@ -647,6 +648,7 @@ function parseVideoCapability(
     maxImageReferences: readFiniteNumber(referenceLimits?.image),
     maxVideoReferences: readFiniteNumber(referenceLimits?.video),
     maxAudioReferences: readFiniteNumber(referenceLimits?.audio),
+    ...(maxVideoAudioReferences !== undefined ? { maxVideoAudioReferences } : {}),
     supportsStandaloneAudio: record.supports_audio === true ? true : undefined,
     requiresReference: record.supports_text_only === false ? true : undefined,
   };

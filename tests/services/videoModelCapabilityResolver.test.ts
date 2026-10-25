@@ -31,6 +31,28 @@ describe('videoModelCapabilityResolver', () => {
     expect(resolveVideoModelCapability('dreamina/seedance2.5', config())).toMatchObject({ maxDuration: 30, maxAudioReferences: 10 });
   });
 
+  it('补齐旧 Sora2U 模型的联合名额，保留显式值与厂商身份边界', () => {
+    const input = config();
+    input.providers.saved = { name: 'Saved Sora2U', catalogId: 'sora2u', apiKey: 'fixture', baseUrl: 'https://sora2u.com' };
+    input.providers.sora2u = { name: 'Custom', catalogId: 'custom-openai', apiKey: 'fixture', baseUrl: 'https://custom.example' };
+    input.generalModels = [
+      { id: 'old', name: 'Old', modelId: 'seedance-2.0', category: 'video', providerConfigId: 'saved',
+        videoCapability: { maxVideoReferences: 3, maxAudioReferences: 3 } },
+      { id: 'explicit', name: 'Explicit', modelId: 'seedance-2.0-character', category: 'video', providerConfigId: 'saved',
+        videoCapability: { maxVideoAudioReferences: 2 } },
+      { id: 'custom', name: 'Custom', modelId: 'seedance-2.0', category: 'video', providerConfigId: 'sora2u',
+        videoCapability: { maxVideoReferences: 3, maxAudioReferences: 3 } },
+      { id: 'mono', name: 'Mono', modelId: 'seedance-2.0-character-mono', category: 'video', providerConfigId: 'saved',
+        videoCapability: { maxVideoReferences: 3, maxAudioReferences: 3 } },
+    ];
+    expect(resolveVideoModelCapability('general/old', input)?.maxVideoAudioReferences).toBe(3);
+    expect(resolveVideoModelCapability('general/explicit', input)?.maxVideoAudioReferences).toBe(2);
+    expect(resolveVideoModelCapability('general/custom', input)?.maxVideoAudioReferences).toBeUndefined();
+    expect(resolveVideoModelCapability('general/mono', input)?.maxVideoAudioReferences).toBeUndefined();
+    expect(resolveVideoModelCapability('sora2u/seedance-2.0', input)).toBeUndefined();
+    expect(input.generalModels[0].videoCapability).not.toHaveProperty('maxVideoAudioReferences');
+  });
+
   it('uses internal general-model identity, explicit capability and preset defaults', () => {
     const input = config();
     input.generalModels = [

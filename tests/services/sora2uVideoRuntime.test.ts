@@ -14,6 +14,33 @@ function capabilityFor(modelId: string) {
 }
 
 describe('Sora2U 通用视频运行时映射', () => {
+  function buildReferences(modelId: string, videoCount: number, audioCount: number, imageCount = 0) {
+    return buildGeneralVideoProtocolVariables(modelId, { model: `general/${modelId}`, provider: 'general', prompt: '保持素材内容并连续自然运镜' }, {
+      prompt: '保持素材内容并连续自然运镜', operation: 'video-to-video',
+      imageUrls: Array.from({ length: imageCount }, (_, index) => `https://assets.example/image-${index}.png`),
+      videoUrls: Array.from({ length: videoCount }, (_, index) => `https://assets.example/video-${index}.mp4`),
+      audioUrls: Array.from({ length: audioCount }, (_, index) => `https://assets.example/audio-${index}.mp3`),
+    }, capabilityFor(modelId));
+  }
+
+  it.each(['seedance-2.0', 'seedance-2.0-character'])('%s 视频与音频共用 3 份名额，图片另计', (modelId) => {
+    expect(() => buildReferences(modelId, 1, 2, 9)).not.toThrow();
+    expect(() => buildReferences(modelId, 2, 2)).toThrow('参考视频和音频（合计）');
+    expect(() => buildReferences(modelId, 3, 1)).toThrow('参考视频和音频（合计）');
+  });
+
+  it.each(['seedance-2.5', 'seedance-2.0-character-mono'])('不向未确认型号 %s 扩展联合名额', (modelId) => {
+    expect(capabilityFor(modelId).maxVideoAudioReferences).toBeUndefined();
+    expect(() => buildReferences(modelId, 2, 2)).not.toThrow();
+  });
+
+  it.each([-1, 1.5, Infinity, NaN])('拒绝非法联合名额 %s', (maximum) => {
+    expect(() => buildGeneralVideoProtocolVariables('seedance-2.0', {
+      model: 'general/sora2u', provider: 'general', prompt: '保持镜头稳定并自然连续运镜',
+    }, { prompt: '保持镜头稳定并自然连续运镜', operation: 'text-to-video', imageUrls: [], videoUrls: [], audioUrls: [] },
+    { ...capabilityFor('seedance-2.0'), maxVideoAudioReferences: maximum })).toThrow('maxVideoAudioReferences 必须是非负整数');
+  });
+
   it('为全部 Sora2U 视频模型声明统一的提交前素材约束', () => {
     const videoCapabilities = SORA2U_MODEL_MANIFEST
       .filter((model) => model.category === 'video')

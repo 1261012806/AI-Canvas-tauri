@@ -1,7 +1,7 @@
 //! AI Canvas Tauri 库入口，装配插件、窗口、命令、事件与原生服务状态。
 
 use base64::Engine;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
@@ -46,6 +46,8 @@ mod thumbnail_cache;
 mod theme_assets;
 #[path = "media/local_fonts.rs"]
 mod local_fonts;
+#[path = "media/reference_image_upload.rs"]
+mod reference_image_upload;
 #[path = "mcp/bridge.rs"]
 mod mcp_bridge;
 #[path = "mcp/client.rs"]
@@ -414,7 +416,21 @@ struct ProxyFetchRequest {
     text_body: Option<String>,
 }
 
-type ProxyFetchCancellations = Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>;
+// 分别限制在途请求和提前到达的取消；128 项远高于正常模型与工具并发。
+const PROXY_MAX_ACTIVE_REQUESTS: usize = 128;
+const PROXY_MAX_EARLY_CANCELLATIONS: usize = 128;
+const PROXY_MAX_REQUEST_ID_BYTES: usize = 256;
+const PROXY_CANCELLATIONS_OVERFLOWED: &str =
+    "HTTP 取消登记已满；为避免已停止的请求重新发送，已暂停新请求，请重启应用后重试";
+
+#[derive(Default)]
+struct ProxyCancellationRegistry {
+    active: HashMap<String, Option<tokio::sync::oneshot::Sender<()>>>,
+    early_cancelled: HashSet<String>,
+    overflowed: bool,
+}
+
+type ProxyFetchCancellations = Mutex<ProxyCancellationRegistry>;
 
 fn is_public_proxy_download(req: &ProxyFetchRequest) -> bool {
     if !matches!(req.method.as_str(), "GET" | "HEAD")
@@ -494,7 +510,7 @@ impl ProxyHttpState {
         Ok(Self {
             client: build_proxy_http_client(true)?,
             download_client: build_proxy_http_client(false)?,
-            cancellations: Mutex::new(HashMap::new()),
+            cancellations: Mutex::default(),
             body_slots: tokio::sync::Semaphore::new(2),
         })
     }
@@ -502,10 +518,17 @@ impl ProxyHttpState {
 
 fn lock_proxy_fetch_cancellations(
     cancellations: &ProxyFetchCancellations,
-) -> std::sync::MutexGuard<'_, HashMap<String, tokio::sync::oneshot::Sender<()>>> {
+) -> std::sync::MutexGuard<'_, ProxyCancellationRegistry> {
     cancellations
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn validate_proxy_request_id(request_id: &str) -> Result<(), String> {
+    if request_id.is_empty() || request_id.len() > PROXY_MAX_REQUEST_ID_BYTES {
+        return Err("HTTP 请求 ID 无效，长度必须为 1–256 个 UTF-8 字节".into());
+    }
+    Ok(())
 }
 
 struct ProxyFetchCancellationRegistration<'a> {
@@ -519,11 +542,21 @@ impl<'a> ProxyFetchCancellationRegistration<'a> {
         request_id: String,
         sender: tokio::sync::oneshot::Sender<()>,
     ) -> Result<Self, String> {
+        validate_proxy_request_id(&request_id)?;
         let mut items = lock_proxy_fetch_cancellations(cancellations);
-        if items.contains_key(&request_id) {
-            return Err(format!("HTTP 请求 ID 重复: {request_id}"));
+        if items.active.contains_key(&request_id) {
+            return Err("HTTP 请求 ID 重复，请等待原请求结束后重试".into());
         }
-        items.insert(request_id.clone(), sender);
+        if items.early_cancelled.remove(&request_id) {
+            return Err("请求已取消".into());
+        }
+        if items.overflowed {
+            return Err(PROXY_CANCELLATIONS_OVERFLOWED.into());
+        }
+        if items.active.len() >= PROXY_MAX_ACTIVE_REQUESTS {
+            return Err("同时进行的 HTTP 请求已达 128 个，请等待已有请求结束后重试".into());
+        }
+        items.active.insert(request_id.clone(), Some(sender));
         drop(items);
 
         Ok(Self {
@@ -535,8 +568,36 @@ impl<'a> ProxyFetchCancellationRegistration<'a> {
 
 impl Drop for ProxyFetchCancellationRegistration<'_> {
     fn drop(&mut self) {
-        lock_proxy_fetch_cancellations(self.cancellations).remove(&self.request_id);
+        lock_proxy_fetch_cancellations(self.cancellations)
+            .active
+            .remove(&self.request_id);
     }
+}
+
+fn cancel_proxy_request(cancellations: &ProxyFetchCancellations, request_id: &str) -> Result<(), String> {
+    validate_proxy_request_id(request_id)?;
+    let cancellation = {
+        let mut items = lock_proxy_fetch_cancellations(cancellations);
+        if let Some(sender) = items.active.get_mut(request_id) {
+            // 取消后仍保留占位，旧请求清理前不能让同 ID 的新请求注册进来。
+            sender.take()
+        } else {
+            if items.early_cancelled.contains(request_id) {
+                return Ok(());
+            }
+            if items.overflowed || items.early_cancelled.len() >= PROXY_MAX_EARLY_CANCELLATIONS {
+                // 丢过的取消 ID 已无法还原，不能靠等待或清空 Map 重新放行。
+                items.overflowed = true;
+                return Err(PROXY_CANCELLATIONS_OVERFLOWED.into());
+            }
+            items.early_cancelled.insert(request_id.to_string());
+            return Ok(());
+        }
+    };
+    if let Some(sender) = cancellation {
+        let _ = sender.send(());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -544,11 +605,18 @@ fn cancel_proxy_fetch(
     state: tauri::State<'_, ProxyHttpState>,
     request_id: String,
 ) -> Result<(), String> {
-    let cancellation = lock_proxy_fetch_cancellations(&state.cancellations).remove(&request_id);
-    if let Some(sender) = cancellation {
-        let _ = sender.send(());
+    cancel_proxy_request(&state.cancellations, &request_id)
+}
+
+async fn run_cancellable_proxy_request<T>(
+    cancel_receiver: tokio::sync::oneshot::Receiver<()>,
+    request: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::select! {
+        biased;
+        _ = cancel_receiver => Err("请求已取消".to_string()),
+        result = request => result,
     }
-    Ok(())
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -742,10 +810,7 @@ async fn proxy_fetch(
         })
     };
 
-    tokio::select! {
-        result = request => result,
-        _ = cancel_receiver => Err("请求已取消".to_string()),
-    }
+    run_cancellable_proxy_request(cancel_receiver, request).await
 }
 
 #[tauri::command]
@@ -801,10 +866,7 @@ async fn proxy_stream_fetch(
         Ok(())
     };
 
-    tokio::select! {
-        result = request => result,
-        _ = cancel_receiver => Err("请求已取消".to_string()),
-    }
+    run_cancellable_proxy_request(cancel_receiver, request).await
 }
 
 /// 使用原生 HTTP 客户端下载远程图片并返回 base64 data URL（绕过 WebView CORS 限制）
@@ -1105,7 +1167,7 @@ mod proxy_http_tests {
 
     #[test]
     fn cancellation_registration_cleans_up_when_dropped() {
-        let cancellations = Mutex::new(HashMap::new());
+        let cancellations = Mutex::default();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
 
         {
@@ -1115,10 +1177,222 @@ mod proxy_http_tests {
                 sender,
             )
             .expect("应成功注册取消句柄");
-            assert!(lock_proxy_fetch_cancellations(&cancellations).contains_key("request-1"));
+            assert!(lock_proxy_fetch_cancellations(&cancellations)
+                .active
+                .contains_key("request-1"));
         }
 
-        assert!(lock_proxy_fetch_cancellations(&cancellations).is_empty());
+        assert!(lock_proxy_fetch_cancellations(&cancellations).active.is_empty());
+    }
+
+    #[test]
+    fn early_cancellation_waits_for_registration_without_expiring_or_growing_on_duplicates() {
+        let cancellations = Mutex::default();
+        cancel_proxy_request(&cancellations, "delayed-request").unwrap();
+        cancel_proxy_request(&cancellations, "delayed-request").unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let other = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "other-request".into(),
+            sender,
+        )
+        .unwrap();
+        drop(other);
+        assert_eq!(
+            lock_proxy_fetch_cancellations(&cancellations).early_cancelled.len(),
+            1
+        );
+
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let error = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "delayed-request".into(),
+            sender,
+        )
+        .err()
+        .expect("提前取消的请求不能开始发送");
+        assert_eq!(error, "请求已取消");
+        let registry = lock_proxy_fetch_cancellations(&cancellations);
+        assert!(registry.active.is_empty());
+        assert!(registry.early_cancelled.is_empty());
+        assert!(!registry.overflowed);
+    }
+
+    #[test]
+    fn cancelled_active_id_remains_reserved_until_its_registration_drops() {
+        let cancellations = Mutex::default();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        let registration = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "active-request".into(),
+            sender,
+        )
+        .unwrap();
+        cancel_proxy_request(&cancellations, "active-request").unwrap();
+        assert_eq!(receiver.try_recv(), Ok(()));
+        cancel_proxy_request(&cancellations, "active-request").unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let error = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "active-request".into(),
+            sender,
+        )
+        .err()
+        .expect("旧请求结束前不能复用 ID");
+        assert!(error.contains("重复"));
+        assert!(lock_proxy_fetch_cancellations(&cancellations)
+            .early_cancelled
+            .is_empty());
+        drop(registration);
+        assert!(lock_proxy_fetch_cancellations(&cancellations).active.is_empty());
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let replacement = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "active-request".into(),
+            sender,
+        )
+        .unwrap();
+        drop(replacement);
+        assert!(lock_proxy_fetch_cancellations(&cancellations).active.is_empty());
+    }
+
+    #[test]
+    fn early_cancellation_overflow_fails_closed_even_after_known_ids_are_consumed() {
+        let cancellations = Mutex::default();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        let active = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "active-request".into(),
+            sender,
+        )
+        .unwrap();
+        for index in 0..PROXY_MAX_EARLY_CANCELLATIONS {
+            cancel_proxy_request(&cancellations, &format!("early-{index}")).unwrap();
+        }
+        cancel_proxy_request(&cancellations, "early-0").unwrap();
+        assert!(cancel_proxy_request(&cancellations, "unrecorded-cancellation")
+            .unwrap_err()
+            .contains("重启"));
+        // 饱和后仍要接收已有请求的取消，不能因保护状态锁住停止入口。
+        cancel_proxy_request(&cancellations, "active-request").unwrap();
+        assert_eq!(receiver.try_recv(), Ok(()));
+        drop(active);
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let consumed = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "early-0".into(),
+            sender,
+        )
+        .err()
+        .expect("已记录的提前取消仍应消费");
+        assert_eq!(consumed, "请求已取消");
+        for index in 0..1024 {
+            assert!(cancel_proxy_request(&cancellations, &format!("overflow-{index}")).is_err());
+        }
+        for id in ["new-request", "unrecorded-cancellation"] {
+            let (sender, _receiver) = tokio::sync::oneshot::channel();
+            let error =
+                ProxyFetchCancellationRegistration::register(&cancellations, id.into(), sender)
+                    .err()
+                    .expect("无法还原的取消必须让后续注册保持关闭");
+            assert!(error.contains("重启"));
+        }
+        let registry = lock_proxy_fetch_cancellations(&cancellations);
+        assert!(registry.active.is_empty());
+        assert_eq!(
+            registry.early_cancelled.len(),
+            PROXY_MAX_EARLY_CANCELLATIONS - 1
+        );
+        assert!(registry.overflowed);
+    }
+
+    #[test]
+    fn active_request_limit_recovers_when_an_existing_registration_drops() {
+        let cancellations = Mutex::default();
+        let mut registrations = Vec::new();
+        for index in 0..PROXY_MAX_ACTIVE_REQUESTS {
+            let (sender, _receiver) = tokio::sync::oneshot::channel();
+            registrations.push(
+                ProxyFetchCancellationRegistration::register(
+                    &cancellations,
+                    format!("active-{index}"),
+                    sender,
+                )
+                .unwrap(),
+            );
+        }
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let error = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "over-capacity".into(),
+            sender,
+        )
+        .err()
+        .expect("在途请求必须有界");
+        assert!(error.contains("等待已有请求"));
+        drop(registrations.pop());
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        registrations.push(
+            ProxyFetchCancellationRegistration::register(
+                &cancellations,
+                "after-capacity-released".into(),
+                sender,
+            )
+            .unwrap(),
+        );
+        drop(registrations);
+        let registry = lock_proxy_fetch_cancellations(&cancellations);
+        assert!(registry.active.is_empty());
+        assert!(!registry.overflowed);
+    }
+
+    #[test]
+    fn invalid_request_ids_never_allocate_cancellation_state() {
+        let cancellations = Mutex::default();
+        for id in [
+            String::new(),
+            "a".repeat(PROXY_MAX_REQUEST_ID_BYTES + 1),
+            "中".repeat(86),
+        ] {
+            assert!(cancel_proxy_request(&cancellations, &id).is_err());
+            let (sender, _receiver) = tokio::sync::oneshot::channel();
+            assert!(
+                ProxyFetchCancellationRegistration::register(&cancellations, id, sender).is_err()
+            );
+        }
+        let boundary = format!("{}a", "中".repeat(85));
+        assert_eq!(boundary.len(), PROXY_MAX_REQUEST_ID_BYTES);
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let valid =
+            ProxyFetchCancellationRegistration::register(&cancellations, boundary, sender).unwrap();
+        drop(valid);
+        let registry = lock_proxy_fetch_cancellations(&cancellations);
+        assert!(registry.active.is_empty());
+        assert!(registry.early_cancelled.is_empty());
+        assert!(!registry.overflowed);
+    }
+
+    #[tokio::test]
+    async fn registered_cancellation_is_checked_before_polling_the_network_request() {
+        let cancellations = Mutex::default();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let registration = ProxyFetchCancellationRegistration::register(
+            &cancellations,
+            "not-started".into(),
+            sender,
+        )
+        .unwrap();
+        cancel_proxy_request(&cancellations, "not-started").unwrap();
+        let mut polled = false;
+        let request = async {
+            polled = true;
+            Ok(())
+        };
+        let result = run_cancellable_proxy_request(receiver, request).await;
+        assert_eq!(result.unwrap_err(), "请求已取消");
+        assert!(!polled);
+        drop(registration);
+        assert!(lock_proxy_fetch_cancellations(&cancellations).active.is_empty());
     }
 }
 
@@ -1532,6 +1806,8 @@ pub fn run() {
         .plugin(canvas_input::init())
         .invoke_handler(tauri::generate_handler![
             theme_assets::store_theme_image,
+            reference_image_upload::optimize_reference_png,
+            reference_image_upload::optimize_reference_jpeg,
             billing::billing_upsert,
             billing::billing_query,
             billing::billing_get_by_task,

@@ -13,11 +13,11 @@ import type {
 import { corsSafeFetch } from './httpTransport';
 import { readModelProtocolFirstScalar, readModelProtocolUrls } from './modelProtocolResponse';
 import {
-  encodeBytesBase64,
   ensureSuccessfulRawResponse,
   fetchSameOriginResultUrls,
   normalizeBase64Result,
   readJsonResponse,
+  readBinaryModelProtocolResult,
   redactModelProtocolError,
 } from './modelProtocolHttp';
 import {
@@ -29,7 +29,6 @@ import {
   FOR_EACH_KEY,
   FOR_EACH_VARIABLE_ROOTS,
   FULL_TEMPLATE_RE,
-  MIME_TYPE_RE,
   TEMPLATE_RE,
   isRecord,
 } from './modelProtocolShared';
@@ -144,13 +143,7 @@ export async function submitModelProtocol(
     }
     if (responseConfig.type === 'binary') {
       await ensureSuccessfulRawResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength === 0) throw new Error('模型响应中未找到二进制结果');
-      const responseMimeType = response.headers.get('Content-Type')?.split(';')[0]?.trim();
-      const mimeType = responseMimeType && MIME_TYPE_RE.test(responseMimeType)
-        ? responseMimeType
-        : responseConfig.result?.mimeType ?? 'application/octet-stream';
-      return { urls: [`data:${mimeType};base64,${encodeBytesBase64(bytes)}`] };
+      return { urls: [await readBinaryModelProtocolResult(response, responseConfig.result?.mimeType, options.signal)] };
     }
     const payload = await readJsonResponse(response, '模型请求失败', responseConfig.errorPath, options.apiKey);
     try {

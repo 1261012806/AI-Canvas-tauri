@@ -158,9 +158,9 @@ export const SORA2U_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     defaultResolution: '720p',
     supportsAudio: false,
   }), 'Sora2U 图片驱动视频模型'),
-  videoModel('seedance-2.0', 'Seedance 2.0', SEEDANCE_20_CAPABILITY,
+  videoModel('seedance-2.0', 'Seedance 2.0', { ...SEEDANCE_20_CAPABILITY, maxVideoAudioReferences: 3 },
     'Sora2U 全模态视频模型，支持文生视频'),
-  videoModel('seedance-2.0-character', 'Seedance 2.0 Character', SEEDANCE_20_CAPABILITY,
+  videoModel('seedance-2.0-character', 'Seedance 2.0 Character', { ...SEEDANCE_20_CAPABILITY, maxVideoAudioReferences: 3 },
     'Sora2U 角色一致性全模态视频模型'),
   videoModel('seedance-2.0-character-mono', 'Seedance 2.0 Character Mono', SEEDANCE_20_CAPABILITY,
     'Sora2U 单角色一致性全模态视频模型'),
@@ -192,3 +192,13 @@ export const SORA2U_MODEL_MANIFEST: readonly ProviderModelSelection[] = [
     executionProfile: { preset: 'custom', protocol: SORA2U_IMAGE_PROTOCOL },
   },
 ];
+
+/** 旧模型记录也要补上已核实的联合名额，远端明确声明的值仍优先。 */
+export function withSora2uReferenceLimits(
+  modelId: string,
+  capability: VideoModelCapability | undefined,
+): VideoModelCapability | undefined {
+  const maximum = capability?.maxVideoAudioReferences
+    ?? SORA2U_MODEL_MANIFEST.find((model) => model.id === modelId)?.videoCapability?.maxVideoAudioReferences;
+  return maximum === undefined ? capability : { ...capability, maxVideoAudioReferences: maximum };
+}

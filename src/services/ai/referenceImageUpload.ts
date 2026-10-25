@@ -1,149 +1,86 @@
-import { readRasterImageDimensions } from '../rasterImageDimensions';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { parseRasterImageDimensions } from '../rasterImageDimensions';
 
-export const MIN_REFERENCE_REENCODE_BYTES = 4 * 1024 * 1024;
-export const FOUR_K_REFERENCE_LONG_EDGE = 3840;
-export const TWO_K_REFERENCE_LONG_EDGE = 2048;
-const MAX_REENCODE_PIXELS = 24_000_000;
+const MAX_LOSSLESS_IMAGE_PIXELS = 24_000_000;
+const APIMART_MAX_IMAGE_BYTES = 20_000_000;
+const MAX_LOSSLESS_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_LOSSLESS_IMAGE_EDGE = 16384;
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 let compressionTail: Promise<unknown> = Promise.resolve();
 
-/** 只接受 8 位 RGB/RGBA 静态 PNG；动画和未知格式保留原始字节。 */
-function inspectPng(bytes: Uint8Array): { checkAlpha: boolean } | undefined {
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (bytes.length < 33 || !signature.every((value, index) => bytes[index] === value)) return;
+function inspectLosslessPng(bytes: Uint8Array): { width: number; height: number } | undefined {
+  if (bytes.length < 33 || !PNG_SIGNATURE.every((value, index) => bytes[index] === value)) return;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452 || bytes[24] !== 8 || ![2, 6].includes(bytes[25])) return;
+  if (view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452) return;
   const width = view.getUint32(16);
   const height = view.getUint32(20);
-  if (!width || !height || width * height > MAX_REENCODE_PIXELS) return;
-  let checkAlpha = bytes[25] === 6;
+  if (!width || !height || Math.max(width, height) > MAX_LOSSLESS_IMAGE_EDGE || width * height > MAX_LOSSLESS_IMAGE_PIXELS) return;
+  let hasImageData = false;
   for (let offset = 8; offset + 12 <= bytes.length;) {
     const length = view.getUint32(offset);
     const type = view.getUint32(offset + 4);
-    if (offset + length + 12 > bytes.length || type === 0x6163544c) return; // acTL
-    if (type === 0x74524e53) checkAlpha = true; // tRNS
-    if (type === 0x49454e44) return length === 0 ? { checkAlpha } : undefined; // IEND
-    offset += length + 12;
+    const end = offset + length + 12;
+    if (end > bytes.length || type === 0x6163544c) return; // acTL：动画不能展平成静态图。
+    if (type === 0x49444154) hasImageData = true; // IDAT
+    if (type === 0x49454e44) return hasImageData && length === 0 && end === bytes.length ? { width, height } : undefined;
+    offset = end;
   }
 }
 
-function inspectWebp(bytes: Uint8Array): { checkAlpha: boolean } | undefined {
-  if (bytes.length < 21
-    || String.fromCharCode(...bytes.subarray(0, 4)) !== 'RIFF'
-    || String.fromCharCode(...bytes.subarray(8, 12)) !== 'WEBP') return;
-  const chunk = String.fromCharCode(...bytes.subarray(12, 16));
-  if (chunk === 'VP8X') {
-    if ((bytes[20] & 0x02) !== 0) return; // animated WebP
-    return { checkAlpha: (bytes[20] & 0x10) !== 0 };
-  }
-  if (chunk === 'VP8L') return { checkAlpha: true };
-  if (chunk === 'VP8 ') return { checkAlpha: false };
-}
-
-function targetSize(width: number, height: number): { width: number; height: number } | undefined {
-  const longEdge = Math.max(width, height);
-  if (longEdge < FOUR_K_REFERENCE_LONG_EDGE || width * height > MAX_REENCODE_PIXELS) return;
-  const scale = TWO_K_REFERENCE_LONG_EDGE / longEdge;
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
-}
-
-async function hasTransparentPixels(
-  context: OffscreenCanvasRenderingContext2D,
-  width: number,
-  height: number,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  // 分条读取 alpha，避免再分配整张 RGBA；允许取消消息进入事件循环。
-  for (let y = 0; y < height; y += 128) {
-    signal?.throwIfAborted();
-    const { data } = context.getImageData(0, y, width, Math.min(128, height - y));
-    for (let index = 3; index < data.length; index += 4) {
-      if (data[index] !== 255) return true;
-    }
-    if (y % 512 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  }
-  return false;
-}
-
-async function compressReferenceImage(
-  blob: Blob,
-  resize: { width: number; height: number } | undefined,
-  signal?: AbortSignal,
-): Promise<Blob> {
-  let bitmap: ImageBitmap | undefined;
-  let canvas: OffscreenCanvas | undefined;
+async function optimizeReferenceImage(blob: Blob, signal?: AbortSignal): Promise<Blob> {
   try {
     signal?.throwIfAborted();
-    const mimeType = blob.type.split(';')[0].trim().toLowerCase();
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (blob.size > MAX_LOSSLESS_IMAGE_BYTES || !isTauri()) return blob;
+    const prefix = new Uint8Array(await blob.slice(0, PNG_SIGNATURE.length).arrayBuffer());
     signal?.throwIfAborted();
-    const metadata = mimeType === 'image/png'
-      ? inspectPng(bytes)
-      : mimeType === 'image/webp'
-        ? inspectWebp(bytes)
-        : mimeType === 'image/jpeg' || mimeType === 'image/jpg'
-          ? { checkAlpha: false }
-          : undefined;
-    if (!metadata) return blob;
-    bitmap = resize
-      ? await createImageBitmap(blob, {
-          resizeWidth: resize.width,
-          resizeHeight: resize.height,
-          resizeQuality: 'high',
-        })
-      : await createImageBitmap(blob);
+    const isPng = PNG_SIGNATURE.every((value, index) => prefix[index] === value);
+    const isJpeg = prefix[0] === 0xff && prefix[1] === 0xd8 && prefix[2] === 0xff;
+    if (!isPng && !isJpeg) return blob;
+    const input = await blob.arrayBuffer();
     signal?.throwIfAborted();
-    if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > MAX_REENCODE_PIXELS) return blob;
-    const outputWidth = resize?.width ?? bitmap.width;
-    const outputHeight = resize?.height ?? bitmap.height;
-    canvas = new OffscreenCanvas(outputWidth, outputHeight);
-    const context = canvas.getContext('2d');
-    if (!context) return blob;
-    context.drawImage(bitmap, 0, 0, outputWidth, outputHeight);
-    const transparent = metadata.checkAlpha
-      ? await hasTransparentPixels(context, outputWidth, outputHeight, signal)
-      : false;
-    if (transparent && !resize) return blob;
+    const inputBytes = new Uint8Array(input);
+    const dimensions = isPng ? inspectLosslessPng(inputBytes) : parseRasterImageDimensions(inputBytes);
+    if (!dimensions || Math.max(dimensions.width, dimensions.height) > MAX_LOSSLESS_IMAGE_EDGE
+      || dimensions.width * dimensions.height > MAX_LOSSLESS_IMAGE_PIXELS) return blob;
+    const output = await invoke<ArrayBuffer | Uint8Array>(isPng ? 'optimize_reference_png' : 'optimize_reference_jpeg', input);
     signal?.throwIfAborted();
-    const encoded = transparent
-      ? await canvas.convertToBlob({ type: 'image/png' })
-      : await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.95 });
-    signal?.throwIfAborted();
-    if (!encoded.size || (transparent ? encoded.type !== 'image/png' : encoded.type !== 'image/jpeg')) {
-      return blob;
-    }
-    return resize || encoded.size < blob.size * 0.8 ? encoded : blob;
+    const bytes = output instanceof ArrayBuffer ? new Uint8Array(output) : output;
+    if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length >= blob.size) return blob;
+    const sameFormat = isPng ? PNG_SIGNATURE.every((value, index) => bytes[index] === value)
+      : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    if (!sameFormat) return blob;
+    const optimizedDimensions = isPng ? inspectLosslessPng(bytes) : parseRasterImageDimensions(bytes);
+    if (!optimizedDimensions || optimizedDimensions.width !== dimensions.width || optimizedDimensions.height !== dimensions.height) return blob;
+    return new Blob([new Uint8Array(bytes)], { type: isPng ? 'image/png' : 'image/jpeg' });
   } catch (error) {
     if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
     return blob;
-  } finally {
-    bitmap?.close();
-    if (canvas) { canvas.width = 0; canvas.height = 0; }
   }
 }
 
-/** 仅压缩上传副本；所有调用方共用一个解码槽，取消不提前释放仍在编码的槽。 */
+/** 只对上传副本做原生无损减重；保留尺寸、格式与动画，不走 Web 有损回退。 */
 export async function prepareReferenceImageUpload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted();
-  const mimeType = blob.type.split(';')[0].trim().toLowerCase();
-  if (!['image/png', 'image/jpeg', 'image/jpg', 'image/webp'].includes(mimeType)
-    || typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return blob;
-  const dimensions = await readRasterImageDimensions(blob).catch(() => null);
-  signal?.throwIfAborted();
-  const resize = dimensions ? targetSize(dimensions.width, dimensions.height) : undefined;
-  const shouldCompressLargePng = mimeType === 'image/png' && blob.size > MIN_REFERENCE_REENCODE_BYTES;
-  if (!resize && !shouldCompressLargePng) return blob;
-  const operation = compressionTail.then(() => compressReferenceImage(blob, resize, signal));
+  const operation = compressionTail.then(() => optimizeReferenceImage(blob, signal));
+  // 取消只停止调用方等待；原生仍在压缩时不能让下一张占用串行槽。
   compressionTail = operation.catch(() => undefined);
-  if (!signal) return operation;
-  return new Promise<Blob>((resolve, reject) => {
+  const prepared = !signal ? await operation : await new Promise<Blob>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
     if (signal.aborted) onAbort();
   });
+  signal?.throwIfAborted();
+  return prepared;
+}
+
+/** APIMart 在无损准备后按上传接口的十进制 20 MB 限制拦截。 */
+export async function prepareApimartImageUpload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
+  const prepared = await prepareReferenceImageUpload(blob, signal);
+  if (prepared.size > APIMART_MAX_IMAGE_BYTES) {
+    throw new Error('APIMart 单张参考图不能超过 20 MB；原图或无损处理结果仍超限。仅静态 PNG/JPEG 尝试无损压缩，其他格式和动画保留原样，请手动准备符合限制的图片');
+  }
+  return prepared;
 }
 
 /** 最多同时准备两张，按原下标存放；失败停止领取新图，禁止过滤后发送错位的引用。 */

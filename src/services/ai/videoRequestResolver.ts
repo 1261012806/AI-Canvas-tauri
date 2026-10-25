@@ -355,6 +355,7 @@ export function assertVideoModelCapability(capability: VideoModelCapability | un
     ['maxImageReferences', capability.maxImageReferences],
     ['maxVideoReferences', capability.maxVideoReferences],
     ['maxAudioReferences', capability.maxAudioReferences],
+    ['maxVideoAudioReferences', capability.maxVideoAudioReferences],
   ];
   for (const [field, value] of referenceLimits) {
     if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
@@ -637,6 +638,7 @@ function assertReferenceCapabilities(
     ['参考图', references.counts.image, capability.maxImageReferences],
     ['参考视频', references.counts.video, capability.maxVideoReferences],
     ['参考音频', references.counts.audio, capability.maxAudioReferences],
+    ['参考视频和音频（合计）', references.counts.video + references.counts.audio, capability.maxVideoAudioReferences],
   ];
   for (const [label, count, maximum] of limits) {
     if (maximum === undefined || count <= maximum) continue;

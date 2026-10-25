@@ -96,12 +96,13 @@ async function buildImageEditsBody(
   if (params.imageQuality) formData.append('quality', params.imageQuality);
   if (params.imageBackground) formData.append('background', params.imageBackground);
   if (params.imageBackground === 'transparent') formData.append('output_format', 'png');
-  // 大参考图逐张解码，避免多张 4K PNG 同时占用解码与画布内存。
+  // 大参考图逐张做无损准备，保留原始尺寸与格式。
   for (const [index, url] of imageUrls.entries()) {
     signal?.throwIfAborted();
     const file = await loadReferenceImage(url, index, signal);
     const blob = await prepareReferenceImageUpload(file.blob, signal);
-    const filename = blob === file.blob ? file.filename : `reference-${index + 1}.jpg`;
+    const extension = MIME_EXTENSION[blob.type.split(';')[0].trim().toLowerCase()] || 'bin';
+    const filename = blob === file.blob ? file.filename : `reference-${index + 1}.${extension}`;
     formData.append('image[]', blob, filename);
   }
   return formData;

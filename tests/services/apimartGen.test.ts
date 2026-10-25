@@ -49,6 +49,7 @@ vi.mock('../../src/services/uploadService', () => ({
 
 import {
   executeGeneralAsyncTask,
+  fetchApimartTask,
   generateApimartImagesBatch,
   generateApimartVideo,
 } from '../../src/services/ai/apimartGen';
@@ -59,6 +60,76 @@ import { fetchProviderModelCatalog } from '../../src/services/ai/providerCatalog
 import { assertVideoInputConstraints } from '../../src/services/ai/videoInputValidation';
 import { buildImageCapabilityRequest } from '../../src/services/ai/mediaModelCapabilities';
 import { getMediaModelOptions } from '../../src/components/nodes/shared/defaultModels';
+
+describe('APIMart 错误凭据隔离', () => {
+  const apiKey = 'fixture~! private/key=';
+  const echoed = () => [apiKey, encodeURIComponent(apiKey), new URLSearchParams({ key: apiKey }).toString().slice(4)].join(' | ');
+  const calls = {
+    image: (nodeId?: string) => generateApimartImagesBatch(apiKey, 'https://api.example/v1', 'gpt-image-2', 'prompt',
+      '1K', '1:1', { width: 1024, height: 1024 }, [], 1, nodeId),
+    video: (nodeId?: string) => generateApimartVideo(apiKey, 'https://api.example/v1', 'seedance-2.5', 'prompt', nodeId),
+    general: (nodeId?: string) => executeGeneralAsyncTask(apiKey, 'https://api.example/v1', 'video-model', 'prompt', 'videos', 'apimart', nodeId),
+  };
+  beforeEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); pollingMocks.receipts.clear(); });
+
+  it.each(['image', 'video', 'general'] as const)('%s 的 HTTP 拒绝先脱敏再截断，且不重发提交', async (kind) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(`${'x'.repeat(197)}${apiKey}`, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await calls[kind]('rejected-node').catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(`${'x'.repeat(197)}[RE`);
+    expect((error as Error).message).not.toContain('fixture');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(pollingMocks.removePendingTask).toHaveBeenCalledWith('rejected-node', '', 'attempt');
+  });
+
+  it.each(['image', 'video', 'general'] as const)('%s 的网络错误在进入暂停回执前脱敏，保持未知提交语义', async (kind) => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError(`Failed to fetch ${echoed()}`));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(calls[kind]('unknown-node')).rejects.toMatchObject({ name: 'MediaTaskPausedError', reason: 'submit_unknown' });
+    const safeError = pollingMocks.pauseMediaTask.mock.calls[0][1] as Error;
+    expect(safeError).toBeInstanceOf(TypeError);
+    expect(safeError.message).toContain('[REDACTED]');
+    expect(safeError.message).not.toContain(apiKey);
+    expect(safeError.message).not.toContain(encodeURIComponent(apiKey));
+    expect(safeError.message).not.toContain(new URLSearchParams({ key: apiKey }).toString().slice(4));
+    expect(pollingMocks.receipts.get('unknown-node')).toMatchObject({ taskId: '', attemptId: 'attempt' });
+    expect(pollingMocks.removePendingTask).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['root', 'data'] as const)('查询器在返回 %s 终态错误对象前脱敏，不携带任意错误属性', async (shape) => {
+    const task = { status: 'failed', error: { message: echoed(), code: `code ${apiKey}`, type: 'task_failed', private: apiKey } };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(shape === 'data' ? { code: 200, data: task } : task)));
+    const result = await fetchApimartTask(apiKey, 'https://api.example/v1', 'original-task');
+    expect(result).toMatchObject({ status: 'failed', error: { code: 'code [REDACTED]', type: 'task_failed' } });
+    expect(JSON.stringify(result.error)).not.toContain(apiKey);
+    expect(JSON.stringify(result.error)).not.toContain(encodeURIComponent(apiKey));
+    expect(result.error).not.toHaveProperty('private');
+  });
+
+  it.each(['network', 'http', 'terminal'] as const)('视频 %s 查询错误不泄露凭据，保持原任务身份与终态语义', async (kind) => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ task_id: 'original-task' }] }));
+    if (kind === 'network') fetchMock.mockRejectedValueOnce(new TypeError(echoed()));
+    else if (kind === 'http') fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: echoed() } }, 401));
+    else fetchMock.mockResolvedValueOnce(jsonResponse({ data: { status: 'failed', error: { message: echoed() } } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await calls.video('query-node').catch((value: unknown) => value);
+    if (kind === 'terminal') {
+      expect(error).toMatchObject({ name: 'PollTaskFailedError', message: expect.stringContaining('[REDACTED]') });
+      expect(pollingMocks.removePendingTask).toHaveBeenCalledWith('query-node', 'original-task', 'attempt');
+    } else {
+      expect(error).toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: { taskId: 'original-task', attemptId: 'attempt' } });
+      const detail = pollingMocks.pauseMediaTask.mock.calls[0][1] as Error;
+      expect(detail.message).toContain('[REDACTED]');
+      expect(detail.message).not.toContain(apiKey);
+      expect(pollingMocks.receipts.get('query-node')).toMatchObject({ taskId: 'original-task', attemptId: 'attempt' });
+    }
+    expect((error as Error).message).not.toContain(apiKey);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('APIMart Omni 视频合同', () => {
   beforeEach(() => {
@@ -192,9 +263,9 @@ describe('APIMart Omni 视频合同', () => {
   });
 });
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: { 'Content-Type': 'application/json' },
   });
 }

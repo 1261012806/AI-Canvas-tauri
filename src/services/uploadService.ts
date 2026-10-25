@@ -26,9 +26,13 @@ import {
   type MediaDataUrlKind,
 } from './fileService';
 import { invoke } from '@tauri-apps/api/core';
-import { MIN_REFERENCE_REENCODE_BYTES, prepareReferenceImageUpload } from './ai/referenceImageUpload';
+import { lstat } from '@tauri-apps/plugin-fs';
+import { prepareReferenceImageUpload, prepareApimartImageUpload } from './ai/referenceImageUpload';
 import { corsSafeFetch } from './ai/httpTransport';
 import { getProviderPolicy, resolveProviderCatalogId } from './ai/providerPolicies';
+import { sha256BytesHex } from './mediaDataUrl';
+import { redactModelProtocolError, redactModelProtocolErrorText } from './ai/modelProtocolHttp';
+import type { ApiProviderConfig } from '../types';
 
 const DEFAULT_UPLOAD_BASE = APIMART_BASE_URL;
 
@@ -39,7 +43,7 @@ const UGUU_UPLOAD_URL = 'https://uguu.se/upload';
 const UPLOAD_TTL_MS = 150 * 60 * 1000;
 
 /** localStorage key */
-const CACHE_STORAGE_KEY = 'canvas-upload-cache-v3';
+const CACHE_STORAGE_KEY = 'canvas-upload-cache-v4';
 
 /** 包含排队时间；到期会中止 fetch 或调用 Rust cancel_proxy_fetch。 */
 export const UPLOAD_TIMEOUT_MS = 120_000;
@@ -49,6 +53,41 @@ export const UPLOAD_TIMEOUT_MS = 120_000;
 interface CacheEntry {
   remoteUrl: string;
   uploadedAt: number;
+}
+
+interface UploadIdentity {
+  key: string;
+  cacheable: boolean;
+  source?: { digest: string; bytes: number };
+}
+
+type UploadConnection = Readonly<Pick<ApiProviderConfig, 'catalogId' | 'baseUrl' | 'apiKey'>>;
+
+function captureUploadConnection(provider: string): UploadConnection {
+  const connection = useAppStore.getState().config.providers[provider];
+  return { catalogId: connection?.catalogId, baseUrl: connection?.baseUrl, apiKey: connection?.apiKey?.trim() ?? '' };
+}
+
+function assertUploadConnection(provider: string, expected: UploadConnection): void {
+  const current = captureUploadConnection(provider);
+  if (current.catalogId !== expected.catalogId || current.baseUrl !== expected.baseUrl || current.apiKey !== expected.apiKey) {
+    throw new Error('参考素材上传期间连接配置已变化，请重新发起');
+  }
+}
+
+/** 与现有文件指纹使用相同的固定块链，核对真正读取的上传副本。 */
+async function fingerprintUploadBlob(blob: Blob, signal?: AbortSignal): Promise<string> {
+  let previous = await sha256BytesHex(new TextEncoder().encode('asset-image-sha256-chain-v1'));
+  for (let offset = 0; offset < blob.size; offset += 256 * 1024) {
+    signal?.throwIfAborted();
+    const chunk = new Uint8Array(await blob.slice(offset, offset + 256 * 1024).arrayBuffer());
+    const input = new Uint8Array(32 + chunk.length);
+    input.set(Uint8Array.from(previous.match(/../g)!, (hex) => parseInt(hex, 16)));
+    input.set(chunk, 32);
+    previous = await sha256BytesHex(input);
+  }
+  signal?.throwIfAborted();
+  return sha256BytesHex(new TextEncoder().encode(`${previous}:${blob.size}`));
 }
 
 function loadPersistentCache(): Record<string, CacheEntry> {
@@ -84,10 +123,32 @@ async function cacheKey(
   url: string,
   provider: string,
   kind: MediaDataUrlKind,
+  connection: UploadConnection,
   signal?: AbortSignal,
-): Promise<string> {
-  const scope = `${provider || 'default'}:${kind}`;
-  if (!isMediaDataUrl(url)) return `${scope}:${url}`;
+): Promise<UploadIdentity> {
+  // 只持久化单向摘要；换站点或换 Key 后不能沿用另一连接的上传结果。
+  const connectionDigest = await sha256BytesHex(new TextEncoder().encode(JSON.stringify([
+    'native-lossless-v1', provider, connection.catalogId ?? '', connection.baseUrl ?? '', connection.apiKey,
+  ])));
+  signal?.throwIfAborted();
+  const scope = `${provider || 'default'}:${kind}:${connectionDigest}`;
+  if (!isMediaDataUrl(url)) {
+    const path = localMediaUrlToPath(url);
+    if (path && isTauriEnv()) {
+      try {
+        const info = await lstat(path);
+        assertMediaDataUrlSize(info.size, kind, mediaKindLabel(kind));
+        const { fingerprintAssetImage } = await import('./fs/assetImageMetadata');
+        const source = await fingerprintAssetImage(path, signal);
+        signal?.throwIfAborted();
+        return { key: `${scope}:file:${source.bytes}:${source.digest}`, source, cacheable: true };
+      } catch {
+        signal?.throwIfAborted();
+        // 现有权限读不到指纹时仍可沿用原素材读取入口，但不猜测缓存身份。
+      }
+    }
+    return { key: `${scope}:uncached:${crypto.randomUUID()}`, cacheable: false };
+  }
   // 两个不同种子的 32 位散列 + 完整长度，避免旧版单一 32 位 hash 碰撞；
   // 不把 header/payload 原文放入 Map 和 localStorage，避免额外持有 Data URL 副本。
   let first = 0x811c9dc5;
@@ -104,7 +165,7 @@ async function cacheKey(
     }
   }
   if (signal?.aborted) throw abortReason(signal);
-  return `${scope}:data:${url.length}:${first >>> 0}:${second >>> 0}`;
+  return { key: `${scope}:data:${url.length}:${first >>> 0}:${second >>> 0}`, cacheable: true };
 }
 
 /** 内存缓存使用短 key，避免把大型 data URL 持有到进程退出。 */
@@ -302,11 +363,8 @@ async function dataUrlToBlob(
 /** 内联图片也复用上传压缩；分块编解码，未转换时保留原 data URL。 */
 export async function prepareReferenceImageDataUrl(dataUrl: string, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted();
-  if (!/^data:image\/png(?:;[^,]*)?;base64,/i.test(dataUrl)
-    || dataUrl.length <= MIN_REFERENCE_REENCODE_BYTES * 4 / 3) return dataUrl;
-  const bytesBeforeCompression = await assertMediaDataUrlWithinLimitAsync(dataUrl, 'image', '参考图', signal);
-  if (bytesBeforeCompression <= MIN_REFERENCE_REENCODE_BYTES
-    || typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return dataUrl;
+  if (!/^data:image\/(?:png|jpeg|jpg)(?:;[^,]*)?;base64,/i.test(dataUrl)) return dataUrl;
+  await assertMediaDataUrlWithinLimitAsync(dataUrl, 'image', '参考图', signal);
   const { blob } = await dataUrlToBlob(dataUrl, signal);
   const prepared = await prepareReferenceImageUpload(blob, signal);
   if (prepared === blob) return dataUrl;
@@ -348,24 +406,30 @@ async function urlToBlob(
   kind: MediaDataUrlKind,
   label = mediaKindLabel(kind),
   signal?: AbortSignal,
+  expectedSource?: UploadIdentity['source'],
+  prepareImage = true,
 ): Promise<{ blob: Blob; ext: string }> {
   const source = await (isMediaDataUrl(url)
     ? dataUrlToBlob(url, signal)
     : fetchUrlToBlob(url, kind, label, signal));
-  const blob = kind === 'image' ? await prepareReferenceImageUpload(source.blob, signal) : source.blob;
-  return blob === source.blob ? source : { blob, ext: 'jpg' };
+  if (expectedSource && (source.blob.size !== expectedSource.bytes
+    || await fingerprintUploadBlob(source.blob, signal) !== expectedSource.digest)) {
+    throw new Error('参考素材在读取期间发生变化，请重新上传');
+  }
+  signal?.throwIfAborted();
+  const blob = kind === 'image' && prepareImage ? await prepareReferenceImageUpload(source.blob, signal) : source.blob;
+  return blob === source.blob ? source : { blob, ext: blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : source.ext };
 }
 
 /** ToAPIs 不回退到其他连接凭据或公共图床；同一 Key 的两站由用户显式选择。 */
-async function uploadToToapis(url: string, providerId: string, kind: MediaDataUrlKind, signal?: AbortSignal): Promise<string> {
-  const connection = useAppStore.getState().config.providers[providerId];
+async function uploadToToapis(url: string, connection: UploadConnection, kind: MediaDataUrlKind, signal?: AbortSignal, source?: UploadIdentity['source']): Promise<string> {
   const apiKey = connection?.apiKey?.trim();
   if (!apiKey) throw new Error('ToAPIs 参考素材上传失败：请在「设置 → API Key → ToAPIs」填写当前连接的 Key');
   const baseUrl = (connection.baseUrl || TOAPIS_BASE_URL).trim().replace(/\/+$/, '');
   if (!TOAPIS_API_SITES.some((site) => site.baseUrl === baseUrl)) {
     throw new Error('ToAPIs 上传站点无效，请在「设置 → API Key → ToAPIs → API 站点」重新选择国内站或国际站');
   }
-  const { blob, ext } = await urlToBlob(url, kind, undefined, signal);
+  const { blob, ext } = await urlToBlob(url, kind, undefined, signal, source);
   const limit = (kind === 'image' ? 10 : 50) * 1024 * 1024;
   if (blob.size > limit) throw new Error(`ToAPIs ${mediaKindLabel(kind)}单个文件不能超过 ${kind === 'image' ? 10 : 50} MB`);
   const allowed = kind === 'image' ? ['jpg', 'jpeg', 'png', 'webp', 'gif']
@@ -496,13 +560,12 @@ async function libapiUploadError(response: Response, apiKey: string, kind: Media
 }
 
 /** LibAPI 参考素材只使用当前连接上传，不借用公共图床或其他连接的 Key。 */
-async function uploadToLibapi(url: string, providerId: string, kind: MediaDataUrlKind, signal?: AbortSignal): Promise<string> {
-  const connection = useAppStore.getState().config.providers[providerId];
+async function uploadToLibapi(url: string, connection: UploadConnection, kind: MediaDataUrlKind, signal?: AbortSignal, source?: UploadIdentity['source']): Promise<string> {
   const apiKey = connection?.apiKey?.trim();
   if (!apiKey) throw new Error('LibAPI 参考素材上传失败：请在「设置 → API Key → LibAPI」填写当前连接的 Key');
   const baseUrl = (connection.baseUrl || LIBAPI_BASE_URL).trim().replace(/\/+$/, '');
   if (baseUrl !== LIBAPI_BASE_URL) throw new Error('LibAPI 上传地址无效，请在「设置 → API Key → LibAPI」恢复官方接口地址');
-  const { blob, ext } = await urlToBlob(url, kind, undefined, signal);
+  const { blob, ext } = await urlToBlob(url, kind, undefined, signal, source);
   if (blob.size > 50 * 1024 * 1024) throw new Error('LibAPI 单个上传文件不能超过 50 MB；模型自身的素材限制仍需分别满足');
   const extension = ext.toLowerCase().split(';')[0];
   const aliases: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov', mpeg: 'mp3', 'x-wav': 'wav', 'x-m4a': 'm4a' };
@@ -530,34 +593,23 @@ async function uploadToLibapi(url: string, providerId: string, kind: MediaDataUr
 
 // ── APIMart 上传 ──
 
-async function uploadToApimart(url: string, signal?: AbortSignal): Promise<string> {
-  const config = useAppStore.getState().config;
-  const apimartConfig = config.providers.apimart;
-  let apiKey = apimartConfig?.apiKey || '';
-  let uploadBaseUrl = (apimartConfig?.baseUrl || DEFAULT_UPLOAD_BASE).replace(/\/+$/, '');
+async function uploadToApimart(url: string, apimartConfig: UploadConnection, signal?: AbortSignal, source?: UploadIdentity['source']): Promise<string> {
+  const apiKey = apimartConfig?.apiKey?.trim() || '';
+  const uploadBaseUrl = (apimartConfig?.baseUrl || DEFAULT_UPLOAD_BASE).trim().replace(/\/+$/, '');
 
   if (!apiKey) {
-    for (const [, providerConfig] of Object.entries(config.providers)) {
-      if (providerConfig?.apiKey) {
-        apiKey = providerConfig.apiKey;
-        if (providerConfig.baseUrl) {
-          uploadBaseUrl = providerConfig.baseUrl.replace(/\/+$/, '');
-        }
-        break;
-      }
-    }
+    throw new Error('未配置 APIMart 的 API Key，无法上传图片\n请在「设置 → API Key → APIMart」中配置');
   }
 
-  if (!apiKey) {
-    throw new Error('未配置任何 API Key，无法上传图片\n请在「设置 → API Key」中配置');
-  }
-
-  const { blob, ext } = await urlToBlob(url, 'image', undefined, signal);
+  const original = await urlToBlob(url, 'image', undefined, signal, source, false);
+  const blob = await prepareApimartImageUpload(original.blob, signal);
+  const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : original.ext;
+  signal?.throwIfAborted();
 
   const formData = new FormData();
   formData.append('file', blob, `canvas-upload-${Date.now()}.${ext}`);
 
-  const resp = await fetch(`${uploadBaseUrl}/uploads/images`, {
+  const resp = await corsSafeFetch(`${uploadBaseUrl}/uploads/images`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -566,12 +618,13 @@ async function uploadToApimart(url: string, signal?: AbortSignal): Promise<strin
 
   if (!resp.ok) {
     const errBody = await resp.text().catch(() => '');
-    throw new Error(`图片上传失败 (${resp.status}): ${errBody.slice(0, 200)}`);
+    throw new Error(`图片上传失败 (${resp.status}): ${redactModelProtocolErrorText(errBody, apiKey).slice(0, 200)}`);
   }
 
-  const result = (await resp.json()) as { url: string };
-  if (!result.url) {
-    throw new Error('图片上传失败: 未返回 url');
+  const result = (await resp.json()) as { url?: unknown };
+  signal?.throwIfAborted();
+  if (typeof result.url !== 'string' || !isRemoteMediaUrl(result.url)) {
+    throw new Error('图片上传失败: 未返回有效公网 URL');
   }
 
   return result.url;
@@ -614,8 +667,9 @@ async function uploadToUguu(
   url: string,
   kind: MediaDataUrlKind,
   signal?: AbortSignal,
+  source?: UploadIdentity['source'],
 ): Promise<string> {
-  const { blob, ext } = await urlToBlob(url, kind, undefined, signal);
+  const { blob, ext } = await urlToBlob(url, kind, undefined, signal, source);
 
   const formData = new FormData();
   formData.append('files[]', blob, `canvas-upload-${Date.now()}.${ext}`);
@@ -731,13 +785,16 @@ export async function uploadToRemote(
   if (!isLocalImageUrl(url)) return url;
   if (signal?.aborted) throw abortReason(signal);
   if (uploadQueueQuarantine) throw new UploadQueueQuarantinedError();
+  const connection = captureUploadConnection(provider);
   if (isMediaDataUrl(url)) {
     await assertMediaDataUrlWithinLimitAsync(url, kind, mediaKindLabel(kind), signal);
   }
-  const key = await cacheKey(url, provider, kind, signal);
+  const identity = await cacheKey(url, provider, kind, connection, signal);
+  assertUploadConnection(provider, connection);
+  const { key } = identity;
 
   // 查缓存（内存 → localStorage），命中且未过期则直接返回
-  const cached = getCachedUrl(key);
+  const cached = identity.cacheable ? getCachedUrl(key) : null;
   if (cached) return cached;
 
   const existing = pendingUploads.get(key);
@@ -752,27 +809,32 @@ export async function uploadToRemote(
     settled: false,
   };
   const pending = runUploadSerially(async (operationSignal) => {
+    assertUploadConnection(provider, connection);
     // 排队期间另一个调用可能已完成上传，再查一次缓存避免重复传输。
-    const queuedCached = getCachedUrl(key);
+    const queuedCached = identity.cacheable ? getCachedUrl(key) : null;
     if (queuedCached) return queuedCached;
 
-    const connection = useAppStore.getState().config.providers[provider];
     const upload = getProviderPolicy(resolveProviderCatalogId(provider, connection)).upload;
     const publicUrl = upload === 'toapis'
-      ? await uploadToToapis(url, provider, kind, operationSignal)
+      ? await uploadToToapis(url, connection, kind, operationSignal, identity.source)
       : upload === 'libapi'
-      ? await uploadToLibapi(url, provider, kind, operationSignal)
+      ? await uploadToLibapi(url, connection, kind, operationSignal, identity.source)
       : provider === 'apimart' && kind === 'image'
-      ? await uploadToApimart(url, operationSignal)
-      : await uploadToUguu(url, kind, operationSignal);
+      ? await uploadToApimart(url, connection, operationSignal, identity.source)
+      : await uploadToUguu(url, kind, operationSignal, identity.source);
 
     // 写入双层缓存（2.5 小时有效期）
-    setCachedUrl(key, publicUrl);
+    operationSignal.throwIfAborted();
+    assertUploadConnection(provider, connection);
+    if (identity.cacheable) setCachedUrl(key, publicUrl);
     return publicUrl;
   }, controller.signal).catch((err) => {
     const sourceType = isMediaDataUrl(url) ? 'data' : url.split(':', 1)[0] || 'unknown';
-    console.error('[uploadService] Upload failed:', { sourceType, sourceLength: url.length, provider }, err);
-    throw err;
+    const currentKey = captureUploadConnection(provider).apiKey;
+    const safeError = redactModelProtocolError(redactModelProtocolError(err, connection.apiKey), currentKey);
+    const reason = safeError instanceof Error ? safeError.message : typeof safeError === 'string' ? safeError : '媒体上传失败';
+    console.error('[uploadService] Upload failed:', { sourceType, sourceLength: url.length, provider, reason });
+    throw safeError instanceof Error || typeof safeError === 'string' ? safeError : new Error(reason);
   }).finally(() => {
     entry.settled = true;
     if (pendingUploads.get(key) === entry) pendingUploads.delete(key);

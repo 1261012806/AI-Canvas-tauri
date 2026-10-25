@@ -381,7 +381,8 @@ function isRecoverableVideoTask(task: PendingTask): boolean {
 export function canResumeMediaTask(task: PendingTask): boolean {
   return (isRecoverableMediaTask(task) || isRecoverableVideoTask(task))
     && task.submitted && !!task.taskId && !task.mediaSubmissionUncertain
-    && task.mediaRecoveryState !== 'submit_unknown';
+    && task.mediaRecoveryState !== 'submit_unknown'
+    && (videoResumePromises.has(task.nodeId) || !isMediaOperationActive(task.projectId, task.nodeId));
 }
 
 export function captureVideoTaskGeneration(nodeId?: string): PendingTask['videoGeneration'] {
@@ -1441,8 +1442,13 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
   const providerConfig = providerConfigId
     ? useAppStore.getState().config.providers[providerConfigId]
     : undefined;
-  if (!providerConfig?.apiKey || !protocolPoll) {
+  if (!providerConfig || !protocolPoll) {
     await handleResumeError(task, new Error('任务恢复失败：调用协议或连接配置已不存在'));
+    return;
+  }
+  const polls = task.protocolPolls?.length ? task.protocolPolls : [protocolPoll];
+  if (!providerConfig.apiKey && polls.some((poll) => poll.auth?.type !== 'none')) {
+    await handleResumeError(task, new Error('任务恢复失败：连接尚未填写 API Key'));
     return;
   }
 
@@ -1456,10 +1462,9 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
   const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
   try {
-    const polls = task.protocolPolls?.length ? task.protocolPolls : [protocolPoll];
     const settled = await settleMediaTaskQueries(polls.map((poll) => (querySignal: AbortSignal) => pollResolvedModelProtocol(
       { ...poll, maxDurationMs: poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS },
-      providerConfig.apiKey, querySignal, providerConfig.baseUrl,
+      providerConfig.apiKey || '', querySignal, providerConfig.baseUrl,
     )), signal);
     const uncertain = settled.find((result) => result.status === 'rejected' && !(result.reason instanceof PollTaskFailedError));
     if (uncertain?.status === 'rejected') throw uncertain.reason;
@@ -1894,6 +1899,9 @@ export function resumeMediaNodeTask(nodeId: string, externalSignal?: AbortSignal
   }
   if (!task.submitted || !task.taskId || task.mediaSubmissionUncertain || task.mediaRecoveryState === 'submit_unknown') {
     return Promise.reject(new MediaTaskPausedError(receiptForTask(task), 'submit_unknown'));
+  }
+  if (isMediaOperationActive(task.projectId, nodeId)) {
+    return Promise.reject(new Error('原生成任务仍在处理或保存结果，请稍后再继续查询'));
   }
   if (abortControllers.has(nodeId)) return Promise.resolve();
   // 保留 paused 标记直到交付成功；在查询中退出应用也不会自动重提或自动续查。
