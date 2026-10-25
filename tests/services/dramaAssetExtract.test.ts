@@ -5,7 +5,10 @@ import {
   normalizeAssetKey,
   parseDramaExtractResponse,
   postProcessDramaExtractOutput,
+  prepareDramaExtractPrompt,
 } from '../../src/services/dramaAssetExtract';
+import { fillTemplate, getSlashCommands } from '../../src/components/nodes/shared/slashCommands';
+import { resolveProjectGenerationPrompt } from '../../src/services/projectSettingsService';
 import {
   buildDramaAssetImagePrompt,
   buildCharacterLookbookPrompt,
@@ -18,6 +21,66 @@ import {
   normalizeDramaAssetLibrary,
 } from '../../src/types/dramaAssets';
 import { DRAMA_EXTRACT_MARKER } from '../../src/types/dramaAssets';
+
+const extractCommands = ['text-extract-characters', 'text-extract-scenes', 'text-extract-props'].map((id) => (
+  getSlashCommands('ai-text').find((command) => command.id === id)!
+));
+
+describe('prepareDramaExtractPrompt', () => {
+  it.each(extractCommands)('$id fills the empty built-in body with the current uploaded text', (command) => {
+    const prompt = fillTemplate(command.promptTemplate!, '');
+    const output = '# 第一场\n林小满在电影院找到了旧运动鞋。\n';
+    expect(prepareDramaExtractPrompt(prompt, output)).toBe(`${prompt}${output}`);
+  });
+
+  it.each(extractCommands)('$id keeps an explicitly filled body instead of old output', (command) => {
+    const prompt = fillTemplate(command.promptTemplate!, '当前剧本正文');
+    expect(prepareDramaExtractPrompt(prompt, '旧结果')).toBe(prompt);
+  });
+
+  it.each(extractCommands)('$id keeps the toolbar source mention before its empty body', (command) => {
+    const prompt = `@{source-node:03-EP01分镜执行单.md}\n${fillTemplate(command.promptTemplate!, '')}`;
+    expect(prepareDramaExtractPrompt(prompt)).toBe(prompt);
+  });
+
+  it.each(extractCommands)('$id rejects an empty source locally', (command) => {
+    const prompt = fillTemplate(command.promptTemplate!, '');
+    expect(() => prepareDramaExtractPrompt(prompt)).toThrow('缺少剧本正文');
+    expect(() => prepareDramaExtractPrompt(prompt, ' \n\t')).toThrow('原内容已保留');
+  });
+
+  it('replaces an unfilled placeholder and preserves CRLF plus the source bytes', () => {
+    const prompt = extractCommands[0].promptTemplate!.replace(/\n/g, '\r\n');
+    const output = '  剧本第一行\r\n第二行  ';
+    const prepared = prepareDramaExtractPrompt(prompt, output);
+    expect(prepared).toBe(prompt.replace('{{ 文章内容 }}', output));
+  });
+
+  it('fills whitespace after a body heading even when it has no final newline', () => {
+    const prompt = `${DRAMA_EXTRACT_MARKER.scene}\n# 剧本正文  `;
+    expect(prepareDramaExtractPrompt(prompt, '电影院场景')).toBe(`${prompt}\n电影院场景`);
+    expect(prepareDramaExtractPrompt(`${prompt}\n \t\n`, '电影院场景')).toBe(`${prompt}\n电影院场景`);
+  });
+
+  it('leaves ordinary prompts and existing custom extraction prompts unchanged', () => {
+    const ordinary = '# 剧本正文\n{{ 文章内容 }}';
+    expect(prepareDramaExtractPrompt(ordinary)).toBe(ordinary);
+    const custom = `${DRAMA_EXTRACT_MARKER.prop}\n直接分析这段自定义剧本`;
+    expect(prepareDramaExtractPrompt(custom, '旧结果')).toBe(custom);
+  });
+
+  it('fills the raw body before project text suffixes are appended', () => {
+    const rawPrompt = fillTemplate(extractCommands[0].promptTemplate!, '');
+    const prompt = prepareDramaExtractPrompt(rawPrompt, '林小满走进影院。');
+    const effective = resolveProjectGenerationPrompt({
+      prompt,
+      data: { type: 'ai-text', label: '上传剧本' },
+      settings: { promptSuffixes: { text: '保持简洁' } },
+    });
+    expect(effective).toBe(`${rawPrompt}林小满走进影院。\n\n保持简洁`);
+    expect(() => prepareDramaExtractPrompt(rawPrompt)).toThrow('缺少剧本正文');
+  });
+});
 
 describe('normalizeAssetKey', () => {
   it('strips spaces and punctuation', () => {
@@ -82,6 +145,7 @@ describe('postProcessDramaExtractOutput', () => {
     });
     const result = postProcessDramaExtractOutput(prompt, json);
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
     expect(result.kind).toBe('character');
     expect(result.parsed?.characters[0].name).toBe('阿宁');
     expect(result.output).toContain('人物');
@@ -106,6 +170,7 @@ describe('postProcessDramaExtractOutput', () => {
     });
     const result = postProcessDramaExtractOutput(prompt, json);
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
     expect(result.kind).toBe('scene');
     expect(result.parsed?.scenes[0].name).toBe('现代电影院');
     expect(result.output).toContain('场景');
@@ -130,18 +195,32 @@ describe('postProcessDramaExtractOutput', () => {
     });
     const result = postProcessDramaExtractOutput(prompt, json);
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
     expect(result.kind).toBe('prop');
     expect(result.parsed?.props[0].name).toBe('旧运动鞋');
     expect(result.output).toContain('道具');
     expect(result.output).toContain('旧运动鞋');
   });
 
-  it('falls back when JSON invalid', () => {
-    const prompt = `${DRAMA_EXTRACT_MARKER.scene}\n`;
-    const result = postProcessDramaExtractOutput(prompt, '不是 JSON');
-    expect(result.ok).toBe(false);
-    expect(result.kind).toBe('scene');
-    expect(result.output).toContain('未规范化');
+  it.each([
+    ['not JSON: private-source-body', '未找到可解析的 JSON 对象'],
+    ['{"kind":"scene","items":[private-source-body]}', '不是有效 JSON'],
+    [JSON.stringify({ kind: 'scene', items: [], notes: 'private-source-body' }), 'items 为空'],
+    [JSON.stringify({ kind: 'character', items: [{ name: 'private-source-body' }] }), '资产类型与提取指令不一致'],
+    [JSON.stringify({ kind: 'private-source-body', items: [] }), '资产类型无效'],
+    [JSON.stringify({ kind: 'scene', items: [{ summary: 'private-source-body' }] }), '第 1 条缺少 name'],
+  ])('does not expose an output or raw response after extraction failure', (raw, reason) => {
+    const result = postProcessDramaExtractOutput(DRAMA_EXTRACT_MARKER.scene, raw);
+    expect(result).toMatchObject({ ok: false, kind: 'scene', error: expect.stringContaining(reason) });
+    expect(result).not.toHaveProperty('output');
+    expect(result.parsed).toBeUndefined();
+    if (result.ok) throw new Error('extraction unexpectedly succeeded');
+    expect(result.error).toContain('原内容已保留');
+    expect(JSON.stringify(result)).not.toContain('private-source-body');
+  });
+
+  it('returns ordinary non-extraction text without parsing it', () => {
+    expect(postProcessDramaExtractOutput('普通写作请求', '原始模型结果')).toEqual({ ok: true, output: '原始模型结果' });
   });
 });
 

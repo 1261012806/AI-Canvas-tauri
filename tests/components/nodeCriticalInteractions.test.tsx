@@ -1685,6 +1685,91 @@ describe('critical canvas node interactions', () => {
     vi.doUnmock('../../src/services/projectSettingsService');
   });
 
+  describe('text asset extraction preserves source content on failure', () => {
+    afterEach(() => { vi.doUnmock('../../src/services/projectSettingsService'); });
+
+    async function setupExtraction(entry: 'dialog' | 'toolbar', kind: 'character' | 'scene' | 'prop', output = '原始剧本：阿青在旧车站捡到一枚铜钥匙。') {
+      const type = kind === 'character' ? 'source-text' : kind === 'scene' ? 'ai-markdown' : 'ai-text';
+      const store = createStore([{
+        id: 'script-source', type, position: { x: 12, y: 34 },
+        data: { type, label: '分镜执行单.md', role: 'source', status: 'success', output,
+          prompt: '', model: 'general/text-model', provider: 'general', assetId: 'source-file' },
+      }], () => 1);
+      store.activeNodeId = 'script-source';
+      const generateText = vi.fn().mockResolvedValue(JSON.stringify({ kind, items: [{ name: '提取资产', summary: '有效简介' }] }));
+      await installReactHookDriver(); installStoreMock(store);
+      vi.doUnmock('../../src/services/generationService');
+      vi.doMock('zustand/react/shallow', () => ({ useShallow: <T,>(selector: T) => selector }));
+      vi.doMock('../../src/i18n', () => ({ useT: () => (text: string) => text }));
+      vi.doMock('../../src/components/nodes/shared/PromptPanel', () => ({ default: function PromptPanelMock() { return null; } }));
+      vi.doMock('../../src/components/nodes/shared/defaultModels', () => ({ findMediaModelOption: vi.fn() }));
+      vi.doMock('../../src/services/aiService', () => ({ generateText, generateImage: vi.fn(), generateImagesBatch: vi.fn(),
+        generateVideo: vi.fn(), generateAudio: vi.fn(), buildPanoramaPrompt: vi.fn() }));
+      vi.doMock('../../src/services/projectSettingsService', async () => ({
+        ...await vi.importActual<typeof import('../../src/services/projectSettingsService')>('../../src/services/projectSettingsService'),
+        resolveProjectGenerationPrompt: ({ prompt }: { prompt: string }) => `${prompt}\n\n项目附加提示词：简介要简洁。`,
+      }));
+      vi.doMock('../../src/services/pollManager', () => ({ ...mockComfyDeliveries(), getPendingTasksForProject: () => [] }));
+      const { getSlashCommands, fillTemplate } = await import('../../src/components/nodes/shared/slashCommands');
+      const id = kind === 'character' ? 'text-extract-characters' : kind === 'scene' ? 'text-extract-scenes' : 'text-extract-props';
+      const command = getSlashCommands('ai-text').find((item) => item.id === id)!;
+      const prompt = fillTemplate(command.promptTemplate!, '');
+      const submit = async () => {
+        if (entry === 'toolbar') {
+          const { executeGeneration } = await import('../../src/services/generationService');
+          return executeGeneration('script-source', prompt);
+        }
+        const Dialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
+        const panel = findElement(Dialog(), (element) => componentName(element) === 'PromptPanelMock');
+        return (panel.props.onSubmit as (prompt: string) => Promise<void>)(prompt);
+      };
+      return { store, generateText, submit, output, type };
+    }
+
+    const extractionCases = (['character', 'scene', 'prop'] as const).flatMap((kind) => (
+      (['dialog', 'toolbar'] as const).map((entry) => ({ kind, entry }))
+    ));
+    it.each(extractionCases.flatMap((item) => ['invalid-json', 'empty-items', 'request-error'].map((failure) => ({ ...item, failure }))))(
+      'keeps $kind original content and failure history through $entry on $failure', async ({ kind, entry, failure }) => {
+      const { store, generateText, submit, output, type } = await setupExtraction(entry, kind);
+      if (failure === 'request-error') generateText.mockRejectedValueOnce(new Error('测试接口暂时不可用'));
+      else generateText.mockResolvedValueOnce(failure === 'empty-items' ? JSON.stringify({ kind, items: [], notes: '未提供正文' }) : '这不是有效 JSON');
+      const result = await submit();
+      if (entry === 'toolbar') expect(result).toMatchObject({ success: false });
+      expect(generateText).toHaveBeenCalledOnce();
+      const sent = generateText.mock.calls[0][0].prompt as string;
+      expect(sent).toContain(output);
+      expect(sent.indexOf(output)).toBeLessThan(sent.indexOf('项目附加提示词'));
+      expect(store.nodes[0]).toMatchObject({ id: 'script-source', type, position: { x: 12, y: 34 },
+        data: { role: 'source', assetId: 'source-file', output, status: 'error', error: expect.any(String) } });
+      expect(store.mergeDramaExtract).not.toHaveBeenCalled();
+      expect(store.updateNodeData).not.toHaveBeenCalled();
+      expect(store.recordOutputHistory).toHaveBeenCalledExactlyOnceWith('script-source', expect.objectContaining({ status: 'error', output: '', error: expect.any(String) }));
+      expect(store.showToast).toHaveBeenCalledWith(expect.any(String), 'error');
+    });
+
+    it.each(extractionCases)('fills $kind script and accepts a validated result through $entry', async ({ kind, entry }) => {
+      const { store, generateText, submit, output, type } = await setupExtraction(entry, kind);
+      await submit();
+      expect(generateText).toHaveBeenCalledOnce();
+      expect(generateText.mock.calls[0][0].prompt).toContain(output);
+      expect(store.nodes[0]).toMatchObject({ type, data: { role: 'source', assetId: 'source-file', status: 'success' } });
+      expect(store.nodes[0].data.output).toContain('提取资产');
+      expect(store.mergeDramaExtract).toHaveBeenCalledOnce();
+      expect(store.recordOutputHistory).toHaveBeenCalledExactlyOnceWith('script-source', expect.objectContaining({ status: 'success', prompt: expect.stringContaining(output) }));
+    });
+
+    it.each(['dialog', 'toolbar'] as const)('rejects an empty source before requesting the model through %s', async (entry) => {
+      const { store, generateText, submit } = await setupExtraction(entry, 'character', '');
+      const result = await submit();
+      if (entry === 'toolbar') expect(result).toMatchObject({ success: false });
+      expect(generateText).not.toHaveBeenCalled();
+      expect(store.nodes[0].data).toMatchObject({ output: '', status: 'error', error: expect.stringContaining('缺少剧本正文') });
+      expect(store.mergeDramaExtract).not.toHaveBeenCalled();
+      expect(store.recordOutputHistory).toHaveBeenCalledWith('script-source', expect.objectContaining({ status: 'error' }));
+    });
+  });
+
   describe('AINodeDialog shared video generation', () => {
     afterEach(() => {
       vi.doUnmock('../../src/services/generationService');

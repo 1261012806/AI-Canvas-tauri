@@ -287,23 +287,50 @@ export function formatDramaExtractMarkdown(
   return lines.join('\n').replace(/\n---\n\n$/u, '\n').trim() + '\n';
 }
 
-/**
- * 若 prompt 含提取标记，尝试把模型输出规范成简介表。
- * 解析失败则返回原文并附简短说明，避免吞结果。
- */
 export type DramaExtractParseResult = ReturnType<typeof parseDramaExtractResponse>;
 
+export type DramaExtractOutputResult =
+  | { ok: true; output: string; kind?: DramaAssetKind; parsed?: DramaExtractParseResult }
+  | { ok: false; kind: DramaAssetKind; error: string; parsed?: undefined };
+
+function getDramaExtractKind(prompt: string): DramaAssetKind | undefined {
+  return (Object.entries(DRAMA_EXTRACT_MARKER) as Array<[DramaAssetKind, string]>)
+    .find(([, marker]) => prompt.includes(marker))?.[0];
+}
+
+/** 上传文本保存在 output；快捷提取没填正文时，沿用节点里当前可见的内容。 */
+export function prepareDramaExtractPrompt(rawPrompt: string, currentOutput?: string): string {
+  const kind = getDramaExtractKind(rawPrompt);
+  if (!kind) return rawPrompt;
+  const heading = /(^|\r?\n)#[ \t]+剧本正文[ \t]*(?:\r?\n|$)/.exec(rawPrompt);
+  if (!heading) return rawPrompt;
+  const bodyStart = heading.index + heading[0].length;
+  const body = rawPrompt.slice(bodyStart).trim();
+  if (body && !/^\{\{\s*文章内容\s*\}\}$/.test(body)) return rawPrompt;
+  // 工具条把源节点引用放在模板前面，仍由既有解析器读取它的正文。
+  if (/@\{[^:{}\r\n]+:[^}\r\n]*\}/.test(rawPrompt)) return rawPrompt;
+  if (!currentOutput?.trim()) {
+    throw new Error(`${DRAMA_ASSET_KIND_LABEL[kind]}提取缺少剧本正文，请先添加正文或 @ 引用文本节点；原内容已保留。`);
+  }
+  const prefix = rawPrompt.slice(0, bodyStart);
+  return `${prefix}${prefix.endsWith('\n') ? '' : '\n'}${currentOutput}`;
+}
+
+function dramaExtractFailureReason(error: unknown): string {
+  if (error instanceof SyntaxError) return '模型结果不是有效 JSON';
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'items 为空' || message === '未找到可解析的 JSON 对象' || /^第 \d+ 条缺少 name$/.test(message)) return message;
+  if (message.startsWith('无效 kind:')) return '返回的资产类型无效';
+  if (message.startsWith('期望 kind=')) return '返回的资产类型与提取指令不一致';
+  return '模型结果格式不符合要求';
+}
+
+/** 提取失败只返回短错误，让调用方保留节点原文，不把模型失败结果当成正文。 */
 export function postProcessDramaExtractOutput(
   prompt: string,
   rawOutput: string,
-): { output: string; kind?: DramaAssetKind; ok: boolean; parsed?: DramaExtractParseResult } {
-  let kind: DramaAssetKind | undefined;
-  for (const [k, marker] of Object.entries(DRAMA_EXTRACT_MARKER) as Array<[DramaAssetKind, string]>) {
-    if (prompt.includes(marker)) {
-      kind = k;
-      break;
-    }
-  }
+): DramaExtractOutputResult {
+  const kind = getDramaExtractKind(prompt);
   if (!kind) return { output: rawOutput, ok: true };
 
   try {
@@ -311,17 +338,10 @@ export function postProcessDramaExtractOutput(
     const md = formatDramaExtractMarkdown(kind, parsed);
     return { output: md, kind, ok: true, parsed };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     return {
-      output: [
-        `# ${DRAMA_ASSET_KIND_LABEL[kind]}提取（未规范化）`,
-        `> 无法解析为 JSON：${msg}`,
-        `> 以下为模型原文，可手动整理或重试提取。`,
-        '',
-        rawOutput,
-      ].join('\n'),
       kind,
       ok: false,
+      error: `${DRAMA_ASSET_KIND_LABEL[kind]}提取失败：${dramaExtractFailureReason(err)}；原内容已保留，请重试。`,
     };
   }
 }

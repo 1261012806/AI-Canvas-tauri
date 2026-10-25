@@ -88,7 +88,7 @@ async function executeOneNode(
     try { prepareMediaNodeGeneration(node.id); }
     catch { return false; }
   }
-  const prompt = (d.prompt as string) || '';
+  let prompt = (d.prompt as string) || '';
   const rawVideoInputs = `${prompt}\n${JSON.stringify(d.workflowInputs ?? {})}`;
   const hasProtectedVideoInputs = nt === 'ai-video' && (Boolean(d.comfyRefmods?.length)
     || rawVideoInputs.includes('@refmod') || rawVideoInputs.includes('/shot/') || rawVideoInputs.includes('@drama{global/'));
@@ -123,9 +123,13 @@ async function executeOneNode(
   ctx.updateNodeDataTransient(node.id, { status: 'loading', error: undefined, videoTaskState: undefined, mediaTaskState: undefined });
   try {
     if (nt === 'ai-text') {
+      const { prepareDramaExtractPrompt, postProcessDramaExtractOutput } = await import('../services/dramaAssetExtract');
+      if (!isFresh() || !useAppStore.getState().nodes.some((item) => item.id === node.id)) return false;
+      prompt = prepareDramaExtractPrompt(prompt, d.output);
       const result = await generateText({ prompt, model: d.model!, provider: d.provider! });
-      const { postProcessDramaExtractOutput } = await import('../services/dramaAssetExtract');
+      if (!isFresh() || !useAppStore.getState().nodes.some((item) => item.id === node.id)) return false;
       const processed = postProcessDramaExtractOutput(prompt, result);
+      if (!processed.ok) throw new Error(processed.error);
       ctx.updateNodeDataTransient(node.id, { output: processed.output, status: 'success' });
       ctx.recordOutputHistory(node.id, {
         nodeId: node.id,

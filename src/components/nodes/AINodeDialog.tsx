@@ -64,6 +64,7 @@ import { animationProcessing, animationResultPatch } from '../../services/animat
 import { useT } from '../../i18n';
 import { mergeAppendedNodeMentions } from '../../utils/promptConnectionMentions';
 import { resolveGenerationNodeData } from '../../utils/nodeGeneration';
+import { postProcessDramaExtractOutput, prepareDramaExtractPrompt } from '../../services/dramaAssetExtract';
 
 const DIALOG_VIEWPORT_MARGIN = 16;
 
@@ -410,7 +411,7 @@ function AINodeDialog() {
       customStyles: store.customStyles,
     });
     const cameraPrompt = buildGenerationCameraPrompt(latestData.cameraSettings);
-    const effectivePrompt = cameraPrompt && nodeType === 'ai-image'
+    let effectivePrompt = cameraPrompt && nodeType === 'ai-image'
       ? `${projectPrompt}\n\nCamera settings: ${cameraPrompt}.`
       : projectPrompt;
     const nodeModel = latestData?.model;
@@ -732,13 +733,18 @@ function AINodeDialog() {
         const rows = await generateShotlistRows(submittingNodeId, effectivePrompt, nodeModel, nodeProvider);
         showToast(t('已生成 {count} 个镜头', { count: rows.length }));
       } else {
+        const textSource = prepareDramaExtractPrompt(rawPrompt, latestData.output);
+        if (textSource !== rawPrompt) effectivePrompt = resolveProjectGenerationPrompt({
+          prompt: textSource, data: latestData, settings: projectSettings, customStyles: store.customStyles,
+        });
         const result = await generateText({
           prompt: effectivePrompt,
           model: nodeModel,
           provider: nodeProvider,
         });
-        const { postProcessDramaExtractOutput } = await import('../../services/dramaAssetExtract');
+        if (!isStillCurrentSubmission()) return;
         const processed = postProcessDramaExtractOutput(effectivePrompt, result);
+        if (!processed.ok) throw new Error(processed.error);
         updateNodeData(activeNodeId!, { output: processed.output, status: 'success' });
         recordOutputHistory(activeNodeId!, {
           nodeId: activeNodeId!,
@@ -752,7 +758,7 @@ function AINodeDialog() {
           status: 'success',
         });
         if (processed.kind) {
-          if (processed.ok && processed.parsed) {
+          if (processed.parsed) {
             useAppStore.getState().mergeDramaExtract(processed.parsed, {
               sourceNodeId: activeNodeId!,
               modelId: nodeModel,
@@ -760,11 +766,7 @@ function AINodeDialog() {
           }
           const kindLabel =
             processed.kind === 'character' ? t('人物') : processed.kind === 'scene' ? t('场景') : t('道具');
-          if (processed.ok) {
-            showToast(t('{kind}简介已提取并入库 · 「资产管理 > 短剧资产」可查看', { kind: kindLabel }));
-          } else {
-            showToast(t('已提取，但 JSON 未完全规范化，请检查输出'), 'error');
-          }
+          showToast(t('{kind}简介已提取并入库 · 「资产管理 > 短剧资产」可查看', { kind: kindLabel }));
         }
       }
     } catch (err) {

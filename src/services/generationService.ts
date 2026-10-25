@@ -20,7 +20,7 @@ import {
   parseProjectModelRef,
   resolveProjectGenerationPrompt,
 } from './projectSettingsService';
-import { postProcessDramaExtractOutput } from './dramaAssetExtract';
+import { postProcessDramaExtractOutput, prepareDramaExtractPrompt } from './dramaAssetExtract';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { resolveVideoSubmissionControls } from './ai/videoRequestResolver';
 import { generateShotlistRows } from './shotlistService';
@@ -490,16 +490,21 @@ export async function executeGeneration(
     } else if (nodeType === 'ai-shotlist') {
       await generateShotlistRows(nodeId, effectivePrompt, nodeModel, nodeProvider);
     } else {
+      const textSource = prepareDramaExtractPrompt(rawPrompt, data.output);
+      if (textSource !== rawPrompt) effectivePrompt = resolveProjectGenerationPrompt({
+        prompt: textSource, data, settings: projectSettings, customStyles: store.customStyles,
+      });
       const result = await generateText({ prompt: effectivePrompt, model: nodeModel, provider: nodeProvider });
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
       const processed = postProcessDramaExtractOutput(effectivePrompt, result);
+      if (!processed.ok) throw new Error(processed.error);
       store.updateNodeData(nodeId, { output: processed.output, status: 'success' });
       store.recordOutputHistory(nodeId, {
         nodeId, nodeLabel: data.label, timestamp: Date.now(), prompt: effectivePrompt,
         output: processed.output, nodeType: 'ai-text', model: nodeModel, provider: nodeProvider, status: 'success',
       });
       if (processed.kind) {
-        if (processed.ok && processed.parsed) {
+        if (processed.parsed) {
           store.mergeDramaExtract(processed.parsed, {
             sourceNodeId: nodeId,
             modelId: nodeModel,
@@ -507,11 +512,7 @@ export async function executeGeneration(
         }
         const kindLabel =
           processed.kind === 'character' ? '人物' : processed.kind === 'scene' ? '场景' : '道具';
-        if (processed.ok) {
-          store.showToast(`${kindLabel}简介已提取并入库 · 「资产管理 > 短剧资产」可查看`);
-        } else {
-          store.showToast('已提取，但 JSON 未完全规范化，请检查输出', 'error');
-        }
+        store.showToast(`${kindLabel}简介已提取并入库 · 「资产管理 > 短剧资产」可查看`);
       }
     }
     return { success: true };

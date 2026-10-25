@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BaseNodeData } from '../../src/types';
 import type { BatchContext } from '../../src/utils/batchExecute';
+import { DRAMA_EXTRACT_MARKER } from '../../src/types/dramaAssets';
 
 const mocks = vi.hoisted(() => ({
   generateText: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   persistAudioGenerationResult: vi.fn(),
   persistMediaUrlToProjectData: vi.fn(),
   syncDramaAssetImageFromNode: vi.fn(),
+  mergeDramaExtract: vi.fn(),
   completeMedia: vi.fn(), pauseMedia: vi.fn(() => new Error('任务已保留')), endOperation: vi.fn(),
   liveState: { currentProjectId: null as string | null, nodes: [] as Node<BaseNodeData>[], revision: 0 },
 }));
@@ -59,6 +61,7 @@ vi.mock('../../src/store/useAppStore', () => ({
       config: { providers: {}, generalModels: [] },
       getCurrentRevision: () => mocks.liveState.revision,
       syncDramaAssetImageFromNode: mocks.syncDramaAssetImageFromNode,
+      mergeDramaExtract: mocks.mergeDramaExtract,
     }),
   },
 }));
@@ -104,6 +107,17 @@ function createContext(): BatchContext {
   };
 }
 
+function createTextContext(node: Node<BaseNodeData>): BatchContext {
+  mocks.liveState = { currentProjectId: 'text-project', nodes: [node], revision: 0 };
+  const ctx = createContext();
+  ctx.currentProjectId = 'text-project';
+  vi.mocked(ctx.updateNodeDataTransient).mockImplementation((nodeId, patch) => {
+    mocks.liveState.nodes = mocks.liveState.nodes.map((current) => current.id === nodeId
+      ? { ...current, data: { ...current.data, ...patch } } : current);
+  });
+  return ctx;
+}
+
 beforeEach(() => {
   mocks.completeMedia.mockClear(); mocks.pauseMedia.mockClear(); mocks.endOperation.mockClear();
   mocks.liveState = { currentProjectId: null, nodes: [], revision: 0 };
@@ -120,9 +134,80 @@ beforeEach(() => {
     sourceUrl: url,
   }));
   mocks.syncDramaAssetImageFromNode.mockReset();
+  mocks.mergeDramaExtract.mockReset();
 });
 
 describe('batchExecuteNodes', () => {
+  it.each(['character', 'scene', 'prop'].flatMap((kind) => (
+    ['invalid-json', 'empty-items'].map((failure) => ({ kind: kind as keyof typeof DRAMA_EXTRACT_MARKER, failure }))
+  )))('保留旧版源文本的原文并报告 $kind 提取失败：$failure', async ({ kind, failure }) => {
+    const original = '原始剧本正文：林夏在深夜车站捡起一把旧雨伞。';
+    const node = createNode('extract-text', 'ai-text', { role: 'source', output: original,
+      prompt: `${DRAMA_EXTRACT_MARKER[kind]}\n# 剧本正文\n` });
+    const ctx = createTextContext(node);
+    mocks.generateText.mockResolvedValue(failure === 'invalid-json' ? '模型没有返回 JSON' : JSON.stringify({ kind, items: [] }));
+
+    await expect(batchExecuteNodes([node.id], [node], [], ctx)).resolves.toEqual({ ok: 0, fail: 1 });
+    expect(mocks.generateText).toHaveBeenCalledWith({ prompt: expect.stringContaining(original), model: node.data.model, provider: node.data.provider });
+    expect(mocks.liveState.nodes[0].data).toMatchObject({ role: 'source', output: original, status: 'error', error: expect.any(String) });
+    expect(vi.mocked(ctx.updateNodeDataTransient).mock.calls.every(([, patch]) => !('output' in patch))).toBe(true);
+    expect(ctx.recordOutputHistory).toHaveBeenCalledOnce();
+    expect(ctx.recordOutputHistory).toHaveBeenCalledWith(node.id, expect.objectContaining({ status: 'error', error: expect.any(String) }));
+    expect(mocks.mergeDramaExtract).not.toHaveBeenCalled();
+  });
+
+  it.each(['character', 'scene', 'prop'] as const)('缺少正文时在本地阻止 %s 提取，不调用模型', async (kind) => {
+    const node = createNode('empty-script', 'ai-text', { role: 'source', output: '  ',
+      prompt: `${DRAMA_EXTRACT_MARKER[kind]}\n# 剧本正文\n` });
+    const ctx = createTextContext(node);
+
+    await expect(batchExecuteNodes([node.id], [node], [], ctx)).resolves.toEqual({ ok: 0, fail: 1 });
+    expect(mocks.generateText).not.toHaveBeenCalled();
+    expect(mocks.mergeDramaExtract).not.toHaveBeenCalled();
+    expect(mocks.liveState.nodes[0].data).toMatchObject({ output: '  ', status: 'error', error: expect.any(String) });
+    expect(ctx.recordOutputHistory).toHaveBeenCalledWith(node.id, expect.objectContaining({ status: 'error' }));
+  });
+
+  it.each(['character', 'scene', 'prop'] as const)('有效的 %s 提取仍生成简介并入库', async (kind) => {
+    const node = createNode('valid-extract', 'ai-text', { role: 'source', output: '林夏在车站捡起雨伞。',
+      prompt: `${DRAMA_EXTRACT_MARKER[kind]}\n# 剧本正文\n` });
+    const ctx = createTextContext(node);
+    mocks.generateText.mockResolvedValue(JSON.stringify({ kind, items: [{ name: '提取资产', summary: '资产简介', importance: 'main' }] }));
+
+    await expect(batchExecuteNodes([node.id], [node], [], ctx)).resolves.toEqual({ ok: 1, fail: 0 });
+    expect(mocks.liveState.nodes[0].data).toMatchObject({ role: 'source', status: 'success', output: expect.stringContaining('提取资产') });
+    expect(mocks.mergeDramaExtract).toHaveBeenCalledWith(expect.objectContaining({ kind }), { sourceNodeId: node.id, modelId: node.data.model });
+    expect(ctx.recordOutputHistory).toHaveBeenCalledWith(node.id, expect.objectContaining({ status: 'success', output: expect.stringContaining('提取资产') }));
+  });
+
+  it('普通文本生成保持原提示词和输出，不触发资产入库', async () => {
+    const node = createNode('normal-text', 'ai-text', { prompt: '请润色这句普通文本', output: '旧内容' });
+    const ctx = createTextContext(node);
+    mocks.generateText.mockResolvedValue('生成后的普通文本');
+
+    await expect(batchExecuteNodes([node.id], [node], [], ctx)).resolves.toEqual({ ok: 1, fail: 0 });
+    expect(mocks.generateText).toHaveBeenCalledWith({ prompt: node.data.prompt, model: node.data.model, provider: node.data.provider });
+    expect(mocks.liveState.nodes[0].data.output).toBe('生成后的普通文本');
+    expect(mocks.mergeDramaExtract).not.toHaveBeenCalled();
+  });
+
+  it.each(['project-switch', 'node-removed'])('文本请求完成时若已过期则不写回：%s', async (change) => {
+    const node = createNode('late-text', 'ai-text', { output: '原文' });
+    const ctx = createTextContext(node);
+    const pending = deferred<string>();
+    mocks.generateText.mockReturnValue(pending.promise);
+    const execution = batchExecuteNodes([node.id], [node], [], ctx);
+    await vi.waitFor(() => expect(mocks.generateText).toHaveBeenCalledOnce());
+    if (change === 'project-switch') mocks.liveState.currentProjectId = 'another-project';
+    else mocks.liveState.nodes = [];
+    pending.resolve('迟到的生成结果');
+
+    await expect(execution).resolves.toEqual({ ok: 0, fail: 1 });
+    expect(vi.mocked(ctx.updateNodeDataTransient).mock.calls.every(([, patch]) => !('output' in patch))).toBe(true);
+    expect(ctx.recordOutputHistory).not.toHaveBeenCalled();
+    expect(mocks.mergeDramaExtract).not.toHaveBeenCalled();
+  });
+
   it('异步图片落盘失败时保留同一个任务，不清理或再次生成', async () => {
     const node = createNode('image', 'ai-image');
     const receipt = { projectId: 'project', nodeId: node.id, taskId: 'original', attemptId: 'first' };
