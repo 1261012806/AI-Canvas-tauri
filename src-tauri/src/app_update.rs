@@ -65,5 +65,13 @@ pub async fn download_app_update(webview: Webview, rid: tauri::ResourceId, on_ev
     };
     // download() 返回前已经验签；校验失败不能切源，安装永远只执行一次。
     let _ = on_event.send(serde_json::json!({ "event": "Finished" }));
+    // updater 在 Windows 直接退出进程，不执行 WorkerSession::drop；安装前必须确认同 exe 的 worker 已退出。
+    // guard 在 install 失败时恢复接新任务，成功硬退出时由 OS 关闭非继承的 Job 句柄兜底。
+    #[cfg(all(windows, feature = "local-onnx"))]
+    let _worker_shutdown_guard = tauri::async_runtime::spawn_blocking(
+        crate::onnx::prepare_update_worker_shutdown,
+    )
+    .await
+    .map_err(|_| "本地推理进程退出准备失败，未启动更新安装".to_string())??;
     update.install(bytes).map_err(|error| format!("更新安装失败：{error}"))
 }
