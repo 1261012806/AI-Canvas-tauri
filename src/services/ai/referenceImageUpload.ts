@@ -5,61 +5,86 @@ const MAX_LOSSLESS_IMAGE_PIXELS = 24_000_000;
 const APIMART_MAX_IMAGE_BYTES = 20_000_000;
 const MAX_LOSSLESS_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_LOSSLESS_IMAGE_EDGE = 16384;
+const MAX_LOSSLESS_PNG_CHUNKS = 4096;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 let compressionTail: Promise<unknown> = Promise.resolve();
 
-function inspectLosslessPng(bytes: Uint8Array): { width: number; height: number } | undefined {
+function inspectLosslessPng(bytes: Uint8Array): { width: number; height: number; animated: boolean } | undefined {
   if (bytes.length < 33 || !PNG_SIGNATURE.every((value, index) => bytes[index] === value)) return;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452) return;
   const width = view.getUint32(16);
   const height = view.getUint32(20);
-  if (!width || !height || Math.max(width, height) > MAX_LOSSLESS_IMAGE_EDGE || width * height > MAX_LOSSLESS_IMAGE_PIXELS) return;
+  if (!width || !height) return;
   let hasImageData = false;
+  let animated = false;
+  let chunks = 0;
   for (let offset = 8; offset + 12 <= bytes.length;) {
+    if (++chunks > MAX_LOSSLESS_PNG_CHUNKS) return;
     const length = view.getUint32(offset);
     const type = view.getUint32(offset + 4);
     const end = offset + length + 12;
-    if (end > bytes.length || type === 0x6163544c) return; // acTL：动画不能展平成静态图。
+    if (end > bytes.length) return;
+    if (type === 0x6163544c || type === 0x6663544c || type === 0x66644154) animated = true; // acTL / fcTL / fdAT
     if (type === 0x49444154) hasImageData = true; // IDAT
-    if (type === 0x49454e44) return hasImageData && length === 0 && end === bytes.length ? { width, height } : undefined;
+    if (type === 0x49454e44) return hasImageData && length === 0 && end === bytes.length ? { width, height, animated } : undefined;
     offset = end;
   }
 }
 
+class LosslessCompressionError extends Error {}
+
 async function optimizeReferenceImage(blob: Blob, signal?: AbortSignal): Promise<Blob> {
   try {
     signal?.throwIfAborted();
-    if (blob.size > MAX_LOSSLESS_IMAGE_BYTES || !isTauri()) return blob;
+    if (!isTauri()) throw new LosslessCompressionError('仅桌面端支持无损压缩');
+    if (!(blob instanceof Blob) || !blob.size) throw new LosslessCompressionError('图片内容无效，无法无损压缩');
+    if (blob.size > MAX_LOSSLESS_IMAGE_BYTES) {
+      throw new LosslessCompressionError('图片超过无损压缩上限（32 MiB、2400 万像素或单边 16384 像素）');
+    }
     const prefix = new Uint8Array(await blob.slice(0, PNG_SIGNATURE.length).arrayBuffer());
     signal?.throwIfAborted();
     const isPng = PNG_SIGNATURE.every((value, index) => prefix[index] === value);
     const isJpeg = prefix[0] === 0xff && prefix[1] === 0xd8 && prefix[2] === 0xff;
-    if (!isPng && !isJpeg) return blob;
+    if (!isPng && !isJpeg) throw new LosslessCompressionError('无损压缩仅支持 PNG 和 JPEG 图片');
     const input = await blob.arrayBuffer();
     signal?.throwIfAborted();
     const inputBytes = new Uint8Array(input);
-    const dimensions = isPng ? inspectLosslessPng(inputBytes) : parseRasterImageDimensions(inputBytes);
-    if (!dimensions || Math.max(dimensions.width, dimensions.height) > MAX_LOSSLESS_IMAGE_EDGE
-      || dimensions.width * dimensions.height > MAX_LOSSLESS_IMAGE_PIXELS) return blob;
+    const png = isPng ? inspectLosslessPng(inputBytes) : undefined;
+    const dimensions = isPng ? png : parseRasterImageDimensions(inputBytes);
+    if (!dimensions) throw new LosslessCompressionError('图片内容无效，无法无损压缩');
+    if (Math.max(dimensions.width, dimensions.height) > MAX_LOSSLESS_IMAGE_EDGE
+      || dimensions.width * dimensions.height > MAX_LOSSLESS_IMAGE_PIXELS) {
+      throw new LosslessCompressionError('图片超过无损压缩上限（32 MiB、2400 万像素或单边 16384 像素）');
+    }
+    // 动画保留原字节，不能为了减重变成静态图。
+    if (png?.animated) return blob;
     const output = await invoke<ArrayBuffer | Uint8Array>(isPng ? 'optimize_reference_png' : 'optimize_reference_jpeg', input);
     signal?.throwIfAborted();
     const bytes = output instanceof ArrayBuffer ? new Uint8Array(output) : output;
-    if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length >= blob.size) return blob;
+    if (!(bytes instanceof Uint8Array) || !bytes.length) {
+      throw new LosslessCompressionError('无损压缩结果格式或尺寸异常，原图已保留');
+    }
     const sameFormat = isPng ? PNG_SIGNATURE.every((value, index) => bytes[index] === value)
       : bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    if (!sameFormat) return blob;
+    if (!sameFormat) throw new LosslessCompressionError('无损压缩结果格式或尺寸异常，原图已保留');
     const optimizedDimensions = isPng ? inspectLosslessPng(bytes) : parseRasterImageDimensions(bytes);
-    if (!optimizedDimensions || optimizedDimensions.width !== dimensions.width || optimizedDimensions.height !== dimensions.height) return blob;
+    if (!optimizedDimensions || ('animated' in optimizedDimensions && optimizedDimensions.animated)
+      || optimizedDimensions.width !== dimensions.width || optimizedDimensions.height !== dimensions.height) {
+      throw new LosslessCompressionError('无损压缩结果格式或尺寸异常，原图已保留');
+    }
+    if (bytes.length >= blob.size) return blob;
     return new Blob([new Uint8Array(bytes)], { type: isPng ? 'image/png' : 'image/jpeg' });
   } catch (error) {
     if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
-    return blob;
+    if (error instanceof LosslessCompressionError) throw error;
+    // 原生异常可能带本机路径，只给手动入口固定提示。
+    throw new LosslessCompressionError('无损压缩失败，请重试或保留原图');
   }
 }
 
-/** 只对上传副本做原生无损减重；保留尺寸、格式与动画，不走 Web 有损回退。 */
-export async function prepareReferenceImageUpload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
+/** 手动压缩明确报告失败；没有更小的安全结果时返回原图。 */
+export async function compressImageLosslessly(blob: Blob, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted();
   const operation = compressionTail.then(() => optimizeReferenceImage(blob, signal));
   // 取消只停止调用方等待；原生仍在压缩时不能让下一张占用串行槽。
@@ -72,6 +97,15 @@ export async function prepareReferenceImageUpload(blob: Blob, signal?: AbortSign
   });
   signal?.throwIfAborted();
   return prepared;
+}
+
+/** 上传继续尽力减重，无法处理时保留原图，不走 Web 有损回退。 */
+export async function prepareReferenceImageUpload(blob: Blob, signal?: AbortSignal): Promise<Blob> {
+  try { return await compressImageLosslessly(blob, signal); }
+  catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+    return blob;
+  }
 }
 
 /** APIMart 在无损准备后按上传接口的十进制 20 MB 限制拦截。 */

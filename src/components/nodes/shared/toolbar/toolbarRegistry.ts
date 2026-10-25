@@ -76,6 +76,7 @@ export const IMAGE_BUTTONS: ToolbarButtonDef[] = [
   { key: 'subjectMatting', label: '自动识别主体',icon: 'mdi:hexagon-outline',             defaultZone: 'Primary' },
   { key: 'annotate',       label: '标注',        icon: 'mdi:draw-pen',                   defaultZone: 'Primary' },
   { key: 'crop',           label: '裁切',        icon: 'mdi:crop',                       defaultZone: 'Primary' },
+  { key: 'losslessCompress', label: '无损压缩', icon: 'mdi:file-image-minus-outline',    defaultZone: 'Primary' },
   { key: 'compose',        label: '多图编辑',    icon: 'mdi:layers-triple-outline',      defaultZone: 'Primary' },
   createMoreButton('Primary'),
   { key: 'upload',         label: '上传图片',    icon: 'mdi:upload',                     defaultZone: 'Primary' },

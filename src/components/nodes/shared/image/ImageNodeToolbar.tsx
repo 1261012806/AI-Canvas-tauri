@@ -61,6 +61,36 @@ function ImageNodeToolbar({
     dialog: pluginDialog,
   } = useNodePluginToolbar({ nodeId: _nodeId });
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const compressionRunning = useRef(false);
+  const showToast = useAppStore((state) => state.showToast);
+
+  const handleLosslessCompress = useCallback(async () => {
+    if (compressionRunning.current) return;
+    const projectId = useAppStore.getState().currentProjectId;
+    const isCurrentProject = () => useAppStore.getState().currentProjectId === projectId;
+    compressionRunning.current = true;
+    setIsCompressing(true);
+    try {
+      const { compressImageNode } = await import('../../../../services/imageLosslessCompression');
+      if (!isCurrentProject()) return;
+      const result = await compressImageNode(_nodeId);
+      if (!isCurrentProject()) return;
+      if (result.status === 'unchanged') {
+        showToast(t('图片无需进一步无损压缩，未创建副本'));
+      } else {
+        const percent = ((result.originalBytes - result.compressedBytes) / result.originalBytes * 100).toFixed(1);
+        showToast(t('已创建无损压缩副本，体积减少 {percent}%', { percent }));
+      }
+    } catch (error) {
+      if (!isCurrentProject()) return;
+      if (error instanceof Error && error.name === 'AbortError') return;
+      showToast(t(error instanceof Error ? error.message : '图片无损压缩失败'), 'error');
+    } finally {
+      compressionRunning.current = false;
+      setIsCompressing(false);
+    }
+  }, [_nodeId, showToast, t]);
 
   // ── 宫格子菜单 ──
   const [gridMenuOpen, setGridMenuOpen] = useState(false);
@@ -194,6 +224,22 @@ function ImageNodeToolbar({
         </AnimatedButton>
       );
     }
+    if (key === 'losslessCompress' && def) {
+      return (
+        <AnimatedButton
+          key={key}
+          className="ftb-btn icon-only act-losslessCompress"
+          data-tooltip={t(isCompressing ? '无损压缩中...' : '无损压缩')}
+          aria-label={t('无损压缩')}
+          aria-busy={isCompressing}
+          disabled={isCompressing}
+          onClick={(event) => { event.stopPropagation(); void handleLosslessCompress(); }}
+        >
+          <Icon icon={isCompressing ? 'mdi:loading' : def.icon} className={isCompressing ? 'animate-spin' : undefined} width={14} height={14} />
+        </AnimatedButton>
+      );
+    }
+
     if (!def || !handler) return null;
 
     if (key === 'upscale') {
@@ -270,7 +316,7 @@ function ImageNodeToolbar({
         <Icon icon={def.icon} width={14} height={14} />
       </AnimatedButton>
     );
-  }, [registry, actionMap, isUpscaling, isSubjectMattingRunning, toggleGridMenu, gridMenuOpen, gridMenuBelow, pickGrid, pickCustom, handlePresetClick, renderPluginButton, userPresets, t]);
+  }, [registry, actionMap, handleLosslessCompress, isCompressing, isUpscaling, isSubjectMattingRunning, toggleGridMenu, gridMenuOpen, gridMenuBelow, pickGrid, pickCustom, handlePresetClick, renderPluginButton, userPresets, t]);
 
   // ── 编辑态 ──
   if (edit.isEditing) {

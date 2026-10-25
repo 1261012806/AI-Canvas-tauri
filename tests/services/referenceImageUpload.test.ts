@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { mapReferenceImagesInOrder, prepareApimartImageUpload, prepareReferenceImageUpload } from '../../src/services/ai/referenceImageUpload';
+import { compressImageLosslessly, mapReferenceImagesInOrder, prepareApimartImageUpload, prepareReferenceImageUpload } from '../../src/services/ai/referenceImageUpload';
 
 vi.mock('@tauri-apps/api/core', async (importOriginal) => ({
   ...await importOriginal<typeof import('@tauri-apps/api/core')>(),
@@ -279,6 +279,136 @@ describe('通用参考图原生无损分流', () => {
     finish(jpegOutput);
     expect((await second).type).toBe('image/png');
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual(['optimize_reference_jpeg', 'optimize_reference_png']);
+  });
+});
+
+describe('手动无损压缩的明确结果', () => {
+  it.each(['png', 'jpeg'] as const)('返回更小的 %s 副本，保持格式与像素尺寸', async (kind) => {
+    const original = kind === 'png' ? png(6, undefined, 3840, 1024, 2160) : jpeg(3840, 2160, 1024);
+    const output = await (kind === 'png' ? png(6, undefined, 3840, 128, 2160) : jpeg(3840, 2160, 128)).arrayBuffer();
+    vi.mocked(invoke).mockResolvedValue(new Uint8Array(output));
+
+    const compressed = await compressImageLosslessly(original);
+    expect(compressed.size).toBeLessThan(original.size);
+    expect(compressed.type).toBe(kind === 'png' ? 'image/png' : 'image/jpeg');
+    expect(new Uint8Array(await compressed.arrayBuffer())).toEqual(new Uint8Array(output));
+    expect(invoke).toHaveBeenCalledWith(kind === 'png' ? 'optimize_reference_png' : 'optimize_reference_jpeg', expect.any(ArrayBuffer));
+    expect(decode).not.toHaveBeenCalled();
+    expect(canvas).not.toHaveBeenCalled();
+  });
+
+  it.each(['png', 'jpeg'] as const)('原生保原或未变小的 %s 返回原 Blob，不创建无收益副本', async (kind) => {
+    const original = kind === 'png' ? png(6, undefined, 3840, 1024, 2160) : jpeg(3840, 2160, 1024);
+    vi.mocked(invoke).mockResolvedValueOnce(await original.arrayBuffer());
+    expect(await compressImageLosslessly(original)).toBe(original);
+    vi.mocked(invoke).mockResolvedValueOnce(await (kind === 'png'
+      ? png(6, undefined, 3840, 2048, 2160) : jpeg(3840, 2160, 2048)).arrayBuffer());
+    expect(await compressImageLosslessly(original)).toBe(original);
+  });
+
+  it('动画 PNG 保留原字节，不调用原生压缩或展平动画', async () => {
+    const original = png(6, 'acTL', 3840, 1024, 2160);
+    expect(await compressImageLosslessly(original)).toBe(original);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+  });
+
+  it('非桌面环境明确报错，上传入口仍保留原图', async () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+    const original = jpeg(3840, 2160, 1024);
+    await expect(compressImageLosslessly(original)).rejects.toThrow('仅桌面端支持无损压缩');
+    expect(await prepareReferenceImageUpload(original)).toBe(original);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(['webp', 'gif', 'fake-png'] as const)('不把 %s 当作 PNG/JPEG，也不影响上传回退', async (kind) => {
+    const original = kind === 'webp' ? webp() : new Blob([kind === 'gif' ? 'GIF89a' : 'not PNG bytes'], { type: 'image/png' });
+    await expect(compressImageLosslessly(original)).rejects.toThrow('无损压缩仅支持 PNG 和 JPEG 图片');
+    expect(await prepareReferenceImageUpload(original)).toBe(original);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(['png', 'jpeg'].flatMap((kind) => ['raw-bytes', 'pixels', 'edge'].map((budget) => ({ kind, budget }))))(
+    '原生调用前拒绝超预算的 $kind（$budget）', async ({ kind, budget }) => {
+      const width = budget === 'pixels' ? 6000 : budget === 'edge' ? 16385 : 3840;
+      const height = budget === 'pixels' ? 5000 : budget === 'edge' ? 1 : 2160;
+      const padding = budget === 'raw-bytes' ? 32 * 1024 * 1024 : 128;
+      const original = kind === 'png' ? png(6, undefined, width, padding, height) : jpeg(width, height, padding);
+      await expect(compressImageLosslessly(original)).rejects.toThrow('图片超过无损压缩上限');
+      expect(await prepareReferenceImageUpload(original)).toBe(original);
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['empty', 'truncated-png', 'truncated-jpeg'] as const)('非法输入给固定提示：%s', async (kind) => {
+    const original = kind === 'empty' ? new Blob([])
+      : kind === 'truncated-png' ? png().slice(0, 33)
+        : new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xc0, 0])]);
+    await expect(compressImageLosslessly(original)).rejects.toThrow('图片内容无效，无法无损压缩');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('PNG 分块过多时在原生前停止解析', async () => {
+    const original = new Uint8Array(await png(6, undefined, 3840, 128, 2160).arrayBuffer());
+    const chunks = new Uint8Array(4096 * 12);
+    for (let offset = 0; offset < chunks.length; offset += 12) chunks.set(new TextEncoder().encode('tEXt'), offset + 4);
+    const input = new Blob([original.slice(0, 33), chunks, original.slice(33)], { type: 'image/png' });
+    await expect(compressImageLosslessly(input)).rejects.toThrow('图片内容无效，无法无损压缩');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(['wrong-format', 'wrong-size', 'animated', 'empty', 'invalid-response'] as const)('拒绝异常原生输出，上传仍回退原图：%s', async (kind) => {
+    const original = png(6, undefined, 3840, 1024, 2160);
+    const output = kind === 'wrong-format' ? await jpeg(3840, 2160, 128).arrayBuffer()
+      : kind === 'empty' ? new Uint8Array()
+        : kind === 'invalid-response' ? 'not binary'
+          : await png(6, kind === 'animated' ? 'acTL' : undefined, kind === 'wrong-size' ? 1024 : 3840, 128, 2160).arrayBuffer();
+    vi.mocked(invoke).mockResolvedValue(output);
+    await expect(compressImageLosslessly(original)).rejects.toThrow('无损压缩结果格式或尺寸异常，原图已保留');
+    expect(await prepareReferenceImageUpload(original)).toBe(original);
+  });
+
+  it('原生失败不泄露错误正文或 cause，后续上传仍能进入队列', async () => {
+    const original = jpeg(3840, 2160, 1024);
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('/Users/private/image.jpg?key=private-token'));
+    const failure = await compressImageLosslessly(original).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('无损压缩失败，请重试或保留原图');
+    expect((failure as Error).cause).toBeUndefined();
+    vi.mocked(invoke).mockResolvedValueOnce(await jpeg(3840, 2160, 128).arrayBuffer());
+    expect((await prepareReferenceImageUpload(original)).size).toBeLessThan(original.size);
+  });
+
+  it('保留原生 AbortError 的取消语义', async () => {
+    const cancelled = new DOMException('cancelled', 'AbortError');
+    vi.mocked(invoke).mockRejectedValueOnce(cancelled);
+    await expect(compressImageLosslessly(jpeg())).rejects.toBe(cancelled);
+  });
+
+  it('已经取消的手动操作不进入原生或压缩队列', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(compressImageLosslessly(jpeg(), controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('手动取消立即结束等待，上传仍等待同一原生串行槽实际结束', async () => {
+    const original = jpeg(3840, 2160, 1024);
+    const output = await jpeg(3840, 2160, 128).arrayBuffer();
+    let finish!: (value: ArrayBuffer) => void;
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise<ArrayBuffer>((resolve) => { finish = resolve; }));
+    vi.mocked(invoke).mockResolvedValue(output);
+    const controller = new AbortController();
+    const active = compressImageLosslessly(original, controller.signal);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    const stopped = expect(active).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort(); await stopped;
+    const next = prepareReferenceImageUpload(original);
+    await Promise.resolve();
+    expect(invoke).toHaveBeenCalledOnce();
+    finish(output);
+    expect((await next).size).toBeLessThan(original.size);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });
 

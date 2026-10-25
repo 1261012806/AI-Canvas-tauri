@@ -2,6 +2,20 @@
  * 节点与画布节点组件（nodes）
  */
 const nodes = {
+  '无损压缩': 'Lossless compression',
+  '无损压缩中...': 'Compressing losslessly…',
+  '已创建无损压缩副本，体积减少 {percent}%': 'Created a lossless copy, reducing file size by {percent}%',
+  '图片无需进一步无损压缩，未创建副本': 'No further lossless compression was possible; no copy was created',
+  '图片无损压缩失败': 'Lossless image compression failed',
+  '仅桌面端支持无损压缩': 'Lossless compression is available in the desktop app only',
+  '无损压缩仅支持 PNG 和 JPEG 图片': 'Lossless compression supports PNG and JPEG images only',
+  '图片超过无损压缩上限（32 MiB、2400 万像素或单边 16384 像素）': 'The image exceeds the lossless compression limit (32 MiB, 24 megapixels, or 16384 pixels per side)',
+  '图片内容无效，无法无损压缩': 'The image data is invalid and cannot be compressed losslessly',
+  '无损压缩失败，请重试或保留原图': 'Lossless compression failed; try again or keep the original image',
+  '无损压缩结果格式或尺寸异常，原图已保留': 'The compressed image has an unexpected format or size; the original was kept',
+  '当前图片不可用，无法无损压缩': 'The current image is unavailable and cannot be compressed losslessly',
+  '读取原图失败，请重试': 'Failed to read the original image; try again',
+  '压缩副本保存失败，原图已保留': 'Failed to save the compressed copy; the original was kept',
   '请填写音色 ID': 'Enter a voice ID',
   '音色 ID': 'Voice ID',
   '填写平台提供的音色 ID': 'Enter the voice ID provided by the platform',

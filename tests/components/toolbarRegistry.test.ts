@@ -98,7 +98,7 @@ describe('toolbar layout migration', () => {
           name: 'Primary',
           buttonKeys: [
             'matting', 'expand', 'multiGrid', 'cameraStudio', 'repaint', 'upscale',
-            'subjectMatting', 'annotate', 'crop', 'compose', 'more', 'upload', 'reversePrompt',
+            'subjectMatting', 'annotate', 'crop', 'losslessCompress', 'compose', 'more', 'upload', 'reversePrompt',
           ],
         },
         {
@@ -108,6 +108,21 @@ describe('toolbar layout migration', () => {
         },
       ],
     });
+  });
+
+  it('keeps an existing custom image layout and offers lossless compression inside More', () => {
+    const custom = { version: 8, zones: [{ id: 'custom', name: '常用工具', buttonKeys: ['crop', 'copyFile', 'more'] }] };
+    expect(migrateToolbarLayout('ai-image', custom)).toBe(custom);
+    const hidden = getHiddenDefaultToolbarButtons(getButtonRegistry('ai-image'), new Set(custom.zones[0].buttonKeys));
+    expect(hidden.map((button) => button.key)).toContain('losslessCompress');
+    expect(custom.zones[0].buttonKeys).toEqual(['crop', 'copyFile', 'more']);
+    expect(getHiddenDefaultToolbarButtons(getButtonRegistry('ai-image'), new Set(['losslessCompress', 'more']))
+      .map((button) => button.key)).not.toContain('losslessCompress');
+  });
+
+  it('keeps an intentional current image layout without More unchanged', () => {
+    const custom = { version: 8, zones: [{ id: 'custom', name: '我的工具', buttonKeys: ['crop'] }] };
+    expect(migrateToolbarLayout('ai-image', custom)).toBe(custom);
   });
 
   it('adds More once to legacy layouts and preserves an intentional current-version removal', () => {
