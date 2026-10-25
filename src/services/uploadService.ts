@@ -390,6 +390,111 @@ async function uploadToToapis(url: string, providerId: string, kind: MediaDataUr
   return result.data.url;
 }
 
+/** 只读完整、有界的错误 JSON；网页和任意服务端文案都不带回日志或界面。 */
+async function readLibapiUploadFailure(response: Response, signal?: AbortSignal): Promise<{ codes: string[]; html: boolean }> {
+  signal?.throwIfAborted();
+  const empty = { codes: [] as string[], html: (response.headers.get('Content-Type') ?? '').toLowerCase().includes('html') };
+  const maxBytes = 8 * 1024;
+  if (empty.html || Number(response.headers.get('Content-Length')) > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    signal?.throwIfAborted();
+    return empty;
+  }
+
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    reader = response.body?.getReader();
+  } catch {
+    signal?.throwIfAborted();
+    return empty;
+  }
+  if (!reader) return empty;
+  const cancel = () => { void reader?.cancel().catch(() => undefined); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      signal?.throwIfAborted();
+      const { done, value } = await reader.read();
+      signal?.throwIfAborted();
+      if (done) break;
+      if (size + value.byteLength > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return empty;
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const text = new TextDecoder().decode(bytes).trim();
+    if (/^<(?:!doctype\s+html|html\b)/iu.test(text)) return { codes: [], html: true };
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
+    const root = parsed as Record<string, unknown>;
+    const error = root.error && typeof root.error === 'object' && !Array.isArray(root.error)
+      ? root.error as Record<string, unknown> : root;
+    return { codes: [error.code, root.code, error.type, root.type].filter((code): code is string => typeof code === 'string'), html: false };
+  } catch {
+    await reader.cancel().catch(() => undefined);
+    signal?.throwIfAborted();
+    return empty;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    reader.releaseLock();
+  }
+}
+
+async function libapiUploadError(response: Response, apiKey: string, kind: MediaDataUrlKind, signal?: AbortSignal): Promise<Error> {
+  const { codes, html } = await readLibapiUploadFailure(response, signal);
+  signal?.throwIfAborted();
+  // 具体 code 优先，只有它不能识别时才参考较宽泛的 type。
+  const code = codes.find((value) => [
+    'api_key_inactive', 'insufficient_permissions', 'content_policy_violation',
+    'model_not_allowed', 'model_not_available_for_api_key', 'api_key_quota_exceeded', 'insufficient_funds',
+  ].includes(value));
+  let hint = '服务端未接受上传，请核对当前连接与参考素材，或联系 LibAPI 核查。';
+  if (response.status === 401) {
+    hint = '当前连接的 Key 未通过认证，请核对是否填写完整、有效或已过期。';
+  } else if (response.status === 403) {
+    if (code === 'api_key_inactive') {
+      hint = '当前连接的 Key 已停用、删除或撤销，请到 LibAPI 控制台「API 密钥」恢复或更换 Key。';
+    } else if (code === 'insufficient_permissions') {
+      hint = '当前 Key 权限不足，请到 LibAPI 控制台「API 密钥」核对并开启「文件」权限；模型权限与文件权限分别配置。';
+    } else if (code === 'content_policy_violation') {
+      hint = '参考素材被 LibAPI 的安全策略拒绝，请调整素材或联系平台核查。';
+    } else if (code === 'model_not_allowed') {
+      hint = '当前 Key 的模型访问范围受限，请核对这把 Key 的可用模型。';
+    } else if (code === 'model_not_available_for_api_key') {
+      hint = '当前接口或模型未向 API Key 开放，请按 LibAPI 文档选择可用接口。';
+    } else {
+      hint = html
+        ? '上传返回了访问拒绝页面，可能受网关或访问策略限制，请联系 LibAPI 核查。'
+        : '服务端拒绝上传，但未提供可识别的原因；请先核对当前 Key 的「文件」权限，已开启则联系 LibAPI 核查。';
+    }
+  } else if (response.status === 402) {
+    hint = code === 'api_key_quota_exceeded'
+      ? '当前 Key 的总额度已用完，请到 LibAPI 控制台核对或调整这把 Key 的额度。'
+      : '账户或 Key 额度受限，请到 LibAPI 核对账户余额及当前 Key 额度。';
+  } else if (response.status === 413) {
+    hint = '文件或请求体超过服务端大小限制；LibAPI 单文件上限为 50 MB，请压缩或更换素材。';
+  } else if (response.status === 400) {
+    hint = '上传参数或素材不被接受，请核对文件格式、内容与接口要求。';
+  } else if (response.status === 429) {
+    hint = '上传频率或服务容量受限，请稍后手动重试。';
+  } else if (response.status >= 500) {
+    hint = 'LibAPI 上传服务暂不可用，请稍后手动重试。';
+  }
+  // 请求 ID 方便平台定位；不让异常头把 Key、地址或自由文本带到界面。
+  const requestId = response.headers.get('X-Request-Id')?.trim();
+  const safeRequestId = requestId && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/u.test(requestId)
+    && !/^(?:https?|file|asset|data|blob|wss?|ftp):/iu.test(requestId)
+    && !/^sk-/iu.test(requestId) && !requestId.includes(apiKey) && !requestId.includes(encodeURIComponent(apiKey));
+  return new Error(`LibAPI ${mediaKindLabel(kind)}上传失败（HTTP ${response.status}）：${hint}${safeRequestId ? `；请求 ID：${requestId}` : ''}`);
+}
+
 /** LibAPI 参考素材只使用当前连接上传，不借用公共图床或其他连接的 Key。 */
 async function uploadToLibapi(url: string, providerId: string, kind: MediaDataUrlKind, signal?: AbortSignal): Promise<string> {
   const connection = useAppStore.getState().config.providers[providerId];
@@ -411,7 +516,7 @@ async function uploadToLibapi(url: string, providerId: string, kind: MediaDataUr
     method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form, signal,
   });
   signal?.throwIfAborted();
-  if (!response.ok) throw new Error(`LibAPI ${mediaKindLabel(kind)}上传失败（HTTP ${response.status}），请检查当前连接的 Key、文件权限与体积限制`);
+  if (!response.ok) throw await libapiUploadError(response, apiKey, kind, signal);
   const result = await response.json().catch(() => {
     signal?.throwIfAborted();
     throw new Error('LibAPI 上传返回了无效 JSON');

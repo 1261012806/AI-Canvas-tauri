@@ -53,6 +53,20 @@
 
 范围按用户确认实施，随后确认将不相关的 `mediaUploadService.test.ts` 替换为实际接线守卫 `mediaReferenceMemoryGuards.test.ts`。最初三个设置语言文件没有新增翻译调用而未修改；音频补充按再次确认的范围新增三个节点语言文案及音频参数／工具回归源码，没有修改 README。保留其他任务的已有改动。
 
+## 2026-10-25 上传拒绝诊断
+
+本次范围仅为 `src/services/uploadService.ts`、`tests/services/modelRequestTransport.test.ts` 和本计划。代码与回归用例已实现，待用户验证；提交钩子对本次 2 个 TypeScript 文件的定向 ESLint 已通过。未运行测试、类型检查、构建、桌面验收或真实接口调用，也未查看或修改用户的密钥值与平台权限。
+
+用户登录后，通过内置浏览器核对了[文件上传](https://libapi.cc/zh-CN/api-docs/endpoints/files)、[错误码](https://libapi.cc/zh-CN/api-docs/guides/errors)和[参数与素材](https://libapi.cc/zh-CN/api-docs/guides/params)：`POST /v1/files` 使用 Bearer 和 multipart `file`，成功返回 201 与顶层 `url`；未开「文件」权限可返回 403，超限是 413。403 还可能是 Key 停用、模型权限或安全策略问题，需要结合 `error.code / error.type` 判断，不能仅凭截图断言 Key 无效。
+
+- **取值与地址**：所选视频模型经 `providerConfigId` 找到真实连接，参考图上传仍用同一连接的 Key 并去掉首尾空格。`catalogId` 只选择上传适配器，不替换连接身份。上传地址为 `https://libapi.cc/v1/files`；内置生成协议以 origin 拼接 `/api/v1/model-runtime/invoke`，实际是 `https://libapi.cc/api/v1/model-runtime/invoke`，没有多拼一层 `/v1`。本次未发现这两条路径的静态接线错误，不代表已验证用户运行时配置的 Key 或授权。
+- **分类提示**：保留 HTTP 状态，按官方已知 code/type 区分认证失败、Key 停用、权限不足、安全策略、模型范围、额度、大小、参数与限频等原因。未知 403 和网页拒绝响应单独兜底，不把所有拒绝都描述成缺文件权限。只输出固定提示，不透传任意服务端 message、未知 code、HTML 或本地素材地址。
+- **读取与报障**：错误解析最多读取 8 KiB，超限立即取消，不解析截断 JSON；错误、取消与结束均清理 reader。只展示符合长度和 ASCII 格式且不含当前 Key 的 `X-Request-Id`，异常请求头不进入界面或错误摘要。上传失败继续沿用原有停止语义，不新增重试、不借用其他连接或公共图床，也不提交依赖失败参考素材的生成请求。
+
+定向桌面验收：使用包含本次代码的 Tauri 构建，在设置中准备名称不同、Key 不同的测试连接，选择其中一条的 LibAPI 视频模型并引用一张本地图片。分别核对无「文件」权限、Key 已停用、无效 Key 的错误提示；提示应对应权限、停用和认证，不能互相混淆。若平台返回请求 ID，应能用于官方调用日志定位，提示中不应出现密钥、素材地址或服务端网页正文。上传失败时，该次依赖参考图的生成不应继续提交；用户自行开启正确权限后再主动验收成功上传和生成。网页拒绝、超大／无效 JSON、未知原因和取消由现有测试夹具覆盖，回归源码未执行。
+
+本次定向回归命令（供用户执行，仓库根目录）：`npx vitest run tests/services/modelRequestTransport.test.ts`。仅凭本次文档与源码核对，尚未取得截图对应请求的服务端错误码，不能宣称已经修复该 Key 的实际 403。
+
 ## Tauri 桌面验收
 
 前置：使用包含本批源码的桌面开发版或新构建，准备自己的 LibAPI Key，并确认具备所用模型生成与文件上传权限；生成步骤会按厂商规则计费，由用户主动执行。

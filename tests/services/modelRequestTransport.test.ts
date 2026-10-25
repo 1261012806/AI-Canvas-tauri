@@ -291,6 +291,17 @@ describe('LibAPI 图片原任务与请求合同', () => {
     return { provider: 'general', model: `general/${model.id}`, nodeId: 'libapi-image', prompt: '透明背景的角色立绘' };
   }
 
+  async function failedLibapiUpload(response: Response): Promise<string> {
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应回退其他图床'));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(response);
+    const error = await uploadToRemote('data:image/png;base64,bGliYXBpLWVycm9y', 'libapi-images', 'image')
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://libapi.cc/v1/files', expect.anything());
+    expect(directFetch).not.toHaveBeenCalled();
+    return (error as Error).message;
+  }
+
   it.each([
     ['image', 'image/png', 'png'], ['video', 'video/mp4', 'mp4'], ['audio', 'audio/mpeg', 'mp3'],
   ] as const)('LibAPI 本地 %s 只用当前连接向 /v1/files 上传', async (kind, mime, extension) => {
@@ -339,6 +350,217 @@ describe('LibAPI 图片原任务与请求合同', () => {
       .rejects.toThrow('当前连接的 Key');
 
     expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 401, hint: /认证|鉴权/u },
+    { status: 402, hint: /额度|余额/u },
+    { status: 400, hint: /参数|素材/u },
+    { status: 413, hint: /50\s*MB/u },
+    { status: 429, hint: /限频|容量|配额/u },
+    { status: 500, hint: /服务.*(?:不可用|异常)|暂.*不可用/u },
+    { status: 403, hint: /原因/u },
+  ])('LibAPI 上传按 HTTP $status 给出固定提示，不回显服务端任意正文', async ({ status, hint }) => {
+    configureLibapiImage();
+    const message = await failedLibapiUpload(new Response(JSON.stringify({ error: {
+      code: 'untrusted_server_code', message: 'libapi-image-fixture https://private.example/ref.png <html>private</html>',
+    } }), { status, headers: { 'Content-Type': 'application/json' } }));
+    expect(message).toContain('LibAPI 图片参考上传失败');
+    expect(message).toContain(`HTTP ${status}`);
+    expect(message).toMatch(hint);
+    for (const privateText of ['untrusted_server_code', 'libapi-image-fixture', 'private.example', '<html>']) {
+      expect(message).not.toContain(privateText);
+    }
+    if (status === 400) expect(message).not.toContain('格式不支持');
+    if (status === 403) expect(message).not.toMatch(/Key.*(?:错误|无效)|已确认.*权限/u);
+  });
+
+  it.each([
+    { payload: { error: { code: 'api_key_inactive' } }, hint: /停用|删除|撤销/u },
+    { payload: { error: { type: 'api_key_inactive' } }, hint: /停用|删除|撤销/u },
+    { payload: { error: { code: 'insufficient_permissions' } }, hint: /权限不足/u },
+    { payload: { type: 'insufficient_permissions' }, hint: /权限不足/u },
+    { payload: { error: { code: 'content_policy_violation' } }, hint: /安全.*策略|策略.*拒绝/u },
+    { payload: { code: 'content_policy_violation' }, hint: /安全.*策略|策略.*拒绝/u },
+    { payload: { error: { code: 'model_not_allowed' } }, hint: /模型.*(?:范围|受限)/u },
+    { payload: { error: { type: 'model_not_available_for_api_key' } }, hint: /未.*开放/u },
+    { payload: { error: { code: 'content_policy_violation', type: 'insufficient_permissions' } }, hint: /安全.*策略|策略.*拒绝/u },
+    { payload: { error: { code: 'unknown_future_code', type: 'insufficient_permissions' } }, hint: /权限不足/u },
+  ])('LibAPI 403 只按已确认的 code/type 分类：$payload', async ({ payload, hint }) => {
+    configureLibapiImage();
+    const message = await failedLibapiUpload(new Response(JSON.stringify(payload), {
+      status: 403, headers: { 'Content-Type': 'application/json' },
+    }));
+    expect(message).toContain('HTTP 403');
+    expect(message).toMatch(hint);
+    if (hint.source === '权限不足') expect(message).toContain('文件');
+  });
+
+  it('LibAPI HTML 403 提示非 JSON 或访问策略拒绝，不回显 HTML 或 Key', async () => {
+    configureLibapiImage();
+    const message = await failedLibapiUpload(new Response(
+      '<!doctype html><html>Bearer libapi-image-fixture https://private.example/ref.png</html>',
+      { status: 403, headers: { 'Content-Type': 'text/html' } },
+    ));
+    expect(message).toMatch(/非\s*JSON|网关|访问.*(?:策略|拒绝页面)/u);
+    expect(message).not.toContain('<html>');
+    expect(message).not.toContain('libapi-image-fixture');
+    expect(message).not.toContain('private.example');
+  });
+
+  it('LibAPI 仅显示合法且不含密钥的请求 ID', async () => {
+    configureLibapiImage();
+    const requestId = 'req-20261025_abc:1.2';
+    const message = await failedLibapiUpload(new Response('{}', {
+      status: 403, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    }));
+    expect(message).toContain('请求 ID');
+    expect(message).toContain(requestId);
+  });
+
+  it.each([
+    { requestId: 'request with spaces' },
+    { requestId: 'https://private.example/request' },
+    { requestId: 'https:private.example' },
+    { requestId: 'sk-private-token' },
+    { requestId: 'x'.repeat(97) },
+    { requestId: 'req-libapi-image-fixture' },
+    { requestId: 'req-fixture%2Bprivate', key: 'fixture+private' },
+  ])('LibAPI 不回显不安全请求 ID：$requestId', async ({ requestId, key }) => {
+    configureLibapiImage();
+    if (key) useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      ...state.config.providers, 'libapi-images': { ...state.config.providers['libapi-images'], apiKey: key },
+    } } }));
+    const message = await failedLibapiUpload(new Response('{}', {
+      status: 403, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+    }));
+    expect(message).not.toContain('请求 ID');
+    expect(message).not.toContain(requestId);
+  });
+
+  it('LibAPI 接受恰好 8 KiB 的完整 JSON 错误，但不回显其中的 message', async () => {
+    configureLibapiImage();
+    const prefix = '{"error":{"code":"insufficient_permissions","message":"';
+    const suffix = '"}}';
+    const body = prefix + 'x'.repeat(8192 - prefix.length - suffix.length) + suffix;
+    const message = await failedLibapiUpload(new Response(body, { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    expect(message).toContain('权限不足');
+    expect(message).not.toContain('x'.repeat(32));
+  });
+
+  it('LibAPI 超过 8 KiB 的错误流立即取消，不能把截断 JSON 当成完整原因', async () => {
+    configureLibapiImage();
+    const prefix = JSON.stringify({ error: { code: 'insufficient_permissions' } });
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode(prefix.padEnd(4096)) })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array(4096).fill(32) })
+      .mockResolvedValueOnce({ done: false, value: new Uint8Array([32]) });
+    const cancel = vi.fn(async () => undefined);
+    const response = { ok: false, status: 403, headers: new Headers({ 'Content-Type': 'application/json' }),
+      body: { getReader: () => ({ read, cancel, releaseLock: vi.fn() }) },
+      text: vi.fn(), json: vi.fn(),
+    } as unknown as Response;
+    const message = await failedLibapiUpload(response);
+    expect(message).toMatch(/原因/u);
+    expect(message).not.toContain('权限不足');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(response.text).not.toHaveBeenCalled();
+    expect(response.json).not.toHaveBeenCalled();
+  });
+
+  it.each(['invalid-json', 'missing-reader', 'reader-failure'] as const)(
+    'LibAPI 错误体 %s 时安全降级，不回显底层诊断', async (failure) => {
+      configureLibapiImage();
+      const response = failure === 'invalid-json'
+        ? new Response('{"error":', { status: 403, headers: { 'Content-Type': 'application/json' } })
+        : failure === 'missing-reader'
+          ? new Response(null, { status: 403, headers: { 'Content-Type': 'application/json' } })
+          : { ok: false, status: 403, headers: new Headers({ 'Content-Type': 'application/json' }),
+            body: { getReader: () => ({
+              read: vi.fn().mockRejectedValue(new Error('libapi-image-fixture https://private.example/raw')),
+              cancel: vi.fn(async () => undefined), releaseLock: vi.fn(),
+            }) },
+          } as unknown as Response;
+      const text = failure === 'missing-reader' ? vi.spyOn(response, 'text') : undefined;
+      const message = await failedLibapiUpload(response);
+      expect(message).toMatch(/原因/u);
+      expect(message).not.toContain('libapi-image-fixture');
+      expect(message).not.toContain('private.example');
+      if (text) expect(text).not.toHaveBeenCalled();
+    },
+  );
+
+  it('LibAPI 读取错误体期间取消仍返回 AbortError，不误报 HTTP 分类', async () => {
+    configureLibapiImage();
+    const controller = new AbortController();
+    let markReading: () => void = () => undefined;
+    const reading = new Promise<void>((resolve) => { markReading = resolve; });
+    let finishRead: ((result: ReadableStreamReadResult<Uint8Array>) => void) | undefined;
+    const read = vi.fn(() => {
+      markReading();
+      return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => { finishRead = resolve; });
+    });
+    const cancel = vi.fn(async () => { finishRead?.({ done: true, value: undefined }); });
+    transportMocks.corsSafeFetch.mockResolvedValueOnce({ ok: false, status: 403,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      body: { getReader: () => ({ read, cancel, releaseLock: vi.fn() }) },
+    });
+    const pending = uploadToRemote('data:image/png;base64,bGliYXBpLWFib3J0', 'libapi-images', 'image', controller.signal)
+      .catch((error: unknown) => error);
+    await reading;
+    controller.abort();
+    const error = await pending;
+    expect(error).toMatchObject({ name: 'AbortError' });
+    expect((error as Error).message).not.toContain('HTTP 403');
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
+    // 等底层取消结算，别把上传队列的临时隔离状态带进下个用例。
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('LibAPI 参考图上传被拒绝时不提交依赖它的图片生成请求', async () => {
+    const params = configureLibapiImage();
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应回退其他图床'));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'insufficient_permissions' } }), {
+      status: 403, headers: { 'Content-Type': 'application/json' },
+    }));
+    await expect(generateImagesBatch({ ...params, image_urls: ['data:image/png;base64,bGliYXBpLWdlbmVyYXRl'] }, 1))
+      .rejects.toThrow('文件');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://libapi.cc/v1/files', expect.anything());
+    expect(directFetch).not.toHaveBeenCalled();
+  });
+
+  it('LibAPI 视频参考上传只用选中自定义连接的 Key，拒绝后不进入视频提交', async () => {
+    const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'seedance-2-5')!;
+    useAppStore.getState().saveProviderConfig('libapi-video-personal', {
+      name: '自己的 LibAPI', catalogId: 'libapi', apiKey: 'video-selected-fixture',
+      baseUrl: 'https://libapi.cc/v1', selectedModels: [selected],
+    });
+    const general = useAppStore.getState().config.generalModels!.find((model) => model.providerConfigId === 'libapi-video-personal')!;
+    useAppStore.setState((state) => ({ currentProjectId: 'libapi-video-upload-denied-project',
+      nodes: [{ id: 'libapi-upload-video', type: 'ai-video', position: { x: 0, y: 0 },
+        data: { type: 'ai-video', label: '自己的 LibAPI 视频', status: 'loading' } }],
+      config: { ...state.config, providers: { ...state.config.providers,
+        libapi: { name: '默认 LibAPI', catalogId: 'libapi', apiKey: 'wrong-default-fixture' },
+        apimart: { name: '其他厂商', apiKey: 'wrong-provider-fixture' },
+      } },
+    }));
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应回退其他图床'));
+    const beforeSubmit = vi.fn();
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'insufficient_permissions' } }), {
+      status: 403, headers: { 'Content-Type': 'application/json' },
+    }));
+    await expect(generateVideo({ provider: 'general', model: `general/${general.id}`, nodeId: 'libapi-upload-video',
+      prompt: '依据参考图生成视频', seedanceDuration: 5, seedanceResolution: '480p', seedanceRatio: '16:9',
+      referenceMedia: [{ kind: 'image', role: 'reference', origin: 'connection', url: 'data:image/png;base64,bGliYXBpLXZpZGVv' }],
+    }, undefined, beforeSubmit)).rejects.toThrow('文件');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://libapi.cc/v1/files', expect.objectContaining({
+      method: 'POST', headers: { Authorization: 'Bearer video-selected-fixture' }, body: expect.any(FormData),
+    }));
+    expect(beforeSubmit).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('libapi-video-upload-denied-project')).toEqual([]);
     expect(directFetch).not.toHaveBeenCalled();
   });
 
