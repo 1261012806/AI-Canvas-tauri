@@ -85,10 +85,13 @@ interface ResolvedShotVideo {
 /** 多行文本列；内容列另外复用节点提示词的引用编辑器。 */
 const TEXT_COLUMNS: ShotlistColumnKey[] = ['content', 'dialogue', 'audio', 'note'];
 
-const FIXED_COLUMN_WIDTHS: Partial<Record<ShotlistColumnKey, number>> = { shotNo: 48, duration: 84 };
-const FIXED_TABLE_WIDTH = 26 + 106 + 48 + 84;
+const MEDIA_COLUMN_WIDTH = 96;
+const FIXED_COLUMN_WIDTHS: Partial<Record<ShotlistColumnKey, number>> = {
+  shotNo: 48, frame: MEDIA_COLUMN_WIDTH, video: MEDIA_COLUMN_WIDTH, duration: 84,
+};
+const FIXED_TABLE_WIDTH = 26 + 106 + Object.values(FIXED_COLUMN_WIDTHS).reduce((sum, width) => sum + (width ?? 0), 0);
 const DEFAULT_COLUMN_WIDTHS: Record<ShotlistColumnKey, number> = {
-  shotNo: 48, frame: 84, video: 96, shotSize: 68, camera: 68, content: 240,
+  shotNo: 48, frame: MEDIA_COLUMN_WIDTH, video: MEDIA_COLUMN_WIDTH, shotSize: 68, camera: 68, content: 240,
   dialogue: 240, audio: 96, transition: 68, duration: 84, note: 96,
 };
 const FLEXIBLE_COLUMNS = SHOTLIST_COLUMN_ORDER.filter((column) => FIXED_COLUMN_WIDTHS[column] === undefined);
@@ -245,7 +248,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
   const visibleRatioTotal = flexibleColumns.reduce((sum, column) => sum + (columnRatios[column] ?? 0), 0);
   const getColumnRatio = (column: ShotlistColumnKey) => (columnRatios[column] ?? 0) / visibleRatioTotal * 100;
   const tableColumns = ['26px', ...visibleColumns.map((column) => FIXED_COLUMN_WIDTHS[column] !== undefined
-    ? `${FIXED_COLUMN_WIDTHS[column]}px` : `minmax(${column === 'video' ? '96px' : '0'}, ${getColumnRatio(column)}fr)`), '106px'].join(' ');
+    ? `${FIXED_COLUMN_WIDTHS[column]}px` : `minmax(0, ${getColumnRatio(column)}fr)`), '106px'].join(' ');
   const hasCustomColumnWidths = !!data.shotlistColumnRatios || !!data.shotlistColumnWidths;
 
   useEffect(() => () => frameController.current?.abort(), []);
@@ -894,7 +897,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                     <button type="button" className="ui-btn ui-btn--sm" disabled={!hasCustomColumnWidths}
                       onClick={() => writeColumnRatios(undefined)}>{t('恢复默认')}</button>
                   </div>
-                  <p className="mb-2 text-xs text-canvas-text-muted">{t('镜号固定 48px，时长固定 84px；其他列分配剩余空间。')}</p>
+                  <p className="mb-2 text-xs text-canvas-text-muted">{t('画面与生成视频固定 {width}px，镜号固定 48px，时长固定 84px；其他列分配剩余空间。', { width: MEDIA_COLUMN_WIDTH })}</p>
                   {flexibleColumns.map((column) => (
                     <div key={column} className="mb-1 grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-2 text-xs text-canvas-text"
                       onKeyDown={(event) => event.stopPropagation()}>

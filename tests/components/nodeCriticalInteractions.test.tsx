@@ -381,7 +381,7 @@ async function setupShotlistWidths(
     dataset: { shotColumn: 'content' }, offsetWidth: widths?.content ?? 200,
     getBoundingClientRect: () => ({ width: (widths?.content ?? 200) / 2 }),
   };
-  (table.props.ref as { current: unknown }).current = { offsetWidth: 1264 };
+  (table.props.ref as { current: unknown }).current = { offsetWidth: 1456 };
   const handle = findElement(tree, (element) => element.type === 'button' && element.props['aria-label'] === '内容列宽');
   const pointer = (clientX: number) => ({
     button: 0, pointerId: 7, clientX, preventDefault: vi.fn(), stopPropagation: vi.fn(),
@@ -404,7 +404,7 @@ beforeEach(() => {
 
 function visibleShotRatio(store: TestStore, column: string) {
   const ratios = store.nodes[0].data.shotlistColumnRatios as Record<string, number>;
-  const total = ['frame', 'video', 'shotSize', 'camera', 'content', 'dialogue']
+  const total = ['shotSize', 'camera', 'content', 'dialogue']
     .reduce((sum, key) => sum + ratios[key], 0);
   return ratios[column] / total * 100;
 }
@@ -783,7 +783,7 @@ describe('critical canvas node interactions', () => {
   it('converts legacy widths to percentages, redistributes space and resets the layout', async () => {
     const { tree, table, store } = await setupShotlistWidths({ content: 320, dialogue: 180 });
     const input = findElement(tree, (element) => componentName(element) === 'NumberStepper' && element.props['aria-label'] === '内容列宽');
-    expect(input.props.value).toBeCloseTo(320 / (84 + 96 + 68 + 68 + 320 + 180) * 100);
+    expect(input.props.value).toBeCloseTo(320 / (68 + 68 + 320 + 180) * 100);
     expect(input.props.unit).toBe('%');
     expect((table.props.style as Record<string, string>)['--shotlist-columns']).toContain('minmax(0,');
     expect((table.props.style as Record<string, string>).width).toBeUndefined();
@@ -799,7 +799,7 @@ describe('critical canvas node interactions', () => {
 
   it('supports keyboard resizing with a bounded width', async () => {
     const { handle, store } = await setupShotlistWidths(undefined, [], undefined, {
-      shotlistColumnRatios: { shotNo: 1, frame: 1, video: 1, shotSize: 1, camera: 1, dialogue: 1, content: 94 },
+      shotlistColumnRatios: { shotNo: 1, frame: 1, video: 1, shotSize: 2, camera: 2, dialogue: 2, content: 94 },
     });
     (handle.props.onKeyDown as (event: unknown) => void)({
       key: 'ArrowRight', shiftKey: true, preventDefault: vi.fn(), stopPropagation: vi.fn(),
@@ -807,10 +807,14 @@ describe('critical canvas node interactions', () => {
     expect(visibleShotRatio(store, 'content')).toBeCloseTo(95);
   });
 
-  it('keeps duration fixed at 84px and excludes it from resizing and percentage settings', async () => {
-    const { tree, table } = await setupShotlistWidths({ duration: 500, content: 300 });
-    expect((table.props.style as Record<string, string>)['--shotlist-columns']).toContain('84px 106px');
-    expect(() => findElement(tree, (element) => element.props['aria-label'] === '时长列宽')).toThrow('Element not found');
+  it.each([
+    { column: 'duration', label: '时长', width: 84, layout: '84px 106px' },
+    { column: 'frame', label: '画面', width: 96, layout: '48px 96px 96px' },
+    { column: 'video', label: '生成视频', width: 96, layout: '48px 96px 96px' },
+  ])('keeps $column fixed at $width px and excludes it from resizing and percentage settings', async ({ column, label, layout }) => {
+    const { tree, table } = await setupShotlistWidths({ [column]: 500, content: 300 });
+    expect((table.props.style as Record<string, string>)['--shotlist-columns']).toContain(layout);
+    expect(() => findElement(tree, (element) => element.props['aria-label'] === `${label}列宽`)).toThrow('Element not found');
   });
 
   it('keeps shot numbers fixed at 48px and excludes them from resizing and percentage settings', async () => {
@@ -827,12 +831,12 @@ describe('critical canvas node interactions', () => {
     });
     const stepper = findElement(tree, (element) => componentName(element) === 'NumberStepper'
       && element.props['aria-label'] === '内容列宽');
-    // 旧比例未存生成视频列时，为它补默认权重（96 / 全部弹性列 1056）。
-    expect(stepper.props.value).toBeCloseTo(30 / (95 + 96 / 1056 * 100) * 100);
+    // 画面和生成视频固定后，剩余列只按自己的旧比例重新分配空间。
+    expect(stepper.props.value).toBeCloseTo(30 / (10 + 15 + 30 + 30) * 100);
     (stepper.props.onChange as (value: number) => void)(40);
     expect(visibleShotRatio(store, 'content')).toBeCloseTo(40);
     expect((store.nodes[0].data.shotlistColumnRatios as Record<string, number>).note).toBe(20);
-    expect(visibleShotRatio(store, 'frame') / visibleShotRatio(store, 'camera')).toBeCloseTo(10 / 15);
+    expect(visibleShotRatio(store, 'shotSize') / visibleShotRatio(store, 'camera')).toBeCloseTo(10 / 15);
   });
 
   it('uses the small NumberStepper for fractional durations without losing frame bindings', async () => {
