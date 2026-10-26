@@ -37,6 +37,8 @@ mod director_desk_runtime;
 mod dreamina;
 #[path = "files/transfer.rs"]
 mod file_transfer;
+#[path = "files/object_storage/mod.rs"]
+mod project_asset_storage;
 #[path = "files/github_fallback.rs"]
 mod github_fallback;
 mod app_update;
@@ -1791,6 +1793,7 @@ pub fn run() {
         .manage(blender_runtime::production_blender_job_core())
         .manage(mcp_bridge::McpBridgeState::default())
         .manage(mcp_client::McpClientState::default())
+        .manage(project_asset_storage::ObjectStorageState::default())
         .manage(path_policy::UserStorageRoot::default())
         .manage(billing::BillingStoragePath::default())
         .register_uri_scheme_protocol("director-desk", director_desk_runtime::handle_protocol)
@@ -1851,6 +1854,13 @@ pub fn run() {
             file_transfer::download_file_streamed,
             app_update::download_app_update,
             file_transfer::cancel_file_transfer,
+            project_asset_storage::project_asset_storage_snapshot,
+            project_asset_storage::project_asset_storage_save_connection,
+            project_asset_storage::project_asset_storage_remove_connection,
+            project_asset_storage::project_asset_storage_bind_project,
+            project_asset_storage::project_asset_storage_probe_project,
+            project_asset_storage::project_asset_storage_unbind_project,
+            project_asset_storage::project_asset_storage_cancel,
             director_desk_runtime::director_desk_runtime_status,
             director_desk_runtime::install_director_desk_runtime,
             director_desk_runtime::cancel_director_desk_install,

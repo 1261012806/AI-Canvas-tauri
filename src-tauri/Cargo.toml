@@ -51,6 +51,8 @@ rmcp = { version = "3.1.4", default-features = false, features = ["server", "tra
 tower = { version = "0.5", features = ["limit"] }
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+# Project-scoped S3 only; a custom HTTP connector disables redirects and automatic retries.
+object_store = { version = "=0.12.4", default-features = false, features = ["aws"] }
 base64 = "0.22"
 fs2 = "0.4"
 flate2 = "1"

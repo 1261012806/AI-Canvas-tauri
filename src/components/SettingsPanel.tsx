@@ -1,7 +1,7 @@
 /**
  * SettingsPanel 设置面板 — 模态弹窗，管理常规、文件与应用、API Key、快捷键、ComfyUI 等设置
  */
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import '../styles/settings.css';
 import { useShallow } from 'zustand/react/shallow';
@@ -36,6 +36,8 @@ import type { SettingsTab } from '../store/store.ui';
 import { LOCALES, LOCALE_LABELS, getLocale, useT } from '../i18n';
 import { applyNativePerformanceMode, isNativePerformanceModeSupported } from '../services/nativePerformanceModeService';
 import { applyMainWindowWorkArea } from '../services/mainWindowBoundsService';
+
+const SharedAssetStorageSettings = lazy(() => import('./settings/SharedAssetStorageSettings'));
 
 /** 窗口尺寸预设：每种比例给紧凑 / 标准 / 大屏三档主流尺寸 */
 const WINDOW_ASPECT_OPTIONS: {
@@ -1166,6 +1168,7 @@ export default function SettingsPanel() {
                 <StorageHealthCenter />
                 <DirectorDeskStorageManager />
                 <OnnxModelStorageManager />
+                <Suspense fallback={<p role="status" className="ui-hint">{t('正在加载项目云同步设置…')}</p>}><SharedAssetStorageSettings /></Suspense>
               </>
             )}
 

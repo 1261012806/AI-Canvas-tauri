@@ -1,0 +1,6 @@
+{
+  "identifier": "project-asset-storage",
+  "description": "Project asset object storage is controlled only by the main application window.",
+  "windows": ["main"],
+  "permissions": ["allow-project-asset-storage"]
+}

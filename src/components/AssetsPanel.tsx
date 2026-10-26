@@ -23,6 +23,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
+import { Cloud } from 'lucide-react';
 import { motion, AnimatePresence, MotionConfig, useReducedMotion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
@@ -86,6 +87,7 @@ const AssetImageBatchReverseDialog = lazy(() => import('./assets/AssetImageBatch
 const GlobalCreativeAssetsPanel = lazy(() => import('./assets/GlobalCreativeAssetsPanel'));
 const GlobalCreativeAssetFileDialog = lazy(() => import('./assets/GlobalCreativeAssetsPanel').then((module) => ({ default: module.GlobalCreativeAssetFileDialog })));
 const AssetRepairDialog = lazy(() => import('./assets/AssetRepairDialog'));
+const SharedProjectBindingDialog = lazy(() => import('./assets/SharedProjectBindingDialog'));
 
 /** 仅磁盘真实文件可拖拽（排除节点引用的 node:// / virtual:// 虚拟路径）*/
 function isDraggableEntry(file: AssetFileEntry): boolean {
@@ -208,6 +210,13 @@ export default function AssetsPanel() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const selectedOwnerId = selectedProjectId ?? currentProjectId;
   const viewProjectId = selectedOwnerId ? seriesOwnerId(projects, selectedOwnerId) : null;
+  const currentOwnerId = currentProjectId ? seriesOwnerId(projects, currentProjectId) : null;
+  const sharingProjectReady = useAppStore((state) => state.projectInitialized && state.projectLoadStatus === 'ready');
+  const canManageProjectSharing = sharingProjectReady && !!currentOwnerId && currentOwnerId === viewProjectId
+    && (visibleTab === 'project' || visibleTab === 'drama');
+  const [sharingOwner, setSharingOwner] = useState<{ id: string; name: string } | null>(null);
+  // 视图离开时撤销弹窗，返回旧视图也不能重新打开已取消的操作。
+  if (sharingOwner && (!assetsPanelOpen || !canManageProjectSharing || sharingOwner.id !== currentOwnerId)) setSharingOwner(null);
   const viewProjectIds = useMemo(() => viewProjectId
     ? [viewProjectId, ...listEpisodes(projects, viewProjectId).map((project) => project.id)] : [], [projects, viewProjectId]);
   const [projectFileOwners, setProjectFileOwners] = useState(new Map<string, string>());
@@ -1406,6 +1415,10 @@ export default function AssetsPanel() {
                     {visibleTab === 'drama' ? translate('管理人物、场景和道具简介与绑图') : visibleTab === 'ark' ? translate('管理火山方舟虚拟人像素材') : visibleTab === 'refmods' ? translate('引用 ComfyUI 中的 H3 角色参考包') : isNodeList ? translate('查看当前画布中的全部节点') : translate('拖拽卡片到画布即可添加节点')}
                   </span>}
                 </h2>
+                {canManageProjectSharing && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ml-auto shrink-0"
+                  disabled={!isTauriEnv()} onClick={() => {
+                    if (currentOwnerId) setSharingOwner({ id: currentOwnerId, name: projects.find((project) => project.id === currentOwnerId)?.name ?? '' });
+                  }}><Cloud size={14} aria-hidden="true" />{translate('项目共享')}</button>}
                 {isDrawer ? (
                   <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={handleClose} aria-label={translate("收起资产库")}>
                     {translate("收起")} <kbd>Tab</kbd>
@@ -1828,6 +1841,9 @@ export default function AssetsPanel() {
     if (loadControllerRef.current) void loadFiles().then(loadTags);
   };
   return <>{presentationPanel}
+    {assetsPanelOpen && sharingOwner && canManageProjectSharing && sharingOwner.id === currentOwnerId && <Suspense fallback={null}>
+      <SharedProjectBindingDialog key={sharingOwner.id} localOwnerId={sharingOwner.id} ownerName={sharingOwner.name} onClose={() => setSharingOwner(null)} />
+    </Suspense>}
     {assetsPanelOpen && batchReverse?.scope === previewScope && <Suspense fallback={null}>
       <AssetImageBatchReverseDialog entries={batchReverse.entries} onClose={closeBatchReverse}
         onSaved={(file, tags) => {

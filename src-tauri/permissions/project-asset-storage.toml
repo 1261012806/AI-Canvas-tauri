@@ -1,0 +1,25 @@
+[[permission]]
+identifier = "allow-project-asset-storage"
+description = "Allows main-window project-scoped object storage configuration and explicit capability checks."
+commands.allow = [
+  "project_asset_storage_snapshot",
+  "project_asset_storage_save_connection",
+  "project_asset_storage_remove_connection",
+  "project_asset_storage_bind_project",
+  "project_asset_storage_probe_project",
+  "project_asset_storage_unbind_project",
+  "project_asset_storage_cancel",
+]
+
+[[permission]]
+identifier = "deny-project-asset-storage"
+description = "Denies all project-scoped object storage commands."
+commands.deny = [
+  "project_asset_storage_snapshot",
+  "project_asset_storage_save_connection",
+  "project_asset_storage_remove_connection",
+  "project_asset_storage_bind_project",
+  "project_asset_storage_probe_project",
+  "project_asset_storage_unbind_project",
+  "project_asset_storage_cancel",
+]

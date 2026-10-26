@@ -118,6 +118,15 @@ fn validate_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_renderer_key(key: &str) -> Result<(), SecretError> {
+    validate_key(key).map_err(|_| SecretError::new("invalid_data"))?;
+    // Object storage signing is native-only, including callers that know the connection ID.
+    if key.starts_with("object-storage/") {
+        return Err(SecretError::new("permission_denied"));
+    }
+    Ok(())
+}
+
 /// 凭据目录：`{appData}/secrets`。
 pub fn secret_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base = app
@@ -257,13 +266,33 @@ fn delete_entry(
 }
 
 /// 仅供原生受限连接读取；不通过 Renderer 中转认证明文。
+pub(crate) fn read_internal_secret_sync(app: &AppHandle, key: &str) -> Result<Option<String>, SecretError> {
+    validate_key(key).map_err(|_| SecretError::new("invalid_data"))?;
+    let file = secret_file(app).map_err(|_| SecretError::new("unavailable"))?;
+    let _lock = lock_store(&file, LOCK_TIMEOUT)?;
+    Ok(read_map(&file)?.get(key).cloned())
+}
+
+/// Only native connection catalogs call these while holding their own revision lock.
+pub(crate) fn set_internal_secret_sync(app: &AppHandle, key: &str, value: &str) -> Result<(), SecretError> {
+    validate_key(key).map_err(|_| SecretError::new("invalid_data"))?;
+    if !key.starts_with("object-storage/") || value.is_empty() || value.len() > MAX_SECRET_BYTES {
+        return Err(SecretError::new("invalid_data"));
+    }
+    let file = secret_file(app).map_err(|_| SecretError::new("unavailable"))?;
+    set_entry(&file, key, value, None)
+}
+
+pub(crate) fn delete_internal_secret_sync(app: &AppHandle, key: &str) -> Result<(), SecretError> {
+    validate_key(key).map_err(|_| SecretError::new("invalid_data"))?;
+    if !key.starts_with("object-storage/") { return Err(SecretError::new("invalid_data")); }
+    let file = secret_file(app).map_err(|_| SecretError::new("unavailable"))?;
+    delete_entry(&file, key, None)
+}
+
 pub(crate) async fn read_internal_secret(app: AppHandle, key: String) -> Result<Option<String>, SecretError> {
-    validate_key(&key).map_err(|_| SecretError::new("invalid_data"))?;
-    let file = secret_file(&app).map_err(|_| SecretError::new("unavailable"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let _lock = lock_store(&file, LOCK_TIMEOUT)?;
-        Ok(read_map(&file)?.get(&key).cloned())
-    }).await.map_err(|_| SecretError::new("unknown"))?
+    tauri::async_runtime::spawn_blocking(move || read_internal_secret_sync(&app, &key))
+        .await.map_err(|_| SecretError::new("unknown"))?
 }
 
 /// 写入或覆盖一条凭据。
@@ -276,7 +305,7 @@ pub async fn secret_set(
     expected: Option<SecretExpectation>,
 ) -> Result<(), SecretError> {
     ensure_trusted_caller(&webview).map_err(|_| SecretError::new("permission_denied"))?;
-    validate_key(&key).map_err(|_| SecretError::new("invalid_data"))?;
+    validate_renderer_key(&key)?;
     if value.is_empty() {
         return Err(SecretError::new("invalid_data"));
     }
@@ -299,7 +328,7 @@ pub async fn secret_get(
     fingerprint_only: Option<bool>,
 ) -> Result<Option<String>, SecretError> {
     ensure_trusted_caller(&webview).map_err(|_| SecretError::new("permission_denied"))?;
-    validate_key(&key).map_err(|_| SecretError::new("invalid_data"))?;
+    validate_renderer_key(&key)?;
 
     let file = secret_file(&app).map_err(|_| SecretError::new("unavailable"))?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -325,7 +354,7 @@ pub async fn secret_delete(
     expected: Option<SecretExpectation>,
 ) -> Result<(), SecretError> {
     ensure_trusted_caller(&webview).map_err(|_| SecretError::new("permission_denied"))?;
-    validate_key(&key).map_err(|_| SecretError::new("invalid_data"))?;
+    validate_renderer_key(&key)?;
 
     let file = secret_file(&app).map_err(|_| SecretError::new("unavailable"))?;
     tauri::async_runtime::spawn_blocking(move || delete_entry(&file, &key, expected.as_ref()))
@@ -612,5 +641,13 @@ mod tests {
         assert!(read_map(&file).is_err());
 
         std::fs::remove_dir_all(file.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn object_storage_credentials_are_not_accessible_through_generic_renderer_commands() {
+        assert!(validate_key("object-storage/connection").is_ok());
+        assert!(matches!(validate_renderer_key("object-storage/connection"), Err(error) if error.code == "permission_denied"));
+        assert!(validate_renderer_key("provider/connection").is_ok());
+        assert!(validate_renderer_key("mcp-client/connection").is_ok());
     }
 }
