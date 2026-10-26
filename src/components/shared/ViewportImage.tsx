@@ -29,7 +29,7 @@ export default function ViewportImage({
   unloadDelayMs,
   previewMaxEdge,
   projectId,
-  loading = 'lazy',
+  loading,
   decoding = 'async',
   onLoad,
   onError,
@@ -69,6 +69,8 @@ export default function ViewportImage({
   const currentPreview = preview && preview.source === mountedSrc && preview.edge === previewMaxEdge
     && preview.projectId === projectId && !preview.request.signal.aborted ? preview : undefined;
   const displayedSrc = !mountedSrc ? undefined : wantsPreview ? currentPreview?.src : mountedSrc;
+  // 视口门禁已控制 src，进入预加载区域后立即读取；无观察器时保留浏览器懒加载兜底。
+  const imageLoading = loading ?? (eager || typeof IntersectionObserver !== 'undefined' ? 'eager' : 'lazy');
 
   return (
     <img
@@ -95,7 +97,7 @@ export default function ViewportImage({
         }
         onError?.(event);
       }}
-      loading={loading}
+      loading={imageLoading}
       decoding={decoding}
       data-viewport-image={displayedSrc ? 'loaded' : 'deferred'}
     />

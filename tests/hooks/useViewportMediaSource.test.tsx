@@ -78,9 +78,9 @@ function ViewportMediaHarness(source = 'asset://image.png', options?: ViewportMe
   commitEffects();
   return result;
 }
-function renderImage(source = 'asset://image.png', edge?: number, projectId = 'owner') {
+function renderImage(source = 'asset://image.png', edge?: number, projectId = 'owner', loading?: ImgHTMLAttributes<HTMLImageElement>['loading']) {
   beginRender();
-  const image = ViewportImage({ src: source, alt: 'Preview', previewMaxEdge: edge, projectId }) as ReactElement<ImgHTMLAttributes<HTMLImageElement>>;
+  const image = ViewportImage({ src: source, alt: 'Preview', previewMaxEdge: edge, projectId, loading }) as ReactElement<ImgHTMLAttributes<HTMLImageElement>>;
   hooks.refs[0].current = element;
   commitEffects();
   return image;
@@ -107,6 +107,69 @@ afterEach(() => {
 });
 
 describe('performance viewport media lifecycle', () => {
+  it('preloads against the nearest scroll container even before it overflows', () => {
+    const outer = { parentElement: null } as unknown as Element;
+    const scroller = { parentElement: outer } as unknown as Element;
+    const wrapper = { parentElement: scroller } as unknown as Element;
+    Object.assign(element, { parentElement: wrapper });
+    const computedStyle = vi.fn((target: Element) => target === scroller
+      ? { overflowX: 'hidden', overflowY: 'auto' }
+      : { overflowX: 'hidden', overflowY: 'hidden' });
+    vi.stubGlobal('getComputedStyle', computedStyle);
+
+    expect(ViewportMediaHarness()).toBeUndefined();
+    const observer = latestObserver();
+    expect(observer.options).toMatchObject({ root: scroller, rootMargin: '800px 0px' });
+    expect(computedStyle.mock.calls.map(([target]) => target)).toEqual([wrapper, scroller]);
+    observer.emit(element, true);
+    expect(ViewportMediaHarness()).toBe('asset://image.png');
+  });
+
+  it('pools observers within one scroller and releases other scrollers independently', () => {
+    const left = { parentElement: null } as unknown as Element;
+    const right = { parentElement: null } as unknown as Element;
+    const first = { current: { parentElement: left } as unknown as Element };
+    const second = { current: { parentElement: left } as unknown as Element };
+    const third = { current: { parentElement: right } as unknown as Element };
+    vi.stubGlobal('getComputedStyle', vi.fn(() => ({ overflowX: 'auto', overflowY: 'hidden' })));
+    function PooledViewportHarness(skipThird = false, skipFirst = false, skipSecond = false) {
+      beginRender();
+      useViewportMediaSource('asset://first.png', first, { eager: skipFirst });
+      useViewportMediaSource('asset://second.png', second, { eager: skipSecond });
+      useViewportMediaSource('asset://third.png', third, { eager: skipThird });
+      commitEffects();
+    }
+
+    PooledViewportHarness();
+    expect(FakeObserver.instances).toHaveLength(2);
+    const [leftObserver, rightObserver] = FakeObserver.instances;
+    expect(leftObserver.options?.root).toBe(left);
+    expect(leftObserver.observe.mock.calls).toEqual([[first.current], [second.current]]);
+    expect(rightObserver.options?.root).toBe(right);
+    PooledViewportHarness(true);
+    expect(rightObserver.disconnect).toHaveBeenCalledOnce();
+    expect(leftObserver.disconnect).not.toHaveBeenCalled();
+    PooledViewportHarness(true, true);
+    expect(leftObserver.unobserve).toHaveBeenCalledWith(first.current);
+    expect(leftObserver.disconnect).not.toHaveBeenCalled();
+    PooledViewportHarness(true, true, true);
+    expect(leftObserver.disconnect).toHaveBeenCalledOnce();
+    PooledViewportHarness();
+    expect(FakeObserver.instances).toHaveLength(4);
+    expect(FakeObserver.instances[2].options?.root).toBe(left);
+    expect(FakeObserver.instances[3].options?.root).toBe(right);
+  });
+
+  it('keeps document scrolling on the browser viewport', () => {
+    const body = { parentElement: null } as unknown as Element;
+    Object.assign(element, { parentElement: body, ownerDocument: { body, scrollingElement: body } });
+    const computedStyle = vi.fn();
+    vi.stubGlobal('getComputedStyle', computedStyle);
+    ViewportMediaHarness();
+    expect(latestObserver().options?.root).toBeNull();
+    expect(computedStyle).not.toHaveBeenCalled();
+  });
+
   it('changes the default preload margin while preserving the current source until the unload grace expires', () => {
     expect(ViewportMediaHarness()).toBeUndefined();
     const normal = latestObserver();
@@ -158,6 +221,24 @@ describe('performance viewport media lifecycle', () => {
 });
 
 describe('viewport-gated shared image previews', () => {
+  it('retains native lazy loading when viewport observation is unavailable', () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const image = renderImage();
+    expect(image.props.src).toBe('asset://image.png');
+    expect(image.props.loading).toBe('lazy');
+  });
+
+  it('loads immediately inside the preload boundary without mounting distant image sources', () => {
+    const deferred = renderImage();
+    expect(deferred.props.src).toBeUndefined();
+    expect(deferred.props.loading).toBe('eager');
+    latestObserver().emit(element, true);
+    const preloaded = renderImage();
+    expect(preloaded.props.src).toBe('asset://image.png');
+    expect(preloaded.props.loading).toBe('eager');
+    expect(renderImage(undefined, undefined, 'owner', 'lazy').props.loading).toBe('lazy');
+  });
+
   it('derives only visible images, releases on unload, and never remounts a revoked preview', async () => {
     const first = { src: 'blob:first', release: vi.fn() };
     const next = { src: 'blob:next', release: vi.fn() };

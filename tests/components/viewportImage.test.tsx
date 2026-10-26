@@ -150,6 +150,9 @@ describe('ViewportImage', () => {
     observer.emit(element, true);
     image = renderViewportImage({ src: 'asset://large-image.png', alt: 'preview', unloadDelayMs: 2_000 });
     expect(image.props.src).toBe('asset://large-image.png');
+    image.props.onLoad?.({ currentTarget: { naturalWidth: 1200, naturalHeight: 1800 } } as Parameters<NonNullable<typeof image.props.onLoad>>[0]);
+    image = renderViewportImage({ src: 'asset://large-image.png', alt: 'preview', unloadDelayMs: 2_000 });
+    expect(image.props.style?.aspectRatio).toBe('1200 / 1800');
 
     observer.emit(element, false);
     vi.advanceTimersByTime(1_999);
@@ -158,6 +161,13 @@ describe('ViewportImage', () => {
     vi.advanceTimersByTime(1);
     image = renderViewportImage({ src: 'asset://large-image.png', alt: 'preview', unloadDelayMs: 2_000 });
     expect(image.props.src).toBeUndefined();
+    expect(image.props.style?.aspectRatio).toBe('1200 / 1800');
+
+    observer.emit(element, true);
+    image = renderViewportImage({ src: 'asset://large-image.png', alt: 'preview', unloadDelayMs: 2_000 });
+    expect(image.props.src).toBe('asset://large-image.png');
+    expect(image.props.style?.aspectRatio).toBe('1200 / 1800');
+    expect(renderViewportImage({ src: 'asset://different-image.png', alt: 'new' }).props.style?.aspectRatio).toBeUndefined();
 
     if (typeof cleanup === 'function') cleanup();
     expect(observer.unobserve).toHaveBeenCalledWith(element);
@@ -203,13 +213,13 @@ describe('ViewportImage', () => {
     expect(image.props.src).toBe('asset://large-image.png');
   });
 
-  it('shares viewport observers and skips layout work for offscreen asset cards', () => {
+  it('shares viewport observers while keeping waterfall card layout independent of media unloading', () => {
     expect(viewportImageSource).toContain('useViewportMediaSource');
     expect(viewportMediaHookSource).toContain('const observerPools = new Map');
     expect(viewportMediaHookSource.match(/new IntersectionObserver/g)).toHaveLength(1);
-    expect(panelsCssSource).toMatch(
-      /\.assets-waterfall-card\s*\{(?=[^}]*content-visibility:\s*auto)(?=[^}]*contain-intrinsic-size:\s*auto 260px)[^}]*\}/s,
-    );
+    const waterfallCard = panelsCssSource.match(/\.assets-waterfall-card\s*\{[^}]*\}/s)?.[0];
+    expect(waterfallCard).toBeDefined();
+    expect(waterfallCard).not.toMatch(/content-visibility|contain-intrinsic-size/);
     expect(panelsCssSource).toMatch(
       /\.drama-asset-card\s*\{(?=[^}]*content-visibility:\s*auto)(?=[^}]*contain-intrinsic-size:\s*auto 148px)[^}]*\}/s,
     );
