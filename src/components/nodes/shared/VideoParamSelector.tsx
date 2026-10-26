@@ -4,6 +4,8 @@
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
 import Select from '../../shared/Select';
+import VideoCharacterPicker from './VideoCharacterPicker';
+import type { MentionPickerItem } from '../../shared/MentionPicker';
 import { useT } from '../../../i18n';
 import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -85,6 +87,22 @@ interface CharacterVideoReferenceOption {
   label: string;
   url: string;
   character?: DramaCharacter;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveCharacterVideoReferenceOptions(
+  characters: readonly DramaCharacter[],
+  canvasNodes: AppState['nodes'],
+  scope: 'project' | 'global',
+): CharacterVideoReferenceOption[] {
+  return characters.flatMap((character) => {
+    // 全局角色不从当前项目的同 ID 节点补图；两种范围也不互相覆盖。
+    const resolved = resolveDramaAssetImageRef(character, scope === 'project' ? canvasNodes : []);
+    return resolved ? [{
+      id: `character:${scope === 'global' ? 'global/' : ''}${character.id}`,
+      label: character.name, url: resolved.imageUrl, character,
+    }] : [];
+  });
 }
 
 /** 角色主图和明确指定的主音色作为同一次选择的参考素材保存。 */
@@ -292,10 +310,12 @@ export default function VideoParamSelector({
   // 正在展开的来源选择器：frame = 加参考帧，character = 加参考角色
   const [pickerFor, setPickerFor] = useState<'frame' | 'character' | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const characterTriggerRef = useRef<HTMLButtonElement>(null);
   const generalModels = useAppStore((state) => state.config.generalModels);
   const projectCharacters = useAppStore((state) => state.dramaAssets.characters);
   const globalCharacters = useAppStore((state) => state.globalCharacters);
   const loadGlobalCharacters = useAppStore((state) => state.loadGlobalCharacters);
+  const globalCharactersLoading = useAppStore((state) => state.globalCharactersLoading);
   // selector 必须只返回扁平节点数组：若返回含有新建数组的对象，Zustand 会认为
   // 每次快照都变化，React 19 会进入重复渲染并让节点编辑器错误边界兜底。
   const connectedSourceNodes = useAppStore(useShallow((state) => (
@@ -318,21 +338,16 @@ export default function VideoParamSelector({
   const frameReferences = references.filter((item) => item.kind === 'frame');
   const characterReferences = references.filter((item) => item.kind === 'character' && item.mediaKind !== 'audio');
 
-  const characterOptions = useMemo(() => {
-    const merged = [...projectCharacters, ...globalCharacters.filter(
-      (character) => !projectCharacters.some((item) => item.id === character.id),
-    )];
-    return merged.flatMap((character: DramaCharacter) => {
-      const resolved = resolveDramaAssetImageRef(character, canvasNodes);
-      if (!resolved) return [];
-      return [{
-        id: `character:${character.id}`, label: character.name, url: resolved.imageUrl,
-        character,
-      }];
-    });
-  }, [canvasNodes, globalCharacters, projectCharacters]);
+  const projectCharacterOptions = useMemo(() => (
+    resolveCharacterVideoReferenceOptions(projectCharacters, canvasNodes, 'project')
+  ), [canvasNodes, projectCharacters]);
+  const globalCharacterOptions = useMemo(() => (
+    resolveCharacterVideoReferenceOptions(globalCharacters, [], 'global')
+  ), [globalCharacters]);
+  const characterOptions = [...projectCharacterOptions, ...globalCharacterOptions];
 
   const addReference = (kind: 'frame' | 'character', option: CharacterVideoReferenceOption) => {
+    if (disabled) return;
     setPickerFor(null);
     if (kind === 'character') {
       const characterItems = buildCharacterVideoReferences(option, provider);
@@ -348,6 +363,15 @@ export default function VideoParamSelector({
       sourceNodeId: option.id.startsWith('character:') ? undefined : option.id,
     }]);
   };
+
+  const characterPickerItems = (options: CharacterVideoReferenceOption[]): MentionPickerItem[] => options.map((option) => ({
+    key: option.id, label: option.label, thumbnailUrl: option.url, icon: 'lucide:user-round',
+    title: [option.label, option.character?.identity, option.character?.summary, option.character?.visualNotes,
+      ...(option.character?.aliases ?? [])].filter(Boolean).join(' · '),
+    disabled: references.some((item) => item.id === buildCharacterVideoReferences(option, provider)[0].id),
+    onSelect: () => addReference('character', option),
+  }));
+  const closeCharacterPicker = useCallback(() => setPickerFor(null), []);
 
   const setFrameRole = (itemId: string, role: ImageReferenceRole) => {
     onChangeVideoReferences?.(references.map((item) => {
@@ -790,9 +814,11 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                 <div className="img-rp-section-label rh-video-ref-head mt-2">
                   <span>
                     {t('参考角色')}
-                    <span className="rh-tip" data-tooltip={t('可选：从角色库或连线节点挑选角色形象，作为参考图提交。从角色库添加时，若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。')}>!</span>
+                    <span className="rh-tip" data-tooltip={t('可选：从本项目角色或全局角色中挑选角色形象，作为参考图提交。若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。')}>!</span>
                   </span>
-                  <button type="button" className="rh-video-ref-add" onClick={() => setPickerFor(pickerFor === 'character' ? null : 'character')}>
+                  <button ref={characterTriggerRef} type="button" className="rh-video-ref-add"
+                    aria-haspopup="dialog" aria-expanded={pickerFor === 'character'}
+                    onClick={() => setPickerFor(pickerFor === 'character' ? null : 'character')}>
                     {t(pickerFor === 'character' ? '取消' : '＋ 添加')}
                   </button>
                 </div>
@@ -811,10 +837,11 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                   </div>
                 )}
 
-                {pickerFor && (() => {
-                  // 参考帧只从连线节点挑；角色库只出现在参考角色里
-                  const pickerCharacters = pickerFor === 'character' ? characterOptions : [];
-                  return (
+                {pickerFor === 'character' && !disabled && <VideoCharacterPicker anchorRef={characterTriggerRef}
+                  projectItems={characterPickerItems(projectCharacterOptions)} globalItems={characterPickerItems(globalCharacterOptions)}
+                  globalLoading={globalCharactersLoading} onReloadGlobal={() => { void loadGlobalCharacters(); }}
+                  onClose={closeCharacterPicker} />}
+                {pickerFor === 'frame' && (
                   <div className="rh-video-ref-picker">
                     {connectedImageNodes.length > 0 && <div className="rh-video-ref-picker-label">{t('连线节点')}</div>}
                     {connectedImageNodes.map((node) => {
@@ -824,35 +851,20 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                           key={node.id}
                           type="button"
                           className="rh-video-ref-option"
-                          onClick={() => addReference(pickerFor, { id: node.id, label: data.label || '参考图', url: data.imageUrl as string })}
+                          onClick={() => addReference('frame', { id: node.id, label: data.label || t('参考图'), url: data.imageUrl as string })}
                         >
                           <img className="rh-video-frame-thumb" src={data.imageUrl} alt="" loading="lazy" />
                           <span className="rh-video-ref-name">{data.label || t('参考图')}</span>
                         </button>
                       );
                     })}
-                    {pickerCharacters.length > 0 && <div className="rh-video-ref-picker-label">{t('角色库')}</div>}
-                    {pickerCharacters.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        className="rh-video-ref-option"
-                        onClick={() => addReference(pickerFor, option)}
-                      >
-                        <img className="rh-video-frame-thumb" src={option.url} alt="" loading="lazy" />
-                        <span className="rh-video-ref-name">{option.label}</span>
-                      </button>
-                    ))}
-                    {connectedImageNodes.length === 0 && pickerCharacters.length === 0 && (
+                    {connectedImageNodes.length === 0 && (
                       <div className="rh-video-ref-empty">
-                        {pickerFor === 'frame'
-                          ? t('还没有可选的图片：先给视频节点连一个图片节点')
-                          : t('还没有可选的角色：先连一个图片节点，或在角色库里添加角色')}
+                        {t('还没有可选的图片：先给视频节点连一个图片节点')}
                       </div>
                     )}
                   </div>
-                  );
-                })()}
+                )}
               </div>
             )}
 

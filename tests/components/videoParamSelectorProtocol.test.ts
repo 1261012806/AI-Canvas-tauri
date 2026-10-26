@@ -13,9 +13,12 @@ import VideoParamSelector, {
   resolveEffectiveVideoParameterCapability,
   resolveVideoParameterInputMode,
   selectConnectedVideoSourceNodes,
+  resolveCharacterVideoReferenceOptions,
+  buildCharacterVideoReferences,
 } from '../../src/components/nodes/shared/VideoParamSelector';
 import type { AppState } from '../../src/store/useAppStore';
 import type { VideoModelCapability } from '../../src/types/aiTypes';
+import type { DramaCharacter } from '../../src/types/dramaAssets';
 
 describe('ComfyUI 时长显示与提交一致', () => {
   it.each([
@@ -50,6 +53,7 @@ describe('视频比例保留与时长主题交互', () => {
   let Component: typeof VideoParamSelector;
   let effects: Array<() => unknown>;
   let stateIndex: number;
+  let pickerFor: 'frame' | 'character' | null;
   function renderVideo(props: ComponentProps<typeof VideoParamSelector>) {
     stateIndex = 0;
     effects = [];
@@ -67,9 +71,10 @@ describe('视频比例保留与时长主题交互', () => {
     vi.resetModules();
     state = { config: { theme: 'light', providers: {} }, dramaAssets: { version: 2, characters: [], scenes: [], props: [] },
       globalCharacters: [], loadGlobalCharacters: vi.fn(), nodes: [], edges: [], workflows: [] };
+    pickerFor = null;
     vi.doMock('react', async () => ({
       ...await vi.importActual<typeof import('react')>('react'),
-      useState: () => [stateIndex++ === 0, vi.fn()],
+      useState: () => [stateIndex++ === 0 ? true : pickerFor, vi.fn()],
       useRef: () => ({ current: null }),
       useMemo: <T,>(factory: () => T) => factory(),
       useCallback: <T,>(callback: T) => callback,
@@ -102,6 +107,37 @@ describe('视频比例保留与时长主题交互', () => {
     tree = renderVideo(props);
     expect(tree.find((element) => element.props.className === 'img-pill-btn ui-schema-menu-trigger')?.props.title).toContain(ratio);
     expect(onChangeSeedanceRatio).not.toHaveBeenCalled();
+  });
+
+  it('参考角色只传入项目与全局库候选，连线图片仍只供参考帧选择', () => {
+    const character = { id: 'shared', kind: 'character', name: '主角', imageUrl: 'project.png' } as DramaCharacter;
+    state.dramaAssets.characters = [character];
+    state.globalCharacters = [{ ...character, imageUrl: 'global.png' }];
+    state.nodes = [{ id: 'connected', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: '连线图片', imageUrl: 'connected.png' } }] as AppState['nodes'];
+    state.edges = [{ id: 'edge', source: 'connected', target: 'video' }];
+    const onChangeVideoReferences = vi.fn();
+    const props = { provider: 'comfyui', nodeId: 'video', onChangeVideoReferences };
+    pickerFor = 'character';
+    let tree = renderVideo(props);
+    const picker = tree.find((element) => Array.isArray(element.props.projectItems) && Array.isArray(element.props.globalItems))!;
+    const project = picker.props.projectItems as Array<{ key: string; onSelect: () => void }>;
+    const global = picker.props.globalItems as Array<{ key: string; onSelect: () => void }>;
+    expect(project.map((item) => item.key)).toEqual(['character:shared']);
+    expect(global.map((item) => item.key)).toEqual(['character:global/shared']);
+    expect(tree.some((element) => element.props.className === 'rh-video-ref-picker')).toBe(false);
+    global[0].onSelect();
+    expect(onChangeVideoReferences).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: 'character:global/shared', kind: 'character', url: 'global.png', sourceNodeId: undefined }),
+    ]);
+
+    pickerFor = 'frame';
+    tree = renderVideo(props);
+    const frame = tree.find((element) => element.props.className === 'rh-video-ref-option')!;
+    (frame.props.onClick as () => void)();
+    expect(onChangeVideoReferences).toHaveBeenLastCalledWith([
+      expect.objectContaining({ id: 'connected', kind: 'frame', sourceNodeId: 'connected', url: 'connected.png' }),
+    ]);
   });
 
   it.each(['dreamina', 'comfyui'])('%s 也如实显示自定义比例，不回落首档或写回默认', (provider) => {
@@ -175,6 +211,38 @@ describe('视频比例保留与时长主题交互', () => {
     onChangeSeedanceDuration.mockClear();
     (selected[0].props.onClick as () => void)();
     expect(onChangeSeedanceDuration).toHaveBeenCalledExactlyOnceWith(value);
+  });
+});
+
+describe('视频参考角色的项目与全局身份', () => {
+  it('同 ID 角色分开保存图片与明确的主音色，保留方舟资产绑定', () => {
+    const project = { id: 'shared', kind: 'character', name: '主角', imageUrl: 'project.png',
+      primaryVoiceClipId: 'main', voiceClips: [{ id: 'main', kind: 'timbre', audioUrl: 'project.wav' }] } as DramaCharacter;
+    const global = { ...project, imageUrl: 'global.png',
+      voiceClips: [{ id: 'main', kind: 'timbre', audioUrl: 'global.wav' }],
+      volcengineBinding: { projectName: 'default', imageAssetId: 'remote-image' } } as DramaCharacter;
+    const projectOption = resolveCharacterVideoReferenceOptions([project], [], 'project')[0];
+    const globalOption = resolveCharacterVideoReferenceOptions([global], [], 'global')[0];
+    expect(buildCharacterVideoReferences(projectOption)).toEqual([
+      expect.objectContaining({ id: 'character:shared', url: 'project.png', sourceNodeId: undefined }),
+      expect.objectContaining({ id: 'character:shared:voice', url: 'project.wav', role: 'reference_audio' }),
+    ]);
+    expect(buildCharacterVideoReferences(globalOption, 'volcengine')).toEqual([
+      expect.objectContaining({ id: 'character:global/shared:volcengine:remote-image', url: 'asset://remote-image', previewUrl: 'global.png' }),
+      expect.objectContaining({ id: 'character:global/shared:volcengine:remote-image:voice', url: 'global.wav' }),
+    ]);
+    expect(buildCharacterVideoReferences({ ...globalOption,
+      character: { ...global, primaryVoiceClipId: 'missing' } })).toHaveLength(1);
+  });
+
+  it('全局角色不借用当前项目同名源节点，项目角色仍可使用库内绑定', () => {
+    const character = { id: 'hero', kind: 'character', name: '主角', imageNodeId: 'source' } as DramaCharacter;
+    const nodes = [{ id: 'source', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { type: 'ai-image', label: '当前项目图片', imageUrl: 'current-project.png' } }] as AppState['nodes'];
+    expect(resolveCharacterVideoReferenceOptions([character], nodes, 'global')).toEqual([]);
+    expect(resolveCharacterVideoReferenceOptions([character], nodes, 'project')).toEqual([
+      expect.objectContaining({ id: 'character:hero', url: 'current-project.png' }),
+    ]);
   });
 });
 

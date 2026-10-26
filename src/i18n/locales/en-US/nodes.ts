@@ -289,7 +289,7 @@ const nodes = {
   "参考角色": "Reference character",
   "可选：指定某张图作为视频的首帧或尾帧，其余作为中间参考帧。不添加时按连线顺序交给模型。": "Optional: assign images as first, last or intermediate reference frames. Without assignments, images are sent in connection order.",
   "该模型：{limits}（连线带入的素材一并计数）。": "This model: {limits} (including connected media).",
-  "可选：从角色库或连线节点挑选角色形象，作为参考图提交。从角色库添加时，若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。": "Optional: choose characters from the library or connected nodes as reference images. Library characters also include an available primary voice; you will be warned before generation if the model does not support audio references. Character names in the prompt are linked to their reference images.",
+  "可选：从本项目角色或全局角色中挑选角色形象，作为参考图提交。若角色设置了可用的主音色，也会携带音频作为参考；当前模型不支持参考音频时，生成前会提示。提示词中提到角色名字时，会说明它对应的参考图。": "Optional: choose from this project's characters or global characters as reference images. If a character has an available primary voice, its audio is also included as a reference; you will be warned before generation if the model does not support audio references. Character names in the prompt are linked to their reference images.",
   "含主音色": "Includes primary voice",
   "还没有可选的图片：先给视频节点连一个图片节点": "No images available. Connect an image node to the video node first.",
   "还没有可选的角色：先连一个图片节点，或在角色库里添加角色": "No characters available. Connect an image node or add a character to the library.",
