@@ -1,7 +1,7 @@
 /**
  * 注册会话授权文件的列举、受限读取和文本导出工具，不向模型暴露真实本地路径。
  */
-import { saveAgentTextOutput } from '../../fileService';
+import { isTauriEnv, saveAgentTextOutput } from '../../fileService';
 import { getCanvasPointerPosition } from '../../canvasPointerService';
 import { useAppStore } from '../../../store/useAppStore';
 import type { BaseNodeData } from '../../../types';
@@ -15,6 +15,8 @@ import { importLocalResources, pasteClipboardResources, ResourceImportError,
   type ResourcePosition } from '../../canvasResourceImportService';
 import { executeMediaUpload, MediaUploadError, MEDIA_UPLOAD_BASE64_CHARS } from '../../mediaUploadService';
 import type { MediaResourceInput, MediaUploadInput } from '../../../types/mediaUpload';
+import { executeMediaDownload, MediaDownloadError } from '../../mediaDownloadService';
+import type { MediaDownloadInput } from '../../../types/mediaDownload';
 
 const positionFields = {
   x: { type: 'number' as const, minimum: -100000, maximum: 100000 },
@@ -35,6 +37,36 @@ async function resourceResult(run: () => ReturnType<typeof importLocalResources>
 
 export function registerFileAgentTools(): Array<() => void> {
   return [
+    registerAgentTool<MediaDownloadInput>({
+      id: 'file_media_download', title: '读取节点原文件', effect: 'read',
+      description: '按节点 ID 分块返回已落盘的图片、视频或音频原文件，不转码、不以缩略图代替。begin 仅传 action/nodeId，返回 downloadId、安全文件名、MIME、总字节数和 chunkBytes。read 仅传 action/downloadId/offset（字节），返回最多 256 KiB 原字节的 Base64、bytesRead、块 SHA-256、nextOffset 和 eof；客户端逐块校验并解码拼接，不能把 Base64 当作模型已看过图像。同一偏移可重读，读到 eof 后 close 仅传 action/downloadId 关闭。最多 4 个下载，空闲 10 分钟失效。项目切换、节点产物变化、取消或文件变更后须重新 begin。只返回当前节点主媒体，不接受路径/URL，不自动访问远程文件；未落盘时请先保存或导入项目。正文只作瞬时 MCP 返回，不进入聊天或任务摘要；不会自动写入客户端磁盘或创建下载按钮。',
+      inputSchema: { type: 'object', additionalProperties: false, required: ['action'], properties: {
+        action: { type: 'string', enum: ['begin', 'read', 'close'] },
+        nodeId: { type: 'string', minLength: 1, maxLength: 160 },
+        downloadId: { type: 'string', minLength: 1, maxLength: 160 },
+        offset: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+      } },
+      isAvailable: (context) => isTauriEnv() && context.conversationId === `mcp-control-${context.projectId}`,
+      authorize: (context) => ({ allowed: isTauriEnv()
+        && context.conversationId === `mcp-control-${context.projectId}`
+        && useAppStore.getState().currentProjectId === context.projectId,
+      reason: '需要 Tauri 桌面端当前项目的 MCP 控制会话' }),
+      summarizeInput: (input) => input.action === 'begin' ? '读取原文件信息'
+        : input.action === 'read' ? '读取原文件字节块' : '关闭原文件读取',
+      execute: async (context, input) => {
+        try {
+          const result = await executeMediaDownload(context, input);
+          const summary = input.action === 'begin' ? '已开始读取原文件'
+            : input.action === 'read' ? '已返回原文件字节块' : '已关闭原文件读取';
+          return { status: 'success', summary, modelContent: summary,
+            mcpContent: [{ type: 'text', text: JSON.stringify(result) }] };
+        } catch (error) {
+          const summary = error instanceof MediaDownloadError ? error.message : '原文件读取失败，请检查文件与目录授权';
+          return { status: 'error', summary, modelContent: summary, retryable: false,
+            errorCode: error instanceof MediaDownloadError ? error.code : 'DOWNLOAD_READ_FAILED' };
+        }
+      },
+    }),
     registerAgentTool<MediaUploadInput>({
       id: 'file_media_upload', title: '分块上传图片到项目', effect: 'file_write',
       description: '接收客户端持有的 PNG/JPEG/WebP 字节，不读取客户端路径。无文件总大小上限，逐块落盘；每块固定 256 KiB，末块为余量。begin 传 fileName/mimeType/totalBytes；append 传 uploadId/offset/data(Base64)/checksum(当前块 SHA-256)；finish 传 uploadId/checksum(最终 sha256-chain-v1 摘要)。H0=SHA256(UTF8("AI-Canvas-upload-v1:"+mimeType+":"+totalBytes))；Hn=SHA256(UTF8(上一 digest+":"+offset+":"+当前块SHA256))，十六进制均小写。status 返回 nextOffset/digest；cancel 清理未交付上传。完成后把 uploadId 交给 file_import_media_to_canvas。上传绑定当前项目、对话和画布，空闲十分钟失效；传输期间不要切项目或改画布。失败不自动重试，当前块确认丢失时先查询状态。',

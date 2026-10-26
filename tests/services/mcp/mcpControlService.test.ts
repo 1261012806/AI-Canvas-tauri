@@ -20,6 +20,7 @@ import type {
 } from '../../../src/types/agentPackage';
 import * as directorRuntime from '../../../src/services/directorRuntimeRegistry';
 import * as mediaUploads from '../../../src/services/mediaUploadService';
+import * as mediaDownloads from '../../../src/services/mediaDownloadService';
 import * as directorScenes from '../../../src/services/directorSceneService';
 import { createDefaultDirectorScene } from '../../../src/services/directorBlenderRuntimeService';
 import { buildDirectorSceneRelativePath } from '../../../src/services/directorSceneSchema';
@@ -888,6 +889,37 @@ describe('MCP control service', () => {
     });
     expect(JSON.stringify(useAppStore.getState().messages)).not.toContain('YWJj');
     expect(JSON.stringify(useAppStore.getState().agentTasks)).not.toContain('YWJj');
+  });
+
+  it.each(['direct', 'envelope'])('returns original file bytes only through transient MCP content: %s', async (route) => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const data = Buffer.from('original-media-payload'.repeat(2000)).toString('base64');
+    const chunk = { downloadId: 'private-download-handle', nodeId: 'media-node', state: 'open' as const,
+      fileName: '原始视频.mp4', mimeType: 'video/mp4', totalBytes: 44_000, chunkBytes: 262144,
+      expiresAt: 1_000_000, offset: 0, bytesRead: 44_000, nextOffset: 44_000, eof: true,
+      encoding: 'base64' as const, data, checksumAlgorithm: 'sha256' as const, checksum: 'a'.repeat(64) };
+    const execute = vi.spyOn(mediaDownloads, 'executeMediaDownload').mockResolvedValue(chunk);
+    try {
+      expect((await listMcpTools('full')).some((tool) => tool.name === 'file_media_download')).toBe(true);
+      const ordinaryTools = buildAssistantFunctionTools({ taskId: 'ordinary', projectId: 'project-mcp',
+        conversationId: 'conv-ordinary', mode: 'autonomous' });
+      expect(ordinaryTools.some((tool) => tool.function.name === 'file_media_download')).toBe(false);
+      const args = { action: 'read', downloadId: chunk.downloadId, offset: 0 };
+      const result = await mcpCall(route === 'direct' ? 'file_media_download' : 'tools_call',
+        route === 'direct' ? args : { name: 'file_media_download', arguments: args }, `download-${route}`);
+      expect(execute).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-mcp',
+        conversationId: 'mcp-control-project-mcp' }), args);
+      expect(result).toMatchObject({ isError: false, summary: '已返回原文件字节块' });
+      expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(chunk) }]);
+      const persisted = JSON.stringify([useAppStore.getState().messages, useAppStore.getState().agentTasks]);
+      expect(persisted).not.toContain(data);
+      expect(persisted).not.toContain(chunk.downloadId);
+      expect(persisted).not.toContain(chunk.checksum);
+      execute.mockClear();
+      const invalid = await mcpCall('file_media_download', { action: 'begin', nodeId: 'media-node', path: '/not-a-node-file' });
+      expect(invalid.isError).toBe(true);
+      expect(execute).not.toHaveBeenCalled();
+    } finally { execute.mockRestore(); vi.unstubAllGlobals(); }
   });
 
   it('returns configured built-in, custom and workflow models without private config', async () => {

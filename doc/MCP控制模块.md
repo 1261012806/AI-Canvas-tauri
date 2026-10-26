@@ -96,6 +96,7 @@ MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 
 | 能力 | 工具与边界 |
 |---|---|
 | 图片上传 | `file_media_upload`（`file_write`）按 begin/append/finish/status/cancel 管理 PNG/JPEG/WebP；固定 256 KiB 分块与链式摘要，完成后由批量导入领取。仅 MCP 会话可用。 |
+| 原文件返回 | `file_media_download`（`read`）按当前节点 begin/read/close，返回已落盘主媒体的原字节，不转码；每块最多 256 KiB，客户端核对块 SHA-256、解码 Base64 并拼接保存。仅 Tauri 当前项目 MCP 会话可用。 |
 | 批量导入 | `file_import_media_to_canvas`（`canvas_write`）一次 1–20 项；path 位于当前项目/剧集共享素材目录时只建画布引用，不重复复制，已授权外部文件仍复制入项目；也可领取同会话 uploadId。准备成功后批量写入一次历史。 |
 | 系统内容与截图 | `canvas_paste_external` 和 `ui_capture_to_canvas` 写入画布；只查看主窗口图像仍用只读 `ui_capture_window`。 |
 | 剪辑工程 | `video_editor_list` / `video_editor_get` 读取；`video_editor_create` / `video_editor_update` 为 `file_write`，更新携带 expectedVersion，tracks 完整替换。仅当前项目的 MCP 会话可用。 |
@@ -107,6 +108,24 @@ MCP 设置中的「工具发现方式」默认按需加载，对应可选配置 
 剪辑控制当前最多 300 秒、8 轨、120 片段、1080p 等像素面积、60 fps。人工剪辑窗口打开时拒绝后台修改/导出；导出期间复核工程、素材和画布，任务状态仅在应用会话内保留。工具受理不等于文件已完成；抽帧也不等于声音和剪辑质量验收。
 
 用户步骤见[说明书：MCP](../site/manual.html#mcp-discovery)。业务实现与实机验收分别见[图片上传计划](./plans/2026-09-11-mcp图片上传导入.md)、[视频制作计划](./plans/2026-09-11-mcp-video-production.md)及[文件与存储](./文件与存储模块.md#mcp-资源导入)。
+
+## 节点原文件返回
+
+`file_media_download` 按 `nodeId` 读取当前画布节点已落盘的图片、视频或音频主文件；不是窗口截图，不读取缩略图，不自动下载远程 URL，不接受调用方提交的路径或保存位置。主产物仍为远程、内嵌数据或 blob 时，即使残留 filePath 也拒绝；仅有缩略图且原件身份不明确时同样拒绝，提示先保存或导入。普通媒体格式沿用文件服务的分类与 MIME 识别，不支持的格式明确报错。
+
+通过 `tools_search({"query":"file_media_download","detail":"schema"})` 取得合同后，在按需模式依次把以下对象作为 `tools_call` 参数；完整列表模式也可直接调用原工具名：
+
+```json
+{"name":"file_media_download","arguments":{"action":"begin","nodeId":"待导出的节点 ID"}}
+{"name":"file_media_download","arguments":{"action":"read","downloadId":"begin 返回的 ID","offset":0}}
+{"name":"file_media_download","arguments":{"action":"close","downloadId":"begin 返回的 ID"}}
+```
+
+begin 返回安全文件名、MIME、总字节数、块上限与失效时间；每次 read 按实际字节偏移返回 `data`（Base64）、`bytesRead`、块 `checksum`（SHA-256）、`nextOffset` 和 `eof`。客户端先校验解码后字节的摘要，再按偏移写入自己控制的文件，继续到 eof=true 后 close。同一偏移可重读，末块不会立刻销毁下载 ID；不自动写入客户端磁盘，也不保证聊天客户端显示附件下载按钮。Base64 原文件不能直接当作模型已看过的图像；视觉预览仍需对应图像通道。
+
+最多保留 4 个活动或关闭中的下载，空闲 10 分钟失效。ID、路径与句柄仅存宿主内存，绑定项目、对话、节点主媒体及存储根；切换项目、节点删除/产物替换、存储根变化、取消或读取失败会回收句柄，旧结果不能回到新项目。每块前后复核文件大小与修改时间；这些元数据检查不是抵抗同大小、同时间戳篡改的完整快照保证。原文件正文只通过 `mcpContent` 瞬时返回，消息/任务摘要不保存原字节、下载 ID、文件路径或来源 URL。close 只关闭读取，不删除或修改原文件。
+
+入口为 `chat/tools/fileTools.ts` → `mediaDownloadService.ts` → `fileService.ts` / `fs/mediaRead.ts`。复用现有文件插件权限与私有目录拒绝；未新增依赖、Rust command、下载 HTTP 端点、数据库或权限。类型与执行语义见[原文件返回方案](./plans/2026-10-26-mcp-original-media-download.md)。已实现并补充文件读取、会话及 MCP 透传回归用例；本次未运行测试，待用户在 Tauri 中分块取回 PNG/JPEG、MP4 和音频并与原文件比较完整 SHA-256，再验收取消、项目切换、文件变化、越界偏移、close 与失效。用户可在仓库根目录执行 `npx vitest run tests/services/fs/mediaRead.test.ts tests/services/mediaDownloadService.test.ts tests/services/mcp/mcpControlService.test.ts`。
 
 ## 验证与资料
 
