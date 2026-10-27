@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
 import { useViewportMediaSource } from '../../hooks/useViewportMediaSource';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 import { acquireCanvasImagePreview, type CanvasImagePreviewLease } from '../nodes/shared/image/canvasImagePreviewCache';
 
 interface ViewportImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'src'> {
@@ -68,7 +69,10 @@ export default function ViewportImage({
 
   const currentPreview = preview && preview.source === mountedSrc && preview.edge === previewMaxEdge
     && preview.projectId === projectId && !preview.request.signal.aborted ? preview : undefined;
-  const displayedSrc = !mountedSrc ? undefined : wantsPreview ? currentPreview?.src : mountedSrc;
+  const originalSrc = useComfyImageSource(wantsPreview ? undefined : mountedSrc, () => {
+    imageRef.current?.dispatchEvent(new Event('error'));
+  });
+  const displayedSrc = !mountedSrc ? undefined : wantsPreview ? currentPreview?.src : originalSrc;
   // 视口门禁已控制 src，进入预加载区域后立即读取；无观察器时保留浏览器懒加载兜底。
   const imageLoading = loading ?? (eager || typeof IntersectionObserver !== 'undefined' ? 'eager' : 'lazy');
 

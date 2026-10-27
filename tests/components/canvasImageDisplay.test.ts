@@ -3,6 +3,8 @@ import { createCanvasDisplayScheduler } from '../../src/services/canvasDisplaySc
 import { canvasImageTier, createCanvasImageDisplay, prepareCanvasImage, type DisplayImageLease } from '../../src/components/nodes/shared/image/canvasImageDisplay';
 
 const { acquire, cached } = vi.hoisted(() => ({ acquire: vi.fn(), cached: vi.fn() }));
+const native = vi.hoisted(() => ({ matches: vi.fn(() => false), acquire: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: native.matches, acquireComfyImageSource: native.acquire }));
 vi.mock('../../src/components/nodes/shared/image/canvasImagePreviewCache', () => ({
   acquireCanvasImagePreview: acquire, acquireCachedCanvasImagePreview: cached,
 }));
@@ -33,7 +35,7 @@ function fixture() {
   };
   return { queue, queueForImage, prepare, publish, display, update, frames, tick, settle };
 }
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); cached.mockReset().mockReturnValue(null); });
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); cached.mockReset().mockReturnValue(null); native.matches.mockReset().mockReturnValue(false); native.acquire.mockReset(); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); acquire.mockReset(); });
 
 describe('canvas image preparation', () => {
@@ -90,6 +92,21 @@ describe('canvas image preparation', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await rejected; expect(acquire).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it('prepares a Comfy original through a blob lease and releases failed decodes without a raw URL retry', async () => {
+    const pending = images();
+    native.matches.mockReturnValue(true);
+    const lease = { src: 'blob:comfy-original', release: vi.fn() };
+    native.acquire.mockResolvedValue(lease);
+    const source = 'http://127.0.0.1:8188/view?filename=result.png';
+    const result = prepareCanvasImage(source, 0, new AbortController().signal);
+    const rejected = expect(result).rejects.toThrow('Image preparation failed');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending[0].src).toBe(lease.src);
+    pending[0].onerror?.(); await rejected;
+    expect(lease.release).toHaveBeenCalledOnce();
+    expect(pending).toHaveLength(1);
+    expect(acquire).not.toHaveBeenCalled();
   });
 });
 

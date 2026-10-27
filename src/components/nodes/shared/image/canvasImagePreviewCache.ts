@@ -3,6 +3,7 @@ import { prepareProjectThumbnail } from '../../../../services/fs/thumbnailCache'
 import { assertEditorSourceBudget } from './imageResourceBudget';
 import { getPerformanceModeBudget, subscribePerformanceMode } from '../../../../services/performanceModeRuntime';
 import { isTauriAssetUrl } from '../../../../utils/mediaUrl';
+import { readNativeComfyImageBlob, shouldLoadNativeComfyImage } from '../../../../services/comfyImageSource';
 
 const MAX_ENCODED_BYTES = 32 * 1024 * 1024;
 const INTERACTION_POLL_MS = 80;
@@ -142,6 +143,7 @@ async function isStaticRaster(blob: Blob): Promise<boolean> {
 }
 
 async function readBoundedBlob(source: string, signal: AbortSignal): Promise<Blob> {
+  if (shouldLoadNativeComfyImage(source)) return readNativeComfyImageBlob(source, signal);
   if (isTauriAssetUrl(source)) {
     // asset 的非 Range GET 会在原生侧整文件读取，先用 HEAD 挡住明显超限的本地文件。
     const head = await fetch(source, { method: 'HEAD', signal });
@@ -208,6 +210,7 @@ async function derive(entry: Entry): Promise<Preview | null> {
       return { src: URL.createObjectURL(blob), rgbaBytes: width * height * 4 };
     }
     stage = 'read-source';
+    const nativeComfyImage = shouldLoadNativeComfyImage(entry.source);
     const blob = await readBoundedBlob(entry.source, signal);
     stage = 'dimensions';
     const dimensions = await readRasterImageDimensions(blob);
@@ -216,7 +219,9 @@ async function derive(entry: Entry): Promise<Preview | null> {
     const edge = Math.max(dimensions.width, dimensions.height);
     // 小图和动图也先检查编码大小及像素预算；只有确认安全后才允许直接显示。
     if (edge <= entry.maxEdge || !await isStaticRaster(blob)) {
-      return { src: entry.source, rgbaBytes: estimate.bytes };
+      // Comfy 原图 Blob 由缓存持有，编码字节也必须占用闲置内存预算。
+      return { src: nativeComfyImage ? URL.createObjectURL(blob) : entry.source,
+        rgbaBytes: estimate.bytes + (nativeComfyImage ? blob.size : 0) };
     }
     const width = Math.max(1, Math.round(dimensions.width * entry.maxEdge / edge));
     const height = Math.max(1, Math.round(dimensions.height * entry.maxEdge / edge));

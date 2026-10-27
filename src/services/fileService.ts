@@ -8,6 +8,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { isLocalMediaUrl, isRemoteMediaUrl, localMediaUrlToPath } from '../utils/mediaUrl';
+import { shouldLoadNativeComfyImage } from './comfyImageSource';
 import { downloadGithubBytes, githubMirrorUrl } from './githubDownloadService';
 import { identifyAsset, getRelativeAssetPath } from './fs/assetIndex';
 import { readAssetTextFile } from './fs/assetTextFiles';
@@ -565,10 +566,15 @@ export async function fetchImageForCrop(imageUrl: string): Promise<string> {
   }
   // 远程 URL：通过 Rust 端 reqwest 原生 HTTP 下载（WebView CORS 不适用）
   if (isTauriEnv() && isRemoteMediaUrl(imageUrl)) {
+    const requireNativeSource = shouldLoadNativeComfyImage(imageUrl);
     try {
       const dataUrl: string = await invoke('fetch_image_data_url', { url: imageUrl });
       return dataUrl;
     } catch (err) {
+      if (requireNativeSource) {
+        // 原生异常可能含地址或凭据；用固定网络异常跨过界面边界，不保留原始 cause。
+        throw new DOMException('ComfyUI 图片读取失败，请检查服务连接或访问权限后重试', 'NetworkError');
+      }
       console.warn('[fileService] fetchImageForCrop via Rust failed, fallback to original URL:', err);
       return imageUrl;
     }

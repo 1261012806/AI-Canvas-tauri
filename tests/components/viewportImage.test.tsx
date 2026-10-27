@@ -9,6 +9,9 @@ const hooks = vi.hoisted(() => ({
   refCursor: 0,
   effects: [] as Array<() => void | (() => void)>,
 }));
+const comfyImageSource = vi.hoisted(() => vi.fn((source?: string) => source));
+
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: comfyImageSource }));
 
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react');
@@ -98,7 +101,7 @@ class FakeIntersectionObserver {
 }
 
 function renderViewportImage(
-  props: ImgHTMLAttributes<HTMLImageElement> & { src?: string; eager?: boolean; unloadDelayMs?: number },
+  props: ImgHTMLAttributes<HTMLImageElement> & { src?: string; eager?: boolean; unloadDelayMs?: number; previewMaxEdge?: number },
 ): ReactElement<ImgHTMLAttributes<HTMLImageElement>> {
   hooks.stateCursor = 0;
   hooks.refCursor = 0;
@@ -127,6 +130,7 @@ describe('ViewportImage', () => {
     hooks.refCursor = 0;
     hooks.effects = [];
     FakeIntersectionObserver.instances = [];
+    comfyImageSource.mockReset().mockImplementation((source) => source);
   });
 
   it('mounts near-viewport sources, unloads them after a delay, and releases the observer', () => {
@@ -189,6 +193,29 @@ describe('ViewportImage', () => {
 
     expect(image.props.src).toBe('asset://selected.png');
     expect(FakeIntersectionObserver.instances).toHaveLength(0);
+  });
+
+  it('only prepares native ComfyUI sources after the viewport gate opens', () => {
+    installFakeObserver();
+    const element = {} as Element;
+    const source = 'http://127.0.0.1:8188/view?filename=output.png&type=output';
+    comfyImageSource.mockImplementation((value) => value ? 'blob:comfy-preview' : undefined);
+    let image = renderViewportImage({ src: source });
+    expect(comfyImageSource.mock.lastCall?.[0]).toBeUndefined();
+    expect(image.props.src).toBeUndefined();
+    hooks.refs[0].current = element;
+    const cleanup = hooks.effects[0]?.();
+    FakeIntersectionObserver.instances[0].emit(element, true);
+    image = renderViewportImage({ src: source });
+    expect(comfyImageSource.mock.lastCall?.[0]).toBe(source);
+    expect(image.props.src).toBe('blob:comfy-preview');
+    if (typeof cleanup === 'function') cleanup();
+  });
+
+  it('does not prepare a second full source when a thumbnail was requested', () => {
+    const image = renderViewportImage({ src: 'http://127.0.0.1:8188/view?filename=output.png', previewMaxEdge: 256 });
+    expect(comfyImageSource.mock.lastCall?.[0]).toBeUndefined();
+    expect(image.props.src).toBeUndefined();
   });
 
   it('clears a pending unload timer when the component unmounts', () => {

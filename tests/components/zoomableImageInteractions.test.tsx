@@ -2,6 +2,9 @@ import { Children, isValidElement, type ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const gesture = vi.hoisted(() => ({ scale: 1, zoomTo: vi.fn(), reset: vi.fn() }));
+const comfyImageSource = vi.hoisted(() => vi.fn((source?: string, _onError?: () => void) => source));
+
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: comfyImageSource }));
 
 vi.mock('../../src/i18n', async (original) => {
   const actual = await original<typeof import('../../src/i18n')>();
@@ -27,6 +30,7 @@ import ZoomableImage from '../../src/components/shared/ZoomableImage';
 type Element = ReactElement<{
   children?: React.ReactNode;
   className?: string;
+  src?: string;
   'aria-label'?: string;
   'data-tauri-drag-region'?: string;
   style?: { transform?: string; transition?: string; willChange?: string };
@@ -57,9 +61,19 @@ function dispatch(path: Element[], handler: 'onClick' | 'onDoubleClick' | 'onMou
 beforeEach(() => {
   gesture.scale = 1;
   vi.clearAllMocks();
+  comfyImageSource.mockImplementation((source) => source);
 });
 
 describe('fullscreen image zoom controls', () => {
+  it('uses the native display source without changing the original reference', () => {
+    const source = 'http://127.0.0.1:8188/view?filename=output.png&type=output';
+    const onError = vi.fn();
+    comfyImageSource.mockReturnValue('blob:comfy-original');
+    const image = children(children(ZoomableImage({ src: source, onError }))[0])[0];
+    expect(comfyImageSource).toHaveBeenCalledWith(source, onError);
+    expect(image.props.src).toBe('blob:comfy-original');
+  });
+
   it('静止图片不保持变换图层，也不对大图追加过渡或 will-change', () => {
     const image = children(children(ZoomableImage({ src: 'asset://preview.png' }))[0])[0];
     expect(image.props.style?.transform).toBe('none');

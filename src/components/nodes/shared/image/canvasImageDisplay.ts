@@ -1,5 +1,6 @@
 import { acquireCachedCanvasImagePreview, acquireCanvasImagePreview } from './canvasImagePreviewCache';
 import { getPerformanceModeBudget } from '../../../../services/performanceModeRuntime';
+import { acquireComfyImageSource, shouldLoadNativeComfyImage } from '../../../../services/comfyImageSource';
 
 export interface DisplayQueue {
   enqueue: (key: object, commit: () => void, delayMs?: number) => () => void;
@@ -49,7 +50,8 @@ function decodeImage(src: string, signal: AbortSignal) {
 }
 
 export async function prepareCanvasImage(source: string, edge: number, signal: AbortSignal, projectId?: string | null): Promise<DisplayImageLease> {
-  const lease = edge > 0 ? await acquireCanvasImagePreview(source, edge, signal, projectId) : null;
+  const lease = edge > 0 ? await acquireCanvasImagePreview(source, edge, signal, projectId)
+    : shouldLoadNativeComfyImage(source) ? await acquireComfyImageSource(source, signal) : null;
   try {
     signal.throwIfAborted();
     if (edge > 0 && !lease) throw new Error('图片预览暂不可用，请重试或主动打开原图');

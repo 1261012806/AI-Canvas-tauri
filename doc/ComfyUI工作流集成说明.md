@@ -3,7 +3,7 @@
 官方安装包、扩展目录和 Git 获取的超时加速见 [共用专项](./plans/2026-10-18-github-download-fallback.md)。Git 只重试 fetch，仓库 origin 保留官方地址；新扩展初始化停用目录后获取默认 HEAD，checkout 只执行一次，不自动安装依赖或运行 install.py。
 
 > 本文档描述 AI Canvas 如何导入、管理和执行 ComfyUI 工作流，包括 IO 节点识别、内容与参数注入规则、结果取回和编辑回写链路。
-> 最后更新：2026-10-22。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)、[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)和[独立管理窗口](./plans/2026-10-11-comfyui-management.md)。
+> 最后更新：2026-10-27。范围、验证与回滚见[可靠性修复](./plans/2026-09-08-comfyui-reliability.md)、[助手多服务器支持](./plans/2026-09-08-comfyui-assistant-servers.md)、[打开与编辑体验](./plans/2026-09-08-comfyui-editor-experience.md)和[独立管理窗口](./plans/2026-10-11-comfyui-management.md)。
 
 ## 1. 概览
 
@@ -25,6 +25,8 @@ ComfyUI 在 AI Canvas 里是一种 **provider**：工作流导入后会出现在
 `ai-text` 分类只能导入和归类，**没有执行路径** —— 文本生成不会走 ComfyUI。
 
 ## 2. 配置与连接
+
+桌面端的 ComfyUI 图片展示复用原生 HTTP：画布原图／缩略图、历史记录及放大查看遇到默认本机或已配置服务器的精确 `/view?filename=...` 时，先读取有界图片内容，再显示本窗口临时 Blob 地址，避免 WebView 跨站来源触发服务端 403；失败不回落裸链接，临时地址不保存到项目。裁剪同样阻止已识别 ComfyUI 来源的原生失败回退。正式生成仍先保存项目文件并显示本地 asset。实现入口与 15 秒／32 MiB 读取边界、未配置远程历史来源和待用户执行的验收见[可靠性计划](./plans/2026-09-08-comfyui-reliability.md#2026-10-27-图片取件-403-与预览通道)。本阶段未运行测试，待用户验收。
 
 设置 → ComfyUI 配置连接与本地安装目录：
 

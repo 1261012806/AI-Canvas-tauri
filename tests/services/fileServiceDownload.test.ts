@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   resolveUniqueDestPath: vi.fn(),
   writeFile: vi.fn(),
   save: vi.fn(),
+  shouldLoadNativeComfyImage: vi.fn(() => false),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -33,6 +34,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
 vi.mock('@tauri-apps/api/path', () => ({ appDataDir: mocks.appDataDir, localDataDir: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: mocks.shouldLoadNativeComfyImage }));
 vi.mock('../../src/services/indexedDb/mediaRelocations', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/services/indexedDb/mediaRelocations')>(),
   retiredMediaPaths: mocks.retired,
@@ -59,6 +61,7 @@ vi.mock('../../src/services/fs/core', () => ({
 import {
   copyFileToProjectData,
   downloadUrlAndSave,
+  fetchImageForCrop,
   MediaPersistenceError,
   persistMediaUrlToProjectData,
   resolveProjectOutputPath,
@@ -92,6 +95,76 @@ function mockMediaDisk(initial: Record<string, Uint8Array> = {}) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('fetchImageForCrop', () => {
+  beforeEach(() => {
+    mocks.invoke.mockReset();
+    mocks.isTauriEnv.mockReturnValue(true);
+    mocks.shouldLoadNativeComfyImage.mockReset().mockReturnValue(false);
+  });
+
+  it('keeps the successful native image data URL without adding request headers', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=result.png&type=output';
+    mocks.shouldLoadNativeComfyImage.mockReturnValue(true);
+    mocks.invoke.mockResolvedValue('data:image/png;base64,AQID');
+
+    await expect(fetchImageForCrop(source)).resolves.toBe('data:image/png;base64,AQID');
+    expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('fetch_image_data_url', { url: source });
+  });
+
+  it('fails closed with a redacted error instead of returning a rejected Comfy view URL', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=result.png&token=fixture-private';
+    mocks.shouldLoadNativeComfyImage.mockReturnValue(true);
+    mocks.invoke.mockRejectedValue(new Error(`HTTP 403 ${source}`));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const failure: unknown = await fetchImageForCrop(source).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).name).toBe('NetworkError');
+      expect((failure as Error).message).toBe('ComfyUI 图片读取失败，请检查服务连接或访问权限后重试');
+      expect(failure).not.toHaveProperty('cause');
+      expect(warn).not.toHaveBeenCalled();
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(mocks.invoke).toHaveBeenCalledOnce();
+    } finally { warn.mockRestore(); }
+  });
+
+  it('retains the native-only decision when configuration changes during the request', async () => {
+    const source = 'https://comfy.example/proxy/view?filename=renamed.png';
+    let rejectRead: (error: Error) => void = () => undefined;
+    mocks.shouldLoadNativeComfyImage.mockReturnValue(true);
+    mocks.invoke.mockReturnValue(new Promise<string>((_resolve, reject) => { rejectRead = reject; }));
+    const task = fetchImageForCrop(source);
+    mocks.shouldLoadNativeComfyImage.mockReturnValue(false);
+    rejectRead(new Error('HTTP 403'));
+
+    await expect(task).rejects.toThrow('ComfyUI 图片读取失败');
+    expect(mocks.shouldLoadNativeComfyImage).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the original URL fallback for ordinary remote images', async () => {
+    const source = 'https://cdn.example/image.png';
+    mocks.invoke.mockRejectedValue(new Error('connection unavailable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(fetchImageForCrop(source)).resolves.toBe(source);
+      expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith('fetch_image_data_url', { url: source });
+    } finally { warn.mockRestore(); }
+  });
+
+  it('does not invoke native HTTP for browser and local media sources', async () => {
+    mocks.isTauriEnv.mockReturnValue(false);
+    const source = 'http://127.0.0.1:8188/view?filename=result.png';
+    await expect(fetchImageForCrop(source)).resolves.toBe(source);
+    mocks.isTauriEnv.mockReturnValue(true);
+    await expect(fetchImageForCrop('data:image/png;base64,AQID')).resolves.toBe('data:image/png;base64,AQID');
+    await expect(fetchImageForCrop('file:///project/crop.png')).resolves.toBe('asset:///project/crop.png');
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    expect(mocks.shouldLoadNativeComfyImage).not.toHaveBeenCalled();
+  });
+});
 
 describe('GitHub 文件另存为', () => {
   it('仅在下载完整后写盘，原站断线后从加速源重新开始', async () => {

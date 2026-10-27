@@ -3,6 +3,8 @@ import type { CanvasImagePreviewLease } from '../../src/components/nodes/shared/
 
 const dimensions = vi.hoisted(() => ({ width: 4096, height: 2048 }));
 const disk = vi.hoisted(() => ({ prepare: vi.fn() }));
+const native = vi.hoisted(() => ({ matches: vi.fn(() => false), read: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: native.matches, readNativeComfyImageBlob: native.read }));
 vi.mock('../../src/services/fs/thumbnailCache', () => ({ prepareProjectThumbnail: disk.prepare }));
 vi.mock('../../src/services/rasterImageDimensions', () => ({
   readRasterImageDimensions: vi.fn(async () => ({ ...dimensions })),
@@ -68,6 +70,8 @@ beforeEach(async () => {
   dimensions.width = 4096;
   dimensions.height = 2048;
   disk.prepare.mockReset().mockResolvedValue(null);
+  native.matches.mockReset().mockReturnValue(false);
+  native.read.mockReset();
   canvases = [];
   hasDrawingContext = true;
   encodedPreview = new Blob(['preview'], { type: 'image/webp' });
@@ -109,6 +113,41 @@ afterEach(() => {
 });
 
 describe('canvas image preview cache', () => {
+  it.each(['small', 'animated'])('keeps a native Comfy %s image on a blob URL instead of decoding the original HTTP source', async (kind) => {
+    const source = 'http://127.0.0.1:8188/view?filename=result.png&type=output';
+    native.matches.mockImplementation((value) => value === source);
+    const blob = png(kind === 'animated');
+    native.read.mockResolvedValue(blob);
+    if (kind === 'small') { dimensions.width = 128; dimensions.height = 64; }
+    const preview = await lease(source);
+    expect(native.read).toHaveBeenCalledExactlyOnceWith(source, expect.any(AbortSignal));
+    expect(preview.src).not.toBe(source);
+    expect(createUrl).toHaveBeenCalledExactlyOnceWith(blob);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(bitmapMock).not.toHaveBeenCalled();
+    preview.release();
+  });
+  it('does not retry a rejected native Comfy read through browser fetch or a raw image URL', async () => {
+    native.matches.mockReturnValue(true);
+    native.read.mockRejectedValue(new Error('HTTP 403'));
+    const item = request('http://127.0.0.1:8188/view?filename=blocked.png');
+    await flush();
+    expect(await item.promise).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(bitmapMock).not.toHaveBeenCalled();
+    expect(createUrl).not.toHaveBeenCalled();
+  });
+  it('counts retained native encoded bytes against the idle image budget even for a small image', async () => {
+    mode.syncPerformanceModeRuntime(true);
+    native.matches.mockReturnValue(true);
+    dimensions.width = 16; dimensions.height = 16;
+    const blob = new Blob([png(), new Uint8Array(9 * 1024 * 1024)], { type: 'image/png' });
+    native.read.mockResolvedValue(blob);
+    const preview = await lease('http://127.0.0.1:8188/view?filename=small-with-metadata.png');
+    expect(revokeUrl).not.toHaveBeenCalled();
+    preview.release();
+    expect(revokeUrl).toHaveBeenCalledExactlyOnceWith(preview.src);
+  });
   it('scales large images when WebKit rejects an explicit from-image orientation', async () => {
     dimensions.width = 1672;
     dimensions.height = 941;

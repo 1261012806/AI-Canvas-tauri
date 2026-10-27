@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect } from 'react';
 import { useImageViewportGesture } from '../../hooks/useImageViewportGesture';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 import { useT } from '../../i18n';
 
 const MIN_SCALE = 1;
@@ -26,6 +27,7 @@ interface ZoomableImageProps {
 
 export default function ZoomableImage({ src, alt = '', className = '', onError, onClose }: ZoomableImageProps) {
   const t = useT();
+  const displaySrc = useComfyImageSource(src, onError);
   const {
     containerRef,
     containerEl,
@@ -90,7 +92,7 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
     >
       <div className="zoomable-image-stage">
         <img
-          src={src}
+          src={displaySrc}
           alt={alt}
           className={className}
           draggable={false}

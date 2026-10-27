@@ -21,6 +21,7 @@ import PopupCloseButton from './shared/PopupCloseButton';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { isTauriEnv, saveAgentTextOutput } from '../services/fileService';
 import ResourceVideoPreview from './shared/ResourceVideoPreview';
+import ViewportImage from './shared/ViewportImage';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import { getLocale, t, useT } from '../i18n';
 
@@ -89,7 +90,7 @@ function HistoryThumbnail({
   if (!src) return null;
 
   return (
-    <img
+    <ViewportImage
       src={src}
       alt=""
       loading="lazy"
