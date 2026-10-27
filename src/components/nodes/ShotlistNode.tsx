@@ -647,10 +647,6 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
           poster={video.poster} projectId={currentProjectId} name={t('镜头 {shot} 生成视频', { shot: row.shotNo })} expanded={expandedVideoRowId === row.id}
           onExpandedChange={(expanded) => setExpandedVideoRowId(expanded ? row.id : null)} />
           : <span className="shot-frame-hint">{t('视频未就绪')}</span>}
-        <button type="button" className="shot-frame-pick nodrag" onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => openPicker(row.id, event.currentTarget, 'video')} title={t('更换生成视频')} aria-label={t('更换生成视频')}>
-          <Icon icon="mdi:video-sync-outline" width={11} aria-hidden="true" />
-        </button>
         <button type="button" className="shot-frame-unbind nodrag" onClick={() => unbindVideo(row.id)} title={t('解除视频绑定')} aria-label={t('解除视频绑定')}>
           <Icon icon="mdi:close" width={11} aria-hidden="true" />
         </button>

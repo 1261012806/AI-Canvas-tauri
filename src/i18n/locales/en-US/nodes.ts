@@ -664,7 +664,6 @@ const nodes = {
   "回填视频": "Link video",
   "镜头 {shot} 生成视频": "Shot {shot} generated video",
   "视频未就绪": "Video not ready",
-  "更换生成视频": "Replace generated video",
   "解除视频绑定": "Unlink video",
   "挑选连线进来的画面，或让 AI 生成": "Choose a connected frame or generate one with AI",
   "换一个画面": "Replace frame",

@@ -376,17 +376,30 @@ button.shot-frame:hover {
   aspect-ratio: auto;
   border-radius: inherit;
 }
-.shot-video .shot-frame-pick,
+.shot-video .resource-video-play,
+.shot-video .shot-frame-unbind {
+  width: var(--ui-control-h-sm);
+  height: var(--ui-control-h-sm);
+  background: transparent;
+  color: var(--theme-text);
+  border: 0;
+  box-shadow: none;
+}
+.shot-video .resource-video-play svg,
+.shot-video .shot-frame-unbind svg {
+  width: 14px;
+  height: 14px;
+}
 .shot-video .shot-frame-unbind {
   z-index: 2;
   display: flex;
-  width: 24px;
-  height: 24px;
-  background: var(--theme-card);
-  color: var(--theme-text);
-  border: 1px solid var(--theme-border);
+  top: 0;
+  right: 0;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 2px;
+  color: var(--danger-light);
 }
-.shot-video .shot-frame-pick:focus-visible,
 .shot-video .shot-frame-unbind:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: -2px;
