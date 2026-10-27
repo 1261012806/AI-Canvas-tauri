@@ -449,8 +449,8 @@ export default function ScriptWorkbench({
       onClose={requestClose}
       ariaLabel={t('剧本创作工作台')}
       closeOnBackdrop={false}
-      className="h-[min(88vh,860px)] w-[min(1180px,calc(100vw-24px))]
-                 border-[var(--glass-ring)] bg-[var(--glass-bg)] text-canvas-text"
+      className="ui-dialog-surface h-[min(88vh,860px)] w-[min(1180px,calc(100vw-24px))]
+                 border-[var(--glass-ring)] text-canvas-text"
     >
       <div
         className="flex min-h-0 flex-1 flex-col"
