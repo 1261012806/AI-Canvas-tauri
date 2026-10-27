@@ -75,6 +75,7 @@ describe('locale dictionaries', () => {
     return out;
   }
 
+  // 全仓同步文件扫描随源码增长，单独预留 CI 文件 I/O 预算，不改变扫描或断言范围。
   it('has no entry whose Chinese source text disappeared from the codebase', () => {
     const sources = collectSources(SRC).join('\n');
     // 多个字典共用大量 key，每个唯一 key 只扫描一次源码，保留逐字典的完整断言。
@@ -90,7 +91,7 @@ describe('locale dictionaries', () => {
       );
       expect(orphans, `${name} 存在源码中已消失的孤儿词条`).toEqual([]);
     }
-  });
+  }, 15_000);
 
   it('has the same keys in every supported dictionary', () => {
     // 三语同步维护；新增界面词条时同时补齐英文、日文和韩文。
