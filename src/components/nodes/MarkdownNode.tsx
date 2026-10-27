@@ -385,7 +385,7 @@ function MarkdownNode({ id, data, selected }: { id: string; data: BaseNodeData; 
               spellCheck={false}
             />
           ) : (
-            <div className="markdown-preview-area">
+            <div className="markdown-preview-area nowheel">
               {(data.output as string) ? (
                 <div
                   className="markdown-rendered"
