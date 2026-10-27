@@ -7,6 +7,7 @@ import { copyText } from '../../services/clipboardService';
 import { formatSize } from '../../utils/assetFormat';
 import VideoPlayer from '../shared/VideoPlayer';
 import ModalOverlay from '../shared/ModalOverlay';
+import ViewportImage from '../shared/ViewportImage';
 
 /** 与图片预览共用布局样式；只在用户打开时挂载播放器和读取生成历史。 */
 export default function AssetVideoPreview({ src, querySrc, filePath, poster, name, size, projectId, historyRecord, unavailable, onClose, onSourceError }: {
@@ -36,7 +37,7 @@ export default function AssetVideoPreview({ src, querySrc, filePath, poster, nam
 
   return <ModalOverlay isOpen onClose={onClose} ariaLabel={t("视频与生成信息")} className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
-    {poster && <img className="asset-image-preview-backdrop" src={poster} alt="" aria-hidden="true" />}
+    {poster && <ViewportImage className="asset-image-preview-backdrop" src={poster} alt="" aria-hidden="true" />}
     <div data-tauri-drag-region className="asset-image-preview-layout">
       <div className="asset-image-preview-stage">
         <VideoPlayer key={src ?? 'unavailable'} src={src} poster={poster} name={name} autoPlay unavailable={unavailable}

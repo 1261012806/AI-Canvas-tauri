@@ -4,6 +4,7 @@ import type {
   VideoInputConstraints,
   VideoModelCapability,
 } from '../../types/aiTypes';
+import { acquireComfyMediaSource, isNativeComfyMediaSource, shouldLoadNativeComfyMedia, type ComfyMediaSourceLease } from '../comfyMediaSource';
 
 export interface ReferenceMediaMetadata {
   durationSeconds?: number;
@@ -84,6 +85,8 @@ export const probeReferenceMediaMetadata: ReferenceMediaMetadataProbe = async (
 
   return new Promise<ReferenceMediaMetadata>((resolve, reject) => {
     const media = document.createElement(kind);
+    const request = new AbortController();
+    let lease: ComfyMediaSourceLease | undefined;
     let settled = false;
     const cleanup = () => {
       clearTimeout(timeoutId);
@@ -92,6 +95,8 @@ export const probeReferenceMediaMetadata: ReferenceMediaMetadataProbe = async (
       media.onerror = null;
       media.removeAttribute('src');
       media.load();
+      request.abort();
+      lease?.release();
     };
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -107,15 +112,30 @@ export const probeReferenceMediaMetadata: ReferenceMediaMetadataProbe = async (
 
     signal?.addEventListener('abort', onAbort, { once: true });
     media.preload = 'metadata';
-    media.onloadedmetadata = () => finish(() => resolve({
-      durationSeconds: Number.isFinite(media.duration) ? media.duration : undefined,
-      width: kind === 'video' && media instanceof HTMLVideoElement && media.videoWidth > 0
-        ? media.videoWidth
-        : undefined,
-    }));
+    media.onloadedmetadata = () => {
+      // 卸载来源会清空媒体元数据，须先捕获实际读取值再归还租约。
+      const metadata = {
+        durationSeconds: Number.isFinite(media.duration) ? media.duration : undefined,
+        width: kind === 'video' && media instanceof HTMLVideoElement && media.videoWidth > 0
+          ? media.videoWidth : undefined,
+      };
+      finish(() => resolve(metadata));
+    };
     media.onerror = () => finish(() => reject(new Error('媒体无法加载')));
-    media.src = url;
-    media.load();
+    if (shouldLoadNativeComfyMedia(url)) {
+      void acquireComfyMediaSource(url, request.signal).then((result) => {
+        if (settled) { result.release(); return; }
+        lease = result;
+        if (!isNativeComfyMediaSource(result.src)) {
+          finish(() => reject(new Error('原生媒体信息读取不可用'))); return;
+        }
+        media.src = result.src;
+        media.load();
+      }, () => finish(() => reject(new Error('原生媒体信息读取失败'))));
+    } else {
+      media.src = url;
+      media.load();
+    }
   });
 };
 

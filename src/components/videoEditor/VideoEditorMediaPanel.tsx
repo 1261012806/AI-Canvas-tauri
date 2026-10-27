@@ -11,6 +11,7 @@ import { getClipDuration, type VideoEditorClip } from '../../types/videoEditor';
 import type { VideoEditorProjectImageSource } from '../../types/videoEditor';
 import type { SourceState } from './useVideoEditorSources';
 import { useT } from '../../i18n';
+import ViewportImage from '../shared/ViewportImage';
 
 type MediaFilter = 'all' | 'video' | 'image';
 
@@ -166,7 +167,7 @@ function VideoEditorMediaPanel({
                       >
                         <span className="video-editor-media-picker-thumb">
                           {asset.category === 'image' && asset.assetUrl
-                            ? <img src={asset.assetUrl} alt="" loading="lazy" />
+                            ? <ViewportImage src={asset.assetUrl} alt="" loading="lazy" />
                             : <Icon icon={asset.category === 'image' ? 'lucide:image' : 'lucide:film'} width={16} height={16} />}
                         </span>
                         <span><strong>{asset.name}</strong><em>{asset.category === 'image' ? t('图片') : t('视频')}</em></span>
@@ -179,7 +180,7 @@ function VideoEditorMediaPanel({
                         onClick={() => { onAddCanvasImage(image); setAddMenu('closed'); }}
                       >
                         <span className="video-editor-media-picker-thumb">
-                          <img src={image.sourceUrl} alt="" loading="lazy" />
+                          <ViewportImage src={image.sourceUrl} alt="" loading="lazy" />
                         </span>
                         <span><strong>{image.label}</strong><em>{t('图片')}</em></span>
                         <Icon icon="lucide:plus" width={14} height={14} />
@@ -255,7 +256,7 @@ function VideoEditorMediaPanel({
                     title={image.label}
                     onClick={() => onAddCanvasImage(image)}
                   >
-                    <img src={image.sourceUrl} alt="" loading="lazy" draggable={false} />
+                    <ViewportImage src={image.sourceUrl} alt="" loading="lazy" draggable={false} />
                     <span>{image.label}</span>
                   </button>
                 ))}
@@ -301,7 +302,7 @@ function VideoEditorMediaPanel({
             >
               <div className="video-editor-media-thumb">
                 {poster
-                  ? <img src={poster} alt="" draggable={false} />
+                  ? <ViewportImage src={poster} alt="" draggable={false} />
                   : <Icon icon={clip.kind === 'image' ? 'lucide:image' : 'lucide:film'} width={18} height={18} />}
               </div>
               <div className="video-editor-media-info">

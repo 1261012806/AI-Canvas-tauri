@@ -16,6 +16,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import { batchExecuteNodes, type BatchContext } from '../../utils/batchExecute';
 import { getGroupChildImageKey, type GroupCoverItem } from '../../utils/groupChildImageKey';
 import { useT } from '../../i18n';
+import ViewportImage from '../shared/ViewportImage';
 
 interface GroupNodeData {
   groupId: string;
@@ -60,7 +61,7 @@ function GroupCoverPhoto({ cover, fan }: { cover: GroupCoverItem; fan: number })
       style={{ '--fan': fan } as React.CSSProperties}
     >
       {showImage ? (
-        <img src={imageUrl} alt="" draggable={false} className="h-full w-full object-cover"
+        <ViewportImage src={imageUrl} alt="" draggable={false} className="h-full w-full object-cover"
           onError={() => setFailedUrl(imageUrl)} />
       ) : (
         <Icon icon={cover.kind === 'video' ? 'mdi:video-outline' : 'mdi:image-outline'}

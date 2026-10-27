@@ -13,6 +13,8 @@ import NodeError from './shared/NodeError';
 import GooeyBtn from './shared/GooeyBtn';
 import ResizeHandle from './shared/ResizeHandle';
 import VideoPlayer from '../shared/VideoPlayer';
+import ViewportImage from '../shared/ViewportImage';
+import { acquireComfyMediaSource } from '../../services/comfyMediaSource';
 import VideoNodeToolbar, { type CaptureFramePosition } from './shared/VideoNodeToolbar';
 import NodeToolbarShell from './shared/NodeToolbarShell';
 import {
@@ -182,66 +184,70 @@ function restoreVideoTime(video: HTMLVideoElement, time: number): void {
   if (video.readyState > 0) video.currentTime = time;
 }
 
-function captureFrameFromVideoUrl(url: string, currentTime: number): Promise<{ dataUrl: string; width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    let settled = false;
-    let captureStarted = false;
-    let timer = 0;
-    const cleanup = () => {
-      window.clearTimeout(timer);
-      releaseVideoElement(video);
-    };
-    const fail = (error: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const done = () => {
-      if (settled || captureStarted) return;
-      captureStarted = true;
-      void captureVideoFrame(video).then(
-        (frame) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(frame);
-        },
-        (error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          reject(error);
-        },
-      );
-    };
+async function captureFrameFromVideoUrl(url: string, currentTime: number): Promise<{ dataUrl: string; width: number; height: number }> {
+  const lease = await acquireComfyMediaSource(url, AbortSignal.timeout(15_000));
+  try {
+    return await new Promise<{ dataUrl: string; width: number; height: number }>((resolve, reject) => {
+      const video = document.createElement('video');
+      let settled = false;
+      let captureStarted = false;
+      let timer = 0;
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        releaseVideoElement(video);
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const done = () => {
+        if (settled || captureStarted) return;
+        captureStarted = true;
+        void captureVideoFrame(video).then(
+          (frame) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(frame);
+          },
+          (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error);
+          },
+        );
+      };
 
-    timer = window.setTimeout(() => fail(new Error('本地视频加载超时')), 15000);
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = 'auto';
-    video.addEventListener('error', () => fail(new Error('本地视频加载失败')), { once: true });
-    video.addEventListener('loadedmetadata', () => {
-      const duration = Number.isFinite(video.duration) ? video.duration : 0;
-      const targetTime = duration > 0
-        ? Math.min(Math.max(currentTime, 0), Math.max(duration - 0.01, 0))
-        : 0;
+      timer = window.setTimeout(() => fail(new Error('本地视频加载超时')), 15000);
+      video.crossOrigin = 'anonymous';
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      video.addEventListener('error', () => fail(new Error('本地视频加载失败')), { once: true });
+      video.addEventListener('loadedmetadata', () => {
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        const targetTime = duration > 0
+          ? Math.min(Math.max(currentTime, 0), Math.max(duration - 0.01, 0))
+          : 0;
 
-      if (Math.abs(video.currentTime - targetTime) < 0.01) {
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          done();
-        } else {
-          video.addEventListener('loadeddata', done, { once: true });
+        if (Math.abs(video.currentTime - targetTime) < 0.01) {
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            done();
+          } else {
+            video.addEventListener('loadeddata', done, { once: true });
+          }
+          return;
         }
-        return;
-      }
 
-      video.addEventListener('seeked', done, { once: true });
-      video.currentTime = targetTime;
-    }, { once: true });
-    video.src = url;
-  });
+        video.addEventListener('seeked', done, { once: true });
+        video.currentTime = targetTime;
+      }, { once: true });
+      video.src = lease.src;
+    });
+  } finally { lease.release(); }
 }
 
 function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; selected?: boolean }) {
@@ -373,10 +379,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
     const video = shouldMountPlayer ? videoRef.current : null;
     const operations = pendingVideoOperations.current;
     // StrictMode 的额外 cleanup 会清除 src；setup 必须恢复同一 DOM 的当前来源。
-    if (video && source && video.getAttribute('src') !== source) {
-      video.src = source;
-      video.load();
-    }
+    // VideoPlayer 独占显示源；这里仅保留原来源对应的播放状态。
     const previousPlayback = compactPlaybackRestoreRef.current;
     if (video && previousPlayback && previousPlayback.source === source) {
       if (typeof previousPlayback.volume === 'number') video.volume = previousPlayback.volume;
@@ -979,7 +982,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               onFullscreen={handleOpenFullscreen}
             />
           ) : data.thumbnailUrl ? (
-            <img
+            <ViewportImage
               src={data.thumbnailUrl}
               alt="Video thumbnail"
               className="video-node-poster"
@@ -1023,7 +1026,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
             <NodeGenerationProgress nodeId={id} fallbackLabel={t(data.mediaTaskStage === 'saving' ? '保存中' : '生成视频中...')} overlay />
           )}
           {shouldMountPlayer && showInitialCover && (
-            <img src={initialCoverUrl} alt="" className="video-node-initial-cover" draggable={false}
+            <ViewportImage src={initialCoverUrl} alt="" className="video-node-initial-cover" draggable={false}
               onError={() => { if (suppliedCover) setFailedCover(suppliedCover); }} />
           )}
           {(data.mediaTaskState || data.videoTaskState === 'paused') && data.status !== 'loading' && <VideoTaskStatus nodeId={id} overlay />}
@@ -1074,7 +1077,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               />
             </div>
           ) : data.thumbnailUrl ? (
-            <img
+            <ViewportImage
               src={data.thumbnailUrl}
               alt="Video thumbnail"
               className="fullscreen-img-view"

@@ -2,6 +2,7 @@ import { useDeferredValue, useMemo, useRef, useState, type KeyboardEvent, type R
 import { Icon } from '@iconify/react';
 import { renderMarkdown } from '../../utils/renderMarkdown';
 import { useT } from '../../i18n';
+import { useComfyDomImageSources } from '../../hooks/useComfyDomImageSources';
 
 export interface MarkdownEditorProps {
   value: string;
@@ -41,6 +42,8 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
   const [notice, setNotice] = useState('');
   const [history, setHistory] = useState({ values: [value], index: 0 });
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const previewRoot = useRef<HTMLDivElement>(null);
+  useComfyDomImageSources(previewRoot);
   const findInput = useRef<HTMLInputElement>(null);
   const deferred = useDeferredValue(value);
   const html = useMemo(() => markdown && !renderPreview ? renderMarkdown(deferred) : '', [deferred, markdown, renderPreview]);
@@ -132,7 +135,7 @@ export default function MarkdownEditor({ value, onChange, markdown = true, initi
     if (icon === 'lucide:code') insert('\n```\n', '\n```\n', t('代码'));
     if (icon === 'lucide:table') insert(t('\n| 列一 | 列二 |\n| --- | --- |\n| 内容 | 内容 |\n'));
   };
-  return <div className="ui-markdown-editor nodrag nowheel" onKeyDown={keyDown}>
+  return <div ref={previewRoot} className="ui-markdown-editor nodrag nowheel" onKeyDown={keyDown}>
     <div className="ui-markdown-editor__toolbar" role="toolbar" aria-label={t('文档编辑工具')}>
       <div className="flex items-center gap-1" role="group" aria-label={t('显示方式')}>
         {(['source', 'preview', ...(markdown ? ['split'] as const : [])] as const).map((item) => <button key={item} type="button"

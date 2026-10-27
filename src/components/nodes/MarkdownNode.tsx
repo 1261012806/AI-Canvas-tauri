@@ -15,6 +15,7 @@ import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDeriva
 import MarkdownEditor from '../shared/MarkdownEditor';
 import AnimatedButton from '../shared/AnimatedButton';
 import { renderMarkdown } from '../../utils/renderMarkdown';
+import { useComfyDomImageSources } from '../../hooks/useComfyDomImageSources';
 import { textNodeHeight } from '../../utils/num';
 import ResizeHandle from './shared/ResizeHandle';
 import { useT } from '../../i18n';
@@ -36,6 +37,8 @@ function MarkdownNode({ id, data, selected }: { id: string; data: BaseNodeData; 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [saveStatus, setSaveStatus] = useState('编辑后自动保存');
   const contentEditActiveRef = useRef(false);
+  const previewRoot = useRef<HTMLDivElement>(null);
+  useComfyDomImageSources(previewRoot);
 
   const finishContentEdit = useCallback(() => {
     if (!contentEditActiveRef.current) return;
@@ -374,7 +377,7 @@ function MarkdownNode({ id, data, selected }: { id: string; data: BaseNodeData; 
         </div>
 
         {/* Content area */}
-        <div className="markdown-node-content">
+        <div ref={previewRoot} className="markdown-node-content">
           {viewMode === 'edit' ? (
             <textarea
               className="nodrag nowheel markdown-edit-area text-selection-source"

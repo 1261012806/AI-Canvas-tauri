@@ -6,6 +6,8 @@ import { findPromptChipRanges, renderPromptWithChips } from '../nodes/shared/Pro
 import { getNodeMetaMap } from '../nodes/shared/mentionEditorDom';
 import { listGlobalDramaAssets } from '../../services/dramaAssetPrompt';
 import type { DramaAsset } from '../../types/dramaAssets';
+import { COMFY_IMAGE_SOURCE_ATTRIBUTE } from '../../utils/comfyMediaUrl';
+import ViewportImage from './ViewportImage';
 
 const MARKDOWN_ELEMENTS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'ul', 'ol', 'li', 'hr', 'br', 'a', 'img', 'strong', 'em', 'del', 'input', 'span']);
 const MARKDOWN_ATTRIBUTES = ['href', 'src', 'alt', 'title', 'rel', 'type', 'aria-label'] as const;
@@ -36,6 +38,10 @@ function renderPreviewStructure(html: string, chips: ReactNode[]): ReactNode[] {
       props.disabled = true;
       props.checked = element.hasAttribute('checked');
       props.readOnly = true;
+    }
+    if (tag === 'img') {
+      props.src = element.getAttribute(COMFY_IMAGE_SOURCE_ATTRIBUTE) ?? props.src;
+      return createElement(ViewportImage, props);
     }
     return createElement(tag, props, ...children);
   };

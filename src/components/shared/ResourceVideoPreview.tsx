@@ -11,6 +11,9 @@ import { resolveVideoThumbnailPoster } from './videoThumbnailSource';
 import { fadeFast, springSmooth } from '../../utils/motion';
 import type { HistoryRecord } from '../../services/indexedDbService';
 import { useT } from '../../i18n';
+import ViewportImage from './ViewportImage';
+import { useComfyMediaSource } from '../../hooks/useComfyMediaSource';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 
 const AssetVideoPreview = lazy(() => import('../assets/AssetVideoPreview'));
 
@@ -106,7 +109,7 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
           setClosing(active); setRequested(!active); onExpandedChange(!active);
         }}>
         {posterSource && posterSource !== failedPoster
-          ? <img src={posterSource} alt={t('{name} 视频缩略图', { name })} draggable={false} decoding="async" loading="lazy" onError={() => setFailedPoster(posterSource)} />
+          ? <ViewportImage src={posterSource} alt={t('{name} 视频缩略图', { name })} draggable={false} decoding="async" loading="lazy" onError={() => setFailedPoster(posterSource)} />
           : <Icon icon="lucide:film" className="resource-video-placeholder" aria-hidden="true" />}
         <span className="resource-video-play"><Icon icon="lucide:play" width="20" aria-hidden="true" /></span>
       </button>
@@ -133,13 +136,15 @@ export default function ResourceVideoPreview({ src, filePath, poster, revision =
   );
 }
 
-function ResourceVideoPlayer({ src, poster, name, anchorRef, openingGeometry, width = 640, height = 360, unavailable, onEnded, onSourceError }: {
+function ResourceVideoPlayer({ src: source, poster: sourcePoster, name, anchorRef, openingGeometry, width = 640, height = 360, unavailable, onEnded, onSourceError }: {
   src?: string; poster?: string; name: string; anchorRef: RefObject<HTMLDivElement | null>;
   openingGeometry: VideoGeometry;
   width?: number; height?: number; unavailable: boolean; onEnded: (animate?: boolean) => void; onSourceError: () => void;
 }) {
   const t = useT();
   const present = useIsPresent();
+  const src = useComfyMediaSource(source, onSourceError);
+  const poster = useComfyImageSource(sourcePoster);
   const reduceMotion = useReducedMotion();
   const videoRef = useRef<HTMLVideoElement>(null);
   const floatingRef = useRef<HTMLDivElement>(null);

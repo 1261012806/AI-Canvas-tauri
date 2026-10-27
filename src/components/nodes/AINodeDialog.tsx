@@ -31,6 +31,8 @@ import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import LazyLoadBoundary from '../shared/LazyLoadBoundary';
 import ResourceVideoPreview from '../shared/ResourceVideoPreview';
+import ViewportImage from '../shared/ViewportImage';
+import ViewportAudio from '../shared/ViewportAudio';
 import { useResourceVideoPreview } from '../../hooks/useResourceVideoPreview';
 const VolcengineBillingSettings = lazy(() => import('../settings/VolcengineBillingSettings'));
 import type { MentionEditorHandle } from './shared/MentionEditor';
@@ -1236,12 +1238,12 @@ function AINodeDialog() {
           </div>}
           {cloudOutputs && cloudOutputs.length > 1 && <details className="ui-card m-2 p-2 text-xs"><summary className="cursor-pointer">{t('全部产物 · {count}', { count: cloudOutputs.length })}</summary><div className="mt-2 flex max-h-72 flex-col gap-2 overflow-y-auto">{cloudOutputs.map((output, index) => <div key={`${output.url}:${index}`}>
             <p className="mb-1 text-canvas-text-secondary">{t('产物 {index}', { index: index + 1 })}{output.nodeId ? t(' · 节点 {id}', { id: output.nodeId }) : ''}</p>
-            {output.kind === 'image' ? <img className="max-h-48 max-w-full object-contain" src={output.url} alt={t('产物 {index}', { index: index + 1 })} /> : output.kind === 'video'
+            {output.kind === 'image' ? <ViewportImage className="max-h-48 max-w-full object-contain" src={output.url} alt={t('产物 {index}', { index: index + 1 })} /> : output.kind === 'video'
               ? <ResourceVideoPreview src={output.url} name={t('产物 {index}', { index: index + 1 })} className="max-h-48 w-full"
                   projectId={currentProjectId ?? undefined}
                   expanded={cloudVideoPreview.expandedId === `${output.url}:${index}`}
                   onExpandedChange={(expanded) => cloudVideoPreview.setExpanded(expanded ? `${output.url}:${index}` : null)} />
-              : <audio className="w-full" src={output.url} controls preload="metadata" />}
+              : <ViewportAudio className="w-full" src={output.url} controls preload="metadata" />}
           </div>)}</div></details>}
           {recoverableComfyTask && (
             <div className="ui-alert ui-alert--warning mx-3 mb-2 flex-wrap" role="status">

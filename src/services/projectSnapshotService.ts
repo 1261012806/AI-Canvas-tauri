@@ -8,6 +8,7 @@ import {
   type ProjectSnapshotViewport,
 } from './projectSnapshotGeometry';
 import { isProjectSnapshotDataUrl, PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH } from './projectSnapshotValidation';
+import { acquireComfyImageSource, shouldLoadNativeComfyImage, type ComfyImageSourceLease } from './comfyImageSource';
 export { isProjectSnapshotDataUrl, PROJECT_SNAPSHOT_MAX_DATA_URL_LENGTH } from './projectSnapshotValidation';
 import type {
   ProjectSnapshotMedia,
@@ -362,7 +363,7 @@ function freezeSnapshotMedia(
   }
 }
 
-/** 污染图片只重载一次 CORS 源，不改原图显示，也不走原生下载或代理。 */
+/** 污染图片只重载一次；Comfy 通过原生有界读取，其余沿用匿名 CORS。 */
 function reloadSnapshotImage(
   media: ReloadableSnapshotImage,
   deadline: number,
@@ -380,6 +381,8 @@ function reloadSnapshotImage(
     return Promise.resolve(null);
   }
   return new Promise((resolve) => {
+    const request = new AbortController();
+    let lease: ComfyImageSourceLease | undefined;
     let finished = false;
     const cancel = (): void => finish(null);
     const finish = (result: ProjectSnapshotMedia | null, reason?: string): void => {
@@ -388,6 +391,8 @@ function reloadSnapshotImage(
       window.clearTimeout(timer);
       image.onload = image.onerror = null;
       image.removeAttribute('src');
+      request.abort();
+      lease?.release();
       activeImageLoads.delete(cancel);
       if (reason) noteFailure(diagnostics, 'media-origin', reason);
       resolve(result);
@@ -422,7 +427,16 @@ function reloadSnapshotImage(
     image.onerror = () => finish(null, 'load-error');
     const timer = window.setTimeout(() => finish(null, 'TimeoutError'), remaining);
     activeImageLoads.add(cancel);
-    try { image.src = media.source; } catch (error) { finish(null, errorName(error)); }
+    if (shouldLoadNativeComfyImage(media.source)) {
+      void acquireComfyImageSource(media.source, request.signal).then((result) => {
+        if (finished) { result.release(); return; }
+        lease = result;
+        if (!result.src.startsWith('blob:')) { finish(null, 'native-source-unavailable'); return; }
+        try { image.src = result.src; } catch (error) { finish(null, errorName(error)); }
+      }, (error) => finish(null, errorName(error)));
+    } else {
+      try { image.src = media.source; } catch (error) { finish(null, errorName(error)); }
+    }
   });
 }
 

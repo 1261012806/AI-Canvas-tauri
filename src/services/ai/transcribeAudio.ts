@@ -1,6 +1,8 @@
 /** 音频转录入口：解析 APIMart 配置、校验音频并调用 Whisper。 */
 import { DEFAULT_BASE_URLS } from '../../constants/api';
 import { useAppStore } from '../../store/useAppStore';
+import { shouldLoadNativeComfyImage } from '../comfyImageSource';
+import { corsSafeFetch } from './httpTransport';
 import {
   transcribeApimartAudio,
   type WhisperResponseFormat,
@@ -54,7 +56,7 @@ function resolveUploadName(fileName: string | undefined, mimeType: string): stri
 async function readAudioBlob(audioUrl: string): Promise<Blob> {
   let response: Response;
   try {
-    response = await fetch(audioUrl);
+    response = await (shouldLoadNativeComfyImage(audioUrl) ? corsSafeFetch : fetch)(audioUrl);
   } catch {
     throw new Error('无法读取音频文件，请确认文件仍可访问');
   }

@@ -17,6 +17,7 @@ import AssistantActivity from './AssistantActivity';
 import { useT } from '../../i18n';
 import ViewportImage from '../shared/ViewportImage';
 import ViewportVideo from '../shared/ViewportVideo';
+import ViewportAudio from '../shared/ViewportAudio';
 import ChatImageAttachments from './ChatImageAttachments';
 import { parseChatImageReferences, stripChatImageReferences } from '../../services/chat/chatImageReferenceService';
 import { getRecoverableMessageTask } from '../../services/ai/generationRuntime';
@@ -238,9 +239,9 @@ function MessageBubble({
               />
               {mediaResult.audioPurpose === 'music' ? t('生成的音乐') : t('生成的语音')}
             </div>
-            <audio src={mediaResult.url} controls className="h-9 w-full" preload="metadata">
+            <ViewportAudio src={mediaResult.url} controls className="h-9 w-full" preload="metadata">
               {t('您的浏览器不支持音频播放')}
-            </audio>
+            </ViewportAudio>
             {mediaResult.prompt && (
               <p className="mt-1.5 text-[11px] leading-[17px] text-canvas-text-muted">
                 {mediaResult.prompt}

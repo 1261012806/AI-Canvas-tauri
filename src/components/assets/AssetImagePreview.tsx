@@ -1,4 +1,5 @@
 import { t, useT } from '../../i18n';
+import ViewportImage from '../shared/ViewportImage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import type { AssetFileEntry } from '../../services/fileService';
@@ -306,7 +307,7 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
 
   return <ModalOverlay isOpen onClose={close} ariaLabel={t("图片与生成信息")} className="asset-image-preview"
     zIndex={360} motionPreset="quick" backdropBlur={false} closeOnBackdrop={false}>
-    <img className="asset-image-preview-backdrop" src={file.assetUrl} alt="" aria-hidden="true" />
+    <ViewportImage className="asset-image-preview-backdrop" src={file.assetUrl} alt="" aria-hidden="true" />
     <div data-tauri-drag-region className="asset-image-preview-layout">
       <div className="asset-image-preview-stage" onLoadCapture={(event) => {
         const image = event.target as HTMLImageElement;
@@ -350,13 +351,13 @@ export default function AssetImagePreview({ files: sourceFiles, initialPath, pro
             {!loading && !metadataError && (referenceViews.length > 0 || editing) && <div className="asset-image-preview-references">
               {referenceViews.map((reference) => <div className="asset-image-preview-reference" key={reference.id}>
                 <button type="button" aria-label={t('查看参考图 {name}', { name: reference.name })} title={t('查看参考图 {name}', { name: reference.name })} disabled={!reference.url} onClick={() => setReferencePreview({ key: queryKey, url: reference.url!, name: reference.name })}>
-                  {reference.url ? <img src={reference.url} alt={reference.name} /> : <span className="text-xs text-canvas-text-muted">{t("参考图不可用")}</span>}
+                  {reference.url ? <ViewportImage src={reference.url} alt={reference.name} /> : <span className="text-xs text-canvas-text-muted">{t("参考图不可用")}</span>}
                 </button>
                 {editing && <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={t('移除参考图 {name}', { name: reference.name })}
                   onClick={() => setDraft((current) => current ? { ...current, references: current.references.filter((item) => item.id !== reference.id) } : current)}><Icon icon="lucide:x" aria-hidden="true" /></button>}
               </div>)}
               {editing && draft.pending.map((reference, i) => <div className="asset-image-preview-reference" key={`${i}:${reference.path}`}>
-                <button type="button" aria-label={t('查看待保存参考图 {name}', { name: reference.name })} onClick={() => setReferencePreview({ key: queryKey, url: reference.url, name: reference.name })}><img src={reference.url} alt={reference.name} /></button>
+                <button type="button" aria-label={t('查看待保存参考图 {name}', { name: reference.name })} onClick={() => setReferencePreview({ key: queryKey, url: reference.url, name: reference.name })}><ViewportImage src={reference.url} alt={reference.name} /></button>
                 <button type="button" className="ui-close-btn asset-image-preview-reference-remove" disabled={busy} aria-label={t('移除待保存参考图 {name}', { name: reference.name })}
                   onClick={() => setDraft((current) => current ? { ...current, pending: current.pending.filter((_, index) => index !== i) } : current)}><Icon icon="lucide:x" aria-hidden="true" /></button>
               </div>)}

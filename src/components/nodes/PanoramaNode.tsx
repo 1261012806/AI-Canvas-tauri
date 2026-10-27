@@ -14,6 +14,7 @@ import ResizeHandle from './shared/ResizeHandle';
 import PanoramaNodeToolbar from './shared/PanoramaNodeToolbar';
 import NodeToolbarShell from './shared/NodeToolbarShell';
 import FullscreenOverlay from '../shared/FullscreenOverlay';
+import ViewportImage from '../shared/ViewportImage';
 import XiaoLuoPanoramaViewer, {
   type XiaoLuoPanoramaViewerHandle,
 } from './panorama/XiaoLuoPanoramaViewer';
@@ -297,7 +298,7 @@ function AIPanoramaNode({ id, data, selected }: { id: string; data: BaseNodeData
               />
             ) : showImage ? (
               <div className="image-preview-container">
-                <img
+                <ViewportImage
                   src={panoramaUrl}
                   alt="360 Panorama"
                   className="image-preview-img compact"

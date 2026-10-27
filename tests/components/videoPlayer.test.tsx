@@ -1,3 +1,7 @@
+const comfySources = vi.hoisted(() => ({ media: vi.fn((source?: string, _onError?: () => void) => source), image: vi.fn((source?: string) => source) }));
+vi.mock('../../src/hooks/useComfyMediaSource', () => ({ useComfyMediaSource: comfySources.media }));
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: comfySources.image }));
+vi.mock('../../src/services/comfyMediaSource', () => ({ shouldLoadNativeComfyMedia: (source?: string) => source?.includes('/view?') === true }));
 import type { ComponentProps, ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,6 +82,8 @@ function event(type: string) { (find((el) => el.type === 'video').props[type] as
 function key() { const event = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' }); win.dispatchEvent(event); return event; }
 function native(type: string, extra: Record<string, unknown> = {}) { videoListeners.get(type)?.forEach((cb) => cb({ currentTarget: video, ...extra })); }
 beforeEach(() => {
+  comfySources.media.mockReset().mockImplementation((source?: string) => source);
+  comfySources.image.mockReset().mockImplementation((source?: string) => source);
   scope = { states: [], refs: [], effects: [], pending: [], stateIndex: 0, refIndex: 0, effectIndex: 0 };
   videoListeners = new Map();
   input = { src: 'https://videos.test/a.mp4?preview=1', name: '视频.mp4', autoPlay: true,
@@ -102,6 +108,74 @@ beforeEach(() => {
 afterEach(() => { scope.effects.forEach((effect) => effect.cleanup?.()); vi.unstubAllGlobals(); });
 
 describe('UI Kit VideoPlayer', () => {
+  it('未激活卡片不持有媒体来源，首次点击可等待原生源就绪后播放并在收起时释放', () => {
+    const original = 'http://127.0.0.1:8188/view?filename=deferred.mp4';
+    const onRequestPlayback = vi.fn();
+    let ready = false;
+    comfySources.media.mockImplementation((source?: string) => source && ready ? 'http://comfy-media.localhost/opaque-video' : undefined);
+    input = { ...input, src: original, compact: true, active: false, autoPlay: false, onRequestPlayback };
+    render();
+    expect(comfySources.media).toHaveBeenLastCalledWith(undefined, expect.any(Function));
+    expect(control('播放视频').props.disabled).toBe(false);
+    click(control('播放视频'));
+    expect(onRequestPlayback).toHaveBeenCalledOnce();
+    expect(video.play).not.toHaveBeenCalled();
+    input = { ...input, active: true };
+    render();
+    expect(comfySources.media).toHaveBeenLastCalledWith(original, expect.any(Function));
+    expect(video.play).not.toHaveBeenCalled();
+    ready = true; render();
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.src).toBe('http://comfy-media.localhost/opaque-video');
+    input = { ...input, active: false }; render();
+    expect(comfySources.media).toHaveBeenLastCalledWith(undefined, expect.any(Function));
+    expect(video.src).toBe('');
+  });
+
+  it('Comfy 旧产物只把原生播放源与安全海报交给媒体元素及重试', () => {
+    const original = 'http://127.0.0.1:8188/view?filename=old.mp4&type=output';
+    const nativeSource = 'http://comfy-media.localhost/opaque-video';
+    comfySources.media.mockImplementation((source?: string) => source === original ? nativeSource : source);
+    comfySources.image.mockReturnValue('blob:safe-poster');
+    input = { ...input, src: original, poster: 'http://127.0.0.1:8188/view?filename=poster.png' };
+    render();
+    expect(find((element) => element.type === 'video').props.src).toBe(nativeSource);
+    expect(find((element) => element.type === 'video').props.poster).toBe('blob:safe-poster');
+    expect(video.src).toBe(nativeSource);
+    video.error = { code: 2 };
+    click(control('播放视频'));
+    expect(video.src).toBe(nativeSource);
+    expect(comfySources.media).toHaveBeenCalledWith(original, expect.any(Function));
+  });
+
+  it('原生申请失败后的重试先撤销来源再重新申请，就绪后延续本次播放意图', () => {
+    const original = 'http://127.0.0.1:8188/view?filename=retry.mp4';
+    let ready = false;
+    comfySources.media.mockImplementation((source?: string) => source && ready ? 'http://comfy-media.localhost/retry-video' : undefined);
+    input = { ...input, src: original, autoPlay: false };
+    render();
+    comfySources.media.mock.lastCall?.[1]?.();
+    render();
+    expect(input.onError).toHaveBeenCalledOnce();
+    click(control('播放视频')); render();
+    expect(comfySources.media).toHaveBeenLastCalledWith(undefined, expect.any(Function));
+    const [frameId, callback] = frames.entries().next().value!;
+    frames.delete(frameId); callback(0); render();
+    expect(comfySources.media).toHaveBeenLastCalledWith(original, expect.any(Function));
+    ready = true; render();
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.src).toBe('http://comfy-media.localhost/retry-video');
+  });
+
+  it('原生来源尚未就绪时不挂载原始 Comfy 请求', () => {
+    comfySources.media.mockReturnValue(undefined);
+    input = { ...input, src: 'http://127.0.0.1:8188/view?filename=pending.mp4' };
+    render();
+    expect(elements(tree).some((element) => element.type === 'video')).toBe(false);
+    expect(video.play).not.toHaveBeenCalled();
+    expect(video.src).toBe('');
+  });
+
   it('紧凑播放器提供 Tab 入口以显露控件，普通播放器不额外占用焦点', () => {
     input = { ...input, compact: true }; render();
     expect(control('视频.mp4 视频播放器').props.tabIndex).toBe(0);

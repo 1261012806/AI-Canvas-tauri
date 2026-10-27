@@ -44,6 +44,7 @@ import {
   voiceClipTitle,
 } from './character/characterReferencePresentation';
 import { readAudioDuration } from './character/characterVoiceMedia';
+import { acquireComfyMediaSource } from '../services/comfyMediaSource';
 
 type CharacterLibraryScope = 'project' | 'global';
 
@@ -295,6 +296,22 @@ export default function CharacterLibraryPanel() {
   const [uploadingActionMedia, setUploadingActionMedia] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
   const voicePlayerRef = useRef<HTMLAudioElement>(null);
+  const voicePlaybackRef = useRef<{
+    clipId: string;
+    player: HTMLAudioElement;
+    controller: AbortController;
+    release?: () => void;
+  } | null>(null);
+  const stopVoicePlayback = useCallback(() => {
+    const playback = voicePlaybackRef.current;
+    voicePlaybackRef.current = null;
+    const player = playback?.player ?? voicePlayerRef.current;
+    player?.pause();
+    player?.removeAttribute('src');
+    player?.load();
+    playback?.controller.abort();
+    playback?.release?.();
+  }, []);
   const actionMediaInputRef = useRef<HTMLInputElement>(null);
 
   // 资源库分类可直接定位同一份全局人物、声音或动作，不另建角色状态。
@@ -404,9 +421,7 @@ export default function CharacterLibraryPanel() {
     : null;
 
   // 切换角色或关闭面板时停止试听，避免声音跟着上一个角色继续播
-  useEffect(() => {
-    voicePlayerRef.current?.pause();
-  }, [open, scope, selectedCharacter?.id]);
+  useEffect(() => stopVoicePlayback, [open, scope, selectedCharacter?.id, stopVoicePlayback]);
 
   const switchScope = (nextScope: CharacterLibraryScope) => {
     setScope(nextScope);
@@ -415,17 +430,33 @@ export default function CharacterLibraryPanel() {
     setVoicePickerOpen(false);
   };
 
-  const toggleVoicePlayback = (clip: CharacterVoiceClip) => {
+  const toggleVoicePlayback = async (clip: CharacterVoiceClip) => {
     const player = voicePlayerRef.current;
     if (!player || !clip.audioUrl || !selectedCharacter) return;
-    if (playingVoiceClipId === clip.id) {
-      player.pause();
+    if (voicePlaybackRef.current?.clipId === clip.id) {
+      stopVoicePlayback();
+      setPlayingVoice(null);
       return;
     }
-    player.src = clip.audioUrl;
-    void player.play()
-      .then(() => setPlayingVoice({ characterId: selectedCharacter.id, clipId: clip.id }))
-      .catch(() => showToast(t('音频播放失败'), 'error'));
+    stopVoicePlayback();
+    setPlayingVoice(null);
+    const playback = { clipId: clip.id, player, controller: new AbortController(), release: undefined as (() => void) | undefined };
+    voicePlaybackRef.current = playback;
+    try {
+      const lease = await acquireComfyMediaSource(clip.audioUrl, playback.controller.signal);
+      if (playback.controller.signal.aborted || voicePlaybackRef.current !== playback || voicePlayerRef.current !== player) {
+        lease.release();
+        return;
+      }
+      playback.release = lease.release;
+      player.src = lease.src;
+      await player.play();
+      if (voicePlaybackRef.current === playback) setPlayingVoice({ characterId: selectedCharacter.id, clipId: clip.id });
+    } catch {
+      if (playback.controller.signal.aborted || voicePlaybackRef.current !== playback) return;
+      stopVoicePlayback();
+      showToast(t('音频播放失败'), 'error');
+    }
   };
 
   const handleBindVoiceNode = async (nodeId: string) => {
@@ -452,7 +483,7 @@ export default function CharacterLibraryPanel() {
 
   const handleRemoveVoiceClip = async (clip: CharacterVoiceClip) => {
     if (!selectedCharacter) return;
-    if (playingVoiceClipId === clip.id) voicePlayerRef.current?.pause();
+    if (voicePlaybackRef.current?.clipId === clip.id) { stopVoicePlayback(); setPlayingVoice(null); }
     if (await removeCharacterVoiceClip(scope, selectedCharacter.id, clip.id)) {
       showToast(t('已移除该声音'));
     }
@@ -836,7 +867,7 @@ export default function CharacterLibraryPanel() {
                             className="character-voice-play"
                             aria-label={playingVoiceClipId === clip.id ? t('暂停试听') : t('试听')}
                             disabled={!clip.audioUrl}
-                            onClick={() => toggleVoicePlayback(clip)}
+                            onClick={() => void toggleVoicePlayback(clip)}
                           >
                             <Icon
                               icon={playingVoiceClipId === clip.id ? 'lucide:pause' : 'lucide:play'}
@@ -947,7 +978,7 @@ export default function CharacterLibraryPanel() {
                       className={voiceDockOpen ? 'is-active' : ''}
                       onClick={() => {
                         if (voiceDockOpen) {
-                          voicePlayerRef.current?.pause();
+                          stopVoicePlayback();
                           setVoicePickerOpen(false);
                         }
                         setVoiceDockState({ context: voiceDockContext, expanded: !voiceDockOpen });
@@ -999,8 +1030,16 @@ export default function CharacterLibraryPanel() {
               <audio
                 ref={voicePlayerRef}
                 className="sr-only"
-                onPause={() => setPlayingVoice(null)}
-                onEnded={() => setPlayingVoice(null)}
+                onPause={(event) => {
+                  if (event.currentTarget.paused && voicePlaybackRef.current?.release) stopVoicePlayback();
+                  setPlayingVoice(null);
+                }}
+                onEnded={() => { stopVoicePlayback(); setPlayingVoice(null); }}
+                onError={(event) => {
+                  if (!event.currentTarget.error || !voicePlaybackRef.current) return;
+                  stopVoicePlayback(); setPlayingVoice(null);
+                  showToast(t('音频播放失败'), 'error');
+                }}
               />
             </section>
           ) : (

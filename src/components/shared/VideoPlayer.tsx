@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { Icon } from '@iconify/react';
 import { releaseViewportVideoElement } from './viewportVideoResource';
 import { useT } from '../../i18n';
+import { useComfyMediaSource } from '../../hooks/useComfyMediaSource';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
+import { shouldLoadNativeComfyMedia } from '../../services/comfyMediaSource';
 
 export interface VideoPlayerMetadata { width: number; height: number; duration: number }
 export interface VideoPlayerProps {
@@ -68,9 +71,12 @@ function VideoSeekPreview({ src, time }: { src: string; time: number }) {
   </div>;
 }
 
-/** UI Kit 视频播放器：调用方提供可播放地址，不依赖 Store、文件服务或生成历史。 */
-export default function VideoPlayer({ src, poster, name, autoPlay = false, unavailable = false, className = '', compact = false, active = true, durationHint = 0, mediaRef, crossOrigin, onLoadedMetadata, onPlay, onPause, onVolumeChange, onPosterError, onRequestPlayback, onFullscreen, onMetadata, onError, onEnded, onEscape }: VideoPlayerProps) {
+/** UI Kit 视频播放器：展示源复用宿主媒体通道，生成历史和状态仍由调用方管理。 */
+export default function VideoPlayer({ src: source, poster: sourcePoster, name, autoPlay = false, unavailable = false, className = '', compact = false, active = true, durationHint = 0, mediaRef, crossOrigin, onLoadedMetadata, onPlay, onPause, onVolumeChange, onPosterError, onRequestPlayback, onFullscreen, onMetadata, onError, onEnded, onEscape }: VideoPlayerProps) {
   const t = useT();
+  const [retryingSource, setRetryingSource] = useState(false);
+  const failedNativeSource = useRef<string | undefined>(undefined);
+  const poster = useComfyImageSource(sourcePoster, onPosterError);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bindVideo = useCallback((video: HTMLVideoElement | null) => {
     videoRef.current = video;
@@ -79,6 +85,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   const claimedEscape = useRef(false);
   const preferredRate = useRef(1);
   const preferredAudio = useRef({ volume: 1, muted: false });
+  const requestedPlayback = useRef<string | undefined>(undefined);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const controlsRef = useRef<HTMLDivElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
@@ -107,7 +114,12 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   const [fullscreenError, setFullscreenError] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [failed, setFailed] = useState<{ src: string; message: string; code?: number } | null>(null);
-  const failure = failed?.src === src ? failed : null;
+  const src = useComfyMediaSource(active && !retryingSource ? source : undefined, () => {
+    failedNativeSource.current = source;
+    setFailed({ src: source ?? '', message: videoErrorMessage(2) });
+    onError?.();
+  });
+  const failure = failed && (failed.src === src || failed.src === source) ? failed : null;
   const [dimensions, setDimensions] = useState<{ src: string; width: number; height: number; duration: number } | null>(null);
   const mediaInfo = dimensions?.src === src ? dimensions : null;
   const knownDuration = mediaInfo?.duration ?? durationHint;
@@ -140,9 +152,18 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     setBufferedEnd(end);
   };
   const play = () => {
-    if (!src) return;
+    if (!source) return;
+    requestedPlayback.current = shouldLoadNativeComfyMedia(source) ? source : undefined;
     if (!active) { onRequestPlayback?.(); return; }
+    if (!src) {
+      if (failedNativeSource.current === source) {
+        failedNativeSource.current = undefined;
+        setRetryingSource(true);
+      }
+      return;
+    }
     const video = videoRef.current; if (!video) return;
+    requestedPlayback.current = undefined;
     if (video.error || !video.getAttribute('src')) { video.src = src; video.load(); }
     void video.play().catch((error: unknown) => handlePlayFailure(video, src, error));
   };
@@ -156,6 +177,13 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
   useEffect(() => () => finishScrub(), [src, active, finishScrub]);
 
   useEffect(() => {
+    if (!retryingSource) return;
+    // 先用一次已提交的空来源释放失败请求，再于下一帧重新申请，不重走裸链接。
+    const frame = requestAnimationFrame(() => setRetryingSource(false));
+    return () => cancelAnimationFrame(frame);
+  }, [retryingSource]);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
     let current = true;
@@ -164,9 +192,12 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
     video.playbackRate = preferredRate.current;
     video.volume = preferredAudio.current.volume;
     video.muted = preferredAudio.current.muted;
-    if (autoPlay) void video.play().catch((error: unknown) => { if (current) handlePlayFailure(video, src, error); });
+    if (autoPlay || requestedPlayback.current === source) {
+      requestedPlayback.current = undefined;
+      void video.play().catch((error: unknown) => { if (current) handlePlayFailure(video, src, error); });
+    }
     return () => { current = false; releaseViewportVideoElement(video); };
-  }, [src, autoPlay, active, handlePlayFailure]);
+  }, [source, src, autoPlay, active, handlePlayFailure]);
 
   // 子播放器先登记释放键处理，避免蒙层把收起菜单或退出原生全屏的 Esc 当成关闭预览。
   useLayoutEffect(() => {
@@ -309,8 +340,8 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
             title={failure?.code === 3 || failure?.code === 4 ? t('建议使用 H.264 编码的 MP4；点击重试播放') : undefined}>
             <span className="whitespace-normal">{failure ? t(failure.message) : t('点击播放')}</span>
           </button>}
-        </> : src && poster ? <img src={poster} alt="" draggable={false} onError={onPosterError} />
-          : <p role="status" className="text-xs text-canvas-text-muted">{unavailable ? t('视频不可用') : src && !active ? t('点击播放') : t('加载视频…')}</p>}
+        </> : source && poster ? <img src={poster} alt="" draggable={false} onError={onPosterError} />
+          : <p role="status" className="text-xs text-canvas-text-muted">{failure ? t(failure.message) : unavailable ? t('视频不可用') : source && !active ? t('点击播放') : t('加载视频…')}</p>}
         </div>
         <div ref={controlsRef} className={`ui-video-player__controls nodrag nopan ${compact ? 'p-2' : 'p-3'}`} aria-label={t('视频播放控件')}
           onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
@@ -348,7 +379,7 @@ export default function VideoPlayer({ src, poster, name, autoPlay = false, unava
           </div>
           <div className="ui-video-player__control-row">
             <div className="ui-video-player__control-left">
-              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={active && playing ? t('暂停视频') : t('播放视频')} disabled={!src}
+              <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control" aria-label={active && playing ? t('暂停视频') : t('播放视频')} disabled={!source}
                 onClick={() => { if (!videoRef.current || videoRef.current.paused) play(); else videoRef.current.pause(); }}><Icon icon={active && playing ? 'lucide:pause' : 'lucide:play'} className="ui-video-player__play-icon" aria-hidden="true" /></button>
               <div className="ui-video-player__control-anchor">
                 <button type="button" className="ui-btn ui-btn--ghost ui-video-player__control ui-video-player__speed-trigger" data-video-speed-trigger

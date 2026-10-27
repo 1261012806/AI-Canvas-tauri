@@ -4,6 +4,7 @@ import { useViewportMediaSource } from '../../hooks/useViewportMediaSource';
 import { resolveResourceVideoSource } from '../../hooks/useResourceVideoPreview';
 import { acquireCanvasVideoPoster, type CanvasVideoPoster } from '../nodes/shared/video/canvasVideoPreviewCache';
 import { resolveVideoThumbnailPoster } from './videoThumbnailSource';
+import ViewportImage from './ViewportImage';
 
 export interface VideoThumbnailProps {
   src?: string;
@@ -60,7 +61,7 @@ export default function VideoThumbnail({ src, filePath, poster, name, alt, class
   return <span ref={rootRef} className={`inline-flex items-center justify-center overflow-hidden ${className}`}
     data-video-thumbnail={image ? 'ready' : 'placeholder'} role={!image && label ? 'img' : undefined}
     aria-label={!image && label ? label : undefined} aria-hidden={!image && !label ? true : undefined}>
-    {image ? <img src={image} alt={label} className="block h-full w-full [object-fit:inherit]" draggable={false}
+    {image ? <ViewportImage src={image} alt={label} className="block h-full w-full [object-fit:inherit]" draggable={false}
       loading="lazy" decoding="async" onError={() => {
         if (suppliedPoster) setFailedPoster(identity);
         else if (current) { current.release(); setDerived({ ...current, src: undefined }); }

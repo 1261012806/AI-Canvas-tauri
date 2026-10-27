@@ -14,6 +14,7 @@ import React, {
 } from 'react';
 import 'pannellum';
 import type { PanoramaViewState, PanoramaCoreHandle, PanoramaCoreProps } from '../../../../types/panorama';
+import { useComfyImageSource } from '../../../../hooks/useComfyImageSource';
 
 interface PannellumRenderer {
   render: (
@@ -48,7 +49,7 @@ export const PanoramaCore: React.ForwardRefExoticComponent<
   PanoramaCoreProps & React.RefAttributes<PanoramaCoreHandle>
 > = forwardRef<PanoramaCoreHandle, PanoramaCoreProps>(
   function PanoramaCore({
-    imageUrl,
+    imageUrl: sourceImageUrl,
     className = '',
     style,
     initialPitch = 0,
@@ -67,6 +68,7 @@ export const PanoramaCore: React.ForwardRefExoticComponent<
     onReady,
     onViewChange,
   }, forwardedRef) {
+    const imageUrl = useComfyImageSource(sourceImageUrl, () => onError?.('无法读取全景图，请检查 ComfyUI 服务连接'));
     const containerRef = useRef<HTMLDivElement>(null);
     const viewerRef = useRef<PannellumViewer | null>(null);
     const callbacksRef = useRef({ onLoad, onError, onReady, onViewChange });

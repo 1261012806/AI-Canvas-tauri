@@ -1,3 +1,5 @@
+vi.mock('../../src/services/comfyMediaSource', () => ({ acquireComfyMediaSource: async (src: string) => ({ src, release: () => {} }) }));
+vi.mock('../../src/components/shared/ViewportImage', () => ({ default: 'img' }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface Element { type: unknown; props: Record<string, unknown> & { children?: unknown } }

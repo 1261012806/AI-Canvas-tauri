@@ -11,6 +11,7 @@ import type { AnimationFrameCount } from '../../services/ai/animationPrompt';
 import { animationSheet, animationProcessing, animationEdits, animationFrameStyle, prepareAnimationPreview, type AnimationPreview } from '../../services/animationService';
 import { useAppStore } from '../../store/useAppStore';
 import { useCompletionFlash } from '../../hooks/useCompletionFlash';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 import { buildAnimationReskinPrompt } from '../../services/ai/animationPrompt';
 import { collectConnectedReferenceMedia } from '../../services/ai/connectedReferenceMedia';
 import { exportSpriteFrames } from '../../services/spriteExportService';
@@ -96,7 +97,7 @@ function AnimationNode({ id, data, selected }: { id: string; data: BaseNodeData;
   const processingError = previewState?.key === previewKey ? previewState.error : undefined;
   // 离屏后会重新挂载；先等透明缓存，避免键控底色原图闪现。
   const preparingPreview = !!data.filePath && !preview && !processingError;
-  const displaySrc = preview?.url ?? (preparingPreview ? undefined : originalSrc);
+  const displaySrc = useComfyImageSource(preview?.url ?? (preparingPreview ? undefined : originalSrc));
   useEffect(() => {
     if (!data.filePath || !pageVisible) return;
     let active = true;

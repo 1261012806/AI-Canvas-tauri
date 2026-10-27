@@ -16,6 +16,13 @@ const documentStub = {
 } as unknown as Document;
 
 describe('UI Kit reference chip', () => {
+  it('defers Comfy view thumbnails until their owning editor can lease a native source', () => {
+    const source = 'http://127.0.0.1:8188/view?filename=old.png';
+    const chip = buildReferenceChipEl(documentStub, { label: '旧结果', kind: 'image', thumbnailUrl: source }) as unknown as ElementStub;
+    const image = chip.children[0].children[0];
+    expect(image.src).toBe('');
+    expect(image.attributes['data-comfy-image-source']).toBe(source);
+  });
   it('keeps the compact node identity and media index separate from the title', () => {
     const chip = buildReferenceChipEl(documentStub, { label: '角色参考图', kind: 'image', badge: '#39', mediaIndex: '(图1)', thumbnailUrl: 'data:image/jpeg;base64,AA==' }) as unknown as ElementStub;
     expect(chip.contentEditable).toBe('false');

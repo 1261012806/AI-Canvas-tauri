@@ -6,6 +6,7 @@ import { Icon } from '@iconify/react';
 import type { BaseNodeData } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
 import { useViewportMediaSource } from '../../hooks/useViewportMediaSource';
+import { useComfyMediaSource } from '../../hooks/useComfyMediaSource';
 import { withPreviewRevision } from '../../hooks/useReferencedImageWatcher';
 import { acquireCanvasImagePreview } from '../nodes/shared/image/canvasImagePreviewCache';
 import ResourceVideoPreview from '../shared/ResourceVideoPreview';
@@ -37,7 +38,8 @@ function CanvasNodeCardContent({ nodeId, data, projectId, connectable, videoExpa
   const mediaSource = video ? undefined : image;
   const revisionSource = mediaSource ? withPreviewRevision(mediaSource, data.mediaVersion ?? 0) : undefined;
   const visibleMedia = useViewportMediaSource(revisionSource, bodyRef, { rootMargin: '160px 0px' });
-  const audioSource = useViewportMediaSource(data.audioUrl, bodyRef, { rootMargin: '160px 0px' });
+  const mountedAudioSource = useViewportMediaSource(data.audioUrl, bodyRef, { rootMargin: '160px 0px' });
+  const audioSource = useComfyMediaSource(mountedAudioSource);
   const text = (data.note?.text || data.output || data.prompt || '').trim().slice(0, 1600);
 
   useEffect(() => {

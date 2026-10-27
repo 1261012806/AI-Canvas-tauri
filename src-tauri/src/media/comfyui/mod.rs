@@ -16,6 +16,7 @@ pub mod installation;
 pub mod installer;
 pub mod launch_settings;
 pub mod management;
+pub mod media_source;
 pub mod model_dedupe;
 pub mod model_dedupe_links;
 pub mod model_dedupe_history;

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import ViewportImage from '../../shared/ViewportImage';
 import { t } from '../../../i18n';
 import { Icon } from '@iconify/react';
 import type {
@@ -208,7 +209,7 @@ export function renderPromptWithChips(
           role="button" tabIndex={0}
         >
           <span className="prompt-chip-icon">
-            {thumb ? <img src={thumb} className="prompt-chip-thumb" alt="" /> : icon}
+            {thumb ? <ViewportImage src={thumb} className="prompt-chip-thumb" alt="" /> : icon}
           </span>
           <span className="prompt-chip-id">{displayName}</span>
           {referenceLabel !== undefined && (
@@ -245,7 +246,7 @@ export function renderPromptWithChips(
           role="button" tabIndex={0}
         >
           <span className={`prompt-chip-icon${showThumbnail ? ' has-thumbnail' : ''}`} aria-hidden="true">
-            {showThumbnail ? <img src={thumbUrl} className="prompt-chip-thumb" alt="" /> : iconPath ? (
+            {showThumbnail ? <ViewportImage src={thumbUrl} className="prompt-chip-thumb" alt="" /> : iconPath ? (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d={iconPath} />
               </svg>

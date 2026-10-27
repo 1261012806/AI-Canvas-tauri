@@ -1,3 +1,5 @@
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: (source?: string) => source }));
+vi.mock('../../src/hooks/useComfyMediaSource', () => ({ useComfyMediaSource: (source?: string) => source }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HistoryRecord } from '../../src/services/indexedDbService';
 import type { BatchContext } from '../../src/utils/batchExecute';

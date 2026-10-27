@@ -56,6 +56,7 @@ import VideoThumbnail from '../shared/VideoThumbnail';
 import FullscreenOverlay from '../shared/FullscreenOverlay';
 import { useCanvasNodeLodProtection } from '../../hooks/useCanvasNodeLod';
 import { useT } from '../../i18n';
+import ViewportImage from '../shared/ViewportImage';
 import { hasShotlistTimeline, openVideoEditorForShotlist, resolveShotlistTimelineRows, resolveShotlistVoiceoverNodes } from '../../services/videoEditorService';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from '../../services/canvasDerivationGuard';
 
@@ -698,7 +699,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                 name={t('镜头 {shot} 参考视频', { shot: row.shotNo })} alt="" className="h-full w-full object-contain" />
             </button>
           ) : frame?.url ? (
-            <img
+            <ViewportImage
               className="shot-frame-img"
               src={frame.url}
               alt=""
@@ -1087,7 +1088,7 @@ function ShotlistNode({ id, data, selected }: { id: string; data: BaseNodeData; 
                     ? <VideoThumbnail src={candidate.videoUrl} filePath={candidate.filePath} poster={candidate.url}
                         name={candidate.label} alt="" className="shot-picker-img absolute inset-0" />
                     : candidate.url
-                    ? <img src={candidate.url} alt="" className="shot-picker-img" />
+                    ? <ViewportImage src={candidate.url} alt="" className="shot-picker-img" />
                     : <span className="shot-frame-hint">{t('未出图')}</span>}
                   {candidate.kind === 'video' && (
                     <Icon className="shot-frame-badge" icon="mdi:play-circle" width={12} height={12} />

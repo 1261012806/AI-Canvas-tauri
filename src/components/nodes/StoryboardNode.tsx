@@ -8,6 +8,8 @@
 import { t as translate, useT } from '../../i18n';
 import { memo, lazy, Suspense, useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import ViewportImage from '../shared/ViewportImage';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData, StoryboardCellOverride } from '../../types';
@@ -107,7 +109,8 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
     return arr;
   }, [rows, cols, hRanges, vRanges]);
 
-  const backgroundImage = displayImageUrl ? `url("${displayImageUrl}")` : undefined;
+  const renderedImageUrl = useComfyImageSource(displayImageUrl);
+  const backgroundImage = renderedImageUrl ? `url("${renderedImageUrl}")` : undefined;
 
   // 取消选中即退出编辑态：派生而非用 effect 回写，避免多一轮渲染
   const editing = editRequested && !!selected;
@@ -347,7 +350,7 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
                   onPointerDown={draggable ? startCellDrag(cell.idx) : undefined}
                 >
                   {override ? (
-                    <img className="sb-cell-fill" src={withPreviewRevision(override.url, revisionFor(override.filePath))} alt="" draggable={false} />
+                    <ViewportImage eager className="sb-cell-fill" src={withPreviewRevision(override.url, revisionFor(override.filePath))} alt="" draggable={false} />
                   ) : isEmpty ? (
                     <span className="sb-cell-plus">+</span>
                   ) : null}
@@ -425,7 +428,7 @@ function StoryboardNode({ id, data, selected }: { id: string; data: BaseNodeData
           <div className="sb-drag-ghost" style={{ left: drag.x, top: drag.y }}>
             <div className="sb-drag-ghost-clip">
               {overrides[drag.idx] ? (
-                <img src={withPreviewRevision(overrides[drag.idx]!.url, revisionFor(overrides[drag.idx]!.filePath))} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <ViewportImage eager src={withPreviewRevision(overrides[drag.idx]!.url, revisionFor(overrides[drag.idx]!.filePath))} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <div className="sb-drag-ghost-fill" style={{ ...dragCell.bg, backgroundImage }} />
               )}

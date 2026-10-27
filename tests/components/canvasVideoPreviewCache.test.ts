@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const media = vi.hoisted(() => ({ acquire: vi.fn() }));
+vi.mock('../../src/services/comfyMediaSource', () => ({ acquireComfyMediaSource: media.acquire }));
+
 class FakeVideo extends EventTarget {
   readyState = 0;
   videoWidth = 1920;
@@ -55,6 +58,7 @@ async function finish(video = videos[videos.length - 1]) {
 }
 
 beforeEach(async () => {
+  media.acquire.mockReset().mockImplementation(async (src: string) => ({ src, release: () => {} }));
   vi.useFakeTimers();
   vi.resetModules();
   videos = [];
@@ -107,6 +111,24 @@ afterEach(async () => {
 });
 
 describe('canvas video poster scheduling and ownership', () => {
+  it('uses the native Comfy range source and releases it after extracting the poster', async () => {
+    const release = vi.fn();
+    media.acquire.mockResolvedValueOnce({ src: 'http://comfy-media.localhost/opaque', release });
+    const request = acquire('http://127.0.0.1:8188/view?filename=old.mp4');
+    await start();
+    expect(videos[0].src).toBe('http://comfy-media.localhost/opaque');
+    await finish();
+    expect(await request.promise).not.toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a placeholder on a native source failure without assigning the raw URL', async () => {
+    media.acquire.mockRejectedValueOnce(new Error('native unavailable'));
+    const request = acquire('http://127.0.0.1:8188/view?filename=old.mp4');
+    await start();
+    expect(await request.promise).toBeNull();
+    expect(videos[0].src).toBe('');
+  });
   it('prunes idle poster memory on a mode switch while keeping playback leases and recent cached frames', async () => {
     const makePoster = async (source: string) => {
       const request = acquire(source); await start();

@@ -27,6 +27,8 @@ import {
 } from '../../types/videoEditor';
 import { resolveClipUrl } from './useVideoEditorSources';
 import { useT } from '../../i18n';
+import { useComfyMediaSource } from '../../hooks/useComfyMediaSource';
+import { useComfyImageSource } from '../../hooks/useComfyImageSource';
 
 interface VideoEditorPreviewProps {
   clip: VideoEditorClip | null;
@@ -88,8 +90,11 @@ function OverlayMedia({ clip, playhead, playing, muted, volume, canvasDisplaySca
   const t = useT();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const url = resolveClipUrl(clip);
-  const failed = !!url && failedUrl === url;
+  const sourceUrl = resolveClipUrl(clip);
+  const videoUrl = useComfyMediaSource(clip.kind === 'video' ? sourceUrl : undefined, () => setFailedUrl(sourceUrl));
+  const imageUrl = useComfyImageSource(clip.kind === 'image' ? sourceUrl : undefined, () => setFailedUrl(sourceUrl));
+  const url = clip.kind === 'image' ? imageUrl : videoUrl;
+  const failed = !!sourceUrl && failedUrl === sourceUrl;
   const sourceTime = clip.sourceIn + (playhead - clip.timelineStart);
 
   useEffect(() => {
@@ -143,7 +148,7 @@ function OverlayMedia({ clip, playhead, playing, muted, volume, canvasDisplaySca
         alt=""
         draggable={false}
         className="video-editor-overlay-img"
-        onError={() => setFailedUrl(url)}
+        onError={() => setFailedUrl(sourceUrl)}
       />
     );
   }
@@ -156,7 +161,7 @@ function OverlayMedia({ clip, playhead, playing, muted, volume, canvasDisplaySca
       preload="auto"
       muted={muted}
       playsInline
-      onError={() => setFailedUrl(url)}
+      onError={() => setFailedUrl(sourceUrl)}
     />
   );
 }
@@ -196,7 +201,10 @@ interface TransitionUnderlayProps {
  */
 function TransitionUnderlay({ clip, sourceTime, playing, style }: TransitionUnderlayProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const url = resolveClipUrl(clip);
+  const sourceUrl = resolveClipUrl(clip);
+  const videoUrl = useComfyMediaSource(clip.kind === 'video' ? sourceUrl : undefined);
+  const imageUrl = useComfyImageSource(clip.kind === 'image' ? sourceUrl : undefined);
+  const url = clip.kind === 'image' ? imageUrl : videoUrl;
   const target = Math.max(0, sourceTime);
 
   // 转场期间底画面与播放头同速前进，靠原生播放跟随即可，只在漂移时纠偏
@@ -251,7 +259,7 @@ interface AudioPreviewProps {
 /** 音频轨走带：由统一播放头定位，播放状态与主走带保持一致。 */
 function AudioPreview({ clip, playhead, playing, muted, volume }: AudioPreviewProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const url = resolveClipUrl(clip);
+  const url = useComfyMediaSource(resolveClipUrl(clip));
   const sourceTime = clip.sourceIn + (playhead - clip.timelineStart);
 
   useEffect(() => {
@@ -279,7 +287,7 @@ function AudioPreview({ clip, playhead, playing, muted, volume }: AudioPreviewPr
 
 function VideoEditorPreview({
   clip,
-  clipUrl,
+  clipUrl: sourceClipUrl,
   playhead,
   timelineDuration,
   tracks,
@@ -293,6 +301,9 @@ function VideoEditorPreview({
   onTransformChange,
 }: VideoEditorPreviewProps) {
   const t = useT();
+  const nativeVideoUrl = useComfyMediaSource(clip?.kind === 'video' ? sourceClipUrl : undefined);
+  const nativeImageUrl = useComfyImageSource(clip?.kind === 'image' ? sourceClipUrl : undefined);
+  const clipUrl = (clip?.kind === 'image' ? nativeImageUrl : nativeVideoUrl) ?? '';
   const previewRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);

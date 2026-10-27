@@ -1,5 +1,30 @@
 # ComfyUI 第一批可靠性修复
 
+## 2026-10-27 宿主媒体全链路原生读取
+
+状态：源码已实现，待用户 Tauri 桌面验收；本轮没有运行测试、类型检查、Rust 编译、构建、应用或真实服务请求，提交时由既有钩子执行本次前端文件的定向 ESLint。此前 `937f870c` 的检查仅对应前一批图片改动，不作为本轮验证证据。
+
+| 链路 | 本轮处理与边界 |
+|---|---|
+| 服务 API、上传、进度与管理 | 静态确认 API／上传／目录／连接探测沿 `comfyFetch → corsSafeFetch` 原生 HTTP；桌面 WebSocket 沿专用原生命令，失败只保留 HTTP 查询；启动、安装、去重和本地管理使用既有原生命令。没有新增浏览器重试或重复提交生成 |
+| 视频与音频展示 | `comfyMediaSource.ts` 与 `media/comfyui/media_source.rs` 提供窗口私有的 `comfy-media` 不透明临时地址。支持 HEAD、单 Range、后缀 Range，单次最多 8 MiB，16 个并发读取、64 个活动租约，每请求 20 秒；不把整段视频放进 JS Blob，不保存临时地址 |
+| 展示与引用消费者 | 接入视频／音频节点、视口播放器、输出历史、资源与引用预览、角色试听、全景、动画、分组、笔记、镜头表、宫格与视频编辑器。图片和海报仍走有界图片 Blob 通道；编辑器引用胶囊由根观察器统一申请／回收，Markdown 中的取件图先延迟挂载，避免 HTML 插入时抢先裸请求 |
+| 数据处理与交付 | 素材转 Data URL、图片加载／可达性检查、角色参考拼图、音频波形／转录、参考媒体元数据和视频编辑器探测／Range／整包回退经原生读取。波形保留 15 秒／32 MiB 边界；元数据在卸载元素前捕获。另存 Comfy 结果复用原生流下载的进度、取消和临时提交保护，已有目标明确提示换名，不覆盖或删除原文件 |
+| 生命周期与隔离 | 默认本机或已配置服务器精确匹配协议／端口／反代前缀；已进入原生分支的操作失败不切回 WebView 或另一台服务器。256 位随机标识绑定真实本地窗口及页面，关闭／换源／取消／导航／销毁／退出回收；取帧／元数据结束即归还。闲置卡片按实际激活与播放意图申请，不长期占用媒体租约 |
+
+原生协议只接受 HTTP(S) `/view?filename=...` 取件，禁止内嵌账号与片段；只读、不转发浏览器 Origin／Referer／Cookie／Authorization，重定向保持同源，媒体类型与 Content-Range／长度／内容版本校验失败即结束。CORS 仅回当前应用页的精确来源；新命令只允许既有受信本地窗口和固定视频编辑器页面，ACL 与 CSP 只增加这个原生媒体通道，不给 ComfyUI 远程编辑页或插件窗口通用 IPC。第三方 ComfyUI 编辑页自身的网页资源仍由该站点同源管理，不纳入宿主代理或凭据上下文。
+
+兼容边界：普通 asset／data／blob、非 Comfy 网址和 Web 演示保留原行为。未知远程历史服务器需先恢复对应配置；不识别任意网站的 `/view` 为受信 ComfyUI。大媒体预览要求上游支持合法 Range；忽略 Range 的完整响应仅在不超过 8 MiB 时接受，不能把大 200 响应截成假成功。若网关不支持分段，请先通过原生另存为下载到本地再播放。
+
+桌面验收（待用户执行）：
+
+1. 前置：可用的本机 ComfyUI 与自定义端口／反代前缀服务，保留旧 `/view` 图片、视频与音频节点及历史。无需重提生成，依次检查缩略图／原图／全屏、视频拖动与截帧、音频播放／波形／试听、角色与 @ 引用、宫格／全景／动画、剪辑主轨／叠加轨／音频轨。主应用网络中不应有发向原 ComfyUI 地址的裸媒体请求；原生协议出现 `comfy-media` 本地虚拟地址是正常行为。
+2. 多于 64 个未激活音视频卡片，检查闲置不占满授权、首次点击可播放、暂停／结束／滚出视口／关闭预览／换项目后释放；快速切换引用、撤销胶囊、关闭角色窗口、元数据读取中取消、原生申请迟到均不能播放旧源或写回临时地址。普通本地和公网素材、深浅主题的控件继续工作。
+3. 验证原服务 403／404、断线、非法或超大分段、长度不符、内容版本改变和不支持 Range 的网关。失败应保持可理解错误，不切回原 URL／默认服务器，不重复生成或上传；恢复后重新打开可重试。另存新文件检查进度与取消；选择已有文件必须提示换名且原文件不变。
+4. 用户授权执行检查时，仓库根目录可运行 `npx vitest run tests/services/comfyMediaSource.test.ts tests/services/comfyDomImageSource.test.ts tests/services/comfyReferenceMetadata.test.ts tests/services/comfyImageUtilityReads.test.ts tests/services/transcribeAudioNativeComfy.test.ts tests/services/fileServiceDataUrlLimits.test.ts tests/services/fileServiceSaveAs.test.ts tests/services/videoEditorMediaService.test.ts tests/hooks/useComfyImageSource.test.ts tests/components/canvasVideoPreviewCache.test.ts tests/components/videoPlayer.test.tsx tests/utils/renderMarkdown.test.ts`；在 `src-tauri/` 可运行 `cargo test comfyui::media_source::tests --lib` 和 `cargo check --lib`。相关组件既有测试已补依赖替身与回归源码，均未执行；自动化替身不能代替 Windows／macOS／Linux 原生协议、拖动、频谱和桌面 CORS 验收。
+
+回滚：撤销本节新增原生媒体租约、协议注册、准确 ACL／CSP 和对应宿主接入即可，保留前一批图片取件修复。无数据库迁移、模型文件变更、自动下载或自动提交；保留其他任务的生成权限清单与资产同步改动。
+
 ## 2026-10-27 图片取件 403 与预览通道
 
 状态：源码已实现，待用户 Tauri 桌面验收。本阶段未运行测试、类型检查、构建、应用或真实服务请求；已做源码、UTF-8 与差异静态核对，提交时由既有钩子执行本次前端文件的定向 ESLint。原有阶段的检查结果不作为本次证据。

@@ -1,6 +1,7 @@
 /**
  * 轻量级 Markdown → HTML 渲染器（无外部依赖）
  */
+import { COMFY_IMAGE_SOURCE_ATTRIBUTE, isComfyViewUrl } from './comfyMediaUrl';
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -113,7 +114,8 @@ function renderMarkdownContent(md: string, findRanges?: (value: string) => reado
       if (!isSafeMarkdownUrl(cleanUrl, 'image')) return alt;
       const titleMatch = url.match(/\s+"([^"]*)"$/);
       const title = titleMatch ? ` title="${escapeHtml(titleMatch[1])}"` : '';
-      return `<img src="${escapeHtml(cleanUrl)}" alt="${escapeHtml(alt)}"${title} />`;
+      const sourceAttribute = isComfyViewUrl(cleanUrl) ? COMFY_IMAGE_SOURCE_ATTRIBUTE : 'src';
+      return `<img ${sourceAttribute}="${escapeHtml(cleanUrl)}" alt="${escapeHtml(alt)}"${title} />`;
     }
   );
 

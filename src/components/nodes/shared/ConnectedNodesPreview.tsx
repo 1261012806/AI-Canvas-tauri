@@ -18,6 +18,10 @@ import { useT } from '../../../i18n';
 import { calcAnchoredPosition } from '../../../utils/popupPosition';
 import FullscreenOverlay from '../../shared/FullscreenOverlay';
 import VideoThumbnail from '../../shared/VideoThumbnail';
+import ViewportImage from '../../shared/ViewportImage';
+import VideoPlayer from '../../shared/VideoPlayer';
+import ViewportAudio from '../../shared/ViewportAudio';
+import { useComfyImageSource } from '../../../hooks/useComfyImageSource';
 import { resolveVideoThumbnailPoster } from '../../shared/videoThumbnailSource';
 import {
   calculateDockOffset,
@@ -342,6 +346,8 @@ export default function ConnectedNodesPreview({
     if (mentionId && mentionLabel) handleClick(mentionId, mentionLabel);
   }, [handleClick]);
 
+  const storyboardSource = useComfyImageSource(connectedNodes.find((node) => node.id === sbPopupId)?.thumbnailUrl);
+
   if (connectedNodes.length === 0) return null;
 
   const handleDisconnect = (edgeIds: string[]) => {
@@ -510,7 +516,7 @@ export default function ConnectedNodesPreview({
             >
             {/* 缩略图内容 */}
             {node.outputType === 'image' && node.thumbnailUrl ? (
-              <img src={node.thumbnailUrl} alt={node.label} className="thumb-img" loading="lazy" />
+              <ViewportImage src={node.thumbnailUrl} alt={node.label} className="thumb-img" loading="lazy" />
             ) : node.outputType === 'video' ? (
               <div className="thumb-video-wrap">
                 <VideoThumbnail src={node.mediaUrl} filePath={node.filePath} poster={node.thumbnailUrl}
@@ -585,7 +591,7 @@ export default function ConnectedNodesPreview({
                   exit={{ opacity: 0, y: 4 }}
                   transition={{ duration: 0.15 }}
                 >
-                  <img
+                  <ViewportImage
                     src={previewNode.mediaUrl || previewNode.thumbnailUrl}
                     alt={previewNode.label}
                   />
@@ -639,12 +645,12 @@ export default function ConnectedNodesPreview({
                       onClick={handleStoryboardClick}
                     >
                       {cell.overrideUrl ? (
-                        <img src={cell.overrideUrl} alt={cell.label} className="sb-cell-img" />
+                        <ViewportImage src={cell.overrideUrl} alt={cell.label} className="sb-cell-img" />
                       ) : sbNode.thumbnailUrl ? (
                         <div
                           className="sb-cell-sprite"
                           style={{
-                            backgroundImage: `url(${sbNode.thumbnailUrl})`,
+                            backgroundImage: storyboardSource ? `url(${storyboardSource})` : undefined,
                             ...cell.bgStyle,
                           }}
                         />
@@ -678,24 +684,24 @@ export default function ConnectedNodesPreview({
           >
             <div data-tauri-drag-region className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-2xl">
               {fullscreenPreview.outputType === 'image' && (fullscreenPreview.mediaUrl || fullscreenPreview.thumbnailUrl) ? (
-                <img
+                <ViewportImage
                   src={fullscreenPreview.mediaUrl || fullscreenPreview.thumbnailUrl}
                   alt={fullscreenPreview.label}
                   className="max-h-full max-w-full select-none rounded-2xl object-contain shadow-2xl"
                   draggable={false}
                 />
               ) : fullscreenPreview.outputType === 'video' && fullscreenPreview.mediaUrl ? (
-                <video
+                <VideoPlayer
                   src={fullscreenPreview.mediaUrl}
                   poster={fullscreenPreview.thumbnailUrl}
+                  name={fullscreenPreview.label}
                   className="max-h-full max-w-full rounded-2xl bg-black shadow-2xl"
-                  controls
                   autoPlay
                 />
               ) : fullscreenPreview.outputType === 'audio' && fullscreenPreview.mediaUrl ? (
                 <div className="flex w-full max-w-xl flex-col items-center gap-5 rounded-2xl border border-canvas-border bg-canvas-surface/90 p-8 shadow-2xl backdrop-blur-xl">
                   <span className="text-5xl" aria-hidden="true">🎵</span>
-                  <audio src={fullscreenPreview.mediaUrl} className="w-full" controls autoPlay />
+                  <ViewportAudio src={fullscreenPreview.mediaUrl} className="w-full" controls autoPlay eager />
                 </div>
               ) : fullscreenPreview.outputType === 'video' && fullscreenPreview.thumbnailUrl ? (
                 <VideoThumbnail poster={fullscreenPreview.thumbnailUrl} name={fullscreenPreview.label} alt={fullscreenPreview.label}

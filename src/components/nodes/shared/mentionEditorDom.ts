@@ -13,6 +13,7 @@ import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
 import { buildReferenceChipEl } from '../../shared/referenceChipDom';
+import { referenceThumbnailSource, setReferenceThumbnailSource } from '../../../utils/comfyMediaUrl';
 import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
 import { buildComfyRefmodMention, parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
 import { comfyRefmodKey } from '../../../utils/comfyRefmod';
@@ -343,7 +344,7 @@ export function buildAssetChipEl(path: string, assetUrl?: string): HTMLSpanEleme
   icon.className = 'prompt-chip-icon';
   if (isImage && assetUrl) {
     const image = document.createElement('img');
-    image.src = assetUrl;
+    setReferenceThumbnailSource(image, assetUrl);
     image.className = 'prompt-chip-thumb';
     image.alt = '';
     icon.appendChild(image);
@@ -376,7 +377,7 @@ export function buildDramaChipEl(dramaId: string, name: string, kind: string, th
   icon.className = 'prompt-chip-icon';
   if (thumbUrl) {
     const image = document.createElement('img');
-    image.src = thumbUrl;
+    setReferenceThumbnailSource(image, thumbUrl);
     image.className = 'prompt-chip-thumb';
     image.alt = '';
     icon.appendChild(image);
@@ -443,7 +444,7 @@ export function syncGlobalCharacterReferenceChips(root: HTMLElement): void {
         const currentImage = currentIcon.querySelector('img');
         const nextImage = nextIcon.querySelector('img');
         const sameImage = !!currentImage && !!nextImage
-          && currentImage.getAttribute('src') === nextImage.getAttribute('src');
+          && referenceThumbnailSource(currentImage) === referenceThumbnailSource(nextImage);
         const sameText = !currentImage && !nextImage && currentIcon.textContent === nextIcon.textContent;
         if (!sameImage && !sameText) currentIcon.replaceChildren(...Array.from(nextIcon.childNodes));
       }
@@ -542,9 +543,9 @@ export function syncComfyRefmodReferenceChips(root: HTMLElement): void {
     if (!presentation || !icon) continue;
     const image = icon.querySelector('img');
     if (presentation.thumbnailUrl) {
-      if (image?.getAttribute('src') === presentation.thumbnailUrl) continue;
+      if (referenceThumbnailSource(image) === presentation.thumbnailUrl) continue;
       const next = document.createElement('img');
-      next.src = presentation.thumbnailUrl; next.alt = ''; next.draggable = false;
+      setReferenceThumbnailSource(next, presentation.thumbnailUrl); next.alt = ''; next.draggable = false;
       next.className = 'ui-reference-chip__thumb prompt-chip-thumb';
       icon.replaceChildren(next); icon.classList.add('has-thumbnail');
     } else if (image) { icon.replaceChildren(document.createTextNode('人')); icon.classList.remove('has-thumbnail'); }

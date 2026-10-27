@@ -6,6 +6,7 @@ import { cropImageByRanges } from '../nodes/shared/image/imageUtils';
 import ModalOverlay from './ModalOverlay';
 import ZoomableImage from './ZoomableImage';
 import VideoPlayer from './VideoPlayer';
+import ViewportImage from './ViewportImage';
 import MarkdownEditor from './MarkdownEditor';
 import { AudioTrackPlayer } from './CanvasAudioPreview';
 import ReferencePreviewBody from './ReferencePreviewBody';
@@ -135,7 +136,7 @@ export default function ReferenceContentPreview({ content, source, onBack, onClo
           {!loading && !unavailable && content.kind === 'image' && images.length > 1 && <div className="asset-image-preview-references" aria-label={t('全部参考图')}>
             {images.map((item, position) => <div className="asset-image-preview-reference" key={`${position}:${item.url}`}>
               <button type="button" aria-label={t('查看{label}', { label: item.label })} aria-pressed={index === position} title={item.label}
-                onClick={() => setSelection({ content, index: position })}><img src={item.url} alt={item.label} loading="lazy" /></button>
+                onClick={() => setSelection({ content, index: position })}><ViewportImage src={item.url} alt={item.label} loading="lazy" /></button>
             </div>)}
           </div>}
           {content.prompt && <section className="ui-card asset-image-preview-section p-3" aria-label={t('提示词')}>

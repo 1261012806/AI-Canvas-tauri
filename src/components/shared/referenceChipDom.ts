@@ -1,4 +1,5 @@
 /** UI Kit 引用胶囊的纯 DOM 构造器；不读取 Store、路径或宿主权限。 */
+import { setReferenceThumbnailSource } from '../../utils/comfyMediaUrl';
 export interface ReferenceChipOptions {
   label: string;
   kind?: 'text' | 'image' | 'video' | 'audio' | 'markdown';
@@ -31,7 +32,7 @@ export function buildReferenceChipEl(doc: Document, options: ReferenceChipOption
     icon.classList.add('has-thumbnail');
     const image = doc.createElement('img');
     image.className = 'ui-reference-chip__thumb prompt-chip-thumb';
-    image.src = options.thumbnailUrl; image.alt = ''; image.draggable = false;
+    setReferenceThumbnailSource(image, options.thumbnailUrl); image.alt = ''; image.draggable = false;
     if (options.thumbnailCrop) {
       const crop = options.thumbnailCrop;
       // 只设置裁剪几何；调用方须先校验来源与 0..1 矩形。

@@ -16,6 +16,7 @@ import {
 import { copyText } from '../../../services/clipboardService';
 import ModelSelector from './ModelSelector';
 import PopupCloseButton from '../../shared/PopupCloseButton';
+import ViewportImage from '../../shared/ViewportImage';
 import { useT } from '../../../i18n';
 
 const panelVariants = {
@@ -126,7 +127,7 @@ function ReversePromptContent({
           <div className="preset-runner-body">
             <div className="reverse-prompt-thumbs" aria-label={t('参与反推的{source}', { source: sourceLabel })}>
               {request.imageUrls.map((url, index) => (
-                <img key={`${url.slice(0, 32)}-${index}`} src={url} alt={`${sourceLabel}${index + 1}`} />
+                <ViewportImage key={`${url.slice(0, 32)}-${index}`} src={url} alt={`${sourceLabel}${index + 1}`} />
               ))}
             </div>
 

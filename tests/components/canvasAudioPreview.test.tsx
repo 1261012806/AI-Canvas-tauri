@@ -1,3 +1,5 @@
+vi.mock('../../src/hooks/useComfyMediaSource', () => ({ useComfyMediaSource: (source?: string) => source }));
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: (source?: string) => source }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../../src/types';

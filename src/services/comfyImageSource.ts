@@ -1,38 +1,17 @@
-import { useAppStore } from '../store/useAppStore';
 import { corsSafeFetch } from './ai/httpTransport';
-import { DEFAULT_COMFY_URL } from './comfyServers';
-import { isTauriEnv } from './fs/core';
+import { shouldLoadNativeComfyMedia } from './comfyMediaSource';
 
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const READ_TIMEOUT_MS = 15_000;
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 export interface ComfyImageSourceLease {
   src: string;
   release: () => void;
 }
 
-function parseEndpoint(value: string | undefined): URL | undefined {
-  try {
-    const url = new URL(value ?? '');
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) return undefined;
-    return url;
-  } catch { return undefined; }
-}
-
 /** 只接管默认本机或已配置服务器的取件地址，保持完整查询和原目标，不借用其他连接。 */
 export function shouldLoadNativeComfyImage(source: string | undefined): boolean {
-  if (!isTauriEnv()) return false;
-  const url = parseEndpoint(source);
-  if (!url?.searchParams.get('filename')?.trim() || !url.pathname.endsWith('/view')) return false;
-  const { config } = useAppStore.getState();
-  return [DEFAULT_COMFY_URL, config.comfyUIUrl, ...(config.comfyServers ?? []).map((server) => server.url)].some((value) => {
-    const base = parseEndpoint(value);
-    if (!base || base.search || base.protocol !== url.protocol || base.port !== url.port) return false;
-    const sameHost = base.hostname === url.hostname
-      || (LOOPBACK_HOSTS.has(base.hostname) && LOOPBACK_HOSTS.has(url.hostname));
-    return sameHost && url.pathname === `${base.pathname.replace(/\/+$/, '')}/view`;
-  });
+  return shouldLoadNativeComfyMedia(source);
 }
 
 /** 原生流读取覆盖响应体的取消、超时和字节预算；失败不再交回 WebView 请求。 */

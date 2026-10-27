@@ -10,6 +10,7 @@ import { confirmAction } from '../../services/confirmDialog';
 import { useT } from '../../i18n';
 import ModalOverlay from '../shared/ModalOverlay';
 import Select from '../shared/Select';
+import ViewportImage from '../shared/ViewportImage';
 
 /** 场景、道具共用参考图管理器；主图只是兼容投影，单图引用保持自己的稳定 ID。 */
 export default function DramaVisualReferencesDialog({ asset, scope, onClose }: {
@@ -94,7 +95,7 @@ export default function DramaVisualReferencesDialog({ asset, scope, onClose }: {
     <div className="min-h-0 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2">
       {references.map((reference, index) => <div key={reference.id} className="ui-card p-2 flex gap-2">
         <div className="w-24 h-24 shrink-0 rounded-lg overflow-hidden bg-canvas-bg flex items-center justify-center">
-          {reference.imageUrl ? <img src={reference.imageUrl} alt={reference.label || t('参考图 {number}', { number: index + 1 })} className="w-full h-full object-contain" />
+          {reference.imageUrl ? <ViewportImage src={reference.imageUrl} alt={reference.label || t('参考图 {number}', { number: index + 1 })} className="w-full h-full object-contain" />
             : <span className="text-xs text-canvas-text-secondary">{t('图片不可用')}</span>}
         </div>
         <div className="min-w-0 flex-1 flex flex-col gap-2">

@@ -5,6 +5,7 @@
 import { memo } from 'react';
 import { useT } from '../../i18n';
 import type { CanvasNoteData } from '../../types';
+import ViewportImage from '../shared/ViewportImage';
 
 interface CanvasNoteImageProps {
   note: CanvasNoteData;
@@ -18,7 +19,7 @@ function CanvasNoteImage({ note, imageUrl, label }: CanvasNoteImageProps) {
     return <div className="canvas-note-image-missing">{t('图片不可用')}</div>;
   }
   return (
-    <img
+    <ViewportImage
       className={`canvas-note-image canvas-note-image--${note.style.roundness}`}
       src={imageUrl}
       alt={label}

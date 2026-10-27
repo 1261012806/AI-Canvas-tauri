@@ -9,6 +9,7 @@ import { animationEdits, animationFrameStyle, animationProcessing, animationShee
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from '../../../services/canvasDerivationGuard';
 import { uploadSourceFileToProject } from '../../../services/fileService';
 import { useT } from '../../../i18n';
+import { useComfyImageSource } from '../../../hooks/useComfyImageSource';
 import ModalOverlay from '../../shared/ModalOverlay';
 import Select from '../../shared/Select';
 import NumberStepper from '../../shared/NumberStepper';
@@ -74,7 +75,7 @@ function Editor({ nodeId, data, projectId, onClose }: { nodeId: string; data: Ba
   const endedOnce = !loop && playhead >= enabled.length - 1;
   const stopped = !playing || endedOnce;
   const layout = preview ?? { cols: sheet.cols, rows: sheet.rows, cellWidth: (data.imageWidth ?? sheet.cols) / sheet.cols, cellHeight: (data.imageHeight ?? sheet.rows) / sheet.rows };
-  const src = preview?.url ?? data.imageUrl;
+  const src = useComfyImageSource(preview?.url ?? data.imageUrl);
   const selectedPosition = edits.indexOf(selectedEdit);
   const actionLabel = Object.hasOwn(ANIMATION_ACTION_LABELS, sheet.action)
     ? t(ANIMATION_ACTION_LABELS[sheet.action as AnimationAction]) : sheet.action;

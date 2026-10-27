@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { renderMarkdown, renderMarkdownWithInlineSlots, renderTextWithInlineSlots } from '../../src/utils/renderMarkdown';
 
 describe('renderMarkdown URL sanitization', () => {
+  it('defers Comfy view images before inserting preview HTML while retaining the source reference', () => {
+    const html = renderMarkdown('![旧结果](http://127.0.0.1:8188/view?filename=old.png&type=output)');
+    expect(html).toContain('data-comfy-image-source="http://127.0.0.1:8188/view?filename=old.png&amp;type=output"');
+    expect(html).not.toContain('<img src=');
+  });
   it.each([
     'javascript:alert(1)',
     'java\u0000script:alert(1)',

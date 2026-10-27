@@ -12,6 +12,7 @@ import { t as translate, useT } from '../../i18n';
 import type { PromptSubmitShortcut } from '../../types';
 import { resolvePromptEnterAction } from '../../utils/promptSubmitShortcut';
 import { buildReferenceChipEl } from '../shared/referenceChipDom';
+import { useComfyDomImageSources } from '../../hooks/useComfyDomImageSources';
 
 export type ChatComposerReference =
   | { kind: 'node'; id: string; label: string; displayId?: number }
@@ -285,6 +286,7 @@ const ChatComposerEditor = forwardRef<ChatComposerEditorHandle, ChatComposerEdit
 }, ref) {
   const t = useT();
   const editorRef = useRef<HTMLDivElement>(null);
+  useComfyDomImageSources(editorRef);
   const lastRangeRef = useRef<Range | null>(null);
   const triggerRangeRef = useRef<Range | null>(null);
   const previousPresentationRef = useRef(referencePresentation);

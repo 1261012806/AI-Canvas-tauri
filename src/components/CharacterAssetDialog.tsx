@@ -5,7 +5,7 @@
  */
 import { t, useT } from '../i18n';
 import Select from './shared/Select';
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, generateId } from '../store/useAppStore';
@@ -46,6 +46,10 @@ import ComfyRefmodPicker from './assets/ComfyRefmodPicker';
 import { comfyRefmodKey, normalizeCharacterRefmods } from '../utils/comfyRefmod';
 import type { ComfyRefmodSelection } from '../types/comfyRefmod';
 import { comfyServerName } from '../services/comfyServers';
+import { acquireComfyMediaSource } from '../services/comfyMediaSource';
+import ViewportImage from './shared/ViewportImage';
+import ViewportVideo from './shared/ViewportVideo';
+import ViewportAudio from './shared/ViewportAudio';
 
 type CharacterLibraryScope = 'project' | 'global';
 
@@ -247,8 +251,9 @@ function AvatarCropEditor({
     <div className="character-crop-editor">
       <div className="character-crop-preview" aria-label={t('头像裁切预览')}>
         {reference.imageUrl ? (
-          <img
+          <ViewportImage
             src={reference.imageUrl}
+            eager
             alt=""
             draggable={false}
             onLoad={handleImageLoad}
@@ -603,15 +608,16 @@ function CharacterNodeCaptureDialog({
             {captureTab === 'voice' && audioUrl ? (
               <div className="flex w-full min-w-0 flex-col items-center gap-4 p-3">
                 <Icon icon="lucide:audio-lines" width="48" height="48" className="text-canvas-text-secondary" aria-hidden="true" />
-                <audio key={audioUrl} src={audioUrl} controls preload="metadata" className="w-full"
+                <ViewportAudio key={audioUrl} src={audioUrl} eager controls preload="metadata" className="w-full"
                   onLoadedMetadata={(event) => {
                     const duration = event.currentTarget.duration;
                     setVoiceDuration(Number.isFinite(duration) && duration > 0 ? duration : undefined);
                   }} />
               </div>
             ) : captureTab === 'action' && actionMedia?.kind === 'video' ? (
-              <video
+              <ViewportVideo
                 src={actionMedia.url}
+                eager
                 className="max-h-[min(62vh,720px)] max-w-full object-contain"
                 controls
                 muted
@@ -619,15 +625,17 @@ function CharacterNodeCaptureDialog({
                 preload="metadata"
               />
             ) : captureTab === 'action' && actionMedia?.url ? (
-              <img
+              <ViewportImage
                 src={actionMedia.url}
+                eager
                 alt=""
                 className="block max-h-[min(62vh,720px)] max-w-full object-contain"
                 draggable={false}
               />
             ) : imageUrl ? (
-              <img
+              <ViewportImage
                 src={imageUrl}
+                eager
                 alt=""
                 className="block max-h-[min(62vh,720px)] max-w-full object-contain"
                 draggable={false}
@@ -983,10 +991,28 @@ function CharacterAssetEditorDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const voiceInputRef = useRef<HTMLInputElement>(null);
   const voicePlayerRef = useRef<HTMLAudioElement>(null);
+  const voicePlaybackRef = useRef<{
+    clipId: string;
+    player: HTMLAudioElement;
+    controller: AbortController;
+    release?: () => void;
+  } | null>(null);
+  const stopVoicePlayback = useCallback(() => {
+    const playback = voicePlaybackRef.current;
+    voicePlaybackRef.current = null;
+    const player = playback?.player ?? voicePlayerRef.current;
+    player?.pause();
+    player?.removeAttribute('src');
+    player?.load();
+    playback?.controller.abort();
+    playback?.release?.();
+  }, []);
+  useEffect(() => stopVoicePlayback, [isOpen, selectedVoiceClipId, stopVoicePlayback]);
 
   const saveController = useRef<AbortController | null>(null);
   useEffect(() => () => saveController.current?.abort(), []);
   const onClose = () => {
+    stopVoicePlayback();
     saveController.current?.abort(); saveController.current = null; setSaving(false);
     closeEditor();
   };
@@ -1160,24 +1186,39 @@ function CharacterAssetEditorDialog({
     }
   };
 
-  const toggleVoicePlayback = (clip: CharacterVoiceClip) => {
+  const toggleVoicePlayback = async (clip: CharacterVoiceClip) => {
     const player = voicePlayerRef.current;
     if (!player || !clip.audioUrl) return;
-    if (playingVoiceClipId === clip.id) {
-      player.pause();
+    if (voicePlaybackRef.current?.clipId === clip.id) {
+      stopVoicePlayback();
       setPlayingVoiceClipId(null);
       return;
     }
-    player.src = clip.audioUrl;
-    void player.play()
-      .then(() => setPlayingVoiceClipId(clip.id))
-      .catch(() => showToast(t('音频播放失败'), 'error'));
+    stopVoicePlayback();
+    setPlayingVoiceClipId(null);
+    const playback = { clipId: clip.id, player, controller: new AbortController(), release: undefined as (() => void) | undefined };
+    voicePlaybackRef.current = playback;
+    try {
+      const lease = await acquireComfyMediaSource(clip.audioUrl, playback.controller.signal);
+      if (playback.controller.signal.aborted || voicePlaybackRef.current !== playback || voicePlayerRef.current !== player) {
+        lease.release();
+        return;
+      }
+      playback.release = lease.release;
+      player.src = lease.src;
+      await player.play();
+      if (voicePlaybackRef.current === playback) setPlayingVoiceClipId(clip.id);
+    } catch {
+      if (playback.controller.signal.aborted || voicePlaybackRef.current !== playback) return;
+      stopVoicePlayback();
+      showToast(t('音频播放失败'), 'error');
+    }
   };
 
   const removeSelectedVoiceClip = () => {
     if (!selectedVoiceClipId) return;
-    if (playingVoiceClipId === selectedVoiceClipId) {
-      voicePlayerRef.current?.pause();
+    if (voicePlaybackRef.current?.clipId === selectedVoiceClipId) {
+      stopVoicePlayback();
       setPlayingVoiceClipId(null);
     }
     const rest = (draft.voiceClips ?? []).filter((clip) => clip.id !== selectedVoiceClipId);
@@ -1356,7 +1397,7 @@ function CharacterAssetEditorDialog({
                 onClick={() => setSelectedReferenceId(reference.id)}
                 aria-label={t('第 {index} 张，{kind}', { index: index + 1, kind: t(CHARACTER_REFERENCE_KIND_LABELS[reference.kind]) })}
               >
-                {reference.imageUrl ? <img src={reference.imageUrl} alt="" /> : null}
+                {reference.imageUrl ? <ViewportImage src={reference.imageUrl} alt="" /> : null}
               </button>
             ))}
             {(draft.referenceImages?.length ?? 0) === 0 ? (
@@ -1375,7 +1416,7 @@ function CharacterAssetEditorDialog({
             <div className="character-reference-editor">
               <div className="character-reference-editor-main">
                 <div className="character-reference-editor-image">
-                  {selectedReference.imageUrl ? <img src={selectedReference.imageUrl} alt="" /> : null}
+                  {selectedReference.imageUrl ? <ViewportImage src={selectedReference.imageUrl} eager alt="" /> : null}
                 </div>
                 <div className="character-reference-editor-fields">
                   <label className="character-field">
@@ -1489,7 +1530,7 @@ function CharacterAssetEditorDialog({
                       className="character-voice-play"
                       aria-label={playingVoiceClipId === clip.id ? t('暂停试听') : t('试听')}
                       disabled={!clip.audioUrl}
-                      onClick={() => toggleVoicePlayback(clip)}
+                      onClick={() => void toggleVoicePlayback(clip)}
                     >
                       <Icon
                         icon={playingVoiceClipId === clip.id ? 'lucide:pause' : 'lucide:play'}
@@ -1571,7 +1612,16 @@ function CharacterAssetEditorDialog({
             <audio
               ref={voicePlayerRef}
               className="sr-only"
-              onEnded={() => setPlayingVoiceClipId(null)}
+              onPause={(event) => {
+                if (event.currentTarget.paused && voicePlaybackRef.current?.release) stopVoicePlayback();
+                setPlayingVoiceClipId(null);
+              }}
+              onEnded={() => { stopVoicePlayback(); setPlayingVoiceClipId(null); }}
+              onError={(event) => {
+                if (!event.currentTarget.error || !voicePlaybackRef.current) return;
+                stopVoicePlayback(); setPlayingVoiceClipId(null);
+                showToast(t('音频播放失败'), 'error');
+              }}
             />
           </div>
         </section>

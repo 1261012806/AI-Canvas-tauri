@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const native = vi.hoisted(() => ({ matches: vi.fn(() => false), fetch: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: native.matches }));
+vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: native.fetch }));
 
 import { createResilientReader as makeReader, createVideoInput } from '../../src/services/videoEditorMediaService';
 
@@ -33,6 +37,11 @@ function webkitFetchFailure() {
   return new TypeError('Type error');
 }
 
+beforeEach(() => {
+  native.matches.mockReset().mockReturnValue(false);
+  native.fetch.mockReset();
+});
+
 afterEach(() => {
   for (const reader of readers) reader.dispose();
   readers.clear();
@@ -41,6 +50,26 @@ afterEach(() => {
 });
 
 describe('createResilientReader', () => {
+  it('keeps ComfyUI Range and whole-file fallback on the captured native channel', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=video.mp4&type=output';
+    native.matches.mockReturnValue(true);
+    native.fetch.mockResolvedValueOnce(wholeResponse()).mockResolvedValueOnce(wholeResponse());
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    const read = createResilientReader(source, WHOLE.length);
+    native.matches.mockReturnValue(false);
+    expect([...(await read(2, 5))]).toEqual([2, 3, 4]);
+    expect(native.fetch.mock.calls[0]).toMatchObject([source, { headers: { Range: 'bytes=2-4' } }]);
+    expect(native.fetch).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back to browser requests when ComfyUI rejects native reads', async () => {
+    native.matches.mockReturnValue(true);
+    native.fetch.mockResolvedValue(new Response(null, { status: 403 }));
+    vi.stubGlobal('fetch', vi.fn());
+    await expect(createResilientReader('http://127.0.0.1:8188/view?filename=video.mp4', WHOLE.length)(0, 2)).rejects.toThrow('HTTP 403');
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it('serves a plain ranged read with a single request', async () => {
     const fetchMock = vi.fn(async () => rangeResponse(2, 5));
     vi.stubGlobal('fetch', fetchMock);
@@ -285,6 +314,22 @@ describe('createResilientReader', () => {
 });
 
 describe('createVideoInput range probe', () => {
+  it('uses native Range requests for the ComfyUI probe and its later reads', async () => {
+    native.matches.mockReturnValue(true);
+    native.fetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      const match = /^bytes=(\d+)-(\d+)$/u.exec(String((init?.headers as Record<string, string> | undefined)?.Range));
+      if (!match) throw new Error('Range expected');
+      return rangeResponse(Number(match[1]), Math.min(WHOLE.length, Number(match[2]) + 1));
+    });
+    vi.stubGlobal('fetch', vi.fn());
+    const input = await createVideoInput('http://127.0.0.1:8188/view?filename=video.mp4');
+    inputs.push(input);
+    native.matches.mockReturnValue(false);
+    await expect(input.source.getSize()).resolves.toBe(WHOLE.length);
+    expect(native.fetch.mock.calls[0][1]).toMatchObject({ headers: { Range: 'bytes=0-0' } });
+    expect(native.fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it.each([
     { status: 206, contentRange: undefined },
     { status: 206, contentRange: 'bytes 0-0/*' },

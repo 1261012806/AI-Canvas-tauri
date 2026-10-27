@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../../src/types';
+const comfyImages = vi.hoisted(() => ({ matches: vi.fn(() => false), acquire: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({
+  shouldLoadNativeComfyImage: comfyImages.matches,
+  acquireComfyImageSource: comfyImages.acquire,
+}));
 import {
   captureCurrentCanvasSnapshot,
   encodeProjectSnapshot,
@@ -187,6 +192,8 @@ async function renderWithSnapshotWorker(convertToBlob: (options: ImageEncodeOpti
 
 describe('projectSnapshotService', () => {
   afterEach(() => {
+    comfyImages.matches.mockReset().mockReturnValue(false);
+    comfyImages.acquire.mockReset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -577,6 +584,65 @@ describe('projectSnapshotService', () => {
       expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toMatch(/private media source|private-token|private\.example/);
       expect(cors.images[0].src).toBe('');
       expect(harness.surfaces.every((surface) => surface.width === 0 && surface.height === 0)).toBe(true);
+    } finally { harness.unregister(); }
+  });
+
+  it('reloads a legacy Comfy image through a native blob and releases it after copying pixels', async () => {
+    const harness = installMediaCapture(1);
+    const cors = installCorsReloads();
+    const source = 'http://127.0.0.1:8188/view?filename=legacy.png&type=output';
+    Object.defineProperty(harness.images[0], 'currentSrc', { value: source });
+    harness.readPixels.mockImplementationOnce(() => { throw new DOMException('tainted image', 'SecurityError'); });
+    comfyImages.matches.mockReturnValue(true);
+    const release = vi.fn();
+    comfyImages.acquire.mockResolvedValue({ src: 'blob:native-snapshot', release });
+    try {
+      const capture = captureCurrentCanvasSnapshot('native-comfy-snapshot', { nodes: [], edges: [] });
+      await vi.waitFor(() => expect(cors.images[0].requestedSource).toBe('blob:native-snapshot'));
+      expect(comfyImages.acquire).toHaveBeenCalledWith(source, expect.any(AbortSignal));
+      cors.images[0].onload?.();
+      await vi.waitFor(() => expect(harness.requests).toHaveLength(1));
+      expect(release).toHaveBeenCalledOnce();
+      expect(cors.images[0].src).toBe('');
+      harness.respond();
+      expect(await capture).toMatch(/^data:image\/webp;base64,/);
+      for (const media of harness.requests[0].media) expect(media).not.toHaveProperty('source');
+    } finally { harness.unregister(); }
+  });
+
+  it('does not retry a failed native snapshot reload with the original Comfy URL', async () => {
+    const harness = installMediaCapture(1);
+    const cors = installCorsReloads();
+    Object.defineProperty(harness.images[0], 'currentSrc', { value: 'http://127.0.0.1:8188/view?filename=denied.png' });
+    harness.readPixels.mockImplementationOnce(() => { throw new DOMException('tainted image', 'SecurityError'); });
+    comfyImages.matches.mockReturnValue(true);
+    comfyImages.acquire.mockRejectedValue(new Error('HTTP 403'));
+    try {
+      expect(await captureCurrentCanvasSnapshot('native-comfy-denied', { nodes: [], edges: [] })).toBeNull();
+      expect(cors.images[0].requestedSource).toBe('');
+      expect(harness.requests).toEqual([]);
+    } finally { harness.unregister(); }
+  });
+
+  it('cancels pending native snapshot reads at the existing media deadline and releases late blobs', async () => {
+    vi.useFakeTimers();
+    const harness = installMediaCapture(1);
+    const cors = installCorsReloads();
+    Object.defineProperty(harness.images[0], 'currentSrc', { value: 'http://127.0.0.1:8188/view?filename=late.png' });
+    harness.readPixels.mockImplementationOnce(() => { throw new DOMException('tainted image', 'SecurityError'); });
+    comfyImages.matches.mockReturnValue(true);
+    const release = vi.fn();
+    let resolveRead!: (lease: { src: string; release: () => void }) => void;
+    comfyImages.acquire.mockImplementation(() => new Promise((resolve) => { resolveRead = resolve; }));
+    try {
+      const capture = captureCurrentCanvasSnapshot('native-comfy-late', { nodes: [], edges: [] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await capture).toBeNull();
+      expect(comfyImages.acquire.mock.calls[0][1].aborted).toBe(true);
+      resolveRead({ src: 'blob:late-snapshot', release });
+      await Promise.resolve();
+      expect(release).toHaveBeenCalledOnce();
+      expect(cors.images[0].requestedSource).toBe('');
     } finally { harness.unregister(); }
   });
 

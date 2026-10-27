@@ -4,11 +4,15 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   readFile: vi.fn(),
   writeFile: vi.fn(),
+  exists: vi.fn(),
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  nativeComfy: vi.fn(() => false),
   convertFileSrc: vi.fn((p: string) => `asset://localhost/${encodeURIComponent(p)}`),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
-  exists: vi.fn(),
+  exists: mocks.exists,
   mkdir: vi.fn(),
   readDir: vi.fn(),
   readFile: mocks.readFile,
@@ -17,8 +21,9 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: mocks.writeFile,
 }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(), save: mocks.save }));
-vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: mocks.convertFileSrc, invoke: vi.fn() }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: mocks.convertFileSrc, invoke: mocks.invoke }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: mocks.listen }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: mocks.nativeComfy }));
 vi.mock('@tauri-apps/api/path', () => ({ appDataDir: vi.fn(), localDataDir: vi.fn() }));
 vi.mock('../../src/services/fs/core', () => ({
   CATEGORY_EXTENSIONS: {},
@@ -47,6 +52,10 @@ describe('saveNodeOutputToFile', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readFile.mockReset();
+    mocks.exists.mockResolvedValue(false);
+    mocks.nativeComfy.mockReset().mockReturnValue(false);
+    mocks.listen.mockReset().mockResolvedValue(vi.fn());
+    mocks.invoke.mockReset();
     mocks.save.mockResolvedValue('/Users/me/Desktop/out.png');
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       // 只有原样的 asset URL 才可读；被 convertFileSrc 二次编码后取不到文件
@@ -65,6 +74,53 @@ describe('saveNodeOutputToFile', () => {
     expect(dest).toBe('/Users/me/Desktop/out.png');
     expect(mocks.convertFileSrc).not.toHaveBeenCalled();
     expect(mocks.writeFile).toHaveBeenCalledWith(dest, new Uint8Array([1, 2, 3]));
+  });
+
+  it('ComfyUI 原始取件另存为使用原生流下载，不经浏览器或整包内存写入', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=video.mp4&type=output';
+    mocks.nativeComfy.mockReturnValue(true);
+    mocks.invoke.mockResolvedValue({ path: '/Users/me/Desktop/out.png', totalBytes: 10, contentType: 'video/mp4' });
+    const onProgress = vi.fn();
+    await expect(saveNodeOutputToFile({ mediaUrl: source, nodeType: 'ai-video', onProgress })).resolves.toBe('/Users/me/Desktop/out.png');
+    expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.objectContaining({
+      url: source, destinationPath: '/Users/me/Desktop/out.png', expectedMediaKind: 'video',
+    }));
+    expect(onProgress).toHaveBeenCalledWith({ transferredBytes: 0, totalBytes: null, phase: 'downloading' });
+    expect(onProgress).toHaveBeenLastCalledWith({ transferredBytes: 10, totalBytes: 10, phase: 'saving' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('ComfyUI 原生下载失败不回退浏览器读取，也不覆盖已有目标', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=image.png&type=output';
+    mocks.nativeComfy.mockReturnValue(true);
+    mocks.exists.mockResolvedValue(true);
+    await expect(saveNodeOutputToFile({ mediaUrl: source, nodeType: 'ai-image' })).rejects.toThrow('目标文件已存在，请改用新文件名');
+    expect(mocks.invoke).not.toHaveBeenCalled();
+    mocks.exists.mockResolvedValue(false);
+    mocks.invoke.mockRejectedValue(new Error('HTTP 403'));
+    await expect(saveNodeOutputToFile({ mediaUrl: source, nodeType: 'ai-image' })).rejects.toThrow('HTTP 403');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('取消 ComfyUI 原生另存为会取消同一传输任务，不触发内存写入', async () => {
+    mocks.nativeComfy.mockReturnValue(true);
+    const controller = new AbortController();
+    let stop!: (error: Error) => void;
+    mocks.invoke.mockImplementation((command: string) => command === 'download_file_streamed'
+      ? new Promise((_resolve, reject) => { stop = reject; })
+      : Promise.resolve(stop(new DOMException('cancelled', 'AbortError'))));
+    const task = saveNodeOutputToFile({
+      mediaUrl: 'http://127.0.0.1:8188/view?filename=video.mp4', nodeType: 'ai-video', signal: controller.signal,
+    });
+    const rejected = expect(task).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.any(Object)));
+    const taskId = (mocks.invoke.mock.calls[0][1] as { taskId: string }).taskId;
+    controller.abort(); await rejected;
+    expect(mocks.invoke).toHaveBeenCalledWith('cancel_file_transfer', { taskId });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
   });
 
   it('源文件读不出来时回退到节点 URL', async () => {

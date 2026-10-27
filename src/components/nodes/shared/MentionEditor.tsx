@@ -21,6 +21,8 @@ import MentionPicker, { type MentionPickerChip, type MentionPickerItem } from '.
 import ViewportImage from '../../shared/ViewportImage';
 import VideoThumbnail from '../../shared/VideoThumbnail';
 import { useDialogFocus } from '../../../hooks/useDialogFocus';
+import { useComfyDomImageSources } from '../../../hooks/useComfyDomImageSources';
+import { useComfyImageSource } from '../../../hooks/useComfyImageSource';
 import { findDraggableMentionChip, startMentionChipDrag } from './mentionEditorChipDrag';
 import {
   captureMentionEditorSelection,
@@ -273,6 +275,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const mentionDropdownHeightRef = useRef<number | null>(null);
   const [mentionDropdownResizing, setMentionDropdownResizing] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
+  useComfyDomImageSources(editorRef);
   const disabledRef = useRef(disabled);
   const historyRef = useRef(new MentionEditorHistory());
   const syncedPromptRef = useRef(prompt);
@@ -1606,6 +1609,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       description: chipTip.assetUnavailable ? t('素材文件不可用') : t('素材库 · {kind}', { kind: t({ image: '图像素材', video: '视频素材', audio: '音频素材', text: '文本文件', other: '文件' }[category]) }),
     };
   }, [chipTip, currentProjectId, dramaAssets, globalAssets, nodeId, nodeMetaMap, nodes, t]);
+  const chipSpriteSource = useComfyImageSource(chipPreview?.sprite ? chipPreview.thumbnailUrl : undefined);
   useEffect(() => {
     // 捕获画布、文字选择和胶囊拖动；原生拖放开始后可能立即收到 pointercancel。
     let nativeDragging = false;
@@ -2119,14 +2123,14 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
                 ) : chipPreview.thumbnailUrls && chipPreview.thumbnailUrls.length > 1 ? (
                   <div className="grid h-full w-full grid-cols-2 gap-1 overflow-hidden p-2">
                     {chipPreview.thumbnailUrls.slice(0, 4).map((url, index) => (
-                      <img key={`${index}:${url}`} src={url} alt={`${chipPreview.label} · ${index + 1}`} className="h-12 w-full object-contain" loading="lazy" />
+                      <ViewportImage key={`${index}:${url}`} src={url} alt={`${chipPreview.label} · ${index + 1}`} className="h-12 w-full object-contain" loading="lazy" />
                     ))}
                   </div>
                 ) : chipPreview.thumbnailUrl ? (
                   chipPreview.sprite ? (
-                    <div role="img" aria-label={chipPreview.label} className="h-full w-full bg-no-repeat" style={{ backgroundImage: `url(${JSON.stringify(chipPreview.thumbnailUrl)})`, ...chipPreview.sprite }} />
+                    <div role="img" aria-label={chipPreview.label} className="h-full w-full bg-no-repeat" style={{ backgroundImage: chipSpriteSource ? `url(${JSON.stringify(chipSpriteSource)})` : undefined, ...chipPreview.sprite }} />
                   ) : (
-                    <img src={chipPreview.thumbnailUrl} alt={chipPreview.label} className="h-full w-full object-contain"
+                    <ViewportImage src={chipPreview.thumbnailUrl} alt={chipPreview.label} className="h-full w-full object-contain"
                       onError={chipTip.source.kind === 'asset' ? () => setChipTip((current) => current && current === chipTip
                         ? { ...current, assetUrl: undefined, assetUnavailable: true } : current) : undefined} />
                   )

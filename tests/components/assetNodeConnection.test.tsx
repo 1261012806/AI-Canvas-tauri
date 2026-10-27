@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../../src/hooks/useComfyMediaSource', () => ({ useComfyMediaSource: (source?: string) => source }));
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { AppState } from '../../src/store/useAppStore';
 import type { BaseNodeData } from '../../src/types';

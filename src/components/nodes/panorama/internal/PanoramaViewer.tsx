@@ -6,6 +6,7 @@
  */
 
 import { useT } from '../../../../i18n';
+import { useComfyImageSource } from '../../../../hooks/useComfyImageSource';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
@@ -101,7 +102,7 @@ const cropCaptureToRatio = async (
 };
 
 export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
-  imageUrl,
+  imageUrl: sourceImageUrl,
   onClose,
   closeText,
   theme = 'light',
@@ -116,6 +117,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
   const [loading, setLoading] = useState(true);
   const [snapshotting, setSnapshotting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const imageUrl = useComfyImageSource(sourceImageUrl, () => { setLoading(false); setError(t('无法读取全景图，请检查 ComfyUI 服务连接')); });
   const [showProTools, setShowProTools] = useState(false);
   const [showCaptureTools, setShowCaptureTools] = useState(false);
   const [captureRatio, setCaptureRatio] = useState<PanoramaCaptureRatio>('16:9');
@@ -362,7 +364,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
 
     const link = document.createElement('a');
     link.href = url;
-    const ext = imageUrl.split('.').pop()?.split('?')[0] || 'jpg';
+    const ext = sourceImageUrl.split('.').pop()?.split('?')[0] || 'jpg';
     link.download = `VR_panorama_original_${Date.now()}.${ext}`;
     document.body.appendChild(link);
     link.click();
@@ -757,7 +759,7 @@ export const PanoramaViewer: React.FC<PanoramaViewerProps> = ({
       {/* The main canvas viewport with CSS Parallax Transformation Layers */}
       <PanoramaCore
         ref={coreRef}
-        imageUrl={imageUrl}
+        imageUrl={imageUrl ?? ''}
         className="w-full h-full bg-[var(--theme-surface)]  relative overflow-hidden flex items-center justify-center origin-center"
         initialPitch={0}
         initialYaw={180}

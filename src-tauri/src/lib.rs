@@ -1774,10 +1774,13 @@ pub fn run() {
 
     let proxy_http_state = ProxyHttpState::new().expect("初始化代理 HTTP 客户端失败");
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().on_page_load(|webview, payload| {
+        #[cfg(target_os = "macos")]
+        native_rendering::record_main_page_load(webview, payload);
+        comfyui::media_source::on_page_load(webview, payload);
+    });
     #[cfg(target_os = "macos")]
     let builder = builder
-        .on_page_load(native_rendering::record_main_page_load)
         .on_web_content_process_terminate(native_rendering::recover_web_content);
 
     builder
@@ -1786,6 +1789,7 @@ pub fn run() {
         .manage(comfyui::management::ManagementState::default())
         .manage(comfyui::runtime_console::ComfyUIRuntimeState::default())
         .manage(comfyui::progress::ComfyProgressState::default())
+        .manage(comfyui::media_source::ComfyMediaState::default())
         .manage(comfyui::installer::ComfyUIInstallerState::default())
         .manage(comfyui::model_dedupe::ModelDedupeState::default())
         .manage(blender_runtime::BlenderRuntimeState::default())
@@ -1800,6 +1804,7 @@ pub fn run() {
         .register_uri_scheme_protocol("plugin-ui", plugin_ui::handle_protocol)
         .register_uri_scheme_protocol("plugin-window", plugin_window::handle_protocol)
         .register_uri_scheme_protocol("theme-image", theme_assets::handle_protocol)
+        .register_asynchronous_uri_scheme_protocol("comfy-media", comfyui::media_source::handle_protocol)
         .plugin(tauri_plugin_fs::init())
         .plugin(comfyui::installation::privacy_plugin())
         .plugin(tauri_plugin_dialog::init())
@@ -1822,6 +1827,8 @@ pub fn run() {
             billing::billing_set_storage_path,
             billing::billing_get_storage_path,
             fetch_image_data_url,
+            comfyui::media_source::open_comfy_media_source,
+            comfyui::media_source::close_comfy_media_source,
             proxy_fetch,
             proxy_stream_fetch,
             cancel_proxy_fetch,
@@ -1965,6 +1972,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             plugin_window::on_window_event(window, event);
             comfyui::progress::on_window_event(window, event);
+            comfyui::media_source::on_window_event(window, event);
             // 用户把文件拖进自有窗口 = 一次显式授权，登记后复制/读取命令才放行。
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 if window.label() == "main" || window.label() == "chat-assistant" {
@@ -2031,6 +2039,7 @@ pub fn run() {
                 comfyui::progress::shutdown_progress(app_handle);
                 comfyui::installer::shutdown_installation(app_handle);
                 comfyui::runtime_console::shutdown_runtime(app_handle);
+                comfyui::media_source::shutdown(app_handle);
                 plugin_window::revoke_all_sessions();
                 app_handle
                     .state::<blender_runtime::BlenderJobCore>()

@@ -4,6 +4,7 @@
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
 import Select from '../../shared/Select';
+import ViewportImage from '../../shared/ViewportImage';
 import VideoCharacterPicker from './VideoCharacterPicker';
 import type { MentionPickerItem } from '../../shared/MentionPicker';
 import { useT } from '../../../i18n';
@@ -792,7 +793,7 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                   <div className="rh-video-frame-list">
                     {frameReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考帧')} title={item.label} loading="lazy" />
+                        <ViewportImage className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考帧')} title={item.label} loading="lazy" />
                         <div className="img-rp-quality-segmented rh-video-frame-seg">
                           {FRAME_ROLE_OPTIONS.map((option) => (
                             <AnimatedButton
@@ -826,7 +827,7 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                   <div className="rh-video-frame-list">
                     {characterReferences.map((item) => (
                       <div key={item.id} className="rh-video-frame-row">
-                        <img className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考角色')} title={item.label} loading="lazy" />
+                        <ViewportImage className="rh-video-frame-thumb" src={getReferencePreviewUrl(item)} alt={item.label || t('参考角色')} title={item.label} loading="lazy" />
                         <span className="rh-video-ref-name">{item.label || t('参考角色')}</span>
                         {references.some((reference) => reference.id === `${item.id}:voice` && reference.mediaKind === 'audio') && (
                           <span className="shrink-0 text-[10px] text-canvas-text-muted">{t('含主音色')}</span>
@@ -853,7 +854,7 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                           className="rh-video-ref-option"
                           onClick={() => addReference('frame', { id: node.id, label: data.label || t('参考图'), url: data.imageUrl as string })}
                         >
-                          <img className="rh-video-frame-thumb" src={data.imageUrl} alt="" loading="lazy" />
+                          <ViewportImage className="rh-video-frame-thumb" src={data.imageUrl} alt="" loading="lazy" />
                           <span className="rh-video-ref-name">{data.label || t('参考图')}</span>
                         </button>
                       );

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   arrayBufferToBase64: vi.fn(),
@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   resolveUniqueDestPath: vi.fn(),
   stat: vi.fn(),
+  nativeComfy: vi.fn(() => false),
+  nativeFetch: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -23,6 +25,8 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open, save: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
+vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: mocks.nativeComfy }));
+vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mocks.nativeFetch }));
 vi.mock('../../src/services/fs/assetIndex', () => ({ identifyAsset: vi.fn() }));
 vi.mock('../../src/services/fs/assetLibrary', () => ({ walkDirectoryFiles: vi.fn() }));
 vi.mock('../../src/services/fs/core', () => ({
@@ -69,12 +73,16 @@ import {
   uploadSourceFileToProject,
 } from '../../src/services/fileService';
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe('fileService Data URL 内存预算', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.arrayBufferToBase64.mockReturnValue('AQIDBA==');
     mocks.bytePartsToBase64Async.mockResolvedValue('AQIDBA==');
     mocks.stat.mockResolvedValue({ size: 4 });
+    mocks.nativeComfy.mockReset().mockReturnValue(false);
+    mocks.nativeFetch.mockReset();
   });
 
   it('在读取大视频前根据 stat 拒绝，避免完整文件进入 WebView', async () => {
@@ -91,6 +99,34 @@ describe('fileService Data URL 内存预算', () => {
     await expect(readFileToDataUrl('G:/media/small.png', { kind: 'image' }))
       .resolves.toBe('data:image/png;base64,AQIDBA==');
     expect(mocks.readFile).toHaveBeenCalledOnce();
+  });
+
+  it('ComfyUI 远程取件转 Data URL 经原生读取，并保留原内存预算', async () => {
+    const source = 'http://127.0.0.1:8188/view?filename=image.png&type=output';
+    mocks.nativeComfy.mockReturnValue(true);
+    mocks.nativeFetch.mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } }));
+    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('FileReader', class {
+      result = 'data:image/png;base64,AQID';
+      onload: (() => void) | null = null;
+      readAsDataURL() { this.onload?.(); }
+    });
+    await expect(readFileToDataUrl(source, { kind: 'image' })).resolves.toBe('data:image/png;base64,AQID');
+    expect(mocks.nativeFetch).toHaveBeenCalledWith(source, { signal: undefined });
+    expect(fetch).not.toHaveBeenCalled();
+    mocks.nativeFetch.mockResolvedValue(new Response(null, { headers: { 'content-length': String(MEDIA_DATA_URL_MAX_BYTES.image + 1) } }));
+    await expect(readFileToDataUrl(source, { kind: 'image' })).rejects.toThrow('超过内存转换上限');
+  });
+
+  it('ComfyUI 原生读取失败后不尝试浏览器请求', async () => {
+    mocks.nativeComfy.mockReturnValue(true);
+    mocks.nativeFetch.mockRejectedValue(new Error('HTTP 403'));
+    vi.stubGlobal('fetch', vi.fn());
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(readFileToDataUrl('http://127.0.0.1:8188/view?filename=image.png', { kind: 'image' })).resolves.toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
   });
 
   it('取消发生在原生读取期间时不再进入 Base64 编码', async () => {

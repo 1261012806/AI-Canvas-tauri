@@ -3,19 +3,15 @@
  * 排版复用角色库画廊那套 justified rows：格子宽高比等于图片宽高比，不裁切不变形。
  */
 import { justifiedRows } from '../components/character/justifiedRows';
+import { loadImage as loadReferenceImage } from './ai/imageUtils';
 
 const TARGET_WIDTH = 1536;
 const GAP = 12;
 const BACKGROUND = '#ffffff';
 
-function loadImage(url: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.onload = () => resolve(image);
-    image.onerror = () => resolve(null);
-    image.src = url;
-  });
+async function loadImage(url: string): Promise<HTMLImageElement | null> {
+  try { return await loadReferenceImage(url); }
+  catch { return null; }
 }
 
 /**

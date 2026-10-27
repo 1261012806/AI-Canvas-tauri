@@ -1,3 +1,4 @@
+vi.mock('../../src/services/comfyMediaSource', () => ({ acquireComfyMediaSource: async (src: string) => ({ src, release: () => {} }) }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 
@@ -15,6 +16,7 @@ vi.mock('../../src/i18n', async (original) => {
 });
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
+  useCallback: <T,>(callback: T) => callback,
   useRef: <T,>(initial: T) => {
     const index = hooks.refCursor++;
     return (hooks.refs[index] ??= { current: initial }) as { current: T };

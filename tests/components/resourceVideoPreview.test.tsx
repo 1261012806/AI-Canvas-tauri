@@ -1,3 +1,6 @@
+vi.mock('../../src/hooks/useComfyMediaSource', () => ({ useComfyMediaSource: (source?: string) => source }));
+vi.mock('../../src/hooks/useComfyImageSource', () => ({ useComfyImageSource: (source?: string) => source }));
+vi.mock('../../src/components/shared/ViewportImage', () => ({ default: 'img' }));
 import type { ComponentProps, ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

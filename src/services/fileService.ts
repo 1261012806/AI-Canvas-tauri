@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { isLocalMediaUrl, isRemoteMediaUrl, localMediaUrlToPath } from '../utils/mediaUrl';
 import { shouldLoadNativeComfyImage } from './comfyImageSource';
+import { corsSafeFetch } from './ai/httpTransport';
 import { downloadGithubBytes, githubMirrorUrl } from './githubDownloadService';
 import { identifyAsset, getRelativeAssetPath } from './fs/assetIndex';
 import { readAssetTextFile } from './fs/assetTextFiles';
@@ -671,11 +672,11 @@ export async function readFileToDataUrl(
       return dataUrl;
     }
 
-    // blob 与浏览器可访问的 URL 由 WebView 读取，不把 URL 当文件路径。
+    // ComfyUI 取件使用原生代理；asset/blob 与其他既有来源保留原读取方式。
     const resp = githubMirrorUrl(filePath)
       ? new Response(await downloadGithubBytes(filePath, { signal: options.signal, maxBytes: MEDIA_DATA_URL_BYTE_LIMITS[kind] }),
         { headers: { 'Content-Type': getMimeType(ext) } })
-      : await fetch(filePath, { signal: options.signal });
+      : await (shouldLoadNativeComfyImage(filePath) ? corsSafeFetch : fetch)(filePath, { signal: options.signal });
     throwIfMediaReadAborted(options.signal);
     if (!resp.ok) throw new Error(`读取本地文件失败 (${resp.status})`);
     const contentLength = Number(resp.headers.get('Content-Length'));
@@ -1612,6 +1613,7 @@ export async function saveNodeOutputToFile(opts: {
   onProgress?: (progress: NodeOutputDownloadProgress) => void;
 }): Promise<string | null> {
   const { filePath, mediaUrl, textOutput, nodeType, fileName, signal, onProgress } = opts;
+  const nativeComfySource = shouldLoadNativeComfyImage(mediaUrl);
   throwIfMediaReadAborted(signal);
   const defExt = nodeType === 'ai-audio' || nodeType === 'source-audio'
     ? getAudioSaveExtension(filePath, fileName, mediaUrl)
@@ -1669,10 +1671,28 @@ export async function saveNodeOutputToFile(opts: {
       return destPath;
     }
 
-    // 3. 其余 URL（asset://localhost、http://asset.localhost、blob:、http(s)://）直接 fetch。
+    // 3. ComfyUI 取件走原生流下载，其余 URL 沿用原读取方式。
     //    节点里的 asset URL 已经是 convertFileSrc 的产物，再转一次会把整个 URL 当成路径编码进去 —
     //    Windows 的 asset URL 是 http://asset.localhost/… 走不到这一步，mac 的 asset:// 才会踩到。
     if (mediaUrl && /^(asset:|blob:|https?:)/.test(mediaUrl)) {
+      if (nativeComfySource) {
+        // 复用原生临时文件与提交保护；不得删除或覆盖用户已有的目标文件。
+        if (await exists(destPath)) throw new Error('目标文件已存在，请改用新文件名保存');
+        throwIfMediaReadAborted(signal);
+        onProgress?.({ transferredBytes: 0, totalBytes: null, phase: 'downloading' });
+        const result = await runNativeFileTransfer('download_file_streamed', {
+          url: mediaUrl, destinationPath: destPath,
+          ...(nodeType.includes('video') ? { expectedMediaKind: 'video' } : {}),
+        }, {
+          signal,
+          onProgress: onProgress ? ({ transferredBytes, totalBytes }) => onProgress({
+            transferredBytes, totalBytes, phase: 'downloading',
+          }) : undefined,
+        });
+        throwIfMediaReadAborted(signal);
+        onProgress?.({ transferredBytes: result.totalBytes, totalBytes: result.totalBytes, phase: 'saving' });
+        return result.path;
+      }
       if (githubMirrorUrl(mediaUrl)) {
         const bytes = await downloadGithubBytes(mediaUrl, { signal, onProgress: (transferredBytes, totalBytes) =>
           onProgress?.({ transferredBytes, totalBytes: totalBytes ?? null, phase: 'downloading' }) });

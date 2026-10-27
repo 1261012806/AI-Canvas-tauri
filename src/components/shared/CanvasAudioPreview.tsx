@@ -3,6 +3,7 @@ import { Music2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lu
 import { useAppStore } from '../../store/useAppStore';
 import { useAudioSpectrum } from '../../hooks/useAudioSpectrum';
 import { useT } from '../../i18n';
+import { useComfyMediaSource } from '../../hooks/useComfyMediaSource';
 
 function formatTime(value: number) {
   const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
@@ -75,7 +76,7 @@ export default function CanvasAudioPreview({ nodeId, openingProjectId, initialTi
   );
 }
 
-export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume, muted, onVolume, onMuted, hasPrevious, hasNext, onNavigate, onAnalysisUnavailable }: {
+export function AudioTrackPlayer({ src: source, initialTime, autoPlay, analysis, volume, muted, onVolume, onMuted, hasPrevious, hasNext, onNavigate, onAnalysisUnavailable }: {
   src: string; initialTime: number; autoPlay: boolean; analysis: boolean;
   volume: number; muted: boolean; onVolume: (value: number) => void; onMuted: (value: boolean) => void;
   hasPrevious: boolean; hasNext: boolean;
@@ -101,13 +102,14 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   const [duration, setDuration] = useState(0);
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [error, setError] = useState('');
+  const src = useComfyMediaSource(source, () => setError(t('音频加载失败，请检查文件或链接')));
   const prepare = useAudioSpectrum(audioRef, canvasRef, analysis);
   const played = duration ? Math.min(100, Math.max(0, time / duration * 100)) : 0;
   const buffered = duration ? Math.min(100, Math.max(time, bufferedEnd) / duration * 100) : 0;
 
   const play = useCallback(async () => {
     const audio = audioRef.current;
-    if (!audio || pendingPlay.current) return;
+    if (!audio || !src || pendingPlay.current) return;
     const version = lifetime.current;
     pendingPlay.current = true;
     playIntent.current = true;
@@ -128,7 +130,7 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
     } finally {
       if (version === lifetime.current) pendingPlay.current = false;
     }
-  }, [prepare, onAnalysisUnavailable, t]);
+  }, [src, prepare, onAnalysisUnavailable, t]);
   const toggle = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -141,7 +143,7 @@ export function AudioTrackPlayer({ src, initialTime, autoPlay, analysis, volume,
   useEffect(() => {
     const audio = audioRef.current;
     const previousFocus = document.activeElement;
-    if (audio && audio.getAttribute('src') !== src) audio.src = src;
+    if (audio && src && audio.getAttribute('src') !== src) audio.src = src;
     playButtonRef.current?.focus();
     const hide = () => {
       if (document.hidden && audio) { playIntent.current = false; audio.pause(); }

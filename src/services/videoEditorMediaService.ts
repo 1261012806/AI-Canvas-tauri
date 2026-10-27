@@ -30,6 +30,8 @@ import {
 } from '../types/videoEditor';
 import { renderFrameAt, type ClipSourceResolver } from './videoCompositor';
 import { MIX_CHANNELS, MIX_SAMPLE_RATE, mixTimelineAudio, toAudioBuffers, type ClipAudioResolver } from './videoAudioMixer';
+import { shouldLoadNativeComfyImage } from './comfyImageSource';
+import { corsSafeFetch } from './ai/httpTransport';
 
 /** 单次 Range 请求的上限，超出由 mediabunny 自行分片 */
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
@@ -103,12 +105,12 @@ async function readBoundedBody(
   return result;
 }
 
-async function fetchRange(url: string, start: number, end: number, signal: AbortSignal): Promise<Uint8Array> {
+async function fetchRange(url: string, start: number, end: number, signal: AbortSignal, nativeComfy: boolean): Promise<Uint8Array> {
   signal.throwIfAborted();
   const expectedLength = Math.max(0, end - start);
   if (expectedLength === 0) return new Uint8Array();
   // Range 是闭区间，mediabunny 的 end 是开区间
-  const response = await fetch(url, {
+  const response = await (nativeComfy ? corsSafeFetch : fetch)(url, {
     headers: { Range: `bytes=${start}-${end - 1}` },
     signal,
   });
@@ -131,7 +133,7 @@ async function fetchRange(url: string, start: number, end: number, signal: Abort
  * 这里先退避重试一次，仍失败则整份下载一次并转为内存切片，
  * 让后续所有读取都不再依赖 asset:// 的并发表现。
  */
-export function createResilientReader(url: string, size: number | null, ranged = true) {
+export function createResilientReader(url: string, size: number | null, ranged = true, nativeComfy = shouldLoadNativeComfyImage(url)) {
   const controller = new AbortController();
   const { signal } = controller;
   let wholeFile: Promise<Uint8Array> | null = null;
@@ -158,7 +160,7 @@ export function createResilientReader(url: string, size: number | null, ranged =
     wholeFile ??= (async () => {
       try {
         if (size !== null) reserve(size);
-        const response = await fetch(url, { signal });
+        const response = await (nativeComfy ? corsSafeFetch : fetch)(url, { signal });
         if (!response.ok) {
           await response.body?.cancel().catch(() => undefined);
           throw new Error(`读取媒体失败：HTTP ${response.status}`);
@@ -180,7 +182,7 @@ export function createResilientReader(url: string, size: number | null, ranged =
     if (wholeFile || !ranged) return (await loadWholeFile()).subarray(start, clampedEnd);
 
     try {
-      return await fetchRange(url, start, clampedEnd, signal);
+      return await fetchRange(url, start, clampedEnd, signal, nativeComfy);
     } catch (error) {
       signal.throwIfAborted();
       if (error instanceof Error && error.name === 'AbortError') throw error;
@@ -193,7 +195,7 @@ export function createResilientReader(url: string, size: number | null, ranged =
         signal.addEventListener('abort', abort, { once: true });
       });
       try {
-        return await fetchRange(url, start, clampedEnd, signal);
+        return await fetchRange(url, start, clampedEnd, signal, nativeComfy);
       } catch (retryError) {
         signal.throwIfAborted();
         if (retryError instanceof Error && retryError.name === 'AbortError') throw retryError;
@@ -211,11 +213,11 @@ export function createResilientReader(url: string, size: number | null, ranged =
 }
 
 /** 探测 URL 是否支持 Range，并取得文件总长度 */
-async function probeRangeSupport(url: string, signal: AbortSignal): Promise<{ size: number; ranged: boolean } | null> {
+async function probeRangeSupport(url: string, signal: AbortSignal, nativeComfy: boolean): Promise<{ size: number; ranged: boolean } | null> {
   let response: Response | null = null;
   try {
     signal.throwIfAborted();
-    response = await fetch(url, { headers: { Range: 'bytes=0-0' }, signal });
+    response = await (nativeComfy ? corsSafeFetch : fetch)(url, { headers: { Range: 'bytes=0-0' }, signal });
     signal.throwIfAborted();
     if (!response.ok) return null;
     if (response.status === 206) {
@@ -245,15 +247,16 @@ async function probeRangeSupport(url: string, signal: AbortSignal): Promise<{ si
  * 首次读取时才探测媒体源，让 Input.dispose 也能取消探测与整包下载。
  */
 export async function createVideoInput(url: string): Promise<Input> {
+  const nativeComfy = shouldLoadNativeComfyImage(url);
   const controller = new AbortController();
   let read: ReturnType<typeof createResilientReader> | null = null;
   let pendingReader: Promise<ReturnType<typeof createResilientReader>> | null = null;
   const getReader = () => {
     controller.signal.throwIfAborted();
     pendingReader ??= (async () => {
-      const probe = await probeRangeSupport(url, controller.signal);
+      const probe = await probeRangeSupport(url, controller.signal, nativeComfy);
       controller.signal.throwIfAborted();
-      read = createResilientReader(url, probe?.size ?? null, probe?.ranged ?? false);
+      read = createResilientReader(url, probe?.size ?? null, probe?.ranged ?? false, nativeComfy);
       return read;
     })();
     return pendingReader;

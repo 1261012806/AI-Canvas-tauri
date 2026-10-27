@@ -5,6 +5,7 @@ import { useT } from '../../i18n';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import Select from '../shared/Select';
+import ViewportImage from '../shared/ViewportImage';
 
 export default function ShotlistStoryboardDialog({ nodeId, rowId, onClose }: { nodeId: string; rowId: string; onClose: () => void }) {
   const t = useT();
@@ -52,7 +53,7 @@ export default function ShotlistStoryboardDialog({ nodeId, rowId, onClose }: { n
               label: t('第 {row} 行，第 {col} 列', { row: Math.floor(index / grid.cols) + 1, col: index % grid.cols + 1 }),
               disabled: !!source.data.storyboardExtracted?.[index] && !source.data.storyboardOverrides?.[index],
             }))} />
-          {(source.data.imageUrl || source.data.thumbnailUrl) && <img className="max-h-64 w-full rounded-lg object-contain" src={source.data.imageUrl || source.data.thumbnailUrl} alt={t('宫格原图')} />}
+          {(source.data.imageUrl || source.data.thumbnailUrl) && <ViewportImage className="max-h-64 w-full rounded-lg object-contain" src={source.data.imageUrl || source.data.thumbnailUrl} alt={t('宫格原图')} />}
         </>}
         {!boards.length && <p className="text-xs text-canvas-text-muted">{t('当前画布还没有宫格节点')}</p>}
         {source && !grid && <p role="alert" className="text-xs">{t('宫格分割线无效')}</p>}

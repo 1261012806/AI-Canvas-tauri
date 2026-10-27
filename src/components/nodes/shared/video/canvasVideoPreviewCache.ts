@@ -1,5 +1,6 @@
 import { afterVideoFramePresented } from '../../../../utils/videoSeek';
 import { getPerformanceModeBudget, subscribePerformanceMode } from '../../../../services/performanceModeRuntime';
+import { acquireComfyMediaSource, type ComfyMediaSourceLease } from '../../../../services/comfyMediaSource';
 
 const MAX_EDGE = 640;
 const LOAD_TIMEOUT_MS = 15_000;
@@ -102,6 +103,7 @@ async function derive(entry: Entry): Promise<Preview | undefined> {
   const { signal } = entry.controller;
   const video = document.createElement('video');
   const canvas = document.createElement('canvas');
+  let media: ComfyMediaSourceLease | undefined;
   const abort = () => releaseCanvasVideo(video);
   signal.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => entry.controller.abort(), LOAD_TIMEOUT_MS);
@@ -110,7 +112,9 @@ async function derive(entry: Entry): Promise<Preview | undefined> {
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    video.src = entry.source;
+    media = await acquireComfyMediaSource(entry.source, signal);
+    signal.throwIfAborted();
+    video.src = media.src;
     await waitForMedia(video, ['loadedmetadata'], () => video.readyState >= 1, signal);
     if (video.videoWidth <= 0 || video.videoHeight <= 0) return undefined;
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
@@ -144,12 +148,13 @@ async function derive(entry: Entry): Promise<Preview | undefined> {
     return { src: URL.createObjectURL(blob), width, height, duration,
       videoWidth: video.videoWidth, videoHeight: video.videoHeight, bytes: width * height * 4 };
   } catch {
-    // 远程跨域或不支持的编码保持占位图，显式播放仍直接使用原视频。
+    // 读取或解码失败保持占位；已识别 Comfy 来源不会回退浏览器直连。
     return undefined;
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);
     releaseCanvasVideo(video);
+    media?.release();
     canvas.width = 1;
     canvas.height = 1;
   }

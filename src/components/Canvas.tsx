@@ -81,6 +81,7 @@ import { useNodeCreation } from '../hooks/useNodeCreation';
 import { useCanvasDrawing } from '../hooks/useCanvasDrawing';
 import { useCanvasWheelZoom } from '../hooks/useCanvasWheelZoom';
 import { useCanvasViewportPreferences } from '../hooks/useCanvasViewportPreferences';
+import ViewportImage from './shared/ViewportImage';
 import { getCanvasLockedZoom, normalizeCanvasZoom } from '../utils/canvasViewportPreferences';
 import type { BaseNodeData } from '../types';
 import type { CanvasEdgeDisplayMode } from '../types/canvasEdges';
@@ -1865,7 +1866,7 @@ function CanvasInner({ onReady }: CanvasProps) {
         style={{ left: dropGhost.x, top: dropGhost.y }}
       >
         <div className="sb-drag-ghost-clip">
-          <img src={dropGhost.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          <ViewportImage eager src={dropGhost.url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
       </div>,
       document.body,

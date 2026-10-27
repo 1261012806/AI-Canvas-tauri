@@ -6,6 +6,7 @@ import { uploadToRemote, isLocalImageUrl, prepareReferenceImageDataUrl } from '.
 import { assertMediaDataUrlSize, getAssetUrlFromPath } from '../fileService';
 import { bytePartsToBase64Async } from '../fs/core';
 import { corsSafeFetch } from './httpTransport';
+import { readNativeComfyImageBlob, shouldLoadNativeComfyImage } from '../comfyImageSource';
 import { mapReferenceImagesInOrder, prepareReferenceImageUpload } from './referenceImageUpload';
 
 const BASE64_IMAGE_DATA_URL_RE = /^data:image\/[^;,]+(?:;[^,]*)*;base64,/i;
@@ -78,8 +79,43 @@ async function referenceImageToDataUrl(
   return `data:${prepared.type};base64,${encoded}`;
 }
 
-/** 加载图片（自动处理远程 URL 的 CORS） */
+async function loadNativeComfyImage(src: string, signal: AbortSignal): Promise<HTMLImageElement> {
+  const blob = await readNativeComfyImageBlob(src, signal);
+  signal.throwIfAborted();
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    return await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      let settled = false;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', abort);
+        image.onload = image.onerror = null;
+        if (error) { image.removeAttribute('src'); reject(error); }
+        else resolve(image);
+      };
+      const abort = () => finish(signal.reason ?? new DOMException('图片读取已取消', 'AbortError'));
+      image.onload = () => {
+        if (typeof image.decode === 'function') void image.decode().then(() => finish(), finish);
+        else finish();
+      };
+      image.onerror = () => finish(new Error('ComfyUI 图片解码失败'));
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+      else image.src = objectUrl;
+    });
+  } finally {
+    // 返回的 HTMLImageElement 已完成解码；只用于绘制，不把临时 src 写回引用。
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+/** 加载图片：ComfyUI 取件在桌面端经原生读取，其他来源沿用既有行为。 */
 export async function loadImage(src: string): Promise<HTMLImageElement> {
+  if (shouldLoadNativeComfyImage(src)) {
+    return loadNativeComfyImage(src, AbortSignal.timeout(15_000));
+  }
   // 远程 URL 通过 fetch 下载为 blob 再加载，避免 canvas 被污染
   if (src.startsWith('http://') || src.startsWith('https://')) {
     const response = await fetch(src);
@@ -108,8 +144,11 @@ export async function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-/** 用 <img> 加载探测线上图片 URL 是否仍可达（避免 CORS：图片加载不受 CORS 限制）*/
+/** ComfyUI 原生读取后探测解码，其他来源沿用原来的 <img> 可达性检查。 */
 export function imageUrlReachable(url: string, timeoutMs = 6000): Promise<boolean> {
+  if (shouldLoadNativeComfyImage(url)) {
+    return loadNativeComfyImage(url, AbortSignal.timeout(timeoutMs)).then(() => true, () => false);
+  }
   return new Promise((resolve) => {
     if (typeof Image === 'undefined') { resolve(true); return; }
     const img = new Image();
