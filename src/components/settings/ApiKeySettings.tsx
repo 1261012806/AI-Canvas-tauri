@@ -35,6 +35,7 @@ import { getCustomConnectionReadiness, shouldListProviderConnection } from './ap
 import { deleteAppSecret, isSecretStoreAvailable } from '../../services/providerSecretService';
 import { testProviderConnection } from '../../services/testConnection';
 import { replaceLegacyApimartOmni } from '../../services/ai/apimartVideoModels';
+import { RELAYON_BASE_URL } from '../../services/ai/providers/relayonModelManifest';
 import DreaminaLoginModal from './DreaminaLoginModal';
 import ModalOverlay from '../shared/ModalOverlay';
 import ProviderConnectionDialog from './ProviderConnectionDialog';
@@ -109,7 +110,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
   );
 
   // 三者总是一起变化，合成一份状态；revision 用于每次打开时重挂载对话框
-  const [dialog, setDialog] = useState<{ open: boolean; connectionId?: string; revision: number }>({
+  const [dialog, setDialog] = useState<{ open: boolean; connectionId?: string; revision: number; returnToRelayGroups?: boolean }>({
     open: false,
     revision: 0,
   });
@@ -163,7 +164,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       const definition = getProviderDefinition(id, providerConfig);
       if (!definition) continue;
       if (definition.kind === 'web-search' && id !== activeWebSearchProviderId) continue;
-      if (definition.id !== 'cccapi' && !shouldListProviderConnection(providerConfig, definition.authType, config.providers.runninghub?.apiKey)) continue;
+      if (!['cccapi', 'relayonapi'].includes(definition.id) && !shouldListProviderConnection(providerConfig, definition.authType, config.providers.runninghub?.apiKey)) continue;
       items.push({ id, config: providerConfig });
     }
     if (config.providers.runninghub?.apiKey && !config.providers['runninghub-model']) {
@@ -204,9 +205,13 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
   // 只合并展示入口，各连接仍保留独立的 ID、模型和凭据。
   const cccConnections = providerItems.filter((item) => getProviderDefinition(item.id, item.config)?.id === 'cccapi');
-  const visibleProviderItems = providerItems.filter((item) => (
-    getProviderDefinition(item.id, item.config)?.id !== 'cccapi' || item.id === cccConnections[0]?.id
-  ));
+  const relayonConnections = providerItems.filter((item) => getProviderDefinition(item.id, item.config)?.id === 'relayonapi');
+  const visibleProviderItems = providerItems.filter((item) => {
+    const id = getProviderDefinition(item.id, item.config)?.id;
+    if (id === 'cccapi') return item.id === cccConnections[0]?.id;
+    if (id === 'relayonapi') return item.id === relayonConnections[0]?.id;
+    return true;
+  });
 
   const connectedProviderIds = useMemo(
     () => providerItems.map((item) => getProviderDefinition(item.id, item.config)?.id || item.id),
@@ -468,9 +473,19 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
       return;
     }
     const definition = getProviderDefinition(parsed.catalogId);
-    if (!definition || (definition.id !== 'custom-openai' && definition.kind !== 'workflow-api')) {
+    if (!definition || (definition.id !== 'custom-openai' && definition.id !== 'relayonapi' && definition.kind !== 'workflow-api')) {
       useAppStore.getState().showToast(t('该连接类型不支持导入'), 'error');
       return;
+    }
+    if (definition.id === 'relayonapi' && parsed.config.baseUrl) {
+      try {
+        const url = new URL(parsed.config.baseUrl);
+        if (url.origin !== 'https://relayonapi.com' || url.username || url.password
+          || url.pathname.replace(/\/+$/, '') !== '/v1' || url.search || url.hash) throw new Error();
+      } catch {
+        useAppStore.getState().showToast(t('万象分组配置的接口地址必须是官方地址'), 'error');
+        return;
+      }
     }
     const newConnectionId = createConnectionId(definition.id);
     if (config.providers[newConnectionId]) {
@@ -486,6 +501,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     }));
     saveProviderConfig(newConnectionId, {
       ...parsed.config,
+      ...(definition.id === 'relayonapi' ? { baseUrl: RELAYON_BASE_URL } : {}),
       selectedModels: models,
       catalogModels: parsed.config.catalogModels?.map((model) => ({
         ...model,
@@ -533,7 +549,14 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
   const closeConnectionDialog = () => {
     setPendingApiKeyConnectionId(null);
-    setDialog((previous) => ({ open: false, connectionId: undefined, revision: previous.revision }));
+    setDialog((previous) => previous.returnToRelayGroups
+      ? { open: true, connectionId: previous.connectionId, revision: previous.revision + 1 }
+      : { open: false, connectionId: undefined, revision: previous.revision });
+  };
+
+  const editRelayGroup = (connectionId: string) => {
+    setPendingApiKeyConnectionId(null);
+    setDialog((previous) => ({ open: true, connectionId, revision: previous.revision + 1, returnToRelayGroups: true }));
   };
 
   const handleSaveConnection = async (
@@ -611,15 +634,15 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
     await saveConfig({ throwOnError: true });
   };
 
-  const handleRemoveConnection = async (connectionId: string, removeAllCccGroups = false) => {
+  const handleRemoveConnection = async (connectionId: string, removeAllGroups = false) => {
     try {
       const providerConfig = useAppStore.getState().config.providers[connectionId];
       const definition = getProviderDefinition(connectionId, providerConfig);
       if (connectionId === 'dreamina') await handleDreaminaLogout();
       const shouldClearVolcengineAssetLibrary = definition?.id === 'volcengine';
-      const connectionIds = removeAllCccGroups && definition?.id === 'cccapi'
+      const connectionIds = removeAllGroups && (definition?.id === 'cccapi' || definition?.id === 'relayonapi')
         ? Object.entries(useAppStore.getState().config.providers)
-          .filter(([id, connection]) => getProviderDefinition(id, connection)?.id === 'cccapi')
+          .filter(([id, connection]) => getProviderDefinition(id, connection)?.id === definition.id)
           .map(([id]) => id)
         : definition?.kind === 'web-search'
         ? getWebSearchProviderDefinitions().map((provider) => provider.id)
@@ -737,9 +760,12 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
               const definition = getProviderDefinition(item.id, item.config);
               if (!definition) return null;
               const isCcc = definition.id === 'cccapi';
-              const cccKeyCount = cccConnections.filter((connection) => connection.config.apiKey.trim()).length;
-              const selectedCount = isCcc
-                ? cccConnections.reduce((count, connection) => count + (connection.config.selectedModels?.length
+              const isRelayon = definition.id === 'relayonapi';
+              const isGrouped = isCcc || isRelayon;
+              const groupConnections = isCcc ? cccConnections : relayonConnections;
+              const groupKeyCount = groupConnections.filter((connection) => connection.config.apiKey.trim()).length;
+              const selectedCount = isGrouped
+                ? groupConnections.reduce((count, connection) => count + (connection.config.selectedModels?.length
                   ?? config.generalModels?.filter((model) => model.providerConfigId === connection.id).length ?? 0), 0)
                 : item.config.selectedModels?.length;
               const summaryUrl = providerSummaryUrl(item.config, definition.defaultBaseUrl);
@@ -754,7 +780,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
               const isCustomConnection = definition.id === 'custom-openai' || isWorkflowApi;
               const connectionWorkflows = workflows.filter((workflow) => workflow.workflowApi?.connectionId === item.id);
               const needsWorkflowKey = connectionWorkflows.some((workflow) => workflow.workflowApi?.version !== 2 || workflow.workflowApi.protocol.auth?.type !== 'none');
-              const isPendingApiKey = isCcc ? cccKeyCount === 0
+              const isPendingApiKey = isGrouped ? groupKeyCount === 0
                 : definition.authType !== 'oauth' && !item.config.apiKey.trim() && (!isWorkflowApi || needsWorkflowKey);
               const hasRunningHubModelKey = isRunningHub && !!item.config.apiKey.trim();
               const hasRunningHubWorkflowKey = isRunningHub
@@ -772,8 +798,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                 ? t('OAuth 已连接')
                 : isRunningHub
                   ? t('{count}/2 密钥已配置', { count: runningHubKeyCount })
-                  : isCcc
-                    ? t('{configured}/{count} 组已配置', { configured: cccKeyCount, count: cccConnections.length })
+                  : isGrouped
+                    ? t('{configured}/{count} 组已配置', { configured: groupKeyCount, count: groupConnections.length })
                   : isPendingApiKey
                     ? t('待填写 API Key')
                     : isWorkflowApi ? t('已配置') : customReadiness ? t('Key 已填写') : t('已连接');
@@ -784,7 +810,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                   <div className="provider-connection-copy">
                     <div className={`provider-connection-title-row${siteOptions ? ' flex-wrap' : ''}`}>
                       <strong>{displayName}</strong>
-                      <span className={`provider-list-status${isPendingApiKey || (isRunningHub && runningHubKeyCount < 2) || (isCcc && cccKeyCount < cccConnections.length) ? ' is-limited' : ''}`}>
+                      <span className={`provider-list-status${isPendingApiKey || (isRunningHub && runningHubKeyCount < 2) || (isGrouped && groupKeyCount < groupConnections.length) ? ' is-limited' : ''}`}>
                         {statusLabel}
                       </span>
                       {customReadiness && (
@@ -828,7 +854,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                               ? t('沿用内置模型目录')
                               : t('{count} 个模型', { count: selectedCount })}
                           </span>
-                          {isCcc ? <span>{t('{count} 个分组', { count: cccConnections.length })}</span> : summaryUrl && <span>{summaryUrl}</span>}
+                          {isGrouped ? <span>{t('{count} 个分组', { count: groupConnections.length })}</span> : summaryUrl && <span>{summaryUrl}</span>}
                         </>
                       )}
                     </div>}
@@ -857,8 +883,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
 
                   {pendingDeleteId === item.id ? (
                     <div className="provider-delete-confirm">
-                      <span>{isCcc
-                        ? t('移除全部 {count} 个 CCC 分组及其模型配置？', { count: cccConnections.length })
+                      <span>{isGrouped
+                        ? t(isCcc ? '移除全部 {count} 个 CCC 分组及其模型配置？' : '移除全部 {count} 个万象分组及其模型配置？', { count: groupConnections.length })
                         : t('移除此连接？')}</span>
                       <AnimatedButton
                         type="button"
@@ -872,7 +898,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                         type="button"
                         className="provider-icon-btn is-danger"
                         aria-label={t('确认删除')}
-                        onClick={() => void handleRemoveConnection(item.id, isCcc)}
+                        onClick={() => void handleRemoveConnection(item.id, isGrouped)}
                       >
                         <Icon icon="mdi:check" width="15" />
                       </AnimatedButton>
@@ -884,7 +910,7 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                           <Icon icon="lucide:receipt-text" width="16" />
                         </AnimatedButton>
                       )}
-                      {!isDreamina && !isWebSearchProvider && !isCcc && (
+                      {!isDreamina && !isWebSearchProvider && !isGrouped && (
                         <AnimatedButton
                           type="button"
                           className="provider-icon-btn"
@@ -901,8 +927,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                       <AnimatedButton
                         type="button"
                         className="provider-icon-btn"
-                        aria-label={isCcc ? t('管理 CCC 分组') : t('编辑 {name}', { name: definition.name })}
-                        data-tooltip={isCcc ? t('统一管理分组') : t('编辑连接')}
+                        aria-label={isCcc ? t('管理 CCC 分组') : isRelayon ? t('管理万象分组') : t('编辑 {name}', { name: definition.name })}
+                        data-tooltip={isGrouped ? t('统一管理分组') : t('编辑连接')}
                         onClick={() => openEditDialog(item.id)}
                       >
                         <Icon icon="mdi:pencil-outline" width="16" />
@@ -910,8 +936,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
                       <AnimatedButton
                         type="button"
                         className="provider-icon-btn"
-                        aria-label={isCcc ? t('删除 CCC API 全部分组') : t('删除 {name}', { name: definition.name })}
-                        data-tooltip={isCcc ? t('删除全部 CCC 分组') : t('删除连接')}
+                        aria-label={isCcc ? t('删除 CCC API 全部分组') : isRelayon ? t('删除万象 API 全部分组') : t('删除 {name}', { name: definition.name })}
+                        data-tooltip={isCcc ? t('删除全部 CCC 分组') : isRelayon ? t('删除全部万象分组') : t('删除连接')}
                         onClick={() => setPendingDeleteId(item.id)}
                       >
                         <Icon icon="mdi:trash-can-outline" width="16" />
@@ -964,6 +990,8 @@ export default function ApiKeySettings({ onClose }: { onClose: () => void }) {
         onSaveCccGroups={handleSaveCccGroups}
         onCopyCccGroup={handleCopyConnection}
         onRemoveCccGroup={handleRemoveConnection}
+        onEditRelayGroup={editRelayGroup}
+        forceSingleGroupEdit={!!dialog.returnToRelayGroups || (!!requestedConnectionId && !!pendingApiKeyModelId)}
       />
 
       <DreaminaLoginModal

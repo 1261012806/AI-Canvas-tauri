@@ -13,6 +13,7 @@ import { parseConnectionShare, serializeConnection } from '../../src/services/ai
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
 import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
 import { RELAYON_IMAGE_MODEL_IDS, RELAYON_MODEL_MANIFEST, RELAYON_VIDEO_MODEL_IDS } from '../../src/services/ai/providers/relayonModelManifest';
+import { RELAYON_PROVIDER_GROUPS, getRelayonGroupPresetModels, relayonConnectionName } from '../../src/services/ai/relayonProviderGroups';
 import { useAppStore } from '../../src/store/useAppStore';
 import type { ApiProviderConfig, AppConfig, ProviderModelSelection } from '../../src/types';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
@@ -200,7 +201,79 @@ describe('万象 API 内置目录与连接身份', () => {
     expect(definition?.models?.filter((model) => model.category === 'text').every((model) => model.executionProfile?.preset === 'openai-chat')).toBe(true);
     expect(definition?.models?.filter((model) => model.category !== 'text').every((model) => model.executionProfile?.preset === 'custom')).toBe(true);
     expect(definition?.policy.upload).toBeUndefined();
-    expect(createConnectionId('relayonapi')).toBe('relayonapi');
+    expect(createConnectionId('relayonapi')).toMatch(/^relayonapi-.+/);
+  });
+
+  it('分组候选是精确型号的静态快照，并非密钥验证', () => {
+    expect(RELAYON_PROVIDER_GROUPS.map(({ name }) => name)).toEqual([
+      'ClaudeMax号池', 'GPTpro号池', 'Gemini号池', 'default', 'image', 'video',
+    ]);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST, 'Gemini号池').map(({ id }) => id)).toEqual([
+      'gemini-3.8-flash', 'gemini-4-argon',
+    ]);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST, 'image')).toHaveLength(9);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST, 'video')).toHaveLength(8);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST, 'default')).toEqual([]);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST, '其他分组')).toEqual([]);
+    expect(getRelayonGroupPresetModels(RELAYON_MODEL_MANIFEST)).toEqual(RELAYON_MODEL_MANIFEST);
+    expect(relayonConnectionName({ relayonGroup: 'image' })).toBe('万象 API · image');
+    expect(relayonConnectionName()).toBe('万象 API（RelayOnAPI）');
+  });
+
+  it('分组刷新求交当前 Key 目录、公开分组与适配型号，公开请求不携带凭据', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'Image-2.5-Flare' }, { id: 'Image-2.5-Sunburst' }, { id: 'future' }] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [
+        { model_name: 'Image-2.5-Flare', enable_groups: ['image'] },
+        { model_name: 'Image-2.5-Sunburst', enable_groups: ['other'] },
+        { model_name: 'nano-banana-2', enable_groups: ['image'] },
+        { model_name: 'future', enable_groups: ['image'] },
+      ] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchProviderModelCatalog({ providerId: 'relayonapi-image', config: {
+      name: '图片组', catalogId: 'relayonapi', relayonGroup: 'image', apiKey: 'group-key',
+    } });
+    expect(result.models.map(({ id }) => id)).toEqual(['Image-2.5-Flare']);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ headers: { Authorization: 'Bearer group-key' } });
+    expect(fetchMock.mock.calls[1][0]).toBe('https://relayonapi.com/api/pricing');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ credentials: 'omit' });
+    expect(fetchMock.mock.calls[1][1]).not.toHaveProperty('headers');
+    expect(fetchMock.mock.calls[1][1]).not.toHaveProperty('body');
+  });
+
+  it.each([null, { success: false, data: [] }, { success: true, data: [{ model_name: 'x' }] }])(
+    '公开分组目录无效时不覆盖已有选择（%s）', async (payload) => {
+      const selected = RELAYON_MODEL_MANIFEST[0];
+      const config: ApiProviderConfig = { name: '万象', catalogId: 'relayonapi', relayonGroup: 'image',
+        apiKey: 'fixture', selectedModels: [selected] };
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ id: selected.id }] }))
+        .mockResolvedValueOnce(jsonResponse(payload)));
+      await expect(fetchProviderModelCatalog({ providerId: 'relayonapi-group', config })).rejects.toThrow();
+      expect(config.selectedModels).toEqual([selected]);
+    },
+  );
+
+  it('公开目录不可用时不以静态候选冒充已验证结果', async () => {
+    const selected = RELAYON_MODEL_MANIFEST[0];
+    const config: ApiProviderConfig = { name: '万象', catalogId: 'relayonapi', relayonGroup: 'image',
+      apiKey: 'fixture', selectedModels: [selected] };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ id: selected.id }] }))
+      .mockResolvedValueOnce(new Response('{}', { status: 503 })));
+    await expect(fetchProviderModelCatalog({ providerId: 'relayonapi-group', config,
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] })).rejects.toThrow('503');
+    expect(config.selectedModels).toEqual([selected]);
+  });
+
+  it('有效目录中没有该分组时返回空列表，而不补静态候选', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ data: [{ id: 'Image-2.5-Flare' }] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [
+        { model_name: 'Image-2.5-Flare', enable_groups: ['image'] },
+      ] })));
+    const result = await fetchProviderModelCatalog({ providerId: 'relayonapi-group', config: {
+      name: '万象', catalogId: 'relayonapi', relayonGroup: 'default', apiKey: 'fixture',
+    } });
+    expect(result.models).toEqual([]);
+    expect(result.source).toBe('remote');
   });
 
   it('别名连接仅用自己的 Key 查询可用目录，精确匹配三类合同并排除未接入型号', async () => {

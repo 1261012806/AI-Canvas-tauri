@@ -40,6 +40,7 @@ import { RELAYON_BASE_URL, RELAYON_MODEL_MANIFEST, matchRelayonCatalog, resolveR
 import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { validateModelExecutionProtocol } from './modelProtocolValidation';
 import { filterCccGroupModels } from './cccProviderGroups';
+import { filterRelayonGroupPricing } from './relayonProviderGroups';
 import {
   GOOGLE_GEMINI_BASE_URL,
   GOOGLE_MODEL_MANIFEST,
@@ -550,10 +551,10 @@ export function resolveWebSearchProviderId(
 }
 
 /**
- * CCC 分组、自定义接口与工作流允许多条连接，各自使用独立的凭据身份。
+ * 分组厂商、自定义接口与工作流允许多条连接，各自使用独立的凭据身份。
  */
 export function createConnectionId(providerId: string): string {
-  if (!['custom-openai', 'workflow-api', 'cccapi'].includes(providerId)) return providerId;
+  if (!['custom-openai', 'workflow-api', 'cccapi', 'relayonapi'].includes(providerId)) return providerId;
   const suffix = globalThis.crypto?.randomUUID?.().slice(0, 8)
     ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   return `${providerId === 'custom-openai' ? 'custom' : providerId}-${suffix}`;
@@ -899,6 +900,16 @@ async function matchActiveLibapiCatalog(
   }));
 }
 
+/** 公开分组目录不携带 Key，只与当前 Key 的目录及已适配模型求交。 */
+async function matchRelayonGroupCatalog(
+  models: ProviderModelSelection[], group: string, signal?: AbortSignal,
+): Promise<ProviderModelSelection[]> {
+  const response = await corsSafeFetch('https://relayonapi.com/api/pricing', { method: 'GET', credentials: 'omit', signal });
+  if (!response.ok) throw new Error(`模型列表拉取失败 (HTTP ${response.status})`);
+  const payload: unknown = await response.json().catch(() => null);
+  return filterRelayonGroupPricing(models, group, payload);
+}
+
 export async function fetchProviderModelCatalog(
   options: FetchProviderCatalogOptions,
 ): Promise<ProviderCatalogResult> {
@@ -956,11 +967,15 @@ export async function fetchProviderModelCatalog(
       };
     }
     if (definition.id === 'relayonapi') {
-      const matched = matchRelayonCatalog(models);
+      const available = matchRelayonCatalog(models);
+      const group = config.relayonGroup?.trim();
+      const matched = group ? await matchRelayonGroupCatalog(available, group, signal) : available;
       return {
         models: matched, source: 'remote', resolvedBaseUrl: baseUrl,
-        ...(matched.length < models.length
-          ? { warning: '已获取当前 Key 的目录，仅展示已适配的文本、图片与视频型号；Midjourney 和其他未适配型号暂不展示。' }
+        ...(group
+          ? { warning: '已按当前 Key 的目录和公开分组目录筛选已适配型号；实际调用权限以平台为准。' }
+          : matched.length < models.length
+            ? { warning: '已获取当前 Key 的目录，仅展示已适配的文本、图片与视频型号；Midjourney 和其他未适配型号暂不展示。' }
           : {}),
       };
     }

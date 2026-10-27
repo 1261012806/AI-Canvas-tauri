@@ -1092,6 +1092,32 @@ describe('pending generation task recovery', () => {
     expect(persisted).not.toContain('apiKey');
   });
 
+  it('resumes the original Relay group task using that connection’s current key', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      'relay-a': { name: 'A', catalogId: 'relayonapi', relayonGroup: 'image', apiKey: 'old-a-key', baseUrl: 'https://relayonapi.com/v1' },
+      'relay-b': { name: 'B', catalogId: 'relayonapi', relayonGroup: 'default', apiKey: 'current-b-key', baseUrl: 'https://relayonapi.com/v1' },
+    } }, nodes: [{ id: 'relay-node', type: 'ai-video', position: { x: 0, y: 0 }, data: {
+      label: 'Video', type: 'ai-video', status: 'loading', prompt: 'scene',
+    } satisfies BaseNodeData }] }));
+    savePendingTask({ nodeId: 'relay-node', projectId: 'project-1', nodeType: 'ai-video', provider: 'general',
+      providerConfigId: 'relay-a', taskId: 'original-relay-task', taskType: 'custom-protocol', submitted: true,
+      protocolPoll: { method: 'GET', url: 'https://relayonapi.com/v1/videos/original-relay-task',
+        statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], resultUrlPath: 'url', intervalMs: 3000 } });
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'relay-a': { ...state.config.providers['relay-a'], apiKey: 'rotated-a-key' },
+    } } }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/video.mp4' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await resumePendingTasks('project-1');
+    await vi.waitFor(() => expect(useAppStore.getState().nodes[0].data).toMatchObject({ status: 'success' }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('https://relayonapi.com/v1/videos/original-relay-task',
+      expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer rotated-a-key' }) }));
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('old-a-key');
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('current-b-key');
+  });
+
   it('resumes declarative protocol tasks with credentials from the provider connection', async () => {
     useAppStore.setState((state) => ({
       config: {

@@ -12,7 +12,9 @@ import { CCCAPI_BASE_URL, RUNNINGHUB_API_SITES, TOAPIS_API_SITES } from '../../.
 import { normalizeBaseUrl } from '../../../services/ai/providerBaseUrl';
 import { runningHubSiteId } from '../../../services/runninghubSiteCredentials';
 import { CCC_PROVIDER_GROUPS, cccConnectionName, getCccGroupPresetModels } from '../../../services/ai/cccProviderGroups';
-import { capCatalogModels, createConnectionId, fetchProviderModelCatalog, type ProviderDefinition } from '../../../services/ai/providerCatalogService';
+import { RELAYON_PROVIDER_GROUPS, relayonConnectionName, getRelayonGroupPresetModels } from '../../../services/ai/relayonProviderGroups';
+import { capCatalogModels, createConnectionId, fetchProviderModelCatalog, getProviderDefinition, type ProviderDefinition } from '../../../services/ai/providerCatalogService';
+import { RELAYON_BASE_URL } from '../../../services/ai/providers/relayonModelManifest';
 import AnimatedButton from '../../shared/AnimatedButton';
 import { PROVIDER_LINKS, openExternal, type CatalogStatus } from './providerConnectionShared';
 import { materializeLegacyImageProtocolDefault, mergeModels } from './providerConnectionModels';
@@ -23,13 +25,14 @@ interface CccGroupDraft {
   models: ProviderModelSelection[];
   selectedIds: Set<string>;
   selectionEdited: boolean;
+  catalogEdited: boolean;
   existing: boolean;
   status: CatalogStatus;
   message: string;
 }
 
 /** 所有分组同时编辑；凭据仍按独立连接保存，不引入嵌套 Key 持久化。 */
-export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave, onClose, onReturnToPicker, onCopyConnection, onRemoveConnection }: {
+export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave, onClose, onReturnToPicker, onCopyConnection, onRemoveConnection, provider = 'cccapi', onEditRelayGroup }: {
   providerConfigs: Record<string, ApiProviderConfig>;
   presetModels: ProviderModelSelection[];
   onSave: (connections: Record<string, ApiProviderConfig>) => Promise<void>;
@@ -37,22 +40,38 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
   onReturnToPicker?: () => void;
   onCopyConnection?: (connectionId: string) => Promise<void>;
   onRemoveConnection?: (connectionId: string) => Promise<boolean>;
+  provider?: 'cccapi' | 'relayonapi';
+  onEditRelayGroup?: (connectionId: string) => void;
 }) {
   const t = useT();
+  const isRelay = provider === 'relayonapi';
+  const groupDefinitions = isRelay ? RELAYON_PROVIDER_GROUPS : CCC_PROVIDER_GROUPS;
+  const groupOf = (config: ApiProviderConfig) => isRelay ? config.relayonGroup : config.cccGroup;
+  const groupPresetModels = (group?: string) => isRelay ? getRelayonGroupPresetModels(presetModels, group) : getCccGroupPresetModels(presetModels, group);
+  const newConfig = (group?: string): ApiProviderConfig => isRelay
+    ? { name: relayonConnectionName({ relayonGroup: group }), apiKey: '', catalogId: provider, relayonGroup: group }
+    : { name: cccConnectionName({ cccGroup: group }), apiKey: '', catalogId: provider, cccGroup: group };
   const [rows, setRows] = useState<CccGroupDraft[]>(() => {
-    const connections = Object.entries(providerConfigs).filter(([id, config]) => id === 'cccapi' || config.catalogId === 'cccapi');
+    const connections = Object.entries(providerConfigs).filter(([id, config]) => isRelay
+      ? getProviderDefinition(id, config)?.id === provider
+      : id === 'cccapi' || config.catalogId === 'cccapi');
     const used = new Set<string>();
     const makeRow = (group?: string, saved?: [string, ApiProviderConfig]): CccGroupDraft => {
-      const [id, original] = saved || [createConnectionId('cccapi'), { name: cccConnectionName({ cccGroup: group }), apiKey: '', catalogId: 'cccapi', cccGroup: group }];
+      const [id, original] = saved || [createConnectionId(provider), newConfig(group)];
       used.add(id);
       const config = { ...original };
-      const models = mergeModels(config.catalogModels?.length ? config.catalogModels : getCccGroupPresetModels(presetModels, group), materializeLegacyImageProtocolDefault(config.selectedModels || [], config));
-      return { id, config, models, selectedIds: new Set(config.selectedModels?.map((model) => model.id) || []), selectionEdited: false, existing: !!saved,
-        status: 'idle', message: config.catalogModels?.length ? t('已加载该分组保存的模型目录') : t('分组预置模型，拉取后以该 Key 返回为准。') };
+      const savedModels = materializeLegacyImageProtocolDefault(config.selectedModels || [], config);
+      const merged = mergeModels(config.catalogModels?.length ? config.catalogModels : groupPresetModels(group), savedModels, { preferIncomingConfiguration: isRelay });
+      const savedById = new Map(savedModels.map((model) => [model.id, model]));
+      const models = isRelay ? merged.map((model) => ({ ...model, ...savedById.get(model.id) })) : merged;
+      return { id, config, models, selectedIds: new Set(config.selectedModels?.map((model) => model.id) || []), selectionEdited: false, catalogEdited: false, existing: !!saved,
+        status: 'idle', message: config.catalogModels?.length ? t('已加载该分组保存的模型目录')
+          : isRelay && group === 'default' && !models.length ? t('该分组暂无已核对的预置模型，可填写 Key 后拉取。')
+          : t('分组预置模型，拉取后以该 Key 返回为准。') };
     };
-    const groups = CCC_PROVIDER_GROUPS.map((group) => makeRow(group.name, connections.find(([, config]) => config.cccGroup === group.name)));
+    const groups = groupDefinitions.map((group) => makeRow(group.name, connections.find(([, config]) => groupOf(config) === group.name)));
     // 旧连接、重复分组与未收录分组都保留原身份，不猜测 Key 的远端分组。
-    return [...groups, ...connections.filter(([id]) => !used.has(id)).map((saved) => makeRow(saved[1].cccGroup, saved))];
+    return [...groups, ...connections.filter(([id]) => !used.has(id)).map((saved) => makeRow(groupOf(saved[1]), saved))];
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -70,6 +89,23 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
     setRows((current) => current.map((row) => row.id === id ? { ...row, config: { ...row.config, apiKey: value }, status: 'idle',
       message: t('Key 已修改，保存后使用此 Key；可拉取模型验证权限。') } : row));
   };
+  const updateRelayGroup = (id: string, group: string) => {
+    requests.current.get(id)?.abort();
+    setRows((current) => current.map((row) => row.id === id ? { ...row,
+      config: { ...row.config, relayonGroup: group || undefined }, status: 'idle',
+      message: t('分组已更改，请保存后按需重新拉取模型。') } : row));
+  };
+  const relaySelectionChanged = (row: CccGroupDraft) => {
+    const previous = new Set(providerConfigs[row.id]?.selectedModels?.map((model) => model.id) || []);
+    return previous.size !== row.selectedIds.size || [...previous].some((id) => !row.selectedIds.has(id));
+  };
+  const relayRowChanged = (row: CccGroupDraft) => {
+    const saved = providerConfigs[row.id];
+    return row.existing
+      ? row.config.apiKey !== saved?.apiKey || row.config.relayonGroup !== saved?.relayonGroup || row.catalogEdited || relaySelectionChanged(row)
+      : Boolean(row.config.apiKey.trim() || row.selectedIds.size);
+  };
+  const hasUnsavedRelayChanges = isRelay && rows.some(relayRowChanged);
   const toggleModel = (id: string, modelId: string) => setRows((current) => current.map((row) => {
     if (row.id !== id) return row;
     const selectedIds = new Set(row.selectedIds);
@@ -87,11 +123,22 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
       const result = await fetchProviderModelCatalog({ providerId: id, config: { ...row.config, apiKey: row.config.apiKey.trim() }, fallbackModels: presetModels, signal: controller.signal });
       if (controller.signal.aborted) return;
       const ids = new Set(result.models.map((model) => model.id));
-      setRows((current) => current.map((item) => item.id === id ? { ...item,
-        models: mergeModels(item.models.filter((model) => ids.has(model.id)), result.models),
-        selectedIds: new Set([...item.selectedIds].filter((modelId) => ids.has(modelId))),
-        config: { ...item.config, catalogUpdatedAt: Date.now(), ...(result.resolvedBaseUrl ? { baseUrl: result.resolvedBaseUrl } : {}) },
-        status: result.warning ? 'warning' : 'ready', message: result.warning || t('已获取 {count} 个模型', { count: result.models.length }) } : item));
+      setRows((current) => current.map((item) => {
+        if (item.id !== id) return item;
+        // 万象历史连接可能包含自定义模型；保留已选模型完整配置及远端目录缺项。
+        const previousSelected = new Map(item.models.filter((model) => item.selectedIds.has(model.id)).map((model) => [model.id, model]));
+        const merged = mergeModels(item.models.filter((model) => ids.has(model.id) || (isRelay && item.selectedIds.has(model.id))), result.models);
+        const retainedMissing = isRelay && [...item.selectedIds].some((modelId) => !ids.has(modelId));
+        const message = retainedMissing
+          ? t('部分已选模型未出现在本次目录中，已保留原配置，请确认该 Key 和分组权限。')
+          : result.warning ? t(result.warning) : t('已获取 {count} 个模型', { count: result.models.length });
+        return { ...item,
+          catalogEdited: true,
+          models: isRelay ? merged.map((model) => ({ ...model, ...previousSelected.get(model.id) })) : merged,
+          selectedIds: isRelay ? item.selectedIds : new Set([...item.selectedIds].filter((modelId) => ids.has(modelId))),
+          config: { ...item.config, catalogUpdatedAt: Date.now(), ...(result.resolvedBaseUrl ? { baseUrl: result.resolvedBaseUrl } : {}) },
+          status: result.warning || retainedMissing ? 'warning' : 'ready', message };
+      }));
     } catch (error) {
       if (controller.signal.aborted) return;
       setRows((current) => current.map((item) => item.id === id ? { ...item, status: 'error', message: error instanceof Error ? error.message : t('模型列表拉取失败') } : item));
@@ -103,7 +150,21 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
     for (const row of rows) {
       // 空白分组始终显示；填写 Key 或选择模型后才创建对应连接。
       if (!row.existing && !row.config.apiKey.trim() && !row.selectedIds.size) continue;
-      connections[row.id] = { ...row.config, name: cccConnectionName(row.config), catalogId: 'cccapi', apiKey: row.config.apiKey.trim(),
+      if (isRelay) {
+        if (!relayRowChanged(row)) continue;
+        const selectedChanged = !row.existing || relaySelectionChanged(row);
+        const original = providerConfigs[row.id];
+        connections[row.id] = {
+          ...row.config,
+          apiKey: row.config.apiKey === original?.apiKey ? row.config.apiKey : row.config.apiKey.trim(),
+          ...(!row.existing ? { catalogId: provider, baseUrl: row.config.baseUrl?.trim() || RELAYON_BASE_URL } : {}),
+          ...(row.existing && !row.config.catalogId && row.config.relayonGroup !== original?.relayonGroup ? { catalogId: provider } : {}),
+          ...(selectedChanged ? { selectedModels: row.models.filter((model) => row.selectedIds.has(model.id)).map((model) => ({ ...model, provider: row.id })) } : {}),
+          ...(!row.existing || row.catalogEdited ? { catalogModels: capCatalogModels(row.models, row.selectedIds).map((model) => ({ ...model, provider: row.id })) } : {}),
+        };
+        continue;
+      }
+      connections[row.id] = { ...row.config, name: cccConnectionName(row.config), catalogId: provider, apiKey: row.config.apiKey.trim(),
         baseUrl: row.config.baseUrl?.trim() || CCCAPI_BASE_URL,
         selectedModels: row.existing && row.config.selectedModels === undefined && !row.selectionEdited
           ? undefined
@@ -129,14 +190,15 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
       requests.current.delete(row.id);
       setRows((current) => current.flatMap((item) => {
         if (item.id !== row.id) return [item];
-        const group = row.config.cccGroup;
+        const group = groupOf(row.config);
         // 已删除的连接不能被「保存全部」重新写回；常驻分组保留空白输入，重新填写会获得新身份。
-        if (!CCC_PROVIDER_GROUPS.some((known) => known.name === group)
-          || current.some((other) => other.id !== row.id && other.config.cccGroup === group)) return [];
-        const id = createConnectionId('cccapi');
-        return [{ id, config: { name: cccConnectionName({ cccGroup: group }), catalogId: 'cccapi', cccGroup: group, apiKey: '' },
-          models: getCccGroupPresetModels(presetModels, group), selectedIds: new Set<string>(), selectionEdited: false,
-          existing: false, status: 'idle' as const, message: t('分组预置模型，拉取后以该 Key 返回为准。') }];
+        if (!groupDefinitions.some((known) => known.name === group)
+          || current.some((other) => other.id !== row.id && groupOf(other.config) === group)) return [];
+        const id = createConnectionId(provider);
+        return [{ id, config: newConfig(group),
+          models: groupPresetModels(group), selectedIds: new Set<string>(), selectionEdited: false, catalogEdited: false,
+          existing: false, status: 'idle' as const, message: isRelay && group === 'default'
+            ? t('该分组暂无已核对的预置模型，可填写 Key 后拉取。') : t('分组预置模型，拉取后以该 Key 返回为准。') }];
       }));
       setPendingRemoveId(null);
     } catch (error) {
@@ -152,14 +214,25 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {rows.map((row) => {
-          const group = row.config.cccGroup || t('旧连接（未指定分组）');
+          const group = groupOf(row.config) || t('旧连接（未指定分组）');
           return <section key={row.id} className="ui-card min-w-0" aria-label={group}>
             <div className="ui-card__header">
               <h4 className="ui-card__title break-words">{group}</h4>
               <span className={`ui-badge ml-auto shrink-0 ${row.config.apiKey.trim() ? 'ui-badge--success' : 'ui-badge--outline'}`}>{row.config.apiKey.trim() ? t('已填写 Key') : t('未填写 Key')}</span>
             </div>
             <div className="ui-card__body space-y-2">
-              <p className="ui-hint">{CCC_PROVIDER_GROUPS.find((item) => item.name === group)?.description || t('保留已有连接与模型配置')}</p>
+              <p className="ui-hint">{t(groupDefinitions.find((item) => item.name === group)?.description || '保留已有连接与模型配置')}</p>
+              {isRelay && row.existing && <p className="ui-hint break-all">{row.config.name} · {row.id}</p>}
+              {isRelay && row.existing && <label className="ui-field block">
+                <span className="ui-label">{t('所属分组')}</span>
+                <Select aria-label={`${t('所属分组')} ${row.id}`} value={row.config.relayonGroup || ''} disabled={busy}
+                  onChange={(value) => updateRelayGroup(row.id, value)} options={[
+                    { value: '', label: t('旧连接（未指定分组）') },
+                    ...(row.config.relayonGroup && !groupDefinitions.some((item) => item.name === row.config.relayonGroup)
+                      ? [{ value: row.config.relayonGroup, label: row.config.relayonGroup }] : []),
+                    ...groupDefinitions.map((item) => ({ value: item.name, label: item.name })),
+                  ]} />
+              </label>}
               <label className="ui-field block">
                 <span className="ui-label">API Key</span>
                 <input className="ui-input w-full" type="password" aria-label={`${group} API Key`} autoComplete="off" placeholder="sk-..." value={row.config.apiKey} disabled={busy} onChange={(event) => updateKey(row.id, event.target.value)} />
@@ -185,12 +258,13 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
                 </div>
               </details>
             </div>
-            {row.existing && (onCopyConnection || onRemoveConnection) && <div className="ui-card__footer flex flex-wrap items-center gap-2">
+            {row.existing && (onCopyConnection || onRemoveConnection || (isRelay && onEditRelayGroup)) && <div className="ui-card__footer flex flex-wrap items-center gap-2">
               {pendingRemoveId === row.id ? <>
                 <span className="ui-hint w-full">{t('移除此分组连接及其模型？立即生效。')}</span>
                 <button type="button" className="ui-btn ui-btn--sm ui-btn--secondary" disabled={busy} onClick={() => setPendingRemoveId(null)}>{t('取消删除')}</button>
                 <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" aria-label={`${t('确认删除')} ${group}`} disabled={busy} onClick={() => removeConnection(row)}>{removingId === row.id ? t('删除中') : t('确认删除')}</button>
               </> : <>
+                {isRelay && onEditRelayGroup && <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={`${t('编辑模型参数')} ${row.id}`} disabled={busy || hasUnsavedRelayChanges} onClick={() => onEditRelayGroup(row.id)}>{t('编辑模型参数')}</button>}
                 {onCopyConnection && <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={`${t('复制分组配置')} ${group}`} disabled={busy} onClick={() => onCopyConnection(row.id)}><Icon icon="mdi:content-copy" width="14" />{t('复制已保存配置（不含 Key）')}</button>}
                 {onRemoveConnection && <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" aria-label={`${t('删除分组')} ${group}`} disabled={busy} onClick={() => setPendingRemoveId(row.id)}><Icon icon="mdi:trash-can-outline" width="14" />{t('删除分组')}</button>}
               </>}
@@ -198,7 +272,8 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
           </section>;
         })}
       </div>
-      <button type="button" className="provider-external-link mt-3" onClick={() => void openExternal('https://cccapi.cn/keys')}>{t('前往厂商控制台')}</button>
+      {hasUnsavedRelayChanges && <p className="ui-hint mt-3">{t('请先保存全部分组，再编辑单组模型参数。')}</p>}
+      <button type="button" className="provider-external-link mt-3" onClick={() => void openExternal(isRelay ? 'https://relayonapi.com/keys' : 'https://cccapi.cn/keys')}>{t('前往厂商控制台')}</button>
       {saveError && <p role="alert" className="ui-alert ui-alert--danger mt-3">{saveError}</p>}
     </div>
     <footer className="provider-dialog-footer">

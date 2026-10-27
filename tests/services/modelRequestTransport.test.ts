@@ -429,7 +429,7 @@ describe('RelayOnAPI 图片请求与连接身份', () => {
   function configureRelayonImage(apiKey = 'relayon-image-fixture') {
     const selected = getProviderDefinition('relayonapi')!.models!.find((model) => model.id === 'image-2-01')!;
     useAppStore.getState().saveProviderConfig('my-relayon-images', {
-      name: '我的万象连接', catalogId: 'relayonapi', apiKey, baseUrl: 'https://relayonapi.com/v1',
+      name: '我的万象连接', catalogId: 'relayonapi', relayonGroup: 'image', apiKey, baseUrl: 'https://relayonapi.com/v1',
       selectedModels: [selected],
     });
     const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'my-relayon-images')!;
@@ -463,6 +463,8 @@ describe('RelayOnAPI 图片请求与连接身份', () => {
       expect(init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer relayon-image-fixture' } });
       expect(JSON.parse(String(init.body))).toMatchObject({ model: 'image-2-01', size: '2048x1152',
         aspect_ratio: '16:9', resolution: '2K', n: 1, response_format: 'url' });
+      expect(JSON.parse(String(init.body))).not.toHaveProperty('relayonGroup');
+      expect(init.headers).not.toHaveProperty('relayonGroup');
       expect(JSON.parse(String(init.body))).not.toHaveProperty('quality');
     }
     const bodies = calls.map(([, init]) => JSON.parse(String(init.body)));

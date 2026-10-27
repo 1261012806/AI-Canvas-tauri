@@ -1072,8 +1072,10 @@ function dedicatedGeneralModelGroup(
 
 function generalModelLabel(model: GeneralModelConfig, config?: ProviderModelVisibilityConfig): string {
   const provider = config?.providers[model.providerConfigId];
-  return (provider?.catalogId || model.providerConfigId) === 'cccapi' && provider?.cccGroup?.trim()
-    ? `${model.name} · ${provider.cccGroup.trim()}` : model.name;
+  const catalogId = getProviderDefinition(model.providerConfigId, provider)?.id;
+  const group = catalogId === 'cccapi' ? provider?.cccGroup?.trim()
+    : catalogId === 'relayonapi' ? provider?.relayonGroup?.trim() : undefined;
+  return group ? `${model.name} · ${group}` : model.name;
 }
 
 function createGeneralModelOption(model: GeneralModelConfig, config?: ProviderModelVisibilityConfig): ModelOption {

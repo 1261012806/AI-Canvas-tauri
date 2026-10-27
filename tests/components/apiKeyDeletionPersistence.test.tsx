@@ -368,6 +368,27 @@ describe('自定义连接 JSON 文件入口', () => {
     expect(fresh.getState().config.providers[id].selectedModels![0].imageCapability).toEqual(capability);
   });
 
+  it('导入万象分组配置时保留分组并生成独立身份，不导入 Key', async () => {
+    driver.readJson.mockResolvedValue(serializeConnection({ name: '万象图片组', catalogId: 'relayonapi',
+      relayonGroup: 'image', apiKey: 'excluded-fixture', selectedModels: [] }));
+    await chooseFile(new File(['fixture'], 'relay.json'));
+    const [id, connection] = Object.entries(driver.state().config.providers)
+      .find(([, item]) => item.name === '万象图片组')!;
+    expect(id).toMatch(/^relayonapi-/);
+    expect(connection).toMatchObject({ catalogId: 'relayonapi', relayonGroup: 'image', apiKey: '' });
+    expect(connection.baseUrl).toBe('https://relayonapi.com/v1');
+    expect(driver.state().setPendingApiKeyConnectionId).toHaveBeenCalledWith(id);
+  });
+
+  it('拒绝导入指向非官方地址的万象分组，避免泄露后续填写的 Key', async () => {
+    const before = Object.keys(driver.state().config.providers);
+    driver.readJson.mockResolvedValue(serializeConnection({ name: '伪造万象', catalogId: 'relayonapi',
+      relayonGroup: 'image', apiKey: '', baseUrl: 'https://evil.example/v1' }));
+    await chooseFile(new File(['fixture'], 'relay.json'));
+    expect(driver.toast).toHaveBeenCalledWith('万象分组配置的接口地址必须是官方地址', 'error');
+    expect(Object.keys(driver.state().config.providers)).toEqual(before);
+  });
+
   it('取消选择不读文件，内置连接和非法 JSON 不改变配置', async () => {
     const before = Object.keys(driver.state().config.providers);
     await chooseFile();
@@ -487,5 +508,24 @@ describe('CCC 统一管理入口', () => {
     expect(fresh.getState().config.providers['cccapi-pro'].apiKey).toBe('pro-fixture');
     expect(fresh.getState().config.generalModels?.filter((model) => model.providerConfigId.startsWith('cccapi'))
       .map((model) => model.providerConfigId)).toEqual(['cccapi-pro']);
+  });
+});
+
+describe('万象 API 分组管理', () => {
+  it('合并分组入口，删除单组时保留另一组和旧连接', async () => {
+    driver.state().saveProviderConfig('relayonapi', { name: '旧连接', apiKey: 'legacy-fixture', catalogId: 'relayonapi' });
+    driver.state().saveProviderConfig('relayon-image', { name: '图片组', apiKey: 'image-fixture', catalogId: 'relayonapi', relayonGroup: 'image',
+      selectedModels: [{ id: 'Image-2.5-Flare', name: 'Flare', category: 'image', provider: 'relayon-image' }] });
+    driver.state().saveProviderConfig('relayon-video', { name: '视频组', apiKey: 'video-fixture', catalogId: 'relayonapi', relayonGroup: 'video' });
+    const cards = findAll(render(), (element) => typeof element.props.className === 'string'
+      && element.props.className.split(' ').includes('provider-connection-card'));
+    const relayCards = cards.filter((card) => find(card, (element) => element.props['aria-label'] === '管理万象分组'));
+    expect(relayCards).toHaveLength(1);
+    expect(find(relayCards[0], (element) => element.props.children === '3/3 组已配置')).toBeDefined();
+    const dialog = find(render(), (element) => 'onRemoveCccGroup' in element.props)!;
+    expect(await (dialog.props.onRemoveCccGroup as (id: string) => Promise<boolean>)('relayon-image')).toBe(true);
+    expect(driver.state().config.providers['relayon-image']).toBeUndefined();
+    expect(driver.state().config.providers.relayonapi.apiKey).toBe('legacy-fixture');
+    expect(driver.state().config.providers['relayon-video'].apiKey).toBe('video-fixture');
   });
 });

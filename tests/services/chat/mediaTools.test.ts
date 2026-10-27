@@ -147,6 +147,37 @@ describe('media task recovery tools', () => {
 });
 
 describe('media_generate display parameters', () => {
+  it('同型号的万象分组以独立模型引用选择各自连接', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      'relay-a': { name: 'A 组', catalogId: 'relayonapi', relayonGroup: 'image', apiKey: 'group-a-key', baseUrl: '' },
+      'relay-b': { name: 'B 组', catalogId: 'relayonapi', relayonGroup: 'default', apiKey: 'group-b-key', baseUrl: 'https://relayonapi.com/v1' },
+    }, generalModels: [
+      { id: 'relay-a-image', name: 'Image', modelId: 'image-2.5-flare', category: 'image', providerConfigId: 'relay-a' },
+      { id: 'relay-b-image', name: 'Image', modelId: 'image-2.5-flare', category: 'image', providerConfigId: 'relay-b' },
+    ] } }));
+    const tool = getAgentTool('media_generate')!;
+    const common = { kind: 'image', prompt: '山谷', deliveryMode: 'chat' };
+    expect(tool.authorize?.(context, { ...common, modelRef: 'general/relay-a-image' }).allowed).toBe(false);
+    expect(tool.authorize?.(context, { ...common, modelRef: 'general/relay-b-image' }).allowed).toBe(true);
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'relay-a': { ...state.config.providers['relay-a'], baseUrl: 'https://relayonapi.com/v1' },
+    } } }));
+    useAppStore.setState({ messages: [{ id: 'relay-message', conversationId: context.conversationId,
+      role: 'assistant', content: '', timestamp: 1, status: 'executing', agentTaskId: context.taskId }] });
+    const generate = vi.spyOn(generationRuntime, 'runMediaGeneration').mockResolvedValue({
+      id: 'relay-artifact', kind: 'image', deliveryMode: 'chat', url: 'https://cdn.example/result',
+      sourceUrl: 'https://cdn.example/result', persistence: 'skipped', prompt: '山谷', modelId: 'image-2.5-flare',
+      provider: 'general', createdAt: 1,
+    });
+    for (const id of ['relay-a-image', 'relay-b-image']) {
+      const input = { ...common, modelRef: `general/${id}` };
+      expect(tool.authorize?.(context, input).allowed).toBe(true);
+      await tool.execute({ ...context, signal: new AbortController().signal }, input);
+      expect(generate).toHaveBeenLastCalledWith(expect.objectContaining({ modelRef: `general/${id}` }),
+        context.projectId, expect.any(AbortSignal), undefined, expect.objectContaining({ messageId: 'relay-message' }));
+    }
+  });
+
   function configureVisualModels() {
     useAppStore.setState((state) => ({ config: { ...state.config,
       providers: { ...state.config.providers, custom: { name: '自定义', catalogId: 'custom-openai',

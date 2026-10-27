@@ -51,7 +51,7 @@ const POLICY_OVERRIDES: Record<string, PolicyOverrides> = {
     catalog: { refresh: 'replace', fallback: 'deny', invalidateOnKeyChange: true, connectionTest: 'catalog' },
     upload: 'libapi' },
   relayonapi: { syncGeneralModels: true,
-    modelMenuGroup: { scope: 'connection', description: '使用当前 RelayOnAPI 连接中启用的模型' },
+    modelMenuGroup: { scope: 'catalog', description: '按模型所属分组使用对应的 API Key' },
     catalog: { refresh: 'replace', fallback: 'deny', invalidateOnKeyChange: true, connectionTest: 'catalog' },
     referenceTransport: 'public-url', submitIdempotency: true },
 };

@@ -13,9 +13,10 @@ describe('厂商接线策略', () => {
     expect(policy.catalog).toMatchObject({ refresh: 'merge', fallback: 'allow', connectionTest: 'default' });
   });
 
-  it('CCC 合并连接分组，其他既有专属菜单按连接区分', () => {
+  it('CCC 与万象合并连接分组，其他既有专属菜单按连接区分', () => {
     expect(getProviderPolicy('cccapi').modelMenuGroup?.scope).toBe('catalog');
-    for (const id of ['sora2u', 'toapis', 'libapi', 'relayonapi']) {
+    expect(getProviderPolicy('relayonapi').modelMenuGroup?.scope).toBe('catalog');
+    for (const id of ['sora2u', 'toapis', 'libapi']) {
       expect(getProviderPolicy(id).modelMenuGroup?.scope).toBe('connection');
     }
     expect(getProviderPolicy('custom-openai').modelMenuGroup).toBeUndefined();
@@ -45,7 +46,7 @@ describe('厂商接线策略', () => {
 
   it('RelayOnAPI 使用公开素材策略及提交幂等键，不借用专有上传或同名连接身份', () => {
     const policy = getProviderPolicy(resolveProviderCatalogId('自己的万象连接', { catalogId: 'relayonapi' }));
-    expect(policy.modelMenuGroup).toMatchObject({ scope: 'connection' });
+    expect(policy.modelMenuGroup).toMatchObject({ scope: 'catalog' });
     expect(policy.submitIdempotency).toBe(true);
     expect(policy.referenceTransport).toBe('public-url');
     expect(policy.upload).toBeUndefined();

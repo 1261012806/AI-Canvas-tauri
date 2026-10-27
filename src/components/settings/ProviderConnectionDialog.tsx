@@ -111,10 +111,14 @@ export default function ProviderConnectionDialog({
   onSaveCccGroups,
   onCopyCccGroup,
   onRemoveCccGroup,
+  forceSingleGroupEdit = false,
+  onEditRelayGroup,
 }: ProviderConnectionDialogProps & {
   onSaveCccGroups: (connections: Record<string, ApiProviderConfig>) => Promise<void>;
   onCopyCccGroup?: (connectionId: string) => Promise<void>;
   onRemoveCccGroup?: (connectionId: string) => Promise<boolean>;
+  forceSingleGroupEdit?: boolean;
+  onEditRelayGroup?: (connectionId: string) => void;
 }) {
   const t = useT();
   const editing = !!connectionId && !!initialConfig;
@@ -777,6 +781,7 @@ export default function ProviderConnectionDialog({
       await onSave(
         nextConnectionId,
         {
+          ...(definition.id === 'relayonapi' ? initialConfig : {}),
           name: connectionName.trim() || definition.name,
           apiKey: definition.authType === 'oauth' ? '' : apiKey.trim(),
           baseUrl: isWorkflowApi ? normalizeWorkflowApiBaseUrl(baseUrl, true) : normalizeBaseUrl(baseUrl, chatApiProtocol) || undefined,
@@ -848,10 +853,10 @@ export default function ProviderConnectionDialog({
             ))}
           </div>
         </div>
-      ) : definition.id === 'cccapi' ? (
-        <CccGroupConnectionsForm providerConfigs={providerConfigs} presetModels={fallbackModels.cccapi || []}
+      ) : definition.id === 'cccapi' || (definition.id === 'relayonapi' && !forceSingleGroupEdit && !initialModelId) ? (
+        <CccGroupConnectionsForm provider={definition.id === 'relayonapi' ? 'relayonapi' : 'cccapi'} providerConfigs={providerConfigs} presetModels={fallbackModels[definition.id] || []}
           onSave={onSaveCccGroups} onClose={closeDialog} onReturnToPicker={editing ? undefined : returnToDefinitionPicker}
-          onCopyConnection={onCopyCccGroup} onRemoveConnection={onRemoveCccGroup} />
+          onCopyConnection={onCopyCccGroup} onRemoveConnection={onRemoveCccGroup} onEditRelayGroup={onEditRelayGroup} />
       ) : (
         <>
           <div className="provider-dialog-body" inert={saving} aria-busy={saving}>

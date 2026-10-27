@@ -503,19 +503,21 @@ describe('RelayOnAPI 模型分组', () => {
     expect(getMediaModelOptions([], config)).toEqual([]);
   });
 
-  it('已启用文本按真实连接分组，媒体菜单不混入文本候选', () => {
+  it('已启用文本聚合厂商并标识分组，模型身份保持独立', () => {
     const config: AppConfig = { theme: 'dark', providers: {
-      left: { name: '左万象连接', catalogId: 'relayonapi', apiKey: 'left-fixture', selectedModels: selectedModels() },
-      right: { name: '右万象连接', catalogId: 'relayonapi', apiKey: 'right-fixture', selectedModels: selectedModels() },
+      left: { name: '左万象连接', catalogId: 'relayonapi', relayonGroup: 'default', apiKey: 'left-fixture', selectedModels: selectedModels() },
+      right: { name: '右万象连接', catalogId: 'relayonapi', relayonGroup: 'Gemini号池', apiKey: 'right-fixture', selectedModels: selectedModels() },
     } };
     const models = [...generalModels('left'), ...generalModels('right')];
     const groups = getGeneralModelGroups(models, config, 'ai-text');
-    expect(groups.map((group) => group.id)).toEqual(['general-provider-left', 'general-provider-right']);
+    expect(groups.map((group) => group.id)).toEqual(['general-provider-relayonapi']);
+    expect(groups[0]).toMatchObject({ name: '万象 API（RelayOnAPI）', badgeText: 'RA' });
     for (const [index, connectionId] of ['left', 'right'].entries()) {
-      expect(groups[index]).toMatchObject({ name: '万象 API（RelayOnAPI）', badgeText: 'RA' });
-      expect(groups[index].models.map((model) => model.value))
+      const options = groups[0].models.slice(index * textIds.length, (index + 1) * textIds.length);
+      expect(options.map((model) => model.value))
         .toEqual(textIds.map((_, modelIndex) => `general/${connectionId}-${modelIndex}`));
-      expect(groups[index].models.every((model) => model.provider === 'general' && model.nodeTypes.includes('ai-text'))).toBe(true);
+      expect(options.every((model) => model.provider === 'general' && model.nodeTypes.includes('ai-text'))).toBe(true);
+      expect(options.every((model) => model.label.endsWith(index === 0 ? ' · default' : ' · Gemini号池'))).toBe(true);
     }
     for (const category of ['ai-image', 'ai-video', 'ai-audio'] as const) {
       expect(getGeneralModelGroups(models, config, category)).toEqual([]);
@@ -547,14 +549,14 @@ describe('RelayOnAPI 模型分组', () => {
       modelId: model.id, providerConfigId: 'my-relay', category: model.category }));
     for (const [nodeType, category] of [['ai-text', 'text'], ['ai-image', 'image'], ['ai-video', 'video']] as const) {
       expect(getGeneralModelGroups(models, config, nodeType)).toEqual([
-        expect.objectContaining({ id: 'general-provider-my-relay', name: '万象 API（RelayOnAPI）', badgeText: 'RA',
+        expect.objectContaining({ id: 'general-provider-relayonapi', name: '万象 API（RelayOnAPI）', badgeText: 'RA',
           models: [expect.objectContaining({ value: `general/relay-${category}`, provider: 'general' })] }),
       ]);
     }
     expect(getMediaModelOptions(models, config).map((model) => ({ value: model.value, kind: model.mediaKind,
       groupId: model.groupId }))).toEqual([
-      { value: 'general/relay-image', kind: 'image', groupId: 'general-provider-my-relay' },
-      { value: 'general/relay-video', kind: 'video', groupId: 'general-provider-my-relay' },
+      { value: 'general/relay-image', kind: 'image', groupId: 'general-provider-relayonapi' },
+      { value: 'general/relay-video', kind: 'video', groupId: 'general-provider-relayonapi' },
     ]);
     const hidden = { ...config, providers: { 'my-relay': { ...config.providers['my-relay'], visibleModelCategories: ['text' as const] } } };
     expect(getMediaModelOptions(models, hidden)).toEqual([]);
@@ -568,6 +570,21 @@ describe('RelayOnAPI 模型分组', () => {
     expect(getGeneralModelGroups([generalModels('relayonapi')[0]], config, 'ai-text')).toEqual([
       expect.objectContaining({ id: 'general-models', models: [expect.objectContaining({ value: 'general/relayonapi-0' })] }),
     ]);
+  });
+
+  it('旧连接不猜测分组，媒体和节点菜单均保留显式分组', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      relayonapi: { name: '旧连接', apiKey: 'legacy-fixture' },
+      image: { name: '图片组', catalogId: 'relayonapi', relayonGroup: 'image', apiKey: 'image-fixture' },
+    } };
+    const models = ['relayonapi', 'image'].map((providerConfigId) => ({
+      id: `${providerConfigId}-image`, name: 'Image', modelId: 'image-2.5-flare',
+      category: 'image' as const, providerConfigId,
+    }));
+    expect(getGeneralModelGroups(models, config, 'ai-image')[0].models.map((model) => model.label))
+      .toEqual(['Image', 'Image · image']);
+    expect(getMediaModelOptions(models, config).map((model) => [model.value, model.label]))
+      .toEqual([['general/relayonapi-image', 'Image'], ['general/image-image', 'Image · image']]);
   });
 });
 

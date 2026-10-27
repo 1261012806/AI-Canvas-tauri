@@ -28,6 +28,33 @@ describe('CCC group connection transfer', () => {
   });
 });
 
+describe('RelayOnAPI group connection transfer', () => {
+  it('round trips the group and models without either credential field', () => {
+    const text = serializeConnection({ name: '万象图片组', catalogId: 'relayonapi', relayonGroup: 'image',
+      apiKey: 'private-fixture', apiKeyRef: 'secret:provider/relay-fixture', baseUrl: 'https://relayonapi.com/v1',
+      selectedModels: [{ id: 'image-2.5-flare', name: 'Image', category: 'image', provider: 'relay-image' }] });
+    expect(text).not.toContain('private-fixture');
+    expect(text).not.toContain('secret:provider');
+    const parsed = parseConnectionShare(text)!;
+    expect(parsed.config).toMatchObject({ catalogId: 'relayonapi', relayonGroup: 'image', apiKey: '',
+      selectedModels: [{ id: 'image-2.5-flare', provider: '' }] });
+    expect(parsed.config).not.toHaveProperty('apiKeyRef');
+    const payload = JSON.parse(text);
+    Object.assign(payload.connection, { apiKey: 'injected', apiKeyRef: 'secret:other' });
+    expect(parseConnectionShare(JSON.stringify(payload))!.config).toMatchObject({ apiKey: '', relayonGroup: 'image' });
+  });
+
+  it('keeps old connections unassigned and ignores group metadata for custom connections', () => {
+    const payload = JSON.parse(serializeConnection({ name: '旧万象连接', catalogId: 'relayonapi', apiKey: '' }));
+    expect(parseConnectionShare(JSON.stringify(payload))!.config.relayonGroup).toBeUndefined();
+    payload.connection.relayonGroup = 'image';
+    payload.connection.catalogId = 'custom-openai';
+    expect(parseConnectionShare(JSON.stringify(payload))!.config).not.toHaveProperty('relayonGroup');
+    expect(serializeConnection({ name: '自定义', catalogId: 'custom-openai', apiKey: '', relayonGroup: 'image' }))
+      .not.toContain('relayonGroup');
+  });
+});
+
 describe('自定义媒体连接 JSON', () => {
   it('图片和视频的参数、默认值、参考限制及协议在启用列表和目录中完整往返', () => {
     const models: ProviderModelSelection[] = [

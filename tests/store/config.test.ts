@@ -180,6 +180,33 @@ describe('config hydration guard', () => {
     expect(state.config.assistantImageModelId).toBe(`general/${stable.id}`);
     expect(state.nodes.map((node) => node.data.model)).toEqual(['cccapi/gpt-image-2', `general/${stable.id}`, undefined]);
   });
+  it('removes only the chosen Relay group and reserves legacy aliases for the root connection', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {}, generalModels: [] } }));
+    for (const [id, group] of [['relayonapi', undefined], ['relay-image', 'image'], ['relay-video', 'video']] as const) {
+      useAppStore.getState().saveProviderConfig(id, { name: '万象', catalogId: 'relayonapi', relayonGroup: group,
+        apiKey: `${id}-fixture`, selectedModels: [{ id: 'image-2.5-flare', name: 'Image', category: 'image', provider: 'relayonapi' }] });
+    }
+    const models = useAppStore.getState().config.generalModels!;
+    expect(new Set(models.map((model) => model.id)).size).toBe(3);
+    const image = models.find((model) => model.providerConfigId === 'relay-image')!;
+    const video = models.find((model) => model.providerConfigId === 'relay-video')!;
+    useAppStore.getState().updateConfig({ assistantImageModelId: `general/${video.id}` });
+    useAppStore.setState({ nodes: [
+      { id: 'legacy', type: 'ai-image', position: { x: 0, y: 0 }, data: { label: 'Image', type: 'ai-image', provider: 'relayonapi', model: 'relayonapi/image-2.5-flare' } },
+      { id: 'image', type: 'ai-image', position: { x: 0, y: 0 }, data: { label: 'Image', type: 'ai-image', provider: 'general', model: `general/${image.id}` } },
+      { id: 'video', type: 'ai-image', position: { x: 0, y: 0 }, data: { label: 'Image', type: 'ai-image', provider: 'general', model: `general/${video.id}` } },
+    ] });
+    await useAppStore.getState().removeProviderConfig('relay-image');
+    let state = useAppStore.getState();
+    expect(state.config.generalModels!.map((model) => model.providerConfigId)).toEqual(['relayonapi', 'relay-video']);
+    expect(state.config.assistantImageModelId).toBe(`general/${video.id}`);
+    expect(state.nodes.map((node) => node.data.model)).toEqual(['relayonapi/image-2.5-flare', undefined, `general/${video.id}`]);
+    await useAppStore.getState().removeProviderConfig('relayonapi');
+    state = useAppStore.getState();
+    expect(state.config.generalModels!.map((model) => model.providerConfigId)).toEqual(['relay-video']);
+    expect(state.config.assistantImageModelId).toBe(`general/${video.id}`);
+    expect(state.nodes.map((node) => node.data.model)).toEqual([undefined, undefined, `general/${video.id}`]);
+  });
   it('persists an activated appearance before reporting the save as complete', async () => {
     fileMocks.loadConfig.mockResolvedValue({ providers: {} });
     await useAppStore.getState().loadConfig();
