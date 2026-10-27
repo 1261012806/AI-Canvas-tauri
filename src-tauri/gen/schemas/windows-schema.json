@@ -2229,6 +2229,18 @@
           "markdownDescription": "Allows only the native-registered plugin window session bridge."
         },
         {
+          "description": "Allows main-window project-scoped storage configuration, checks, manual sync and confirmed cloud-only cleanup.",
+          "type": "string",
+          "const": "allow-project-asset-storage",
+          "markdownDescription": "Allows main-window project-scoped storage configuration, checks, manual sync and confirmed cloud-only cleanup."
+        },
+        {
+          "description": "Denies all project-scoped object storage commands.",
+          "type": "string",
+          "const": "deny-project-asset-storage",
+          "markdownDescription": "Denies all project-scoped object storage commands."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:channel:default`\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
