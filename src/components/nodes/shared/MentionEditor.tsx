@@ -1379,11 +1379,31 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         if (!range.collapsed) return;
         const node = range.startContainer;
         const offset = range.startOffset;
-        // 行首芯片前（光标在其 ZWSP 落点里）退格 → 删掉上面的换行 <br> 合并到上一行，而不是卡在 ZWSP
-        if (node && node.nodeType === Node.TEXT_NODE && isChipEl(node.nextSibling) && isBrEl(node.previousSibling)) {
+        // 芯片前的零宽落点不是正文：行首合并换行，文档开头则保留落点。
+        let chipSlot: Node | null = null;
+        if (node.nodeType === Node.TEXT_NODE && isChipEl(node.nextSibling)
+          && !(node.textContent || '').slice(0, offset).replaceAll(ZWSP, '')) {
+          chipSlot = node;
+        } else if (node === editorRef.current) {
+          const after = node.childNodes[offset];
+          const before = node.childNodes[offset - 1];
+          if (after?.nodeType === Node.TEXT_NODE && after.textContent === ZWSP && isChipEl(after.nextSibling)) {
+            chipSlot = after;
+          } else if (isChipEl(after) && before?.nodeType === Node.TEXT_NODE && before.textContent === ZWSP) {
+            chipSlot = before;
+          }
+        }
+        if (chipSlot && (isBrEl(chipSlot.previousSibling)
+          || (!chipSlot.previousSibling && chipSlot.parentNode === editorRef.current))) {
           e.preventDefault();
-          (node.previousSibling as ChildNode).remove();
-          emitDOM();
+          if (node !== chipSlot) {
+            range.setStart(chipSlot, (chipSlot.textContent || '').length);
+            range.collapse(true);
+          }
+          if (isBrEl(chipSlot.previousSibling)) {
+            (chipSlot.previousSibling as ChildNode).remove();
+            emitDOM();
+          }
           return;
         }
         if (node && node.nodeType === Node.TEXT_NODE && offset === 0) {
