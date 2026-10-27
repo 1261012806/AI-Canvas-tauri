@@ -502,19 +502,30 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
       addPastedNode(newNode);
     };
 
-    const addTextNode = (text: string, idx: number) => {
+    const addTextNode = (text: string, idx: number, fileName?: string) => {
       const lineCount = text.split('\n').length;
-      const estimatedHeight = textNodeHeight(lineCount);
+      const estimatedHeight = fileName ? textNodeHeight(lineCount, 160) : textNodeHeight(lineCount);
+      const nodeType = fileName ? 'ai-markdown' : 'ai-text';
       const newNode: Node<BaseNodeData> = {
         id: `node-${generateId()}`,
-        type: 'ai-text',
+        type: nodeType,
         position: { x: position.x + offsets[idx].x, y: position.y + offsets[idx].y },
-        data: { label: '粘贴文本', type: 'ai-text', role: 'source', output: text, status: 'success', nodeWidth: 280, nodeHeight: estimatedHeight },
+        data: { label: fileName || '粘贴文本', type: nodeType, role: 'source', output: text, status: 'success',
+          ...(fileName ? { fileName } : {}), nodeWidth: 280, nodeHeight: estimatedHeight },
       };
       addPastedNode(newNode);
     };
 
-    const parsedItems = await parseDataTransferItems(dt);
+    const hasMarkdownFile = Array.from(dt.files || []).some((file) => (file as File).name.toLowerCase().endsWith('.md'));
+    const parseGuard = hasMarkdownFile ? registerCanvasImport(get()) : null;
+    if (hasMarkdownFile && !parseGuard) return;
+    let parsedItems: ParsedDTItem[];
+    try {
+      parsedItems = await parseDataTransferItems(dt);
+      if (parseGuard && !isCanvasDerivationFresh(parseGuard, get())) return;
+    } finally {
+      if (parseGuard) completeCanvasDerivation(parseGuard);
+    }
     if (parsedItems.length === 0) return;
 
     for (const p of parsedItems) {
@@ -619,6 +630,22 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
             pastedCount++;
           }
         }
+      } else if (p.kind === 'markdown' && p.file) {
+        if (get().currentProjectId !== currentProjectId) break;
+        const guard = registerCanvasImport(get());
+        if (!guard) continue;
+        let content: string;
+        try {
+          content = await p.file.text();
+          if (!isCanvasDerivationFresh(guard, get())) continue;
+        } catch {
+          // 文件读取失败时不创建空节点。
+          continue;
+        } finally {
+          completeCanvasDerivation(guard);
+        }
+        addTextNode(content, pastedCount, p.file.name);
+        pastedCount++;
       } else if (p.kind === 'image') {
         // 浏览器复制的图像走此分支：先落盘再建节点，避免 base64 常驻节点数据
         await addImageNode(p.dataUrl!, pastedCount);
@@ -641,10 +668,11 @@ export const createClipboardSlice: StateCreator<AppState, [], [], ClipboardSlice
 // ---- helper: parse dataTransfer into structured items ----
 
 interface ParsedDTItem {
-  kind: 'text' | 'image' | 'file';
+  kind: 'text' | 'image' | 'file' | 'markdown';
   text?: string;
   dataUrl?: string;
   filePath?: string;
+  file?: File;
 }
 
 async function parseDataTransferItems(dt: DataTransfer): Promise<ParsedDTItem[]> {
@@ -655,6 +683,10 @@ async function parseDataTransferItems(dt: DataTransfer): Promise<ParsedDTItem[]>
   // Process files first
   for (const file of files) {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (ext === 'md') {
+      items.push({ kind: 'markdown', file });
+      continue;
+    }
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
     if (imageExts.includes(ext)) {
       try {

@@ -13,6 +13,7 @@ import { isExternalDropCaptured } from '../utils/dropCapture';
 import { nativeDropClientPosition } from '../utils/nativeDropPosition';
 import { textNodeHeight } from '../utils/num';
 import { COMFY_REFMOD_MIME } from '../utils/comfyRefmod';
+import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation } from '../services/canvasDerivationGuard';
 
 // ── File type constants ──
 
@@ -430,16 +431,27 @@ export function useNodeCreation() {
               }
             } else {
               // Text file
-              const content = await readBinaryFile(fp);
+              const isMarkdown = ext === 'md';
+              if (isMarkdown && useAppStore.getState().currentProjectId !== store.currentProjectId) break;
+              const guard = isMarkdown ? registerCanvasImport(useAppStore.getState()) : null;
+              if (isMarkdown && !guard) continue;
+              let content: Uint8Array<ArrayBuffer>;
+              try {
+                content = await readBinaryFile(fp);
+                if (guard && !isCanvasDerivationFresh(guard, useAppStore.getState())) continue;
+              } finally {
+                if (guard) completeCanvasDerivation(guard);
+              }
               const text = new TextDecoder('utf-8').decode(content);
-              if (!text.trim()) continue;
+              if (!isMarkdown && !text.trim()) continue;
               const lines = text.split('\n').length;
-              const h = textNodeHeight(lines);
+              const h = isMarkdown ? textNodeHeight(lines, 160) : textNodeHeight(lines);
+              const nodeType = isMarkdown ? 'ai-markdown' : 'ai-text';
               store.addNode({
                 id: `node-${generateId()}`,
-                type: 'ai-text',
+                type: nodeType,
                 position: { x: flowPos.x + offX, y: flowPos.y + offY },
-                data: { label: fileName, type: 'ai-text', role: 'source', output: text, status: 'success', fileName, nodeWidth: 280, nodeHeight: h },
+                data: { label: fileName, type: nodeType, role: 'source', output: text, status: 'success', fileName, nodeWidth: 280, nodeHeight: h },
               } as Parameters<typeof store.addNode>[0]);
             }
             if (store.currentProjectId && useAppStore.getState().currentProjectId === store.currentProjectId) {
