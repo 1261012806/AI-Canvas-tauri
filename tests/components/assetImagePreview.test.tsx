@@ -425,7 +425,7 @@ describe('asset image fullscreen preview', () => {
     // 检查上方参考图区域
     const refButton = button('查看参考图 生成图像');
     expect(refButton).toBeDefined();
-    expect(find((element) => element.type === 'img' && element.props.src === 'https://images.test/ref-thumb.png')).toBeDefined();
+    expect(find((element) => element.type === 'viewport-image' && element.props.src === 'https://images.test/ref-thumb.png')).toBeDefined();
 
     // 点击参考图切换到预览舞台
     click(refButton);

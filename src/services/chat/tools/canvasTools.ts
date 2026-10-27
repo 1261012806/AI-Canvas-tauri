@@ -1934,7 +1934,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
           const kind = getProjectModelKind(data.type);
           const projectModel = kind && useAppStore.getState().projects.find((project) => project.id === context.projectId)
             ?.settings?.defaultModels?.[kind];
-          const provider = parseProjectModelRef(data.model || projectModel)?.provider ?? data.provider;
+          const provider = parseProjectModelRef((data.model || projectModel) ?? undefined)?.provider ?? data.provider;
           const usesWorkflow = Boolean(data.workflowId) || ['comfyui', 'runninghub', 'runninghubwf', 'workflow-api'].includes(provider ?? '');
           const parameters = data.type === 'ai-image' ? { imageQuality: data.imageQuality, imageBackground: data.imageBackground }
             : data.type === 'ai-video' ? { videoFps: data.videoFps, generateAudio: data.generateAudio,

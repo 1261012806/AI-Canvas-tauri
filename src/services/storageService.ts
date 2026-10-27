@@ -769,7 +769,7 @@ async function serializeProjectDramaAssets(
   return { ...library, characters, scenes, props };
 }
 
-async function serializeProjectRecord(data: ProjectSaveData): Promise<ProjectSaveData> {
+export async function serializeProjectRecord(data: ProjectSaveData): Promise<ProjectSaveData> {
   const projectDir = await getProjectDataDir(data.id);
   if (!projectDir) {
     if (projectRecordContainsInlineMedia(data)) {

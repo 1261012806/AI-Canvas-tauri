@@ -13,7 +13,8 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeFile: mocks.writeFile, readFile: mocks.readFile, mkdir: mocks.mkdir,
 }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: mocks.open }));
-vi.mock('../../src/services/fs/core', () => ({
+vi.mock('../../src/services/fs/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/fs/core')>(),
   isTauriEnv: () => mocks.tauri,
   joinPath: (...parts: string[]) => parts.join('/'),
   getBaseDir: async () => '/global',
@@ -21,7 +22,8 @@ vi.mock('../../src/services/fs/core', () => ({
   resolveUniqueDestPath: mocks.uniquePath, listDirectoryFiles: vi.fn(),
   getFileCategory: () => 'image', CATEGORY_EXTENSIONS: { image: ['.png'] },
 }));
-vi.mock('../../src/services/fs/assetIndex', () => ({
+vi.mock('../../src/services/fs/assetIndex', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/fs/assetIndex')>(),
   identifyAsset: async (path: string, options: { rootPath: string }) => ({
     assetId: `asset-${path}`, relativePath: path.slice(options.rootPath.length + 1),
   }),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { assert, describe, expect, it } from 'vitest';
 import type { ProviderModelSelection } from '../../src/types';
 import {
   RELAYON_BASE_URL,
@@ -133,7 +133,8 @@ describe('RelayOnAPI 已确认的媒体合同', () => {
         expect(protocol).toMatchObject({ mode: 'async', response: { taskIdPath: 'id' },
           poll: { path: '/videos/{{submit.id}}', intervalMs: 10_000, maxDurationMs: 7_200_000,
             response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], result: { urlPath: 'url' } } } });
-        expect(protocol!.poll!.response.result).not.toHaveProperty('download');
+        assert(protocol?.version === 2, item.id);
+        expect(protocol.poll!.response.result).not.toHaveProperty('download');
       }
     }
     expect(RELAYON_VIDEO_RESULT_URL_PATHS).toEqual(['url', 'video_url', 'content.video_url']);
@@ -331,6 +332,7 @@ describe('RelayOnAPI 普通 Image 2.5 的参数兼容', () => {
     const capability = { qualities: ['custom-quality'], defaultQuality: 'custom-quality' };
     for (const change of ['path', 'response', 'quality-only'] as const) {
       const custom = previousImageProfile(id);
+      assert(custom.protocol?.version === 2);
       if (change === 'path') custom.protocol!.submit.path = '/user/images';
       else if (change === 'response') custom.protocol!.response.result!.urlPath = 'custom_result';
       else (custom.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = '{{imageQuality}}';

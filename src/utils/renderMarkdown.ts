@@ -106,6 +106,7 @@ function renderMarkdownContent(md: string, findRanges?: (value: string) => reado
     .map((part, i) => (i % 2 === 0 ? escapeHtml(part) : part))
     .join('\x00');
 
+  // URL 已在第 3 步转义；属性内直接复用，避免查询参数被再次转义。
   // ── 4. 图片 ![alt](url) ──
   processed = processed.replace(
     /!\[([^\]]*)\]\(([^)\s]+(?:\s+"[^"]*")?)\)/g,
@@ -115,7 +116,7 @@ function renderMarkdownContent(md: string, findRanges?: (value: string) => reado
       const titleMatch = url.match(/\s+"([^"]*)"$/);
       const title = titleMatch ? ` title="${escapeHtml(titleMatch[1])}"` : '';
       const sourceAttribute = isComfyViewUrl(cleanUrl) ? COMFY_IMAGE_SOURCE_ATTRIBUTE : 'src';
-      return `<img ${sourceAttribute}="${escapeHtml(cleanUrl)}" alt="${escapeHtml(alt)}"${title} />`;
+      return `<img ${sourceAttribute}="${cleanUrl}" alt="${escapeHtml(alt)}"${title} />`;
     }
   );
 
@@ -127,7 +128,7 @@ function renderMarkdownContent(md: string, findRanges?: (value: string) => reado
       if (!isSafeMarkdownUrl(cleanUrl, 'link')) return text;
       const titleMatch = url.match(/\s+"([^"]*)"$/);
       const title = titleMatch ? ` title="${escapeHtml(titleMatch[1])}"` : '';
-      return `<a href="${escapeHtml(cleanUrl)}"${title} rel="noopener">${text}</a>`;
+      return `<a href="${cleanUrl}"${title} rel="noopener">${text}</a>`;
     }
   );
 

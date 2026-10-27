@@ -513,6 +513,7 @@ describe('CCC 统一管理入口', () => {
 
 describe('万象 API 分组管理', () => {
   it('合并分组入口，删除单组时保留另一组和旧连接', async () => {
+    driver.native = true;
     driver.state().saveProviderConfig('relayonapi', { name: '旧连接', apiKey: 'legacy-fixture', catalogId: 'relayonapi' });
     driver.state().saveProviderConfig('relayon-image', { name: '图片组', apiKey: 'image-fixture', catalogId: 'relayonapi', relayonGroup: 'image',
       selectedModels: [{ id: 'Image-2.5-Flare', name: 'Flare', category: 'image', provider: 'relayon-image' }] });
@@ -527,5 +528,10 @@ describe('万象 API 分组管理', () => {
     expect(driver.state().config.providers['relayon-image']).toBeUndefined();
     expect(driver.state().config.providers.relayonapi.apiKey).toBe('legacy-fixture');
     expect(driver.state().config.providers['relayon-video'].apiKey).toBe('video-fixture');
+    const fresh = configStore();
+    await fresh.getState().loadConfig();
+    expect(fresh.getState().config.providers['relayon-image']).toBeUndefined();
+    expect(fresh.getState().config.providers.relayonapi.apiKey).toBe('legacy-fixture');
+    expect(fresh.getState().config.providers['relayon-video'].apiKey).toBe('video-fixture');
   });
 });

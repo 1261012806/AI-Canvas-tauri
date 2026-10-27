@@ -110,6 +110,12 @@ vi.mock('../../src/services/fileService', async () => ({
 vi.mock('../../src/services/clipboardService', () => ({ copyFile: driver.copyClipboard, copyText: driver.copyText, readClipboardFolders: driver.readClipboard }));
 vi.mock('../../src/services/assetImageDetails', () => ({ loadAssetImageDetails: driver.imageDetails }));
 vi.mock('../../src/services/assetVideoDetails', () => ({ loadAssetVideoHistory: driver.videoHistory }));
+vi.mock('../../src/services/fs/sharedAssetSync', () => ({
+  projectAssetSyncService: {
+    readProjectFiles: (projectId: string, options?: AssetScanOptions) => driver.listProject(projectId, options),
+    projectFileView: async (_projectId: string, files: AssetFileEntry[]) => files,
+  },
+}));
 vi.mock('../../src/services/dramaAssetTransferService', () => ({
   exportProjectDramaAssets: driver.exportDrama, importProjectDramaAssets: driver.importDrama,
   exportGlobalDramaAssets: driver.exportGlobalDrama, importGlobalDramaAssets: driver.importGlobalDrama,
@@ -1596,7 +1602,7 @@ describe('资产库 Tab 抽屉', () => {
       publish = options!.onFiles!;
       return new Promise<AssetFileEntry[]>((resolve) => { finish = resolve; });
     });
-    driver.store!.getState().setAssetsPanelOpen(true, mode); render();
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); await settle();
     expect(cards()).toHaveLength(0);
     publish([file('先完成')]); render();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['先完成']);
@@ -1611,7 +1617,7 @@ describe('资产库 Tab 抽屉', () => {
     driver.store!.getState().setAssetsPanelOpen(false); render();
     let finish!: (files: AssetFileEntry[]) => void;
     driver.listProject.mockImplementationOnce(() => new Promise<AssetFileEntry[]>((resolve) => { finish = resolve; }));
-    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); render();
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); render(); await settle();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['人物', '森林']);
     expect(all(tree, (el) => el.props.className === 'assets-empty')).toHaveLength(0);
     finish([file('刷新结果')]); await settle();
@@ -1627,7 +1633,7 @@ describe('资产库 Tab 抽屉', () => {
       oldOptions = options!;
       return new Promise<AssetFileEntry[]>((resolve) => { finishOld = resolve; });
     }).mockResolvedValueOnce([renamed]);
-    driver.store!.getState().setAssetsPanelOpen(true, mode); render();
+    driver.store!.getState().setAssetsPanelOpen(true, mode); render(); await settle();
     oldOptions.onFiles!([previous]); render();
     (cards()[0].props.onImagePreview as () => void)(); render();
     const preview = find((el) => el.type === 'asset-image-preview');
@@ -1653,7 +1659,7 @@ describe('资产库 Tab 抽屉', () => {
       publish = options!.onFiles!;
       return new Promise<AssetFileEntry[]>((_resolve, reject) => { fail = reject; });
     }).mockResolvedValueOnce(finalFiles);
-    key(); render();
+    key(); render(); await vi.advanceTimersByTimeAsync(0); render();
     publish([file('首轮旧条目')]); render();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['首轮旧条目']);
     fail(new Error('temporary scan failure'));
@@ -1789,7 +1795,7 @@ describe('资产库 Tab 抽屉', () => {
       oldOptions = options!;
       return new Promise<AssetFileEntry[]>((resolve) => { finishOld = resolve; });
     });
-    key(); render();
+    key(); render(); await settle();
     oldOptions.onFiles!([file('项目一首批')]); render();
     expect(cards().map((el) => (el.props.file as AssetFileEntry).name)).toEqual(['项目一首批']);
     driver.store!.setState({ currentProjectId: 'project-2' });

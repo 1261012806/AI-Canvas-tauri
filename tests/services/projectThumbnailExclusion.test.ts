@@ -26,7 +26,8 @@ vi.mock('@tauri-apps/plugin-fs', async (importOriginal) => ({
   lstat: mocks.lstat,
   exists: async (path: string) => mocks.directories.has(path) || mocks.sizes.has(path),
 }));
-vi.mock('../../src/services/indexedDbService', () => ({
+vi.mock('../../src/services/indexedDbService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/indexedDbService')>(),
   savePresetFolderToDb: vi.fn().mockResolvedValue(undefined),
   loadPresetFoldersFromDb: vi.fn().mockResolvedValue([]),
   deletePresetFolderFromDb: vi.fn().mockResolvedValue(undefined),

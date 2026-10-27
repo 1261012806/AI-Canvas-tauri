@@ -14,7 +14,7 @@
 
 AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, Markdown, shot lists, 360° panoramas and hand-drawn notes into connectable canvas nodes. In a single project you can orchestrate generation pipelines, manage characters, scenes, props and local media assets, run ComfyUI workflows, and use the conversational assistant to query or modify the canvas, generate media, dispatch read-only sub-agents, read authorized files, and accumulate project memory. Projects can also be split into series and episodes — each episode of an AI short drama gets its own canvas, while the character library and assets are shared across the whole series.
 
-![Version](https://img.shields.io/badge/version-0.10.17-6366f1)
+![Version](https://img.shields.io/badge/version-0.10.18-6366f1)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![React Flow](https://img.shields.io/badge/React_Flow-12-ff0072)
@@ -47,6 +47,8 @@ AI Canvas Tauri organizes text, images, video, audio, frame-by-frame animation, 
 | Built-in video editing | Arrange multiple tracks and edit clips, transitions, captions, stickers and volume in a separate editor. Supports video export and MCP control. |
 | Conversational Agent | Query and edit the canvas, generate media and manage tasks through conversation. Supports multiple conversations, Plan/B/C modes, project memory, separate windows and read-only sub-agents. |
 | AI app nodes | Create interactive apps through the Agent or MCP. Apps access only bound canvas assets, run read-only actions and save results. |
+| Project asset cloud sync | Connect a shared project through S3-compatible storage, preview and manually sync project media, characters, scenes, props and related data. Cloud-only clearing and deletion keep local assets; global assets and automatic sync are not included. |
+| RelayOnAPI groups | Manage separate connections and API keys by group, and choose supported text, image and video models. |
 | Characters & creative assets | Manage project and global characters, scenes and props, with character voices and actions, multiple scene/prop reference images and precise references to individual images. |
 | External MCP control | Let external AI tools control the canvas, media and editing projects through local stdio or Streamable HTTP. Disabled by default; remote access requires confirmation to enable. |
 | Local storage | Save projects and media locally, and manage API keys in a separate credential store. Storage health separates file usage from app data quota, confirms cleanup and rechecks references, and can reveal unreferenced files in their folders. |

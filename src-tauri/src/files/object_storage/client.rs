@@ -37,17 +37,17 @@ const PROBE_BYTES: &[u8] = b"\0ai-canvas-capability-probe\xff\r\n";
 static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
-struct RestrictedConnector(reqwest::Client);
+struct RestrictedConnector(reqwest::Client, bool, usize);
 
 impl HttpConnector for RestrictedConnector {
     fn connect(&self, _options: &ClientOptions) -> object_store::Result<HttpClient> {
         // All transport policy is fixed here, never inherited from remote configuration.
-        Ok(HttpClient::new(RestrictedService(self.0.clone())))
+        Ok(HttpClient::new(RestrictedService(self.0.clone(), self.1, self.2)))
     }
 }
 
 #[derive(Debug, Clone)]
-struct RestrictedService(reqwest::Client);
+struct RestrictedService(reqwest::Client, bool, usize);
 
 #[derive(Debug)]
 struct ResponseTooLarge;
@@ -60,6 +60,37 @@ impl std::fmt::Display for ResponseTooLarge {
 
 impl std::error::Error for ResponseTooLarge {}
 
+fn log_transport_failure(method: &str, elapsed: Duration, error: &HttpError) {
+    use std::error::Error as _;
+    let kind = match error.kind() {
+        HttpErrorKind::Connect => "connect", HttpErrorKind::Request => "request",
+        HttpErrorKind::Timeout => "timeout", HttpErrorKind::Interrupted => "interrupted",
+        HttpErrorKind::Decode => "decode", _ => "unknown",
+    };
+    let mut io_kind = "none";
+    let mut timeout = false; let mut connect = false; let mut request = false; let mut body = false;
+    let mut source = error.source();
+    while let Some(current) = source {
+        if let Some(error) = current.downcast_ref::<reqwest::Error>() {
+            timeout |= error.is_timeout(); connect |= error.is_connect();
+            request |= error.is_request(); body |= error.is_body();
+        }
+        if let Some(error) = current.downcast_ref::<std::io::Error>() {
+            io_kind = match error.kind() {
+                std::io::ErrorKind::TimedOut => "timeout",
+                std::io::ErrorKind::ConnectionReset => "connection_reset",
+                std::io::ErrorKind::ConnectionAborted => "connection_aborted",
+                std::io::ErrorKind::ConnectionRefused => "connection_refused",
+                std::io::ErrorKind::BrokenPipe => "broken_pipe",
+                std::io::ErrorKind::UnexpectedEof => "unexpected_eof",
+                _ => "other",
+            };
+        }
+        source = current.source();
+    }
+    eprintln!("[project-asset-sync] transport method={method} kind={kind} elapsed_ms={} io={io_kind} timeout={timeout} connect={connect} request={request} body={body}", elapsed.as_millis());
+}
+
 impl HttpService for RestrictedService {
     // Match the SDK's async_trait ABI without introducing another direct dependency.
     fn call<'life0, 'async_trait>(
@@ -71,12 +102,30 @@ impl HttpService for RestrictedService {
         Self: 'async_trait,
     {
         Box::pin(async move {
-            let response = HttpService::call(&self.0, request).await?;
+            let content_read = self.1 && request.method().as_str() == "GET";
+            let method = match request.method().as_str() {
+                "GET" => "GET", "PUT" => "PUT", "POST" => "POST",
+                "DELETE" => "DELETE", "HEAD" => "HEAD", _ => "OTHER",
+            };
+            let started = std::time::Instant::now();
+            let response = match HttpService::call(&self.0, request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    log_transport_failure(method, started.elapsed(), &error);
+                    return Err(error);
+                }
+            };
+            // 404 and conditional failures may be expected during reconciliation.
+            // Never log the URL, headers, response body, or SDK error text.
+            eprintln!("[project-asset-sync] http method={method} status={}", response.status().as_u16());
+            // Only the dedicated fixed-content client streams successful GETs. Its caller
+            // checks declared length, incremental size, idle timeout and SHA-256.
+            if content_read && response.status().is_success() { return Ok(response); }
             let (parts, body) = response.into_parts();
             let mut stream = body.bytes_stream();
             let mut bytes = Vec::new();
             while let Some(chunk) = stream.try_next().await? {
-                if chunk.len() > HTTP_RESPONSE_LIMIT.saturating_sub(bytes.len()) {
+                if chunk.len() > self.2.saturating_sub(bytes.len()) {
                     return Err(HttpError::new(HttpErrorKind::Decode, ResponseTooLarge));
                 }
                 bytes.extend_from_slice(&chunk);
@@ -88,17 +137,28 @@ impl HttpService for RestrictedService {
 }
 
 fn client(connection: &ConnectionInput, credentials: Credentials) -> Result<AmazonS3, StorageError> {
+    build_client(connection, credentials, false, HTTP_RESPONSE_LIMIT, Some(REQUEST_TIMEOUT))
+}
+
+pub(super) fn sync_client(connection: &ConnectionInput, credentials: Credentials, content: bool) -> Result<AmazonS3, StorageError> {
+    build_client(connection, credentials, content, if content { HTTP_RESPONSE_LIMIT } else { super::protocol::MANIFEST_LIMIT }, if content { None } else { Some(Duration::from_secs(30)) })
+}
+
+fn build_client(connection: &ConnectionInput, credentials: Credentials, content: bool, response_limit: usize, timeout: Option<Duration>) -> Result<AmazonS3, StorageError> {
     if credentials.access_key_id.trim().is_empty() || credentials.secret_access_key.is_empty() {
         return Err(StorageError::new("credentials_missing"));
     }
-    let http = reqwest::Client::builder()
+    let mut http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .https_only(true)
         .danger_accept_invalid_certs(false)
         .no_proxy()
         .connect_timeout(Duration::from_secs(5))
-        .timeout(REQUEST_TIMEOUT)
-        .build()
+        // A media part may need longer before the server starts its response;
+        // the upload operation still has its own overall timeout and cancellation.
+        .read_timeout(Duration::from_secs(if content { 120 } else { 30 }));
+    if let Some(timeout) = timeout { http = http.timeout(timeout); }
+    let http = http.build()
         .map_err(|_| StorageError::new("unavailable"))?;
     let mut builder = AmazonS3Builder::new()
         .with_endpoint(request_endpoint(connection)?)
@@ -110,7 +170,7 @@ fn client(connection: &ConnectionInput, credentials: Credentials) -> Result<Amaz
         .with_secret_access_key(credentials.secret_access_key)
         .with_conditional_put(S3ConditionalPut::ETagMatch)
         .with_retry(RetryConfig { max_retries: 0, ..Default::default() })
-        .with_http_connector(RestrictedConnector(http));
+        .with_http_connector(RestrictedConnector(http, content, response_limit));
     if let Some(token) = credentials.session_token {
         builder = builder.with_token(token);
     }
@@ -169,13 +229,30 @@ impl<'a> Io<'a> {
     }
 }
 
-fn remote_error(error: ObjectError) -> StorageError {
+pub(super) fn remote_error(error: ObjectError) -> StorageError {
     let mut source: &(dyn std::error::Error + 'static) = &error;
+    let mut network = false;
     loop {
-        if source.is::<ResponseTooLarge>() { return StorageError::new("response_too_large"); }
+        if source.is::<ResponseTooLarge>() {
+            eprintln!("[project-asset-sync] remote_error code=response_too_large");
+            return StorageError::new("response_too_large");
+        }
+        // Classify only public typed evidence; SDK-private wrappers and error text
+        // do not prove a transport kind or an HTTP response status.
+        if let Some(error) = source.downcast_ref::<HttpError>() {
+            network |= matches!(error.kind(), HttpErrorKind::Timeout | HttpErrorKind::Connect | HttpErrorKind::Request | HttpErrorKind::Interrupted);
+        }
+        // A transparent SDK wrapper may expose reqwest directly instead of HttpError.
+        if let Some(error) = source.downcast_ref::<reqwest::Error>() {
+            network |= error.is_timeout() || error.is_connect();
+        }
         match source.source() { Some(next) => source = next, None => break }
     }
-    let code = match error {
+    if network {
+        eprintln!("[project-asset-sync] remote_error code=network");
+        return StorageError::new("network");
+    }
+    let code = match &error {
         ObjectError::PermissionDenied { .. } => "access_denied",
         ObjectError::Unauthenticated { .. } => "authentication_failed",
         ObjectError::AlreadyExists { .. } | ObjectError::Precondition { .. } | ObjectError::NotModified { .. } => "conflict",
@@ -183,6 +260,19 @@ fn remote_error(error: ObjectError) -> StorageError {
         ObjectError::NotSupported { .. } | ObjectError::NotImplemented => "unavailable",
         _ => "unknown",
     };
+    if code != "project_not_found" {
+        let kind = match &error {
+            ObjectError::Generic { .. } => "generic",
+            ObjectError::PermissionDenied { .. } => "permission_denied",
+            ObjectError::Unauthenticated { .. } => "unauthenticated",
+            ObjectError::AlreadyExists { .. } => "already_exists",
+            ObjectError::Precondition { .. } => "precondition",
+            ObjectError::NotModified { .. } => "not_modified",
+            ObjectError::NotSupported { .. } | ObjectError::NotImplemented => "not_supported",
+            _ => "other",
+        };
+        eprintln!("[project-asset-sync] remote_error kind={kind} code={code}");
+    }
     StorageError::new(code)
 }
 
@@ -203,26 +293,67 @@ fn nonce() -> String {
     format!("{:016x}-{sequence:016x}", hasher.finish())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProjectDescriptor {
+pub(super) struct ProjectDescriptor {
     format: String,
     version: u32,
     library_id: String,
     shared_project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")] pub generation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub status: Option<ProjectStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub lock: Option<ProjectLock>,
 }
 
-fn validate_descriptor(bytes: &[u8], scope: &RemoteProjectScope) -> Result<(), StorageError> {
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ProjectStatus { Active, Locked, Deleted }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ProjectLock {
+    pub operation_id: String,
+    pub token_digest: String,
+}
+
+impl ProjectDescriptor {
+    pub(super) fn generation(&self) -> &str { self.generation.as_deref().unwrap_or("legacy") }
+}
+
+pub(super) fn parse_descriptor(bytes: &[u8], scope: &RemoteProjectScope) -> Result<ProjectDescriptor, StorageError> {
     if bytes.len() > DESCRIPTOR_LIMIT {
         return Err(StorageError::new("response_too_large"));
     }
     let descriptor: ProjectDescriptor = serde_json::from_slice(bytes)
         .map_err(|_| StorageError::new("project_mismatch"))?;
-    if descriptor.format != DESCRIPTOR_FORMAT || descriptor.version != DESCRIPTOR_VERSION
+    if descriptor.format != DESCRIPTOR_FORMAT || ![1, 2].contains(&descriptor.version)
         || descriptor.library_id != scope.library_id
         || descriptor.shared_project_id != scope.shared_project_id
     {
         return Err(StorageError::new("project_mismatch"));
+    }
+    match descriptor.version {
+        1 if descriptor.generation.is_none() && descriptor.status.is_none() && descriptor.sequence.is_none() && descriptor.lock.is_none() => {},
+        2 if descriptor.generation.as_deref().is_some_and(|generation| generation == "legacy" || super::protocol::valid_digest(generation))
+            && descriptor.sequence.is_some_and(|sequence| sequence <= 9_007_199_254_740_991)
+            && matches!((&descriptor.status, &descriptor.lock), (Some(ProjectStatus::Active | ProjectStatus::Deleted), None) | (Some(ProjectStatus::Locked | ProjectStatus::Deleted), Some(_))) => {
+                if let Some(lock) = &descriptor.lock {
+                    super::validate_id(&lock.operation_id)?;
+                    if !super::protocol::valid_digest(&lock.token_digest) { return Err(StorageError::new("project_mismatch")); }
+                }
+            },
+        _ => return Err(StorageError::new("project_mismatch")),
+    }
+    Ok(descriptor)
+}
+
+pub(super) fn validate_descriptor(bytes: &[u8], scope: &RemoteProjectScope) -> Result<(), StorageError> {
+    let descriptor = parse_descriptor(bytes, scope)?;
+    match descriptor.status {
+        Some(ProjectStatus::Locked) => return Err(StorageError::new("busy")),
+        Some(ProjectStatus::Deleted) => return Err(StorageError::new("project_not_found")),
+        _ => {},
     }
     Ok(())
 }
@@ -481,6 +612,7 @@ pub(super) async fn prepare_project(
         let bytes = serde_json::to_vec(&ProjectDescriptor {
             format: DESCRIPTOR_FORMAT.to_string(), version: DESCRIPTOR_VERSION,
             library_id: scope.library_id.clone(), shared_project_id: scope.shared_project_id.clone(),
+            generation: None, status: None, sequence: None, lock: None,
         }).map_err(|_| StorageError::new("invalid_input"))?;
         let location = key(scope, "project.json")?;
         match io.run(store.put_opts(&location, bytes.into(), PutOptions::from(PutMode::Create))).await? {
@@ -510,6 +642,25 @@ pub(super) async fn probe_project(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_transport_failures_are_classified_without_exposing_the_source() {
+        for kind in [HttpErrorKind::Timeout, HttpErrorKind::Connect, HttpErrorKind::Request, HttpErrorKind::Interrupted] {
+            let error = ObjectError::Generic { store: "S3", source: Box::new(HttpError::new(kind, std::io::Error::other("private response and signed URL"))) };
+            assert_eq!(serde_json::to_value(remote_error(error)).unwrap(), serde_json::json!({ "code": "network" }));
+        }
+        for kind in [HttpErrorKind::Decode, HttpErrorKind::Unknown] {
+            let error = ObjectError::Generic { store: "S3", source: Box::new(HttpError::new(kind, std::io::Error::other("private response"))) };
+            assert_eq!(remote_error(error).code, "unknown");
+        }
+        let too_large = ObjectError::Generic { store: "S3", source: Box::new(HttpError::new(HttpErrorKind::Timeout, ResponseTooLarge)) };
+        assert_eq!(remote_error(too_large).code, "response_too_large");
+        let opaque = ObjectError::Generic { store: "S3", source: Box::new(std::io::Error::other("request timed out: private response")) };
+        assert_eq!(remote_error(opaque).code, "unknown");
+        let invalid_request = reqwest::Client::new().get("invalid URL").build().unwrap_err();
+        let builder_error = ObjectError::Generic { store: "S3", source: Box::new(invalid_request) };
+        assert_eq!(serde_json::to_value(remote_error(builder_error)).unwrap(), serde_json::json!({ "code": "unknown" }));
+    }
 
     fn scope() -> RemoteProjectScope {
         RemoteProjectScope { library_id: "library-a".into(), shared_project_id: "project-a".into(), project_prefix: "libraries/library-a/projects/project-a".into() }

@@ -11,11 +11,13 @@ import {
   getConvertFileSrc,
   resolveUniqueDestPath,
   getFileCategory,
+  stripVerbatimPrefix,
   CATEGORY_EXTENSIONS,
   type AssetFileEntry,
 } from './core';
 import { moveToTrash } from './trash';
-import { identifyAsset } from './assetIndex';
+import { getRelativeAssetPath, identifyAsset } from './assetIndex';
+import { getAssetIndexByPath, putAssetIndex } from '../indexedDbService';
 
 /** 仅用于目录浏览的运行时条目，不写入资产索引或持久化配置。 */
 export interface AssetFolderEntry {
@@ -34,8 +36,22 @@ export type AssetFolderSelection =
 
 export interface AssetScanOptions {
   signal?: AbortSignal;
+  /** 调用方已知的历史版本路径；在 stat 与身份识别前排除，不为旧版本分配新共享身份。 */
+  excludedFilePaths?: readonly string[];
+  /** 精确项目路径模式：只复用这些项目的现有身份，新路径不从丢失指纹候选接管身份。 */
+  projectIdentityScope?: readonly string[];
   /** 已完成稳定身份识别的新增条目；完整列表仍通过返回值获取。 */
   onFiles?: (batch: AssetFileEntry[]) => void;
+}
+
+/** 同步必须区分完整扫描与受限／失败的部分结果，不能据部分结果推断删除。 */
+export interface AssetDirectoryScanResult {
+  files: AssetFileEntry[];
+  folders: AssetFolderEntry[];
+  truncated: boolean;
+  complete: boolean;
+  failedDirectories: number;
+  failedFiles: number;
 }
 
 function throwIfScanAborted(signal?: AbortSignal): void {
@@ -43,7 +59,7 @@ function throwIfScanAborted(signal?: AbortSignal): void {
 }
 
 function comparablePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalized = stripVerbatimPrefix(path).replace(/\\/g, '/').replace(/\/+$/, '');
   return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//') ? normalized.toLowerCase() : normalized;
 }
 
@@ -129,19 +145,20 @@ export async function createAssetSubfolder(selection: AssetFolderSelection, root
  * 递归遍历目录收集文件（带数量/深度上限，避免超大目录卡死）。
  * stat 小批并行，身份识别串行；边扫描边返回稳定条目，整体用栈迭代而非深递归。
  */
-async function scanDirectoryFiles(
+export async function scanDirectoryFiles(
   rootDir: string,
   opts: AssetScanOptions & {
     maxFiles?: number; maxDepth?: number; maxDirectories?: number;
     excludedRootDirectories?: readonly string[]; excludedDirectories?: readonly string[];
     source?: 'project' | 'folder' | 'global'; projectId?: string;
   } = {},
-): Promise<{ files: AssetFileEntry[]; folders: AssetFolderEntry[]; truncated: boolean }> {
+): Promise<AssetDirectoryScanResult> {
   throwIfScanAborted(opts.signal);
-  if (!isTauriEnv()) return { files: [], folders: [], truncated: false };
+  if (!isTauriEnv()) return { files: [], folders: [], truncated: false, complete: false, failedDirectories: 0, failedFiles: 0 };
   const maxFiles = opts.maxFiles ?? 3000;
   const maxDepth = opts.maxDepth ?? 8;
   const maxDirectories = Math.max(1, opts.maxDirectories ?? 3000);
+  const excludedFiles = new Set((opts.excludedFilePaths ?? []).map(comparablePath));
   const convertFileSrc = await getConvertFileSrc();
   throwIfScanAborted(opts.signal);
   const out: AssetFileEntry[] = [];
@@ -152,6 +169,8 @@ async function scanDirectoryFiles(
   const folders: AssetFolderEntry[] = [root];
   const stack: { dir: string; depth: number; folder: AssetFolderEntry }[] = [{ dir: rootDir, depth: 0, folder: root }];
   let truncated = false;
+  let failedDirectories = 0;
+  let failedFiles = 0;
 
   while (stack.length > 0 && out.length < maxFiles) {
     throwIfScanAborted(opts.signal);
@@ -163,12 +182,16 @@ async function scanDirectoryFiles(
     } catch {
       throwIfScanAborted(opts.signal);
       folder.availability = 'offline';
+      failedDirectories++;
       continue;
     }
     throwIfScanAborted(opts.signal);
     // 不跟随符号链接扩大外部目录授权或形成遍历环。
-    const fileEntries = entries.filter((e) => e.isFile && !e.isSymlink);
-    const subDirs = entries.filter((e) => e.isDirectory && !e.isSymlink);
+    const fileEntries = entries.filter((e) => e.isFile && !e.isSymlink
+      && !excludedFiles.has(comparablePath(joinPath(dir, e.name))));
+    const subDirs = entries.filter((e) => e.isDirectory && !e.isSymlink
+      && !opts.excludedDirectories?.includes(e.name)
+      && !(depth === 0 && opts.excludedRootDirectories?.includes(e.name)));
 
     const initialFileCount = out.length;
     const statBatchSize = 12;
@@ -191,12 +214,34 @@ async function scanDirectoryFiles(
       throwIfScanAborted(opts.signal);
       const batch: AssetFileEntry[] = [];
       for (const r of statResults) {
-        if (!r) continue;
+        if (!r) { failedFiles++; continue; }
         if (out.length >= maxFiles) { truncated = true; break; }
         throwIfScanAborted(opts.signal);
         const ext = `.${r.name.split('.').pop()?.toLowerCase()}`;
         const assetUrl = CATEGORY_EXTENSIONS.image.includes(ext) && convertFileSrc ? convertFileSrc(r.filePath) : undefined;
+        let assetId: string | undefined;
+        if (opts.projectIdentityScope) {
+          const relativePath = getRelativeAssetPath(r.filePath, rootDir);
+          if (opts.source !== 'project' || !opts.projectId || !opts.projectIdentityScope.includes(opts.projectId) || !relativePath) {
+            throw new Error('项目文件身份范围无效，请重新预览');
+          }
+          const indexed = await getAssetIndexByPath(r.filePath);
+          if (indexed && (indexed.source !== 'project' || !indexed.projectId || !opts.projectIdentityScope.includes(indexed.projectId))) {
+            throw new Error('项目文件包含其他来源的资产身份，请先复制为独立项目资产');
+          }
+          assetId = indexed?.assetId ?? crypto.randomUUID();
+          if (!indexed) {
+            // 先登记全新身份，让既有识别器仅刷新精确路径，不接管其他来源的丢失记录。
+            // path 唯一索引会拒绝并发登记，保留原记录。
+            await putAssetIndex({ assetId, path: stripVerbatimPrefix(r.filePath).replace(/\\/g, '/'),
+              rootPath: stripVerbatimPrefix(rootDir).replace(/\\/g, '/'), relativePath, projectId: opts.projectId,
+              source: 'project', size: r.size, mtimeMs: r.mtimeMs, fingerprint: `${r.size}:${r.mtimeMs}`,
+              status: 'online', updatedAt: Date.now() });
+            throwIfScanAborted(opts.signal);
+          }
+        }
         const identity = await identifyAsset(r.filePath, {
+          assetId,
           rootPath: rootDir,
           source: opts.source ?? 'folder',
           projectId: opts.projectId,
@@ -250,7 +295,9 @@ async function scanDirectoryFiles(
     }
   }
   throwIfScanAborted(opts.signal);
-  return { files: out, folders, truncated: truncated || stack.length > 0 };
+  truncated ||= stack.length > 0;
+  return { files: out, folders, truncated, complete: !truncated && failedDirectories === 0 && failedFiles === 0,
+    failedDirectories, failedFiles };
 }
 
 /** 保留原文件扫描接口，项目文件和独立资源搜索继续返回扁平列表。 */

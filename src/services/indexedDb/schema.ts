@@ -6,7 +6,7 @@
 import { toProjectSummaryRecord } from './projectSummary';
 
 export const DB_NAME = 'ai-canvas-db';
-export const DB_VERSION = 23;
+export const DB_VERSION = 26;
 
 export const STORE_PROJECTS = 'projects';
 export const STORE_PROJECT_SUMMARIES = 'projectSummaries';
@@ -33,6 +33,9 @@ export const STORE_VIDEO_EDITOR_PROJECTS = 'videoEditorProjects';
 export const STORE_PROJECT_VISUAL_DESCRIPTIONS = 'projectVisualDescriptions';
 export const STORE_PLUGINS = 'plugins';
 export const STORE_APPEARANCE_THEMES = 'appearanceThemes';
+export const STORE_SHARED_ASSET_MAPPINGS = 'sharedAssetMappings';
+export const STORE_SHARED_ASSET_OUTBOX = 'sharedAssetOutbox';
+export const STORE_SHARED_ASSET_CONFLICTS = 'sharedAssetConflicts';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -166,6 +169,37 @@ export function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_APPEARANCE_THEMES)) {
         db.createObjectStore(STORE_APPEARANCE_THEMES, { keyPath: 'id' });
+      }
+      // 开发期间部分实例已提前打开 v24，随后补写的同步索引不会在同版本自动创建。
+      // v25 重新进入升级事务，只补缺失表／索引，保留已有映射和未完成队列。
+      for (const name of [STORE_SHARED_ASSET_MAPPINGS, STORE_SHARED_ASSET_OUTBOX, STORE_SHARED_ASSET_CONFLICTS]) {
+        const store = db.objectStoreNames.contains(name)
+          ? request.transaction!.objectStore(name)
+          : db.createObjectStore(name, { keyPath: 'id' });
+        // 保留旧代记录，补齐缺省代次；不要把旧待办或基线迁到云端新代次。
+        const cursorRequest = store.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          if (cursor.value.generation === undefined) cursor.update({ ...cursor.value, generation: 'legacy' });
+          cursor.continue();
+        };
+        if (!store.indexNames.contains('ownerId')) store.createIndex('ownerId', 'ownerId', { unique: false });
+        if (name === STORE_SHARED_ASSET_OUTBOX && !store.indexNames.contains('operationId')) {
+          store.createIndex('operationId', 'operationId', { unique: true });
+        }
+        if (name === STORE_SHARED_ASSET_MAPPINGS) {
+          const scope = ['ownerId', 'connectionId', 'connectionRevision', 'libraryId', 'sharedProjectId', 'generation'];
+          for (const index of ['localIdentity', 'sharedIdentity']) {
+            if (store.indexNames.contains(index)) store.deleteIndex(index);
+          }
+          if (!store.indexNames.contains('localIdentity')) {
+            store.createIndex('localIdentity', [...scope, 'kind', 'localEntityId'], { unique: true });
+          }
+          if (!store.indexNames.contains('sharedIdentity')) {
+            store.createIndex('sharedIdentity', [...scope, 'sharedAssetId'], { unique: true });
+          }
+        }
       }
     };
     request.onsuccess = () => {

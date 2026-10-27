@@ -3,7 +3,7 @@ import type { CanvasImagePreviewLease } from '../../src/components/nodes/shared/
 
 const dimensions = vi.hoisted(() => ({ width: 4096, height: 2048 }));
 const disk = vi.hoisted(() => ({ prepare: vi.fn() }));
-const native = vi.hoisted(() => ({ matches: vi.fn(() => false), read: vi.fn() }));
+const native = vi.hoisted(() => ({ matches: vi.fn<(source: string | undefined) => boolean>(() => false), read: vi.fn() }));
 vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: native.matches, readNativeComfyImageBlob: native.read }));
 vi.mock('../../src/services/fs/thumbnailCache', () => ({ prepareProjectThumbnail: disk.prepare }));
 vi.mock('../../src/services/rasterImageDimensions', () => ({

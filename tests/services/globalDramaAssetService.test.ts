@@ -109,7 +109,7 @@ describe('全局创作资产持久化', () => {
     previous.close();
     const schema = await import('../../src/services/indexedDb/schema');
     const upgraded = await schema.openDB();
-    expect(upgraded.version).toBe(23);
+    expect(upgraded.version).toBe(schema.DB_VERSION);
     expect(upgraded.objectStoreNames.contains('globalDramaAssets')).toBe(true);
     const db = await import('../../src/services/indexedDbService');
     expect((await db.getAllGlobalCharacters())[0].id).toBe('old-character');

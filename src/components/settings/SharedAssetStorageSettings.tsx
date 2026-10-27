@@ -117,7 +117,7 @@ export default function SharedAssetStorageSettings() {
         setSelectedId(latest.id); setDraft(connectionDraft(latest)); setExpectedRevision(latest.revision);
       }
       setClearCredentials(false); setClearSessionToken(false);
-      setNotice(t('S3 连接已保存；尚未传输资产，请在当前项目中绑定并校验能力。'));
+      setNotice(t('S3 连接已保存；请在当前项目中绑定并立即同步。'));
     } catch (cause) {
       if (mounted.current && run === operation.current) setError(t(cause instanceof Error ? cause.message : 'S3 连接保存失败'));
     } finally {
@@ -186,9 +186,9 @@ export default function SharedAssetStorageSettings() {
     <summary className="ui-card__header cursor-pointer list-none gap-3 select-none hover:bg-canvas-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-canvas-text-muted [&::-webkit-details-marker]:hidden">
       <Cloud size={18} className="shrink-0 text-canvas-text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1"><h3 className="ui-card__title">{t('项目云同步 · S3 连接')}</h3>
-        <p className="ui-card__desc">{t('当前仅支持连接配置、项目绑定与能力校验；不会传输资产。')}</p></div>
+        <p className="ui-card__desc">{t('此页管理 S3 连接；资产传输从项目中的立即同步发起。')}</p></div>
       {busy || loading ? <span className="ui-spinner shrink-0" aria-hidden="true" /> : null}
-      <span className="ui-badge ui-badge--outline hidden shrink-0 sm:inline-flex">{t('尚未传输资产')}</span>
+      <span className="ui-badge ui-badge--outline hidden shrink-0 sm:inline-flex">{t('连接设置')}</span>
       <ChevronDown size={16} className="shrink-0 text-canvas-text-muted group-open:rotate-180" aria-hidden="true" />
     </summary>
     <div className="ui-card__body space-y-3">

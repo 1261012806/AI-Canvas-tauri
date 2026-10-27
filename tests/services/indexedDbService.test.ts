@@ -21,6 +21,9 @@ const EXPECTED_STORES = [
   'projectSummaries',
   'projectVisualDescriptions',
   'projects',
+  'sharedAssetConflicts',
+  'sharedAssetMappings',
+  'sharedAssetOutbox',
   'skills',
   'styles',
   'subAgentProfiles',
@@ -375,6 +378,86 @@ describe('indexedDbService schema', () => {
       id: 'app-config', data: RECOVERY_CONFIG,
     });
     newer.close();
+  });
+
+  it('repairs an early v24 sync schema without losing projects, config, mappings or pending operations', async () => {
+    const scope = {
+      ownerId: RECOVERY_PROJECT.id, connectionId: 'saved-connection', connectionRevision: 'connection-v1',
+      libraryId: 'shared-library', sharedProjectId: 'shared-project',
+    };
+    const mapping = {
+      ...scope, id: 'saved-mapping', kind: 'file', localEntityId: 'local-file', sharedAssetId: 'shared-file',
+      members: [], media: [], currentFileAssetId: 'local-file', acceptedRevisionId: 'revision-v1',
+      acceptedETag: 'head-v1', baselineDigest: 'a'.repeat(64), updatedAt: 3,
+    };
+    const operation = {
+      ...scope, id: 'saved-operation', operationId: 'saved-operation', mappingId: mapping.id,
+      sharedAssetId: mapping.sharedAssetId, kind: 'file', direction: 'upload', revisionId: 'revision-v2',
+      baseRevisionId: 'revision-v1', baseETag: 'head-v1', phase: 'prepared', createdAt: 4, updatedAt: 5,
+    };
+    const oldDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 24);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore('projects', { keyPath: 'id' });
+        db.createObjectStore('config', { keyPath: 'id' });
+        for (const name of ['sharedAssetMappings', 'sharedAssetOutbox', 'sharedAssetConflicts']) {
+          const store = db.createObjectStore(name, { keyPath: 'id' });
+          store.createIndex('ownerId', 'ownerId', { unique: false });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = oldDb.transaction(['projects', 'config', 'sharedAssetMappings', 'sharedAssetOutbox'], 'readwrite');
+      tx.objectStore('projects').put(RECOVERY_PROJECT);
+      tx.objectStore('config').put({ id: 'app-config', data: RECOVERY_CONFIG });
+      tx.objectStore('sharedAssetMappings').put(mapping);
+      tx.objectStore('sharedAssetOutbox').put(operation);
+      tx.oncomplete = () => resolve();
+      tx.onabort = tx.onerror = () => reject(tx.error);
+    });
+    oldDb.close();
+
+    const { openDB, DB_VERSION } = await import('../../src/services/indexedDb/schema');
+    const db = await openDB();
+    expect(DB_VERSION).toBe(26);
+    expect(db.version).toBe(26);
+    const sync = db.transaction(['sharedAssetMappings', 'sharedAssetOutbox', 'sharedAssetConflicts'], 'readonly');
+    const mappings = sync.objectStore('sharedAssetMappings');
+    const outbox = sync.objectStore('sharedAssetOutbox');
+    const conflicts = sync.objectStore('sharedAssetConflicts');
+    expect([...mappings.indexNames]).toEqual(['localIdentity', 'ownerId', 'sharedIdentity']);
+    expect([...outbox.indexNames]).toEqual(['operationId', 'ownerId']);
+    expect([...conflicts.indexNames]).toEqual(['ownerId']);
+    expect(mappings.index('localIdentity').unique).toBe(true);
+    expect(mappings.index('localIdentity').keyPath).toEqual([
+      'ownerId', 'connectionId', 'connectionRevision', 'libraryId', 'sharedProjectId', 'generation', 'kind', 'localEntityId',
+    ]);
+    expect(mappings.index('sharedIdentity').unique).toBe(true);
+    expect(mappings.index('sharedIdentity').keyPath).toEqual([
+      'ownerId', 'connectionId', 'connectionRevision', 'libraryId', 'sharedProjectId', 'generation', 'sharedAssetId',
+    ]);
+    expect(outbox.index('operationId').unique).toBe(true);
+    expect(outbox.index('operationId').keyPath).toBe('operationId');
+    const readUsingIndex = (store: string, name: string, key: IDBValidKey): Promise<unknown> => new Promise((resolve, reject) => {
+      const request = db.transaction(store, 'readonly').objectStore(store).index(name).get(key);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const sharedScope = [scope.ownerId, scope.connectionId, scope.connectionRevision, scope.libraryId, scope.sharedProjectId, 'legacy'];
+    expect(await readUsingIndex('sharedAssetMappings', 'localIdentity', [...sharedScope, mapping.kind, mapping.localEntityId])).toEqual({ ...mapping, generation: 'legacy' });
+    expect(await readUsingIndex('sharedAssetMappings', 'sharedIdentity', [...sharedScope, mapping.sharedAssetId])).toEqual({ ...mapping, generation: 'legacy' });
+    expect(await readUsingIndex('sharedAssetMappings', 'ownerId', scope.ownerId)).toEqual({ ...mapping, generation: 'legacy' });
+    expect(await readUsingIndex('sharedAssetOutbox', 'operationId', operation.operationId)).toEqual({ ...operation, generation: 'legacy' });
+    expect(await readUsingIndex('sharedAssetOutbox', 'ownerId', scope.ownerId)).toEqual({ ...operation, generation: 'legacy' });
+    expect(await readUsingIndex('sharedAssetConflicts', 'ownerId', scope.ownerId)).toBeUndefined();
+    expect(await readRecord(db, 'projects', RECOVERY_PROJECT.id)).toEqual(RECOVERY_PROJECT);
+    expect(await readRecord(db, 'config', 'app-config')).toEqual({ id: 'app-config', data: RECOVERY_CONFIG });
+    expect(await readRecord(db, 'sharedAssetMappings', mapping.id)).toEqual({ ...mapping, generation: 'legacy' });
+    expect(await readRecord(db, 'sharedAssetOutbox', operation.id)).toEqual({ ...operation, generation: 'legacy' });
+    db.close();
   });
 
   it('creates the complete current schema for a fresh database', async () => {

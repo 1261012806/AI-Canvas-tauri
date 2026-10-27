@@ -1,7 +1,13 @@
-//! Project-scoped S3 connection and capability boundary. P0 never synchronizes assets.
+//! Project-scoped S3 connection, capability and explicit manual sync boundary.
 
 mod catalog;
 mod client;
+mod protocol;
+mod journal;
+mod transfer;
+mod sync;
+
+pub use sync::*;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -11,13 +17,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State, Webview};
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ErrorStage {
+    HeadRead, RevisionRead, BlobCheck, StagingVerify,
+    MultipartCreate, PartUpload, MultipartComplete, BlobVerify, RevisionWrite,
+    MultipartAbort,
+}
+
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StorageError {
     pub(super) code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<ErrorStage>,
 }
 
 impl StorageError {
-    pub(super) fn new(code: &'static str) -> Self { Self { code } }
+    pub(super) fn new(code: &'static str) -> Self { Self { code, stage: None } }
+    pub(super) fn at_stage(mut self, stage: ErrorStage) -> Self {
+        if self.stage.is_none() {
+            eprintln!("[project-asset-sync] failure stage={stage:?} code={}", self.code);
+            self.stage = Some(stage);
+        }
+        self
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -167,13 +191,29 @@ struct Tasks {
 struct RunningTask { connection_id: String, owner_id: String, cancel: CancellationToken }
 
 #[derive(Default)]
-pub struct ObjectStorageState { tasks: Arc<Mutex<Tasks>> }
+pub struct ObjectStorageState {
+    tasks: Arc<Mutex<Tasks>>,
+    // Held across the main-window IDB commit; OS locks disappear on process exit.
+    apply_locks: Arc<Mutex<HashMap<String, std::fs::File>>>,
+    cleanup_previews: Arc<Mutex<HashMap<String, CleanupPreviewSession>>>,
+}
+
+#[derive(Clone)]
+struct CleanupPreviewSession {
+    context: protocol::Context,
+    owner_revision: u64,
+    mode: String,
+    token_digest: String,
+    expires_at: u64,
+    objects: Vec<object_store::ObjectMeta>,
+}
 
 struct TaskGuard { id: String, tasks: Arc<Mutex<Tasks>>, cancel: CancellationToken }
 
 impl Drop for TaskGuard {
     fn drop(&mut self) {
         if let Ok(mut tasks) = self.tasks.lock() { tasks.running.remove(&self.id); }
+        transfer::clear_progress(&self.id);
     }
 }
 
@@ -362,6 +402,9 @@ pub async fn project_asset_storage_save_connection(
     let connection = normalize_connection(input.connection)?;
     let id = connection.id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || catalog::access(&app, |catalog| {
+        for binding in catalog.bindings.iter().filter(|binding| binding.connection_id == connection.id) {
+            journal::ensure_not_applying(&app, &binding.owner_id)?;
+        }
         let old = catalog.connections.iter().find(|value| value.connection.id == connection.id);
         if old.map(|value| value.revision.as_str()) != input.expected_revision.as_deref() { return Err(StorageError::new("conflict")); }
         if old.is_none() && catalog.connections.len() >= 64 { return Err(StorageError::new("busy")); }
@@ -434,6 +477,7 @@ pub async fn project_asset_storage_bind_project(
     let cancel = task.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || catalog::access(&app, |catalog| {
         assert_current(&cancel)?;
+        journal::ensure_not_applying(&app, &input.owner_id)?;
         if catalog.connection(&input.connection_id)?.revision != input.connection_revision || catalog.owner_revision(&input.owner_id) != owner_revision {
             return Err(StorageError::new("conflict"));
         }
@@ -491,6 +535,7 @@ pub async fn project_asset_storage_probe_project(
     let cancel = task.cancel.clone();
     tauri::async_runtime::spawn_blocking(move || catalog::access(&app, |catalog| {
         assert_current(&cancel)?;
+        journal::ensure_not_applying(&app, &binding.owner_id)?;
         if catalog.connection(&binding.connection_id)?.revision != binding.connection_revision || catalog.owner_revision(&binding.owner_id) != owner_revision {
             return Err(StorageError::new("conflict"));
         }
@@ -514,6 +559,7 @@ pub async fn project_asset_storage_unbind_project(
     validate_id(&owner_id)?;
     let id = owner_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || catalog::access(&app, |catalog| {
+        journal::ensure_not_applying(&app, &owner_id)?;
         let binding = catalog.bindings.iter().find(|binding| binding.owner_id == owner_id).ok_or_else(|| StorageError::new("binding_not_found"))?;
         if binding.connection_revision != connection_revision || binding.library_id != library_id || binding.shared_project_id != shared_project_id {
             return Err(StorageError::new("conflict"));
@@ -528,15 +574,33 @@ pub async fn project_asset_storage_unbind_project(
 }
 
 #[tauri::command]
-pub fn project_asset_storage_cancel(webview: Webview, state: State<'_, ObjectStorageState>, task_id: String) -> Result<(), StorageError> {
+pub fn project_asset_storage_cancel(app: AppHandle, webview: Webview, state: State<'_, ObjectStorageState>, task_id: String) -> Result<(), StorageError> {
     ensure_main(&webview)?;
     validate_id(&task_id)?;
-    state.cancel(task_id)
+    state.cancel(task_id.clone())?;
+    sync::revoke_task_apply(&app, &state, &task_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_error_keeps_the_first_stage_and_exposes_only_fixed_diagnostics() {
+        let plain = serde_json::to_value(StorageError::new("unknown")).unwrap();
+        assert_eq!(plain, serde_json::json!({ "code": "unknown" }));
+        let error = StorageError::new("network").at_stage(ErrorStage::PartUpload).at_stage(ErrorStage::MultipartAbort);
+        assert_eq!(serde_json::to_value(error).unwrap(), serde_json::json!({ "code": "network", "stage": "partUpload" }));
+        for (stage, wire) in [
+            (ErrorStage::BlobCheck, "blobCheck"), (ErrorStage::StagingVerify, "stagingVerify"),
+            (ErrorStage::MultipartCreate, "multipartCreate"), (ErrorStage::PartUpload, "partUpload"),
+            (ErrorStage::MultipartComplete, "multipartComplete"), (ErrorStage::BlobVerify, "blobVerify"),
+            (ErrorStage::RevisionWrite, "revisionWrite"), (ErrorStage::HeadRead, "headRead"),
+            (ErrorStage::RevisionRead, "revisionRead"), (ErrorStage::MultipartAbort, "multipartAbort"),
+        ] {
+            assert_eq!(serde_json::to_value(StorageError::new("unknown").at_stage(stage)).unwrap(), serde_json::json!({ "code": "unknown", "stage": wire }));
+        }
+    }
 
     fn credentials() -> Credentials {
         Credentials { access_key_id: "key".into(), secret_access_key: "secret".into(), session_token: Some("token".into()) }

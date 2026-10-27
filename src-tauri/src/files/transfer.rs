@@ -703,7 +703,7 @@ pub struct AssetFileCopyResult {
     digest: String,
 }
 
-fn file_digest(
+pub(crate) fn file_digest(
     path: &Path,
     cancelled: impl Fn() -> Result<bool, String>,
 ) -> Result<String, String> {

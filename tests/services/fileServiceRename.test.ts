@@ -52,7 +52,8 @@ vi.mock('../../src/services/fs/assetImageMetadata', () => ({ fingerprintAssetIma
 vi.mock('../../src/services/fs/assetIndex', async (original) => ({
   ...await original<typeof import('../../src/services/fs/assetIndex')>(), identifyAsset: mocks.identify,
 }));
-vi.mock('../../src/services/indexedDbService', () => ({
+vi.mock('../../src/services/indexedDbService', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/indexedDbService')>(),
   getAssetIndexById: mocks.index, getAssetIndexByPath: mocks.index,
   savePresetFolderToDb: vi.fn().mockResolvedValue(undefined),
   loadPresetFoldersFromDb: vi.fn().mockResolvedValue([]),

@@ -29,6 +29,7 @@ vi.mock('react', async () => ({
     hooks.refs[index] ??= { current: initial };
     return hooks.refs[index] as { current: T };
   },
+  useMemo: <T,>(factory: () => T) => factory(),
   useEffect: (effect: () => void | (() => void), dependencies?: readonly unknown[]) => {
     const index = hooks.effectCursor++;
     const previous = hooks.effects[index];

@@ -27,6 +27,7 @@ vi.mock('react', async () => ({
     hooks.layoutDeps[index] = deps;
   },
   useEffect: () => {},
+  useCallback: <T,>(callback: T) => callback,
   useState: <T,>(initial: T) => [initial, vi.fn()] as const,
 }));
 

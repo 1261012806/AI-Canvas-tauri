@@ -8,6 +8,8 @@ import {
 
 /** Only the DOM construction/serialization contract is exercised; no browser is launched. */
 class TestNode {
+  readonly nodeType: number;
+  readonly tagName: string;
   readonly attributes = new Map<string, string>();
   childNodes: TestNode[] = [];
   className = '';
@@ -16,7 +18,11 @@ class TestNode {
   title = '';
   private content = '';
 
-  constructor(readonly nodeType: number, readonly tagName = '', text = '') { this.content = text; }
+  constructor(nodeType: number, tagName = '', text = '') {
+    this.nodeType = nodeType;
+    this.tagName = tagName;
+    this.content = text;
+  }
   get firstChild(): TestNode | null { return this.childNodes[0] ?? null; }
   get textContent(): string { return this.childNodes.length ? this.childNodes.map((child) => child.textContent).join('') : this.content; }
   set textContent(text: string) { this.content = text; this.childNodes = []; }

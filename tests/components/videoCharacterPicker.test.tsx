@@ -86,7 +86,7 @@ function render() {
     effect.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
     effect.pending = undefined;
   }
-  const picker = nodes.find((element) => element.type === MentionPicker) as ReactElement<MentionProps>;
+  const picker = nodes.find((element) => element.type === MentionPicker) as unknown as ReactElement<MentionProps>;
   return { portal, picker: picker.props };
 }
 
@@ -245,15 +245,15 @@ describe('VideoCharacterPicker 角色范围与交互', () => {
     const outside = documentEvents.addEventListener.mock.calls.find(([name]) => name === 'mousedown')![1] as (event: MouseEvent) => void;
     const blank = new Node();
     menu.contains.mockReturnValueOnce(true);
-    outside({ target: blank } as MouseEvent);
+    outside({ target: blank } as unknown as MouseEvent);
     expect(options.onClose).not.toHaveBeenCalled();
-    outside({ target: blank } as MouseEvent);
+    outside({ target: blank } as unknown as MouseEvent);
     expect(options.onClose).toHaveBeenCalledOnce();
     expect(anchor.focus).toHaveBeenCalledWith({ preventScroll: true });
     anchor.focus.mockClear();
     const control = new Element();
     Object.assign(control, { closest: vi.fn(() => control) });
-    outside({ target: control } as MouseEvent);
+    outside({ target: control } as unknown as MouseEvent);
     expect(options.onClose).toHaveBeenCalledTimes(2);
     expect(anchor.focus).not.toHaveBeenCalled();
   });

@@ -52,6 +52,8 @@ export interface SharedProjectBinding {
   libraryId: string;
   sharedProjectId: string;
   projectPrefix: string;
+  /** 当前同步会话读取的云端代次；不属于本机连接配置。 */
+  generation?: string;
   capabilities: SharedStorageCapabilityReport;
   updatedAt: number;
 }
@@ -80,7 +82,236 @@ export interface SharedProjectOperationResult {
   bound: boolean;
 }
 
+export type SharedProjectResetMode = 'clear' | 'delete';
+export interface SharedProjectResetPreview {
+  mode: SharedProjectResetMode;
+  objectCount: number;
+  bytes: number;
+  previewToken: string;
+}
+export interface SharedProjectResetResult {
+  status: 'completed' | 'cancelled' | 'failed' | 'changed';
+  deletedCount: number;
+  totalCount: number;
+  errorCode?: string;
+}
+export interface SharedProjectResetStatus {
+  stage: 'idle' | 'previewing' | 'preview' | 'applying';
+  progress?: { deletedCount: number; totalCount: number };
+}
+
 export interface ProbeSharedProjectInput {
   taskId: string;
   ownerId: string;
+}
+
+/** 同步协议的身份与本机卡片／文件身份分离；SHA-256 只标识文件内容。 */
+export type SharedSyncAssetKind = 'file' | 'character' | 'scene' | 'prop';
+export type SharedSyncMediaKind = 'image' | 'audio' | 'video';
+export interface SharedSyncMedia {
+  id: string;
+  kind: SharedSyncMediaKind;
+  sha256: string;
+  bytes: number;
+  extension: string;
+}
+export interface SharedSyncFilePayload {
+  kind: 'file';
+  name: string;
+  displayRelativePath: string;
+  mediaId: string;
+  tags: string[];
+  taggedBy?: 'manual' | 'comfyui' | 'vision';
+  imageMetadata?: {
+    prompt: string;
+    references: Array<{ id: string; name: string; mediaId: string }>;
+  };
+}
+export interface SharedSyncCardPayload {
+  kind: 'character' | 'scene' | 'prop';
+  /** 已白名单校验；所有实体 ID 为共享 ID，媒体字段仅为 aicsync-media:<id>。 */
+  data: import('./dramaAssets').DramaAsset;
+}
+export type SharedSyncPayload = SharedSyncFilePayload | SharedSyncCardPayload;
+export interface SharedSyncRevision {
+  format: 'ai-canvas-shared-asset';
+  version: 1;
+  libraryId: string;
+  sharedProjectId: string;
+  sharedAssetId: string;
+  revisionId: string;
+  parentRevisionId?: string;
+  operationId: string;
+  createdAt: number;
+  payload: SharedSyncPayload;
+  media: SharedSyncMedia[];
+}
+/** 只用于准备阶段；原生按暂存字节填入 sha256/bytes 后成为不可变版本。 */
+export type SharedSyncDraft = Omit<SharedSyncRevision, 'media'> & {
+  media: Array<Omit<SharedSyncMedia, 'sha256' | 'bytes'>>;
+};
+export interface SharedSyncHead {
+  sharedAssetId: string;
+  kind: SharedSyncAssetKind;
+  revisionId: string;
+  revisionDigest: string;
+  operationId: string;
+  updatedAt: number;
+}
+export interface SharedSyncRemoteAsset {
+  head: SharedSyncHead;
+  etag: string;
+  revision: SharedSyncRevision;
+}
+export interface SharedSyncBindingIdentity {
+  ownerId: string;
+  connectionId: string;
+  connectionRevision: string;
+  libraryId: string;
+  sharedProjectId: string;
+  /** 缺省仅用于读取早期数据，语义等同 legacy；新操作必须显式携带代次。 */
+  generation?: string;
+}
+export type SharedSyncMemberKind = 'referenceImage' | 'voiceClip' | 'action' | 'actionMedia' | 'imageReference';
+export interface SharedSyncMemberMapping {
+  kind: SharedSyncMemberKind;
+  localId: string;
+  sharedId: string;
+  /** 动作媒体的父动作本机 ID；其余成员不设置。 */
+  parentLocalId?: string;
+}
+export interface SharedSyncMediaMapping {
+  sharedMediaId: string;
+  localAssetId: string;
+  projectId: string;
+  relativePath: string;
+  sha256: string;
+  bytes: number;
+}
+export interface SharedAssetMapping extends SharedSyncBindingIdentity {
+  id: string;
+  kind: SharedSyncAssetKind;
+  localEntityId: string;
+  sharedAssetId: string;
+  members: SharedSyncMemberMapping[];
+  media: SharedSyncMediaMapping[];
+  acceptedRevisionId?: string;
+  acceptedETag?: string;
+  /** 去除运行期身份后的规范内容摘要，不等同于媒体 SHA-256。 */
+  baselineDigest?: string;
+  currentFileAssetId?: string;
+  previousFileAssetIds?: string[];
+  displayRelativePath?: string;
+  updatedAt: number;
+}
+export type SharedAssetSyncPhase = 'planned' | 'preparing' | 'prepared' | 'uploading' | 'checkingCommit'
+  | 'downloading' | 'applying' | 'applied' | 'completed' | 'paused' | 'conflict' | 'failed';
+export interface SharedAssetOutboxEntry extends SharedSyncBindingIdentity {
+  id: string;
+  operationId: string;
+  sharedAssetId: string;
+  kind: SharedSyncAssetKind;
+  direction: 'upload' | 'download';
+  revisionId: string;
+  baseRevisionId?: string;
+  baseETag?: string;
+  draft?: SharedSyncDraft;
+  revision?: SharedSyncRevision;
+  revisionDigest?: string;
+  mappingId: string;
+  phase: SharedAssetSyncPhase;
+  errorCode?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface SharedAssetConflict extends SharedSyncBindingIdentity {
+  id: string;
+  sharedAssetId: string;
+  kind: SharedSyncAssetKind;
+  operationId?: string;
+  baseRevisionId?: string;
+  remoteRevisionId?: string;
+  reason: 'bothChanged' | 'headChanged' | 'missingLocal' | 'missingRemote' | 'unknownCommit';
+  createdAt: number;
+}
+export interface SharedAssetSyncLocalState {
+  mappings: SharedAssetMapping[];
+  outbox: SharedAssetOutboxEntry[];
+  conflicts: SharedAssetConflict[];
+}
+export interface SharedSyncRequestContext extends SharedSyncBindingIdentity {
+  taskId: string;
+}
+export interface SharedSyncListResult {
+  assets: SharedSyncRemoteAsset[];
+  complete: boolean;
+  nextCursor?: string;
+}
+export interface SharedSyncPrepareInput extends SharedSyncRequestContext {
+  rootDirectory: string;
+  draft: SharedSyncDraft;
+  baseETag?: string;
+  sources: Array<{ mediaId: string; filePath: string }>;
+}
+export interface SharedSyncPreparedResult {
+  revision: SharedSyncRevision;
+  revisionDigest: string;
+}
+export interface SharedSyncOperationInput extends SharedSyncRequestContext {
+  operationId: string;
+  revisionId: string;
+  sharedAssetId: string;
+}
+export interface SharedSyncPublishResult {
+  status: 'published' | 'retryable' | 'conflict' | 'uncertain';
+  asset?: SharedSyncRemoteAsset;
+  applyToken?: string;
+  prepared?: SharedSyncPreparedResult;
+}
+export interface SharedSyncDownloadInput extends SharedSyncOperationInput {
+  rootDirectory: string;
+  expectedRevisionDigest: string;
+}
+export interface SharedSyncDownloadedMedia {
+  mediaId: string;
+  relativePath: string;
+  bytes: number;
+  sha256: string;
+}
+export interface SharedSyncDownloadResult {
+  operationId: string;
+  revision: SharedSyncRevision;
+  revisionDigest: string;
+  media: SharedSyncDownloadedMedia[];
+  /** 原生绑定/执行材料身份；不是路径授权，不可用于通用文件命令。 */
+  applyToken: string;
+}
+export interface SharedSyncProgress {
+  taskId: string;
+  ownerId: string;
+  operationId: string;
+  phase: 'preparing' | 'uploading' | 'downloading' | 'publishing' | 'cleanup';
+  transferredBytes: number;
+  totalBytes: number;
+}
+/** 仅用于展示的固定诊断阶段，不包含请求、路径或响应正文。 */
+export type SharedSyncErrorStage = 'blobCheck' | 'stagingVerify' | 'multipartCreate' | 'partUpload'
+  | 'multipartComplete' | 'blobVerify' | 'revisionWrite' | 'headRead' | 'revisionRead' | 'multipartAbort';
+export interface SharedAssetSyncPreviewItem {
+  id: string;
+  name: string;
+  kind: SharedSyncAssetKind;
+  direction: 'upload' | 'download' | 'conflict' | 'unchanged' | 'blocked';
+  message?: string;
+}
+export interface SharedAssetSyncStatus {
+  ownerId: string;
+  stage: 'idle' | 'scanning' | 'preview' | 'syncing' | 'paused' | 'completed' | 'failed';
+  items: SharedAssetSyncPreviewItem[];
+  completed: number;
+  total: number;
+  progress?: SharedSyncProgress;
+  lastSyncedAt?: number;
+  error?: string;
+  errorStage?: SharedSyncErrorStage;
 }

@@ -61,10 +61,14 @@ function cleanupTimestamp(value: unknown): number | undefined {
 }
 
 /** Old identities stay retired; an explicit new import receives an independent asset ID. */
-function withActiveAsset(tx: IDBTransaction, assetId: string, write: () => void, onForgotten: () => void): void {
+export function withActiveAsset(tx: IDBTransaction, assetId: string, write: () => void, onForgotten: () => void): void {
   const request = tx.objectStore(STORE_METADATA).get(forgottenAssetKey(assetId));
   request.onsuccess = () => {
-    if (request.result !== undefined) { onForgotten(); tx.abort(); return; }
+    if (request.result !== undefined) {
+      onForgotten();
+      try { tx.abort(); } catch { /* 调用方可能已经中止事务。 */ }
+      return;
+    }
     write();
   };
 }
@@ -271,6 +275,7 @@ export async function recordRecentAssetUsage(assetId: string, usedAt = Date.now(
 export interface ProjectRecord extends ProjectSummaryRecord {
   nodes: unknown;
   edges: unknown;
+  dramaAssets?: unknown;
 }
 
 export * from './indexedDb/catalogRepository';

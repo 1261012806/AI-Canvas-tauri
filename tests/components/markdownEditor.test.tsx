@@ -18,6 +18,7 @@ vi.mock('react', async () => ({
     }];
   },
   useRef: <T,>(initial: T) => hooks.refs[hooks.refIndex++] ??= { current: initial },
+  useEffect: () => {},
   useDeferredValue: <T,>(value: T) => value,
   useMemo: <T,>(factory: () => T) => factory(),
 }));

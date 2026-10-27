@@ -1289,13 +1289,14 @@ export async function listProjectFiles(projectId: string, options: AssetScanOpti
   if (options.signal?.aborted) throw new DOMException('资源扫描已取消', 'AbortError');
   if (!projectDir) return [];
   // 一次扫描完成项目身份识别；派生缓存与内部目录在遍历前排除，增量和最终结果保持一致。
-  return walkDirectoryFiles(projectDir, {
+  const files = await walkDirectoryFiles(projectDir, {
     ...options,
     source: 'project',
     projectId,
     excludedRootDirectories: ['.thumbnail'],
-    excludedDirectories: ['AppData', '.trash'],
+    excludedDirectories: ['AppData', '.trash', '.shared-sync'],
   });
+  return files;
 }
 
 export interface AgentTextFileSelection {

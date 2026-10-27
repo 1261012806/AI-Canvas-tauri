@@ -7,8 +7,42 @@ describe('renderMarkdown URL sanitization', () => {
     expect(html).toContain('data-comfy-image-source="http://127.0.0.1:8188/view?filename=old.png&amp;type=output"');
     expect(html).not.toContain('<img src=');
   });
+
+  it.each([
+    ['[文档]', 'href'],
+    ['![预览]', 'src'],
+  ])('escapes query separators once for %s', (label, attribute) => {
+    const html = renderMarkdown(`${label}(https://example.test/media?name=a&size=2)`);
+
+    expect(html).toContain(`${attribute}="https://example.test/media?name=a&amp;size=2"`);
+    expect(html).not.toContain('&amp;amp;');
+  });
+
+  it.each([
+    ['[文档]', 'href'],
+    ['![预览]', 'src'],
+  ])('keeps quotes and tags inside the escaped URL attribute for %s', (label, attribute) => {
+    const html = renderMarkdown(`${label}(https://example.test/media?q="><svg/onload=1>&next="onerror=1)`);
+
+    expect(html).toContain(`${attribute}="https://example.test/media?q=&quot;&gt;&lt;svg/onload=1&gt;&amp;next=&quot;onerror=1"`);
+    expect(html).not.toContain('<svg');
+    expect(html).not.toContain('"onerror=');
+  });
+
+  it.each([
+    ['[文档]', 'href'],
+    ['![预览]', 'src'],
+  ])('does not decode an entity-encoded scheme into executable HTML for %s', (label, attribute) => {
+    const html = renderMarkdown(`${label}(java&#x73;cript&#58;alert)`);
+
+    expect(html).toContain(`${attribute}="java&amp;#x73;cript&amp;#58;alert"`);
+    expect(html).not.toContain('="javascript:');
+    expect(html).not.toContain('="java&#x73;');
+  });
+
   it.each([
     'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
     'java\u0000script:alert(1)',
     'vbscript:msgbox(1)',
     'data:text/html;base64,PHNjcmlwdD4=',

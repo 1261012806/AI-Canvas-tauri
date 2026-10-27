@@ -33,13 +33,20 @@ import { reassignProjectMemories } from '../services/chat/projectMemoryService';
 import { duplicateProjectArchive, exportProjectArchive, importProjectArchive } from '../services/projectTransferService';
 import {
   getLastActiveProjectId,
+  getProjectById,
   setLastActiveProjectId,
   updateProjectSnapshot,
 } from '../services/indexedDbService';
+import { serializeProjectRecord } from '../services/storageService';
+import {
+  applySharedAssetSyncCommit,
+  type SharedAssetSyncCommitInput,
+  type SharedAssetSyncCommitResult,
+} from '../services/indexedDb/sharedAssetSyncRepository';
 import { describeStorageError, type StorageFailureKind } from '../services/storageQuota';
 import { relocateMediaReferences } from '../services/indexedDb/mediaRelocations';
 import { applyAssetRepairs, cleanupUnavailableAssets, type AssetRepairPreview } from '../services/fs/assetRepair';
-import type { DramaAssetWriteOptions } from '../types/dramaAssets';
+import type { DramaAssetLibrary, DramaAssetWriteOptions } from '../types/dramaAssets';
 import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import { isWebviewRecovery } from '../services/webviewRecoveryService';
 
@@ -152,9 +159,27 @@ interface ProjectSaveQueue {
   active: PendingProjectSave | null;
   pending: PendingProjectSave | null;
   pendingSnapshot: { snapshot: string | undefined; waiters: ProjectSaveWaiter[] } | null;
+  idleWaiters: Array<() => void>;
 }
 
 const projectSaveQueues = new Map<string, ProjectSaveQueue>();
+interface ProjectAssetSyncBarrier {
+  done: Promise<void>;
+  library: AppState['dramaAssets'];
+}
+const projectAssetSyncBarriers = new Map<string, ProjectAssetSyncBarrier>();
+
+function waitForProjectSaveQueue(projectId: string): Promise<void> {
+  const queue = projectSaveQueues.get(projectId);
+  return queue?.running ? new Promise((resolve) => queue.idleWaiters.push(resolve)) : Promise.resolve();
+}
+
+function waitForProjectAssetSync(get: () => AppState): Promise<void> | undefined {
+  const state = get();
+  if (!state.currentProjectId) return;
+  const ownerId = seriesOwnerId(state.projects, state.currentProjectId);
+  return projectAssetSyncBarriers.get(ownerId)?.done;
+}
 let projectSwitchSequence = 0;
 
 interface CapturedCanvasState {
@@ -247,6 +272,7 @@ async function drainProjectSaveQueue(projectId: string, queue: ProjectSaveQueue)
       void drainProjectSaveQueue(projectId, queue);
     } else if (projectSaveQueues.get(projectId) === queue) {
       projectSaveQueues.delete(projectId);
+      queue.idleWaiters.splice(0).forEach((resolve) => resolve());
     }
   }
 }
@@ -254,7 +280,7 @@ async function drainProjectSaveQueue(projectId: string, queue: ProjectSaveQueue)
 function getProjectSaveQueue(projectId: string): ProjectSaveQueue {
   let queue = projectSaveQueues.get(projectId);
   if (!queue) {
-    queue = { running: false, active: null, pending: null, pendingSnapshot: null };
+    queue = { running: false, active: null, pending: null, pendingSnapshot: null, idleWaiters: [] };
     projectSaveQueues.set(projectId, queue);
   }
   return queue;
@@ -280,6 +306,13 @@ function enqueueProjectSnapshot(projectId: string, snapshot: string | undefined)
 }
 
 function enqueueProjectSave(record: ProjectSaveData): Promise<string> {
+  const barrier = projectAssetSyncBarriers.get(record.id);
+  if (barrier) {
+    // 屏障前已捕获的节点和项目元数据仍可保存；所属库必须改用屏障释放时的版本。
+    return barrier.done.then(() => enqueueProjectSave({ ...record,
+      ...(record.dramaAssets ? { dramaAssets: barrier.library } : {}),
+    }));
+  }
   const queue = getProjectSaveQueue(record.id);
 
   return new Promise((resolve, reject) => {
@@ -420,6 +453,16 @@ async function noteSaveError(
   return noteSaveFailure(set, get, { kind, reason, notify });
 }
 
+export interface SharedProjectAssetSyncApplyInput {
+  ownerId: string;
+  originProjectId: string;
+  expectedLibrary: DramaAssetLibrary;
+  nextLibrary?: DramaAssetLibrary;
+  commit: Omit<SharedAssetSyncCommitInput, 'project' | 'expectedProjectLibrary' | 'onCommitted'>;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+}
+
 export interface ProjectSlice {
   projects: CanvasProject[];
   currentProjectId: string | null;
@@ -466,6 +509,7 @@ export interface ProjectSlice {
   returnToStartPage: () => Promise<boolean>;
   saveCurrentProject: () => Promise<string | undefined>;
   saveCurrentProjectSilent: () => Promise<string | undefined>;
+  commitSharedAssetSyncDownload: (input: SharedProjectAssetSyncApplyInput) => Promise<SharedAssetSyncCommitResult>;
   loadProject: () => Promise<void>;
   initFromDb: () => Promise<void>;
   moveGlobalAssetToFolder: (file: fileService.AssetFileEntry, selection: fileService.AssetFolderSelection,
@@ -642,7 +686,7 @@ async function patchProjectRecord(
   }
 }
 
-export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = (set, get) => {
+export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = (set, get, api) => {
   const live: AppState | undefined = get();
   // 首次应用这次热更新时，旧 Store 还没有标记；已就绪的画布要沿用内存。
   const initialized = live?.projectInitialized
@@ -1588,6 +1632,8 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
   },
 
   saveCurrentProject: async () => {
+    const syncPending = waitForProjectAssetSync(get);
+    if (syncPending) await syncPending;
     const state = get();
     if (state.currentProjectId && state.projectLoadStatus !== 'ready') {
       // 加载中只是还没就绪，不算故障；加载失败才记进退出拦截状态
@@ -1624,6 +1670,8 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
 
   /** 静默保存（不弹 toast），用于自动保存 */
   saveCurrentProjectSilent: async () => {
+    const syncPending = waitForProjectAssetSync(get);
+    if (syncPending) await syncPending;
     const state = get();
     if (state.currentProjectId && state.projectLoadStatus !== 'ready') {
       if (state.projectLoadStatus === 'error') {
@@ -1650,6 +1698,85 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       console.warn('[自动保存] 保存失败:', error);
       await noteSaveError(set, get, error, true);
       return undefined;
+    }
+  },
+
+  commitSharedAssetSyncDownload: async (input) => {
+    if (input.commit.ownerId !== input.ownerId || projectAssetSyncBarriers.has(input.ownerId)) {
+      throw new Error('该项目正在应用共享资产，请稍后重试');
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(input.signal?.reason ?? input.commit.signal?.reason);
+    const assertCurrent = () => {
+      controller.signal.throwIfAborted();
+      input.signal?.throwIfAborted();
+      input.commit.signal?.throwIfAborted();
+      input.assertCurrent?.();
+      input.commit.assertCurrent?.();
+      const current = get();
+      if (current.projectLoadStatus !== 'ready' || current.currentProjectId !== input.originProjectId
+        || !current.projects.some((project) => project.id === input.ownerId)
+        || seriesOwnerId(current.projects, input.originProjectId) !== input.ownerId
+        || current.dramaAssets !== input.expectedLibrary) {
+        throw new Error('项目或资产内容已变化，请重新预览');
+      }
+    };
+    assertCurrent();
+    input.signal?.addEventListener('abort', abort, { once: true });
+    input.commit.signal?.addEventListener('abort', abort, { once: true });
+    let release!: () => void;
+    const barrier: ProjectAssetSyncBarrier = {
+      done: new Promise<void>((resolve) => { release = resolve; }), library: input.expectedLibrary,
+    };
+    projectAssetSyncBarriers.set(input.ownerId, barrier);
+    let unsubscribe = api.subscribe(() => { try { assertCurrent(); } catch { controller.abort(); } });
+    try {
+      // 屏障先登记，再等旧 active/pending 写完；后来的自动保存不能挤到下载提交后面写旧库。
+      await waitForProjectSaveQueue(input.ownerId);
+      assertCurrent();
+      let project: ProjectSaveData | undefined;
+      let expectedProjectLibrary: unknown;
+      if (input.nextLibrary) {
+        const previous = await getProjectById(input.ownerId);
+        assertCurrent();
+        if (!previous) throw new Error('所属项目已不存在，已停止共享资产应用');
+        expectedProjectLibrary = previous.dramaAssets;
+        const state = { ...get(), dramaAssets: input.nextLibrary };
+        const captured = input.ownerId === input.originProjectId
+          ? createCurrentProjectSaveRecord(state) : createSeriesLibraryRecord(state);
+        if (!captured) throw new Error('所属项目已变化，请重新预览');
+        project = await serializeProjectRecord(captured);
+        assertCurrent();
+      }
+      return await applySharedAssetSyncCommit({
+        ...input.commit, project, expectedProjectLibrary, signal: controller.signal, assertCurrent,
+        onCommitted: (result) => {
+          if (result.alreadyApplied) return;
+          if (input.nextLibrary) barrier.library = input.nextLibrary;
+          const current = get();
+          // 提交后的取消不能撤回已持久化数据；只给仍持有原库的原项目投影，不覆盖新编辑。
+          if (current.currentProjectId !== input.originProjectId || current.projectLoadStatus !== 'ready'
+            || current.dramaAssets !== input.expectedLibrary
+            || seriesOwnerId(current.projects, input.originProjectId) !== input.ownerId) return;
+          unsubscribe(); unsubscribe = () => undefined;
+          // IDB 已提交；同一回调里同步投影，校验与 set 之间没有 await。
+          set((state) => ({
+            ...(input.nextLibrary ? { dramaAssets: input.nextLibrary } : {}),
+            projects: project ? state.projects.map((item) => item.id === input.ownerId
+              ? { ...item, updatedAt: project!.updatedAt } : item) : state.projects,
+          }));
+        },
+      });
+    } finally {
+      unsubscribe();
+      input.signal?.removeEventListener('abort', abort);
+      input.commit.signal?.removeEventListener('abort', abort);
+      const current = get();
+      if (current.currentProjectId && seriesOwnerId(current.projects, current.currentProjectId) === input.ownerId) {
+        if (current.dramaAssets !== input.expectedLibrary) barrier.library = current.dramaAssets;
+      }
+      projectAssetSyncBarriers.delete(input.ownerId);
+      release();
     }
   },
 

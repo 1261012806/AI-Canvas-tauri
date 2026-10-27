@@ -1099,7 +1099,7 @@ describe('canvas agent tools', () => {
     const definition = getAgentTool('canvas_update_nodes')!;
     expect(definition.inputSchema.properties).toMatchObject({
       videoResolution: { type: 'string' },
-      videoDuration: { type: 'integer' },
+      videoDuration: { type: 'number' },
     });
     const result = await definition.execute(context(), {
       nodeIds: ['n3'],
