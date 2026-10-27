@@ -484,6 +484,93 @@ describe('LibAPI 独立模型分组', () => {
   });
 });
 
+describe('RelayOnAPI 模型分组', () => {
+  const textIds = ['gemini-3.8-flash', 'gemini-4-argon', 'gpt-6.1-sol', 'claude-opus-5-5'];
+  const selectedModels = (): ProviderModelSelection[] => getProviderDefinition('relayonapi')!.models!
+    .filter((model) => model.category === 'text');
+  const generalModels = (providerConfigId: string) => selectedModels().map((model, index) => ({
+    id: `${providerConfigId}-${index}`, name: model.name, modelId: model.id,
+    category: model.category, providerConfigId,
+  }));
+
+  it.each(['', 'fixture'])('预置四个文本候选，未勾选时不自动注入节点模型（Key %s）', (apiKey) => {
+    expect(selectedModels().map((model) => model.id)).toEqual(textIds);
+    const config: AppConfig = { theme: 'dark', providers: {
+      relayonapi: { name: '万象连接', catalogId: 'relayonapi', apiKey, selectedModels: [] },
+    } };
+    expect(getConfiguredModelGroups(config, 'ai-text')).toEqual([]);
+    expect(getGeneralModelGroups([], config, 'ai-text')).toEqual([]);
+    expect(getMediaModelOptions([], config)).toEqual([]);
+  });
+
+  it('已启用文本按真实连接分组，媒体菜单不混入文本候选', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      left: { name: '左万象连接', catalogId: 'relayonapi', apiKey: 'left-fixture', selectedModels: selectedModels() },
+      right: { name: '右万象连接', catalogId: 'relayonapi', apiKey: 'right-fixture', selectedModels: selectedModels() },
+    } };
+    const models = [...generalModels('left'), ...generalModels('right')];
+    const groups = getGeneralModelGroups(models, config, 'ai-text');
+    expect(groups.map((group) => group.id)).toEqual(['general-provider-left', 'general-provider-right']);
+    for (const [index, connectionId] of ['left', 'right'].entries()) {
+      expect(groups[index]).toMatchObject({ name: '万象 API（RelayOnAPI）', badgeText: 'RA' });
+      expect(groups[index].models.map((model) => model.value))
+        .toEqual(textIds.map((_, modelIndex) => `general/${connectionId}-${modelIndex}`));
+      expect(groups[index].models.every((model) => model.provider === 'general' && model.nodeTypes.includes('ai-text'))).toBe(true);
+    }
+    for (const category of ['ai-image', 'ai-video', 'ai-audio'] as const) {
+      expect(getGeneralModelGroups(models, config, category)).toEqual([]);
+    }
+    expect(getMediaModelOptions(models, config)).toEqual([]);
+    expect(models.map((model) => model.providerConfigId)).toEqual(['left', 'left', 'left', 'left', 'right', 'right', 'right', 'right']);
+  });
+
+  it('仅展示同步保留的勾选模型，关闭文本类别后隐藏整个连接', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      relay: { name: '万象连接', catalogId: 'relayonapi', apiKey: 'fixture', selectedModels: [selectedModels()[2]] },
+    } };
+    const models = [generalModels('relay')[2]];
+    expect(getGeneralModelGroups(models, config, 'ai-text')[0].models.map((model) => model.value))
+      .toEqual(['general/relay-2']);
+    const hidden = { ...config, providers: { relay: { ...config.providers.relay, visibleModelCategories: [] } } };
+    expect(getGeneralModelGroups(models, hidden, 'ai-text')).toEqual([]);
+  });
+
+  it('默认媒体候选不自动启用，勾选后文本、图片、视频共用当前连接分组', () => {
+    const catalog = getProviderDefinition('relayonapi')!.models!;
+    const selected = ['text', 'image', 'video'].map((category) => catalog.find((model) => model.category === category)!);
+    const config: AppConfig = { theme: 'dark', providers: {
+      'my-relay': { name: '我的万象连接', catalogId: 'relayonapi', apiKey: 'fixture', selectedModels: selected },
+    } };
+    expect(getGeneralModelGroups([], config, 'ai-image')).toEqual([]);
+    expect(getMediaModelOptions([], config)).toEqual([]);
+    const models = selected.map((model) => ({ id: `relay-${model.category}`, name: model.name,
+      modelId: model.id, providerConfigId: 'my-relay', category: model.category }));
+    for (const [nodeType, category] of [['ai-text', 'text'], ['ai-image', 'image'], ['ai-video', 'video']] as const) {
+      expect(getGeneralModelGroups(models, config, nodeType)).toEqual([
+        expect.objectContaining({ id: 'general-provider-my-relay', name: '万象 API（RelayOnAPI）', badgeText: 'RA',
+          models: [expect.objectContaining({ value: `general/relay-${category}`, provider: 'general' })] }),
+      ]);
+    }
+    expect(getMediaModelOptions(models, config).map((model) => ({ value: model.value, kind: model.mediaKind,
+      groupId: model.groupId }))).toEqual([
+      { value: 'general/relay-image', kind: 'image', groupId: 'general-provider-my-relay' },
+      { value: 'general/relay-video', kind: 'video', groupId: 'general-provider-my-relay' },
+    ]);
+    const hidden = { ...config, providers: { 'my-relay': { ...config.providers['my-relay'], visibleModelCategories: ['text' as const] } } };
+    expect(getMediaModelOptions(models, hidden)).toEqual([]);
+    expect(getGeneralModelGroups(models, config, 'ai-audio')).toEqual([]);
+  });
+
+  it('连接名称等于 RelayOnAPI ID 的显式自定义连接保持通用分组', () => {
+    const config: AppConfig = { theme: 'dark', providers: {
+      relayonapi: { name: '同名自定义连接', catalogId: 'custom-openai', apiKey: 'fixture' },
+    } };
+    expect(getGeneralModelGroups([generalModels('relayonapi')[0]], config, 'ai-text')).toEqual([
+      expect.objectContaining({ id: 'general-models', models: [expect.objectContaining({ value: 'general/relayonapi-0' })] }),
+    ]);
+  });
+});
+
 describe('声明式厂商菜单的分组范围', () => {
   it.each([
     { catalogId: 'cccapi', name: 'CCC API', badge: 'CCC', sharedGroup: true },

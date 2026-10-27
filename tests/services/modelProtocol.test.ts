@@ -33,6 +33,7 @@ import {
   assertImageModelCapability, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageQuality,
   resolveConfiguredImageBackground,
 } from '../../src/services/ai/modelCapabilityValidation';
+import { RELAYON_MODEL_MANIFEST, RELAYON_VIDEO_RESULT_URL_PATHS } from '../../src/services/ai/providers/relayonModelManifest';
 
 const jsonResponse = (
   payload: unknown,
@@ -65,6 +66,193 @@ async function mp4Result(): Promise<Uint8Array<ArrayBuffer>> {
   await output.finalize();
   return new Uint8Array(target.buffer!);
 }
+
+describe('厂商提交幂等身份与明确结果路径', () => {
+  const syncProtocol: ModelExecutionProtocol = { version: 2, mode: 'sync',
+    submit: { method: 'POST', path: '/images', body: { model: '{{model}}', prompt: '{{prompt}}' } },
+    response: { type: 'json', result: { urlPath: 'data.*.url' } } };
+
+  it('重复本地构建复用同一内部幂等标识，合并不同大小写而不改鉴权', () => {
+    const protocol = structuredClone(syncProtocol);
+    protocol.submit.headers = { 'idempotency-key': 'user-static-key', 'IDEMPOTENCY-KEY': 'another-static-key' };
+    const options = { apiKey: 'fixture-secret', baseUrl: 'https://gateway.example/v1', protocol,
+      variables: { model: 'image', prompt: 'draft' }, idempotencyKey: 'internal-request-0001' };
+    for (let index = 0; index < 2; index += 1) {
+      const built = buildModelProtocolRequest(options);
+      const headers = new Headers(built.init.headers);
+      expect(headers.get('idempotency-key')).toBe('internal-request-0001');
+      expect(headers.get('authorization')).toBe('Bearer fixture-secret');
+      expect(Object.keys(built.init.headers!).filter((name) => name.toLowerCase() === 'idempotency-key'))
+        .toEqual(['Idempotency-Key']);
+      expect(built.init.body).not.toContain('internal-request-0001');
+    }
+    expect(buildModelProtocolRequest({ ...options, idempotencyKey: undefined }).init.headers)
+      .toMatchObject({ 'idempotency-key': 'user-static-key', 'IDEMPOTENCY-KEY': 'another-static-key' });
+  });
+
+  it.each(['short', 'request-id\r\nInjected: yes', 'request id with spaces', 'x'.repeat(129)])(
+    '拒绝不安全的内部幂等标识 %#', (idempotencyKey) => {
+      expect(() => buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: 'https://gateway.example/v1',
+        protocol: syncProtocol, variables: {}, idempotencyKey })).toThrow('提交幂等标识');
+    },
+  );
+
+  it('幂等 Header 不能覆盖同名鉴权字段', () => {
+    expect(() => buildModelProtocolRequest({ apiKey: 'private-auth', baseUrl: 'https://gateway.example/v1',
+      protocol: { ...syncProtocol, auth: { type: 'header', name: 'iDeMpOtEnCy-KeY' } },
+      variables: {}, idempotencyKey: 'internal-request-0001' })).toThrow('已用于鉴权');
+  });
+
+  it.each(['sync', 'async'] as const)('真实 RelayOn 连接的无节点 %s 调用每次只生成一个新幂等号', async (mode) => {
+    const previous = useAppStore.getState();
+    const uuidSpy = vi.spyOn(crypto, 'randomUUID');
+    const protocol: ModelExecutionProtocol = mode === 'sync' ? syncProtocol : {
+      version: 2, mode: 'async', submit: syncProtocol.submit, response: { type: 'json', taskIdPath: 'id' },
+      poll: { method: 'GET', path: '/tasks/{{submit.id}}', response: { statusPath: 'status',
+        successValues: ['completed'], failureValues: ['failed'], result: { urlPath: 'url' } } },
+    };
+    let submitted = 0;
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        submitted += 1;
+        return mode === 'sync' ? jsonResponse({ data: [{ url: 'https://cdn.example/image.png' }] })
+          : jsonResponse({ id: `original-${submitted}` });
+      }
+      expect(new Headers(init?.headers).has('Idempotency-Key')).toBe(false);
+      return jsonResponse({ status: 'completed', url: 'https://cdn.example/image.png' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useAppStore.setState({ config: { ...previous.config, providers: { ...previous.config.providers,
+      'relay-alias': { name: 'My Relay', catalogId: 'relayonapi', baseUrl: 'https://relayonapi.com/v1', apiKey: 'own-key' },
+    } } });
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        await expect(runConfiguredModelProtocol({ category: 'image',
+          model: { id: 'image', name: 'Image', category: 'image', modelId: 'image', providerConfigId: 'relay-alias',
+            executionProfile: { preset: 'custom', protocol } }, variables: { model: 'image', prompt: 'draft' } }))
+          .resolves.toEqual(['https://cdn.example/image.png']);
+      }
+      expect(uuidSpy).toHaveBeenCalledTimes(2);
+      const keys = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+        .map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'));
+      expect(keys).toHaveLength(2);
+      expect(keys.every((key) => /^[a-f0-9-]{36}$/i.test(key ?? ''))).toBe(true);
+      expect(new Set(keys).size).toBe(2);
+    } finally {
+      uuidSpy.mockRestore();
+      useAppStore.setState({ config: previous.config });
+    }
+  });
+
+  it('内部提交幂等号不进入轮询及同源二进制下载', async () => {
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'async', submit: syncProtocol.submit,
+      response: { type: 'json', taskIdPath: 'id' }, poll: { method: 'GET', path: '/tasks/{{submit.id}}',
+        response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], result: {
+          mimeType: 'image/png', download: { method: 'GET', path: '/tasks/{{submit.id}}/content' },
+        } } } };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'download-original' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed' }))
+      .mockResolvedValueOnce(new Response(pngResult, { headers: { 'Content-Type': 'image/png' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await executeModelProtocol({ apiKey: 'fixture-secret', baseUrl: 'https://gateway.example/v1', protocol,
+      variables: {}, idempotencyKey: 'internal-request-0001' });
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Idempotency-Key')).toBe('internal-request-0001');
+    for (const [, init] of fetchMock.mock.calls.slice(1)) {
+      expect(new Headers(init?.headers).has('Idempotency-Key')).toBe(false);
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fixture-secret');
+    }
+  });
+
+  it.each(['url', 'video_url', 'content.video_url'])('RelayOn 内置视频只读取本批确认的兼容结果路径 %s', async (path) => {
+    const previous = useAppStore.getState();
+    const selected = RELAYON_MODEL_MANIFEST.find((model) => model.id === 'sd-2.0-c1')!;
+    const resultUrl = 'https://cdn.example/video.mp4?signature=keep%2Fthis';
+    const result = path === 'content.video_url' ? { content: { video_url: resultUrl } } : { [path]: resultUrl };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'video-original' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed', ...result }));
+    vi.stubGlobal('fetch', fetchMock);
+    useAppStore.setState({ config: { ...previous.config, providers: { ...previous.config.providers,
+      'relay-alias': { name: 'My Relay', catalogId: 'relayonapi', baseUrl: 'https://relayonapi.com/v1', apiKey: 'own-key' },
+    } } });
+    try {
+      await expect(runConfiguredModelProtocol({ category: 'video',
+        model: { ...selected, modelId: selected.id, providerConfigId: 'relay-alias' },
+        variables: { model: selected.id, prompt: 'draft', duration: 10, resolution: '720p', aspectRatio: '16:9' } }))
+        .resolves.toEqual([resultUrl]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1][0]).toBe('https://relayonapi.com/v1/videos/video-original');
+    } finally {
+      useAppStore.setState({ config: previous.config });
+    }
+  });
+
+  it.each(['取消查询', '非法结果地址'])('%s 保留原任务及明确结果路径，继续查询不重新生成', async (failure) => {
+    const previous = useAppStore.getState();
+    localStorage.clear();
+    const selected = RELAYON_MODEL_MANIFEST.find((model) => model.id === 'sd-2.0-c1')!;
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'recover-original' }))
+      .mockImplementationOnce(async () => {
+        if (failure === '取消查询') {
+          controller.abort();
+          throw new DOMException('Query cancelled', 'AbortError');
+        }
+        return jsonResponse({ status: 'completed', video_url: 'not-a-media-url' });
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    useAppStore.setState({ currentProjectId: 'relayon-recovery', nodes: [{ id: 'relay-video', type: 'ai-video',
+      position: { x: 0, y: 0 }, data: { type: 'ai-video', label: 'Video', status: 'loading' } }],
+    config: { ...previous.config, providers: { ...previous.config.providers,
+      'relay-alias': { name: 'My Relay', catalogId: 'relayonapi', baseUrl: 'https://relayonapi.com/v1', apiKey: 'own-key' },
+    } } });
+    try {
+      await expect(runConfiguredModelProtocol({ category: 'video', nodeId: 'relay-video', signal: controller.signal,
+        model: { ...selected, modelId: selected.id, providerConfigId: 'relay-alias' },
+        variables: { model: selected.id, prompt: 'draft', duration: 10, resolution: '720p', aspectRatio: '16:9' } }))
+        .rejects.toMatchObject({ name: 'MediaTaskPausedError', taskReceipt: { taskId: 'recover-original' } });
+      const saved = getPendingTasksForProject('relayon-recovery')[0];
+      expect(saved).toMatchObject({ submitted: true, taskId: 'recover-original', providerConfigId: 'relay-alias',
+        protocolPoll: { resultUrlFallbackPaths: [...RELAYON_VIDEO_RESULT_URL_PATHS] } });
+      expect(JSON.stringify(saved)).not.toContain('own-key');
+      expect(new Headers(saved.protocolPoll?.headers).has('Idempotency-Key')).toBe(false);
+      fetchMock.mockResolvedValueOnce(jsonResponse({ status: 'completed', url: 'https://cdn.example/recovered.mp4',
+        video_url: 'https://cdn.example/recovered.mp4', content: { video_url: 'https://cdn.example/recovered.mp4' } }));
+      await expect(pollResolvedModelProtocol(saved.protocolPoll!, 'own-key', undefined, 'https://relayonapi.com/v1'))
+        .resolves.toEqual({ urls: ['https://cdn.example/recovered.mp4'] });
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+      expect(fetchMock.mock.calls[2][0]).toBe('https://relayonapi.com/v1/videos/recover-original');
+    } finally {
+      localStorage.clear();
+      useAppStore.setState({ config: previous.config, currentProjectId: previous.currentProjectId, nodes: previous.nodes });
+    }
+  });
+
+  it.each(['自定义同名连接', '修改过的协议'])('%s 不继承 RelayOn 结果兜底', async (scenario) => {
+    const previous = useAppStore.getState();
+    const selected = structuredClone(RELAYON_MODEL_MANIFEST.find((model) => model.id === 'sd-2.0-c1')!);
+    if (scenario === '修改过的协议') {
+      const protocol = parseModelExecutionProtocol(selected.executionProfile!.protocol!);
+      protocol.poll!.response.result.urlPath = 'user_result';
+      selected.executionProfile = { preset: 'custom', protocol };
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ id: 'guard-original' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 'completed', video_url: 'https://cdn.example/video.mp4' }));
+    vi.stubGlobal('fetch', fetchMock);
+    useAppStore.setState({ config: { ...previous.config, providers: { ...previous.config.providers,
+      relayonapi: { name: 'Relay', catalogId: scenario === '自定义同名连接' ? 'custom-openai' : 'relayonapi',
+        baseUrl: 'https://relayonapi.com/v1', apiKey: 'own-key' },
+    } } });
+    try {
+      await expect(runConfiguredModelProtocol({ category: 'video',
+        model: { ...selected, modelId: selected.id, providerConfigId: 'relayonapi' },
+        variables: { model: selected.id, prompt: 'draft', duration: 10, resolution: '720p', aspectRatio: '16:9' } }))
+        .rejects.toThrow('未返回配置的结果');
+      if (scenario === '自定义同名连接') expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Idempotency-Key')).toBe(false);
+    } finally {
+      useAppStore.setState({ config: previous.config });
+    }
+  });
+});
 
 describe('binary model result boundaries', () => {
   it.each(['sync', 'download', 'fetchUrl'] as const)('recognizes actual media with generic or missing MIME through %s', async (mode) => {

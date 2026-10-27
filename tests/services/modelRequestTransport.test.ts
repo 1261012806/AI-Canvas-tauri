@@ -425,6 +425,87 @@ describe('上传策略使用显式厂商身份', () => {
   });
 });
 
+describe('RelayOnAPI 图片请求与连接身份', () => {
+  function configureRelayonImage(apiKey = 'relayon-image-fixture') {
+    const selected = getProviderDefinition('relayonapi')!.models!.find((model) => model.id === 'image-2-01')!;
+    useAppStore.getState().saveProviderConfig('my-relayon-images', {
+      name: '我的万象连接', catalogId: 'relayonapi', apiKey, baseUrl: 'https://relayonapi.com/v1',
+      selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'my-relayon-images')!;
+    return { provider: 'general', model: `general/${model.id}`, prompt: '生成角色立绘', imageSize: '2K', aspectRatio: '16:9' };
+  }
+
+  it('文生和内联参考编辑各提交一次，像素、比例、分辨率一致且不经过公共上传', async () => {
+    const params = configureRelayonImage();
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      relayonapi: { name: '另一万象连接', catalogId: 'relayonapi', apiKey: 'wrong-default-key-fixture' },
+    } } }));
+    const saved = structuredClone(useAppStore.getState().config.providers['my-relayon-images'].selectedModels);
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应访问公共图床'));
+    const reference = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8Z0AAAAASUVORK5CYII=';
+    transportMocks.corsSafeFetch
+      .mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/relayon-generated.png' }] }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/relayon-edited.png' }] }));
+
+    await expect(generateImagesBatch(params, 1)).resolves.toMatchObject({
+      results: [{ url: 'https://cdn.example/relayon-generated.png', width: 2048, height: 1152 }], failedCount: 0,
+    });
+    await expect(generateImagesBatch({ ...params, image_urls: [reference] }, 1)).resolves.toMatchObject({
+      results: [{ url: 'https://cdn.example/relayon-edited.png' }], failedCount: 0,
+    });
+
+    const calls = transportMocks.corsSafeFetch.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      'https://relayonapi.com/v1/images/generations', 'https://relayonapi.com/v1/images/edits',
+    ]);
+    for (const [, init] of calls) {
+      expect(init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer relayon-image-fixture' } });
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: 'image-2-01', size: '2048x1152',
+        aspect_ratio: '16:9', resolution: '2K', n: 1, response_format: 'url' });
+      expect(JSON.parse(String(init.body))).not.toHaveProperty('quality');
+    }
+    const bodies = calls.map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies[0]).not.toHaveProperty('image');
+    expect(bodies[1].image).toEqual([reference]);
+    const keys = calls.map(([, init]) => new Headers(init.headers).get('Idempotency-Key'));
+    expect(keys.every((key) => typeof key === 'string' && key.length > 0)).toBe(true);
+    expect(new Set(keys).size).toBe(2);
+    expect(directFetch).not.toHaveBeenCalled();
+    expect(useAppStore.getState().config.providers['my-relayon-images'].selectedModels).toEqual(saved);
+  });
+
+  it('名为 relayonapi 的显式自定义连接保留自己的请求，不继承幂等注入或内置图片路由', async () => {
+    useAppStore.getState().saveProviderConfig('relayonapi', {
+      name: '同名自定义', catalogId: 'custom-openai', apiKey: 'custom-image-fixture', baseUrl: 'https://custom.example/v1',
+      selectedModels: [{ id: 'image-2-01', name: '自定义图片', provider: 'relayonapi', category: 'image',
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync', auth: { type: 'bearer' },
+          submit: { method: 'POST', path: '/render', body: { model: '{{model}}', prompt: '{{prompt}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } } } },
+      }],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'relayonapi')!;
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ url: 'https://cdn.example/custom-relay.png' }));
+
+    await expect(generateImagesBatch({ provider: 'general', model: `general/${model.id}`, prompt: '使用自己的图片协议' }, 1))
+      .resolves.toMatchObject({ results: [{ url: 'https://cdn.example/custom-relay.png' }] });
+
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://custom.example/v1/render', expect.objectContaining({
+      method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer custom-image-fixture' }),
+    }));
+    expect(new Headers(transportMocks.corsSafeFetch.mock.calls[0][1].headers).has('Idempotency-Key')).toBe(false);
+  });
+
+  it('当前别名连接缺少 Key 时不借用默认万象连接的凭据', async () => {
+    const params = configureRelayonImage('');
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      relayonapi: { name: '另一万象连接', catalogId: 'relayonapi', apiKey: 'unrelated-default-fixture' },
+    } } }));
+    await expect(generateImagesBatch(params, 1)).rejects.toThrow('API Key');
+    expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('LibAPI 图片原任务与请求合同', () => {
   function configureLibapiImage() {
     const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!;

@@ -39,6 +39,7 @@ import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
 import { assertToapisImageInput, resolveToapisImageModelContract, toapisImageReferences } from './providers/toapisModelManifest';
 import { assertLibapiImageInput, libapiImageExecutionProfile, libapiImageVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
+import { relayonImageVariables, resolveRelayonImageExecutionProfile, usesRelayonModelProtocol } from './providers/relayonModelManifest';
 import { resolveImageParameterCapability } from './mediaModelCapabilities';
 import { DREAMINA_IMAGE_RATIOS } from './dreaminaModels';
 import { compileVideoReferencePrompt } from './referencePrompt';
@@ -177,6 +178,8 @@ export async function generateImagesBatch(
   }
   const executionProfile = builtInContract ? undefined : effectiveProfile;
   const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(modelName, executionProfile);
+  const usesRelayonProtocol = providerDefinition?.id === 'relayonapi'
+    && usesRelayonModelProtocol(modelName, executionProfile);
   const usesStandardImageRequest = !executionProfile
     || executionProfile.preset === 'openai-image'
     || executionProfile.preset === 'openai-gpt-image';
@@ -302,6 +305,8 @@ export async function generateImagesBatch(
   if (providerDefinition?.id === 'toapis') assertToapisImageInput(modelName, allImageUrls.length, requestedCount);
   if (usesLibapiProtocol) assertLibapiImageInput(modelName, allImageUrls.length, requestedCount);
   const libapiExecutionProfile = usesLibapiProtocol ? libapiImageExecutionProfile(modelName, allImageUrls.length) : undefined;
+  const relayonExecutionProfile = usesRelayonProtocol
+    ? resolveRelayonImageExecutionProfile(modelName, executionProfile, allImageUrls.length) : undefined;
   // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。
   allImageUrls = provider === 'runninghub' || usesImageMultipart ? allImageUrls : usesImageDataUrls || usesCustomImageFiles
     ? await resolveImageDataUrlArray(allImageUrls, signal)
@@ -382,12 +387,13 @@ export async function generateImagesBatch(
         };
         const urls = await runConfiguredModelProtocol({
           model: { ...gm,
-            executionProfile: libapiExecutionProfile ?? executionProfile,
+            executionProfile: libapiExecutionProfile ?? relayonExecutionProfile ?? executionProfile,
             imageCapability: configuredCapability },
           category: 'image',
           nodeId: params.nodeId,
           signal,
-          variables: usesLibapiProtocol ? libapiImageVariables(modelName, variables) : variables,
+          variables: usesLibapiProtocol ? libapiImageVariables(modelName, variables)
+            : usesRelayonProtocol ? relayonImageVariables(modelName, variables) : variables,
         });
         const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions,
           ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) }));

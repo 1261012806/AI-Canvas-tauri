@@ -56,6 +56,7 @@ import { savePendingTask, updatePendingTask, removePendingTask, registerNodePoll
 import { corsSafeFetch } from './httpTransport';
 import { resolveImageUrlArray } from './imageUtils';
 import { resolveMediaReferenceUrl } from '../uploadService';
+import { relayonVideoVariables, usesRelayonModelProtocol } from './providers/relayonModelManifest';
 import {
   createMediaDataUrlBudget,
   type MediaDataUrlBudget,
@@ -778,7 +779,10 @@ export async function generateVideo(
     const catalogId = connection.definition?.id ?? resolveProviderCatalogId(connection.providerConfigId, connection.provider);
     const isToapis = catalogId === 'toapis';
     const isLibapi = catalogId === 'libapi';
-    const publicUrlProvider = getProviderPolicy(catalogId).upload ? connection.providerConfigId : undefined;
+    const usesRelayonProtocol = catalogId === 'relayonapi' && usesRelayonModelProtocol(gm.modelId, gm.executionProfile);
+    const policy = getProviderPolicy(catalogId);
+    const publicUrlProvider = policy.upload || (usesRelayonProtocol && policy.referenceTransport === 'public-url')
+      ? connection.providerConfigId : undefined;
     const usesLibapiProtocol = isLibapi && usesLibapiModelProtocol(gm.modelId, gm.executionProfile);
     const configuredVideoCapability = gm.videoCapability
       ?? getModelProtocolPresetVideoCapability(gm.executionProfile);
@@ -803,6 +807,10 @@ export async function generateVideo(
     });
     if (isToapis) assertToapisVideoInput(preflight);
     if (usesLibapiProtocol) assertLibapiVideoInput(preflight);
+    if (usesRelayonProtocol) {
+      // 先检查素材角色与组合，避免上传完成后才发现内置合同接不住首尾帧。
+      relayonVideoVariables(gm.modelId, buildCanonicalVideoProtocolVariables(preflight));
+    }
     if (resolveModelExecutionProfile(gm.executionProfile)) {
       const dataUrlBudget = createMediaDataUrlBudget('本次视频模型参考媒体');
       const remoteImageUrls = await resolveImageUrlsSequentially(
@@ -821,6 +829,9 @@ export async function generateVideo(
         video: videoUrls,
         audio: audioUrls,
       });
+      if (usesRelayonProtocol && remoteReferences.some((reference) => !/^https:\/\//i.test(reference.url))) {
+        throw new Error('RelayOnAPI 视频 JSON 参考素材必须是可访问的 HTTPS 地址，请检查素材链接或公共上传结果');
+      }
       const canonicalRequest = resolveCanonicalVideoRequest(canonicalParams, {
         references: remoteReferences,
         capability: videoCapability,
@@ -850,6 +861,7 @@ export async function generateVideo(
         signal,
         variables: isToapis ? toapisVideoVariables(canonicalRequest, buildCanonicalVideoProtocolVariables(canonicalRequest))
           : usesLibapiProtocol ? libapiVideoVariables(canonicalRequest, buildCanonicalVideoProtocolVariables(canonicalRequest))
+            : usesRelayonProtocol ? relayonVideoVariables(gm.modelId, buildCanonicalVideoProtocolVariables(canonicalRequest))
             : buildCanonicalVideoProtocolVariables(canonicalRequest),
       });
       const url = urls[0];

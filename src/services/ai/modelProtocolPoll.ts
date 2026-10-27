@@ -280,7 +280,12 @@ export async function pollResolvedModelProtocol(
       const status = normalizeStatus(readModelProtocolFirstScalar(payload, poll.statusPath));
       if (!successValues.has(status)) return null;
       if (poll.resultDownload) return {};
-      const urls = poll.resultUrlPath ? readModelProtocolUrls(payload, poll.resultUrlPath) : [];
+      const resultUrlPaths = [poll.resultUrlPath, ...(poll.resultUrlFallbackPaths ?? [])].filter(
+        (path): path is string => typeof path === 'string' && path.length > 0,
+      );
+      const urls = poll.resultUrlFallbackPaths?.length
+        ? [...new Set([...new Set(resultUrlPaths)].flatMap((path) => readModelProtocolUrls(payload, path)))]
+        : poll.resultUrlPath ? readModelProtocolUrls(payload, poll.resultUrlPath) : [];
       const base64Urls = poll.resultBase64Path
         ? readModelProtocolUrls(payload, poll.resultBase64Path).map((value) =>
             normalizeBase64Result(value, poll.resultMimeType!, poll.resultBase64Transform))

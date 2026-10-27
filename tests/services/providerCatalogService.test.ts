@@ -12,6 +12,7 @@ import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabi
 import { parseConnectionShare, serializeConnection } from '../../src/services/ai/providerConnectionTransfer';
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
 import { LIBAPI_MODEL_MANIFEST } from '../../src/services/ai/providers/libapiModelManifest';
+import { RELAYON_IMAGE_MODEL_IDS, RELAYON_MODEL_MANIFEST, RELAYON_VIDEO_MODEL_IDS } from '../../src/services/ai/providers/relayonModelManifest';
 import { useAppStore } from '../../src/store/useAppStore';
 import type { ApiProviderConfig, AppConfig, ProviderModelSelection } from '../../src/types';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
@@ -174,6 +175,110 @@ describe('LibAPI 内置目录与连接身份', () => {
     } finally {
       useAppStore.setState({ config: previous });
     }
+  });
+});
+
+describe('万象 API 内置目录与连接身份', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('默认提供四个主流文本及已适配媒体候选，不自动启用型号', () => {
+    const definition = getProviderDefinition('relayonapi');
+    expect(definition).toMatchObject({
+      name: '万象 API（RelayOnAPI）', defaultBaseUrl: 'https://relayonapi.com/v1', modelsPath: '/models',
+      catalogAdapter: 'openai-compatible', models: RELAYON_MODEL_MANIFEST,
+      policy: { syncGeneralModels: true, catalog: {
+        initialModelsOnCreate: 'fallback', initialModelsOnEdit: 'fallback', refresh: 'replace',
+        fallback: 'deny', invalidateOnKeyChange: true, connectionTest: 'catalog',
+      } },
+    });
+    expect(definition?.models?.filter((model) => model.category === 'text').map((model) => model.id)).toEqual([
+      'gemini-3.8-flash', 'gemini-4-argon', 'gpt-6.1-sol', 'claude-opus-5-5',
+    ]);
+    expect(definition?.models).toHaveLength(21);
+    expect(definition?.models?.filter((model) => model.category === 'image').map((model) => model.id)).toEqual([...RELAYON_IMAGE_MODEL_IDS]);
+    expect(definition?.models?.filter((model) => model.category === 'video').map((model) => model.id)).toEqual([...RELAYON_VIDEO_MODEL_IDS]);
+    expect(definition?.models?.filter((model) => model.category === 'text').every((model) => model.executionProfile?.preset === 'openai-chat')).toBe(true);
+    expect(definition?.models?.filter((model) => model.category !== 'text').every((model) => model.executionProfile?.preset === 'custom')).toBe(true);
+    expect(definition?.policy.upload).toBeUndefined();
+    expect(createConnectionId('relayonapi')).toBe('relayonapi');
+  });
+
+  it('别名连接仅用自己的 Key 查询可用目录，精确匹配三类合同并排除未接入型号', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [
+      ...RELAYON_MODEL_MANIFEST.map((model) => ({ id: model.id, category: 'audio' })),
+      { id: 'gemini-3.8-flash' }, { id: 'claude-fable-5-1' }, { id: 'Midjourney v8.2' },
+      { id: 'gpt-6-astra' }, { id: 'future-model' },
+    ] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const config: ApiProviderConfig = {
+      name: '我的万象连接', catalogId: 'relayonapi', apiKey: 'alias-fixture-key', selectedModels: [],
+    };
+    const result = await fetchProviderModelCatalog({ providerId: 'relayon-alias', config,
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('https://relayonapi.com/v1/models', expect.objectContaining({
+      method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer alias-fixture-key' }),
+    }));
+    expect(result).toMatchObject({ source: 'remote', resolvedBaseUrl: 'https://relayonapi.com/v1' });
+    expect(result.models).toHaveLength(21);
+    expect(result.models).toEqual(expect.arrayContaining(RELAYON_MODEL_MANIFEST.map((model) => ({
+      ...model, provider: 'relayon-alias',
+    }))));
+    expect(config.selectedModels).toEqual([]);
+    expect(result.warning).toBeTruthy();
+  });
+
+  it.each(['401', '网络断开'])('%s 不用预置候选冒充已验证目录', async (failure) => {
+    const fetchMock = failure === '401'
+      ? vi.fn().mockResolvedValue(new Response('{}', { status: 401 }))
+      : vi.fn().mockRejectedValue(new TypeError('Network request failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    const selected = structuredClone(RELAYON_MODEL_MANIFEST[0]);
+    const config: ApiProviderConfig = { name: '万象', catalogId: 'relayonapi', apiKey: 'fixture', selectedModels: [selected] };
+    await expect(fetchProviderModelCatalog({ providerId: 'relayon-alias', config,
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.every(([url]) => url === 'https://relayonapi.com/v1/models')).toBe(true);
+    expect(config.selectedModels).toEqual([selected]);
+  });
+
+  it('缺少 Key 时仍有默认候选，但不能请求或声称目录验证成功', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const definition = getProviderDefinition('relayonapi');
+    expect(definition?.models).toHaveLength(21);
+    await expect(fetchProviderModelCatalog({ providerId: 'relayonapi',
+      config: { name: '万象', catalogId: 'relayonapi', apiKey: '' },
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] })).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('认证目录返回空数组时沿用共享目录错误，不补造可用模型', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ data: [] })));
+    await expect(fetchProviderModelCatalog({ providerId: 'relayonapi',
+      config: { name: '万象', catalogId: 'relayonapi', apiKey: 'fixture' },
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] })).rejects.toThrow('200');
+  });
+
+  it('认证目录只返回未接入型号时保留真实空结果，不追加预置候选', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ id: 'gpt-6-astra' }, { id: 'Midjourney v8.2' }, { id: 'future-video' }],
+    })));
+    const result = await fetchProviderModelCatalog({ providerId: 'relayonapi',
+      config: { name: '万象', catalogId: 'relayonapi', apiKey: 'fixture' },
+      fallbackModels: [...RELAYON_MODEL_MANIFEST] });
+    expect(result).toMatchObject({ source: 'remote', models: [] });
+  });
+
+  it('名为 relayonapi 的显式自定义连接不继承内置目录白名单或默认地址', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'my-text-model' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await fetchProviderModelCatalog({ providerId: 'relayonapi',
+      config: { name: '同名自定义', catalogId: 'custom-openai', apiKey: 'custom-fixture', baseUrl: 'https://custom.example/v1' } });
+    expect(getProviderDefinition('relayonapi', { catalogId: 'custom-openai' })?.id).toBe('custom-openai');
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('https://custom.example/v1/models', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer custom-fixture' }),
+    }));
+    expect(result.models).toMatchObject([{ id: 'my-text-model', category: 'text', provider: 'relayonapi' }]);
   });
 });
 

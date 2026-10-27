@@ -1,0 +1,264 @@
+import { describe, expect, it } from 'vitest';
+import type { ProviderModelSelection } from '../../src/types';
+import {
+  RELAYON_BASE_URL,
+  RELAYON_IMAGE_MODEL_IDS,
+  RELAYON_IMAGE_REFERENCE_LIMIT,
+  RELAYON_MODEL_MANIFEST,
+  RELAYON_TEXT_MODEL_IDS,
+  RELAYON_VIDEO_MODEL_IDS,
+  RELAYON_VIDEO_RESULT_URL_PATHS,
+  matchRelayonCatalog,
+  relayonImageVariables,
+  relayonVideoVariables,
+  resolveRelayonImageExecutionProfile,
+  usesRelayonModelProtocol,
+} from '../../src/services/ai/providers/relayonModelManifest';
+import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
+import { buildModelProtocolRequest, validateModelExecutionProtocol } from '../../src/services/ai/modelProtocol';
+import { assertVideoModelCapability } from '../../src/services/ai/videoRequestResolver';
+import { findUnusedReferenceVariables } from '../../src/services/ai/modelProtocolRuntime';
+import type { ModelExecutionProfile } from '../../src/types/aiTypes';
+
+function remote(id: string): ProviderModelSelection {
+  return { id, name: id, provider: 'relayon-personal', category: 'text' };
+}
+
+describe('RelayOnAPI 已核对文本目录', () => {
+  it('只预置四个已确认型号，使用通用对话协议，不推断视觉和上下文能力', () => {
+    expect(RELAYON_BASE_URL).toBe('https://relayonapi.com/v1');
+    expect(RELAYON_TEXT_MODEL_IDS).toEqual([
+      'gemini-3.8-flash', 'gemini-4-argon', 'gpt-6.1-sol', 'claude-opus-5-5',
+    ]);
+    const models = RELAYON_MODEL_MANIFEST.filter((model) => model.category === 'text');
+    expect(models.map((model) => model.id)).toEqual(RELAYON_TEXT_MODEL_IDS);
+    for (const model of models) {
+      expect(model).toMatchObject({ provider: 'relayonapi', category: 'text',
+        inputModalities: ['text'], executionProfile: { preset: 'openai-chat' } });
+      expect(model.name).not.toBe(model.id);
+      expect(model).not.toHaveProperty('contextWindow');
+      expect(model).not.toHaveProperty('imageCapability');
+      expect(model).not.toHaveProperty('videoCapability');
+    }
+  });
+
+  it('只返回当前认证目录实际提供的精确型号，不补缺失型号或接受别名', () => {
+    const result = matchRelayonCatalog([
+      remote('gemini-3.8-flash'), remote('gpt-6.1-sol'),
+      remote('GPT-6.1-SOL'), remote('gt-6.1-sol'), remote('gpt-6.1-sol-preview'),
+      remote('gemini-3.1-flash-image'), remote('seedance-2-5'), remote('unknown'),
+    ]);
+    expect(result.map((model) => model.id)).toEqual(['gemini-3.8-flash', 'gpt-6.1-sol']);
+    expect(result.every((model) => model.provider === 'relayon-personal')).toBe(true);
+    expect(matchRelayonCatalog([])).toEqual([]);
+  });
+
+  it('不让远端误分类、媒体协议或未核实能力覆盖已确认文本合同', () => {
+    const result = matchRelayonCatalog([{
+      ...remote('claude-opus-5-5'), name: '远端媒体条目', category: 'video',
+      inputModalities: ['text', 'image'], contextWindow: 999,
+      executionProfile: { preset: 'openai-gpt-image' },
+      imageCapability: { resolutions: ['4K'] }, videoCapability: { durations: [30] },
+    }]);
+    expect(result).toEqual([{
+      id: 'claude-opus-5-5', name: 'Claude Opus 5.5', provider: 'relayon-personal', category: 'text',
+      inputModalities: ['text'], executionProfile: { preset: 'openai-chat' },
+    }]);
+  });
+
+  it('同一个精确型号不重复展示，保持远端可用顺序和首个连接身份', () => {
+    const result = matchRelayonCatalog([
+      remote('gpt-6.1-sol'), { ...remote('gpt-6.1-sol'), provider: 'other-connection' },
+      remote('gemini-4-argon'),
+    ]);
+    expect(result.map((model) => [model.id, model.provider])).toEqual([
+      ['gpt-6.1-sol', 'relayon-personal'], ['gemini-4-argon', 'relayon-personal'],
+    ]);
+  });
+
+  it('不修改输入或共享快照，返回的嵌套合同可以独立编辑', () => {
+    const input = [remote('gpt-6.1-sol')];
+    const inputBefore = structuredClone(input);
+    const manifestBefore = structuredClone(RELAYON_MODEL_MANIFEST);
+    const first = matchRelayonCatalog(input);
+    first[0].inputModalities!.push('image');
+    first[0].executionProfile!.preset = 'anthropic-chat';
+    expect(input).toEqual(inputBefore);
+    expect(RELAYON_MODEL_MANIFEST).toEqual(manifestBefore);
+    expect(matchRelayonCatalog(input)[0]).toMatchObject({ inputModalities: ['text'],
+      executionProfile: { preset: 'openai-chat' } });
+  });
+});
+
+function model(id: string): ProviderModelSelection {
+  const known = RELAYON_MODEL_MANIFEST.find((item) => item.id === id);
+  if (!known) throw new Error(`missing fixture: ${id}`);
+  return known;
+}
+
+describe('RelayOnAPI 已确认的媒体合同', () => {
+  it('声明九个图片、八个视频，排除会返回四候选的 MJ 和未核实的质量／背景选项', () => {
+    expect(RELAYON_IMAGE_MODEL_IDS).toHaveLength(9);
+    expect(RELAYON_VIDEO_MODEL_IDS).toHaveLength(8);
+    expect(RELAYON_MODEL_MANIFEST).toHaveLength(21);
+    expect(RELAYON_MODEL_MANIFEST.filter((item) => item.category === 'image').map((item) => item.id))
+      .toEqual(RELAYON_IMAGE_MODEL_IDS);
+    expect(RELAYON_MODEL_MANIFEST.filter((item) => item.category === 'video').map((item) => item.id))
+      .toEqual(RELAYON_VIDEO_MODEL_IDS);
+    expect(matchRelayonCatalog([remote('mj-v7'), remote('seedream-5.0-pro'), remote('Seedream 5.0 Pro')])
+      .map((item) => [item.id, item.category])).toEqual([['Seedream 5.0 Pro', 'image']]);
+    for (const id of RELAYON_IMAGE_MODEL_IDS) {
+      expect(model(id).imageCapability).not.toHaveProperty('qualities');
+      expect(model(id).imageCapability).not.toHaveProperty('backgrounds');
+      expect(model(id).imageCapability!.maxImageReferences).toBe(RELAYON_IMAGE_REFERENCE_LIMIT);
+    }
+    expect(RELAYON_IMAGE_REFERENCE_LIMIT).toBe(6);
+  });
+
+  it('全部能力与协议满足当前校验，视频保持同源任务查询且不猜 content 下载接口', () => {
+    for (const item of RELAYON_MODEL_MANIFEST) {
+      expect(() => assertModelCapabilityProtocol(item), item.id).not.toThrow();
+      if (item.videoCapability) expect(() => assertVideoModelCapability(item.videoCapability!), item.id).not.toThrow();
+      const protocol = item.executionProfile?.protocol;
+      if (protocol) expect(validateModelExecutionProtocol(protocol), item.id).toEqual([]);
+      if (item.category === 'video') {
+        expect(protocol).toMatchObject({ mode: 'async', response: { taskIdPath: 'id' },
+          poll: { path: '/videos/{{submit.id}}', intervalMs: 10_000, maxDurationMs: 7_200_000,
+            response: { statusPath: 'status', successValues: ['completed'], failureValues: ['failed'], result: { urlPath: 'url' } } } });
+        expect(protocol!.poll!.response.result).not.toHaveProperty('download');
+      }
+    }
+    expect(RELAYON_VIDEO_RESULT_URL_PATHS).toEqual(['url', 'video_url', 'content.video_url']);
+  });
+
+  it.each([
+    ['image-2-01', '1K', '4:3', '1152x864'],
+    ['image-2-01', '2K', '3:2', '2016x1344'],
+    ['image-2-01', '4K', '21:9', '3808x1632'],
+    ['image-2-01', '4K', '9:21', '1632x3808'],
+    ['Image-2.5-Flare', '2K', '4:5', '1600x2048'],
+    ['image-2.5-sunburst-01', '4K', '5:4', '2880x2304'],
+    ['nano-banana-2', '2K', '16:9', '2560x1440'],
+    ['nano-banana-2.1', '4K', '3:2', '4992x3328'],
+    ['nano-banana-pro', '4K', '9:16', '2880x5120'],
+    ['Seedream 5.0 Pro', '1K', '16:9', '1536x864'],
+    ['Seedream 5.0 Pro', '2K', '3:2', '2016x1344'],
+  ])('%s 的 %s / %s 严格使用公布像素 %s', (id, resolution, ratio, size) => {
+    const variables = relayonImageVariables(id, { model: id, prompt: 'test', imageSize: resolution, aspectRatio: ratio, n: 1 });
+    const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture',
+      protocol: model(id).executionProfile!.protocol!, variables });
+    expect(built.renderedBody).toMatchObject({ resolution, aspect_ratio: ratio, size, n: 1, response_format: 'url' });
+    expect(built.renderedBody).not.toHaveProperty('image');
+  });
+
+  it('文生与图编辑按真实参考数量切换临时路径，保留原协议并省略空参考数组', () => {
+    const id = 'image-2-01';
+    const profile = model(id).executionProfile!;
+    const original = structuredClone(profile);
+    const inline = 'data:image/png;base64,YQ==';
+    const edit = resolveRelayonImageExecutionProfile(id, profile, 1)!;
+    const variables = relayonImageVariables(id, { model: id, prompt: 'edit', imageSize: '2K', aspectRatio: '16:9',
+      size: '2048x1152', imageUrls: [inline] });
+    const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture', protocol: edit.protocol!, variables });
+    expect(built.url).toBe('https://relayonapi.com/v1/images/edits');
+    expect(built.renderedBody).toMatchObject({ image: [inline], size: '2048x1152', n: 1 });
+    expect(resolveRelayonImageExecutionProfile(id, profile, 0)!.protocol!.submit.path).toBe('/images/generations');
+    expect(relayonImageVariables(id, { imageUrls: [] }).imageUrls).toBeUndefined();
+    expect(profile).toEqual(original);
+  });
+
+  it('参考数量、图片格式、生成数量和未映射尺寸错误在提交前失败', () => {
+    expect(() => relayonImageVariables('image-2-01', { n: 2 })).toThrow('仅提交一个结果');
+    expect(() => relayonImageVariables('image-2-01', { imageUrls: Array(7).fill('https://cdn.example/a.png') })).toThrow('最多接受 6 张');
+    expect(() => resolveRelayonImageExecutionProfile('image-2-01', model('image-2-01').executionProfile, 7)).toThrow('最多接受 6 张');
+    expect(relayonImageVariables('Image-2.5-Flare', { imageUrls: Array(6).fill('https://cdn.example/a.png') }).imageUrls).toHaveLength(6);
+    expect(() => relayonImageVariables('nano-banana-2', { imageUrls: ['data:image/gif;base64,YQ=='] })).toThrow('PNG、JPEG、WebP');
+    expect(() => relayonImageVariables('Seedream 5.0 Pro', { imageSize: '1K', aspectRatio: '2:3' })).toThrow('没有已公布的像素尺寸');
+    expect(() => relayonImageVariables('image-2-01', { imageSize: '2K', aspectRatio: '16:9', size: '1024x1024' })).toThrow('不一致');
+    expect(model('image-2-01').imageCapability!.ratios).toHaveLength(9);
+    expect(model('Image-2.5-Flare').imageCapability!.ratios).toHaveLength(10);
+    expect(model('Seedream 5.0 Pro').imageCapability!.ratios).toHaveLength(6);
+  });
+
+  it('只转换完整内置协议，保留用户编辑的提交路径及合同', () => {
+    const id = 'image-2-01';
+    expect(usesRelayonModelProtocol(id, structuredClone(model(id).executionProfile))).toBe(true);
+    expect(usesRelayonModelProtocol('gpt-6.1-sol', model('gpt-6.1-sol').executionProfile)).toBe(false);
+    expect(usesRelayonModelProtocol(id, undefined)).toBe(false);
+    const custom: ModelExecutionProfile = structuredClone(model(id).executionProfile!);
+    custom.protocol!.submit.path = '/user/images';
+    expect(usesRelayonModelProtocol(id, custom)).toBe(false);
+    expect(resolveRelayonImageExecutionProfile(id, custom, 1)).toBe(custom);
+    expect(custom.protocol!.submit.path).toBe('/user/images');
+  });
+
+  it('四个官方型号仅提供已核实文生字段，分别保留时长和分辨率范围', () => {
+    const expected = [
+      ['doubao-seedance-2-0-260128', 15, ['480p', '720p', '1080p', '4k']],
+      ['doubao-seedance-2-0-fast-260128', 15, ['480p', '720p']],
+      ['doubao-seedance-2-0-mini-260615', 15, ['480p', '720p']],
+      ['doubao-seedance-2-5-260628', 30, ['480p', '720p', '1080p']],
+    ] as const;
+    for (const [id, maxDuration, resolutions] of expected) {
+      expect(model(id).videoCapability).toMatchObject({ minDuration: 4, maxDuration, resolutions,
+        operations: ['text-to-video'], maxImageReferences: 0, maxVideoReferences: 0, maxAudioReferences: 0 });
+      const variables = relayonVideoVariables(id, { model: id, prompt: 'test', durationText: '5', resolution: '720p', aspectRatio: '16:9', generateAudio: false });
+      const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture', protocol: model(id).executionProfile!.protocol!, variables });
+      expect(built.renderedBody).toEqual({ model: id, prompt: 'test', seconds: '5',
+        metadata: { resolution: '720p', ratio: '16:9', generate_audio: false } });
+      expect(() => relayonVideoVariables(id, { referenceImageUrls: ['https://cdn.example/i.png'] })).toThrow('最多接受 0 个参考图');
+    }
+  });
+
+  it('A 渠道 references 按图片／视频／音频原序展开，只有图片声明 reference 角色', () => {
+    for (const id of ['sd-2.0-A', 'sd-2.5-A']) {
+      const variables = relayonVideoVariables(id, { model: id, prompt: '图片1配合视频1和音频1', durationText: '6',
+        resolution: '720p', aspectRatio: '16:9', generateAudio: true,
+        referenceImageUrls: ['https://cdn.example/i1.png', 'https://cdn.example/i2.png'],
+        referenceVideoUrls: ['https://cdn.example/v.mp4'], referenceAudioUrls: ['https://cdn.example/a.mp3'] });
+      const protocol = model(id).executionProfile!.protocol!;
+      const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture', protocol, variables });
+      expect(built.renderedBody).toMatchObject({ seconds: '6', output: { resolution: '720p', aspect_ratio: '16:9' }, generate_audio: true,
+        references: [
+          { type: 'image', url: 'https://cdn.example/i1.png', role: 'reference' },
+          { type: 'image', url: 'https://cdn.example/i2.png', role: 'reference' },
+          { type: 'video', url: 'https://cdn.example/v.mp4' }, { type: 'audio', url: 'https://cdn.example/a.mp3' },
+        ] });
+      expect(findUnusedReferenceVariables(JSON.stringify(protocol), variables)).toEqual([]);
+    }
+  });
+
+  it('C1／C2 使用顶层数值时长、精确素材上限，并只转换存在的提示词编号', () => {
+    const id = 'sd-2.0-c1';
+    const variables = relayonVideoVariables(id, { model: id, prompt: '图片1和图片2参考视频1与@音频1，图片3无对应素材',
+      duration: 10, resolution: '720p', aspectRatio: '9:16',
+      referenceImageUrls: ['https://cdn.example/i1.png', 'https://cdn.example/i2.png'],
+      referenceVideoUrls: ['https://cdn.example/v.mp4'], referenceAudioUrls: ['https://cdn.example/a.mp3'] });
+    const protocol = model(id).executionProfile!.protocol!;
+    const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture', protocol, variables });
+    expect(built.renderedBody).toMatchObject({ prompt: '@图1和@图2参考@视频1与@音频1，图片3无对应素材',
+      duration: 10, resolution: '720p', aspect_ratio: '9:16' });
+    expect(built.renderedBody).not.toHaveProperty('metadata');
+    expect(findUnusedReferenceVariables(JSON.stringify(protocol), variables)).toEqual([]);
+    expect(model(id).videoCapability).toMatchObject({ minDuration: 10, maxDuration: 15, maxImageReferences: 9, maxVideoReferences: 3, maxAudioReferences: 3 });
+    expect(model('sd-2.0-c2').videoCapability).toMatchObject({ minDuration: 4, maxDuration: 15, maxVideoReferences: 0 });
+    expect(() => relayonVideoVariables('sd-2.0-c2', { referenceVideoUrls: ['https://cdn.example/v.mp4'] })).toThrow('最多接受 0 个参考视频');
+    expect(() => relayonVideoVariables(id, { referenceAudioUrls: Array(4).fill('https://cdn.example/a.mp3') })).toThrow('最多接受 3 个参考音频');
+  });
+
+  it('JSON 合同不接未公开的首尾帧，不把它们降级成普通参考', () => {
+    for (const id of ['sd-2.0-A', 'sd-2.5-A', 'sd-2.0-c1', 'sd-2.0-c2']) {
+      expect(() => relayonVideoVariables(id, { firstImage: 'https://cdn.example/i.png' })).toThrow('未公布首尾帧字段');
+      expect(() => relayonVideoVariables(id, { videoInputMode: 'mixed' })).toThrow('未公布首尾帧字段');
+    }
+  });
+
+  it('首批不开放未确认的纯音频组合，仍接收图片搭配音频', () => {
+    for (const id of ['sd-2.0-A', 'sd-2.5-A', 'sd-2.0-c1', 'sd-2.0-c2']) {
+      expect(model(id).videoCapability!.supportsStandaloneAudio).toBe(false);
+      expect(() => relayonVideoVariables(id, { referenceAudioUrls: ['https://cdn.example/a.mp3'] })).toThrow('当前应用接入尚未开放');
+      expect(relayonVideoVariables(id, { referenceImageUrls: ['https://cdn.example/i.png'],
+        referenceAudioUrls: ['https://cdn.example/a.mp3'] }).referenceAudioUrls).toEqual(['https://cdn.example/a.mp3']);
+    }
+  });
+});

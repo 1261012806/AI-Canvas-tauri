@@ -29,6 +29,8 @@ import { REFERENCE_PROTOCOL_VARIABLES } from './modelProtocolVariables';
 import { readModelProtocolPathValues } from './modelProtocolResponse';
 import { readGoogleImagePartsReferenceUrls } from './imageModelTemplates';
 import { assertModelProtocolResult } from './modelCapabilityValidation';
+import { getProviderPolicy, resolveProviderCatalogId } from './providerPolicies';
+import { RELAYON_VIDEO_RESULT_URL_PATHS, usesRelayonModelProtocol } from './providers/relayonModelManifest';
 
 interface RunConfiguredModelProtocolOptions {
   model: GeneralModelConfig;
@@ -351,6 +353,7 @@ export async function runConfiguredModelProtocol(
   if (!provider) throw new Error(`模型“${options.model.name}”的连接配置不存在`);
   const baseUrl = provider.baseUrl?.trim() || '';
   if (!baseUrl) throw new Error(`模型“${options.model.name}”未配置接口地址`);
+  const catalogId = resolveProviderCatalogId(options.model.providerConfigId, provider);
   assertReferenceMediaDeliverable(options.model.name, JSON.stringify(protocol), options.variables);
 
   const projectId = useAppStore.getState().currentProjectId;
@@ -363,7 +366,9 @@ export async function runConfiguredModelProtocol(
     : nodeSignal ?? options.signal;
   try {
     signal?.throwIfAborted();
-    const submitOptions = { apiKey: provider.apiKey || '', baseUrl, protocol, variables: options.variables, signal };
+    const submitOptions = { apiKey: provider.apiKey || '', baseUrl, protocol, variables: options.variables, signal,
+      ...(getProviderPolicy(catalogId).submitIdempotency ? { idempotencyKey: crypto.randomUUID() } : {}),
+    };
     // 在记录“提交中”之前完成本地构建校验，避免将输入错误误称为提交状态未知。
     buildModelProtocolRequest(submitOptions);
     if (protocol.mode === 'async' && options.nodeId && projectId) {
@@ -372,19 +377,17 @@ export async function runConfiguredModelProtocol(
         taskId: '', taskType: 'custom-protocol', submitted: false, videoGeneration,
         batchCount: readBatchCount(options.variables.n) });
     }
-    const submitted = await submitModelProtocol({
-      apiKey: provider.apiKey || '',
-      baseUrl,
-      protocol,
-      variables: options.variables,
-      signal,
-    });
+    const submitted = await submitModelProtocol(submitOptions);
     if (submitted.urls) {
       assertModelProtocolResult(options.category, submitted);
       return submitted.urls;
     }
     if (!submitted.poll || !submitted.taskId) throw new Error('异步调用协议未返回轮询配置');
-    const poll = { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS };
+    const poll = { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS,
+      ...(catalogId === 'relayonapi' && options.category === 'video'
+        && usesRelayonModelProtocol(options.model.modelId, options.model.executionProfile)
+        ? { resultUrlFallbackPaths: [...new Set(RELAYON_VIDEO_RESULT_URL_PATHS)] } : {}),
+    };
     if (receipt) receipt = updatePendingTask(receipt.nodeId, { taskId: submitted.taskId, protocolPoll: poll, submitted: true }, receipt.taskId, receipt.attemptId);
 
     const result = await pollResolvedModelProtocol(

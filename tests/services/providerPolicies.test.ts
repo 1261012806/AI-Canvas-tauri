@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getProviderPolicy, resolveProviderCatalogId } from '../../src/services/ai/providerPolicies';
 
 describe('厂商接线策略', () => {
-  it.each(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi'])('%s 沿用通用模型同步', (id) => {
+  it.each(['custom-openai', 'cccapi', 'xai', 'google', 'sora2u', 'toapis', 'libapi', 'relayonapi'])('%s 沿用通用模型同步', (id) => {
     expect(getProviderPolicy(id).syncGeneralModels).toBe(true);
   });
 
@@ -15,7 +15,7 @@ describe('厂商接线策略', () => {
 
   it('CCC 合并连接分组，其他既有专属菜单按连接区分', () => {
     expect(getProviderPolicy('cccapi').modelMenuGroup?.scope).toBe('catalog');
-    for (const id of ['sora2u', 'toapis', 'libapi']) {
+    for (const id of ['sora2u', 'toapis', 'libapi', 'relayonapi']) {
       expect(getProviderPolicy(id).modelMenuGroup?.scope).toBe('connection');
     }
     expect(getProviderPolicy('custom-openai').modelMenuGroup).toBeUndefined();
@@ -25,6 +25,7 @@ describe('厂商接线策略', () => {
     ['cccapi', 'empty', 'fallback', 'ungrouped-only', false],
     ['toapis', 'fallback', 'fallback', 'deny', true],
     ['libapi', 'fallback', 'fallback', 'deny', true],
+    ['relayonapi', 'fallback', 'fallback', 'deny', true],
   ] as const)('%s 分别声明初始目录、刷新和失败规则', (id, create, edit, fallback, keyChange) => {
     expect(getProviderPolicy(id).catalog).toEqual({ initialModelsOnCreate: create,
       initialModelsOnEdit: edit, refresh: 'replace', fallback,
@@ -40,6 +41,20 @@ describe('厂商接线策略', () => {
     expect(resolveProviderCatalogId('libapi')).toBe('libapi');
     expect(resolveProviderCatalogId('autodl-workflow')).toBe('workflow-api');
     expect(resolveProviderCatalogId('autodl-workflow', { catalogId: 'custom-openai' })).toBe('custom-openai');
+  });
+
+  it('RelayOnAPI 使用公开素材策略及提交幂等键，不借用专有上传或同名连接身份', () => {
+    const policy = getProviderPolicy(resolveProviderCatalogId('自己的万象连接', { catalogId: 'relayonapi' }));
+    expect(policy.modelMenuGroup).toMatchObject({ scope: 'connection' });
+    expect(policy.submitIdempotency).toBe(true);
+    expect(policy.referenceTransport).toBe('public-url');
+    expect(policy.upload).toBeUndefined();
+    const custom = getProviderPolicy(resolveProviderCatalogId('relayonapi', { catalogId: 'custom-openai' }));
+    expect(custom.modelMenuGroup).toBeUndefined();
+    expect(custom.catalog.connectionTest).toBe('default');
+    expect(custom.submitIdempotency).toBeUndefined();
+    expect(custom.referenceTransport).toBeUndefined();
+    expect(custom.upload).toBeUndefined();
   });
 
   it('查询返回稳定只读策略，不共享可变目录规则', () => {

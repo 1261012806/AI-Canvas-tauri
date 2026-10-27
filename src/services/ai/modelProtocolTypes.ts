@@ -18,6 +18,8 @@ export interface SubmitModelProtocolOptions {
   baseUrl: string;
   protocol: ModelExecutionProtocol;
   variables: ModelProtocolVariables;
+  /** 仅由厂商运行时提供的单次提交身份，不是可编辑协议变量。 */
+  idempotencyKey?: string;
   /** 适配器可校验平台业务码，不改变传输和同源边界。 */
   validateResponse?: (payload: unknown) => void;
   signal?: AbortSignal;

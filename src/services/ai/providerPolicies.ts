@@ -17,6 +17,10 @@ export interface ProviderPolicy {
   };
   /** 仅选择已有上传实现；地址、凭据及媒体约束仍由各实现复核。 */
   readonly upload?: 'toapis' | 'libapi';
+  /** 媒体参考需要公网地址；无专用上传实现时沿用应用已有公共上传服务。 */
+  readonly referenceTransport?: 'public-url';
+  /** 仅为每次新媒体提交注入应用生成的幂等身份，不启用提交重试。 */
+  readonly submitIdempotency?: boolean;
 }
 
 type PolicyOverrides = Omit<Partial<ProviderPolicy>, 'catalog'> & { catalog?: Partial<ProviderPolicy['catalog']> };
@@ -46,6 +50,10 @@ const POLICY_OVERRIDES: Record<string, PolicyOverrides> = {
     modelMenuGroup: { scope: 'connection', description: '使用当前 LibAPI 连接中启用的模型' },
     catalog: { refresh: 'replace', fallback: 'deny', invalidateOnKeyChange: true, connectionTest: 'catalog' },
     upload: 'libapi' },
+  relayonapi: { syncGeneralModels: true,
+    modelMenuGroup: { scope: 'connection', description: '使用当前 RelayOnAPI 连接中启用的模型' },
+    catalog: { refresh: 'replace', fallback: 'deny', invalidateOnKeyChange: true, connectionTest: 'catalog' },
+    referenceTransport: 'public-url', submitIdempotency: true },
 };
 
 const POLICIES = new Map(Object.entries(POLICY_OVERRIDES).map(([id, overrides]) => [id, Object.freeze({

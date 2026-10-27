@@ -36,6 +36,7 @@ import { GRSAI_ADDED_MODELS } from './grsaiModels';
 import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from './dreaminaModels';
 import { matchToapisCatalog, resolveToapisImageModelContract, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
 import { LIBAPI_MODEL_MANIFEST, matchLibapiCatalog, resolveLibapiModelId } from './providers/libapiModelManifest';
+import { RELAYON_BASE_URL, RELAYON_MODEL_MANIFEST, matchRelayonCatalog } from './providers/relayonModelManifest';
 import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { validateModelExecutionProtocol } from './modelProtocolValidation';
 import { filterCccGroupModels } from './cccProviderGroups';
@@ -309,6 +310,15 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = ([
     externalUrl: 'https://libapi.cc/signup?ref=HVM4YNC85BR8R97K',
     credentials: [{ ...API_KEY_FIELD, placeholder: '填写 LibAPI API Key' }],
     models: LIBAPI_MODEL_MANIFEST,
+  },
+  {
+    id: 'relayonapi', name: '万象 API（RelayOnAPI）',
+    description: '主流文本、图片与视频模型；使用当前连接的 Key 和已适配的渠道参数。',
+    badgeText: 'RA', authType: 'api-key', catalogAdapter: 'openai-compatible',
+    defaultBaseUrl: RELAYON_BASE_URL, modelsPath: '/models', allowCustomBaseUrl: false,
+    externalUrl: 'https://relayonapi.com/keys',
+    credentials: [{ ...API_KEY_FIELD, placeholder: '填写 RelayOnAPI API Key' }],
+    models: RELAYON_MODEL_MANIFEST,
   },
   {
     id: 'xai',
@@ -924,7 +934,7 @@ export async function fetchProviderModelCatalog(
   }
 
   try {
-    if (definition.id === 'libapi' && !config.apiKey.trim()) throw new Error('请填写 API Key');
+    if ((definition.id === 'libapi' || definition.id === 'relayonapi') && !config.apiKey.trim()) throw new Error('请填写 API Key');
     const { models, baseUrl } = await fetchOpenAiCompatibleCatalog(
       definition,
       providerId,
@@ -939,6 +949,15 @@ export async function fetchProviderModelCatalog(
         resolvedBaseUrl: baseUrl,
         ...(models.some((model) => !matched.some((known) => known.id === model.id))
           ? { warning: '已获取官方目录，仅展示仍在售且已适配的文本、图片、视频与音频型号；尚无完整调用合同的型号暂不展示。' }
+          : {}),
+      };
+    }
+    if (definition.id === 'relayonapi') {
+      const matched = matchRelayonCatalog(models);
+      return {
+        models: matched, source: 'remote', resolvedBaseUrl: baseUrl,
+        ...(matched.length < models.length
+          ? { warning: '已获取当前 Key 的目录，仅展示已适配的文本、图片与视频型号；Midjourney 和其他未适配型号暂不展示。' }
           : {}),
       };
     }

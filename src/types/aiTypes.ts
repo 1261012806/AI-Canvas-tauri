@@ -377,6 +377,8 @@ export interface ResolvedModelProtocolPoll {
   successValues: string[];
   failureValues: string[];
   resultUrlPath?: string;
+  /** 厂商适配器追加的明确结果路径；仅在内部任务描述中保存，不属于可编辑协议。 */
+  resultUrlFallbackPaths?: string[];
   resultTextPath?: string;
   resultBase64Path?: string;
   resultMimeType?: string;

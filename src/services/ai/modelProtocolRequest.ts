@@ -137,8 +137,22 @@ export function buildRequestInit(
   apiKey: string,
   context: Record<string, unknown>,
   signal?: AbortSignal,
+  idempotencyKey?: string,
 ): RequestInit {
   const headers = renderRequestHeaders(request, auth, apiKey, context);
+  if (idempotencyKey !== undefined) {
+    if (typeof idempotencyKey !== 'string' || !/^[\x21-\x7E]{8,128}$/.test(idempotencyKey)) {
+      throw new Error('提交幂等标识必须是 8–128 个可打印 ASCII 字符，且不能包含空格或换行');
+    }
+    const resolvedAuth = resolveAuthentication(auth);
+    if (resolvedAuth.type === 'header' && resolvedAuth.name?.toLowerCase() === 'idempotency-key') {
+      throw new Error('Idempotency-Key 已用于鉴权，不能同时作为提交幂等标识');
+    }
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'idempotency-key') delete headers[name];
+    }
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
   const body = renderRequestBody(request, context);
   const serializedBody = request.method === 'GET' || body === undefined
     ? undefined
@@ -164,7 +178,7 @@ export function buildModelProtocolRequest(
   const url = buildSameOriginUrl(options.baseUrl, protocol.submit, context);
   return {
     url: applyQueryAuthentication(url, protocol.auth, options.apiKey),
-    init: buildRequestInit(protocol.submit, protocol.auth, options.apiKey, context, options.signal),
+    init: buildRequestInit(protocol.submit, protocol.auth, options.apiKey, context, options.signal, options.idempotencyKey),
     protocol,
     ...(renderedBody === undefined ? {} : { renderedBody }),
   };
