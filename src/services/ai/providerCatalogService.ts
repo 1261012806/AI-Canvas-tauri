@@ -36,7 +36,7 @@ import { GRSAI_ADDED_MODELS } from './grsaiModels';
 import { DREAMINA_IMAGE_MODELS, DREAMINA_VIDEO_MODELS } from './dreaminaModels';
 import { matchToapisCatalog, resolveToapisImageModelContract, TOAPIS_MODEL_MANIFEST } from './providers/toapisModelManifest';
 import { LIBAPI_MODEL_MANIFEST, matchLibapiCatalog, resolveLibapiModelId } from './providers/libapiModelManifest';
-import { RELAYON_BASE_URL, RELAYON_MODEL_MANIFEST, matchRelayonCatalog } from './providers/relayonModelManifest';
+import { RELAYON_BASE_URL, RELAYON_MODEL_MANIFEST, matchRelayonCatalog, resolveRelayonImageModelContract } from './providers/relayonModelManifest';
 import { assertImageModelCapability, isModelProtocolPresetId } from './modelCapabilityValidation';
 import { validateModelExecutionProtocol } from './modelProtocolValidation';
 import { filterCccGroupModels } from './cccProviderGroups';
@@ -588,6 +588,9 @@ export function resolveProviderImageModelForValidation(
   }
   if (definition?.id === 'toapis') {
     return { ...model, ...resolveToapisImageModelContract(model.id, profile, model.imageCapability) };
+  }
+  if (definition?.id === 'relayonapi') {
+    return { ...model, ...resolveRelayonImageModelContract(model.id, profile, model.imageCapability) };
   }
   return model;
 }

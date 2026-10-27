@@ -152,6 +152,59 @@ describe('RelayOnAPI 视频渠道与原任务交付', () => {
     } finally { media.mockRestore(); }
   });
 
+  it('C2 画布引用按实际素材顺序生成图片／音频编号，提交时保留官方写法', async () => {
+    const params = configure('sd-2.0-c2');
+    const nodes: Node<BaseNodeData>[] = [
+      { id: 'image-a', type: 'ai-image', position: { x: 0, y: 0 },
+        data: { label: '图片 A', type: 'ai-image', imageUrl: 'https://cdn.example/a.png' } },
+      { id: 'image-b', type: 'ai-image', position: { x: 0, y: 0 },
+        data: { label: '图片 B', type: 'ai-image', imageUrl: 'https://cdn.example/b.png' } },
+      { id: 'audio-a', type: 'ai-audio', position: { x: 0, y: 0 },
+        data: { label: '声音 A', type: 'ai-audio', audioUrl: 'https://cdn.example/a.mp3' } },
+    ];
+    useAppStore.setState({ nodes });
+    const image = vi.spyOn(imageUtils, 'resolveImageUrlArray').mockImplementation(async (urls) => urls);
+    const media = vi.spyOn(uploadService, 'resolveMediaReferenceUrl').mockImplementation(async (url) => url);
+    const constraints = vi.spyOn(videoInputValidation, 'assertVideoInputConstraints').mockResolvedValue(undefined);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-relayon-c2' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed', video_url: 'https://cdn.example/c2.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await generateVideo({ ...params, prompt: '@{image-b:图片 B} 跟随 @{audio-a:声音 A}，再看 @{image-a:图片 A}',
+        seedanceDuration: 5, seedanceResolution: '720p', seedanceRatio: '9:16' });
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body).toMatchObject({ model: 'sd-2.0-c2', prompt: '图片1 跟随 音频1，再看 图片2', references: [
+        { type: 'image', url: 'https://cdn.example/b.png' }, { type: 'image', url: 'https://cdn.example/a.png' },
+        { type: 'audio', url: 'https://cdn.example/a.mp3' },
+      ] });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally { image.mockRestore(); media.mockRestore(); constraints.mockRestore(); }
+  });
+
+  it('用户修改过的 C1 协议不继承内置编号转换', async () => {
+    const selected = structuredClone(RELAYON_MODEL_MANIFEST.find((item) => item.id === 'sd-2.0-c1')!);
+    selected.executionProfile!.protocol!.submit.path = '/custom/videos';
+    useAppStore.getState().saveProviderConfig('relayon-user-protocol', {
+      name: '自定义万象合同', catalogId: 'relayonapi', baseUrl: 'https://relayonapi.com/v1',
+      apiKey: 'custom-fixture', selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'relayon-user-protocol')!;
+    const image = vi.spyOn(imageUtils, 'resolveImageUrlArray').mockImplementation(async (urls) => urls);
+    const constraints = vi.spyOn(videoInputValidation, 'assertVideoInputConstraints').mockResolvedValue(undefined);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-custom' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example/custom.mp4' })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await generateVideo({ model: `general/${model.id}`, provider: 'general', prompt: '保持图片1的原始编号',
+        seedanceDuration: 10, seedanceResolution: '720p', seedanceRatio: '16:9',
+        referenceMedia: [{ kind: 'image', role: 'reference', origin: 'connection', url: 'https://cdn.example/person.png' }] });
+      expect(fetchMock.mock.calls[0][0]).toBe('https://relayonapi.com/v1/custom/videos');
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).prompt).toBe('保持图片1的原始编号');
+    } finally { image.mockRestore(); constraints.mockRestore(); }
+  });
+
   it.each(['sd-2.0-A', 'sd-2.0-c1'])('%s 未开放的首帧输入在上传前拒绝', async (modelId) => {
     const params = configure(modelId);
     const image = vi.spyOn(imageUtils, 'resolveImageUrlArray');

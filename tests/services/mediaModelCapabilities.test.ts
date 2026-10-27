@@ -3,7 +3,90 @@ import { normalizeSeedreamSize } from '../../src/services/ai/helpers';
 import { buildImageCapabilityRequest, getImageCapability, resolveImageParameterCapability } from '../../src/services/ai/mediaModelCapabilities';
 import { assertConfiguredImageReferences, assertImageModelCapability, assertModelCapabilityProtocol, resolveConfiguredImageParameters } from '../../src/services/ai/modelCapabilityValidation';
 import { TOAPIS_MODEL_MANIFEST } from '../../src/services/ai/providers/toapisModelManifest';
+import { RELAYON_MODEL_MANIFEST } from '../../src/services/ai/providers/relayonModelManifest';
 import type { ProtocolJsonValue } from '../../src/types/aiTypes';
+
+describe('RelayOnAPI 旧图片参数能力', () => {
+  function legacyModel(modelId: string) {
+    const model = structuredClone(RELAYON_MODEL_MANIFEST.find((item) => item.id === modelId)!);
+    const body = model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+    delete body.quality;
+    delete body.background;
+    delete model.imageCapability!.qualities;
+    delete model.imageCapability!.defaultQuality;
+    delete model.imageCapability!.backgrounds;
+    delete model.imageCapability!.defaultBackground;
+    return model;
+  }
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('已保存 %s 的完整旧快照立即显示质量和背景，且不改比例、分辨率或配置', (modelId) => {
+    const model = legacyModel(modelId);
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { saved: { name: '旧万象连接', catalogId: 'relayonapi', apiKey: '', selectedModels: [model] } },
+      generalModels: [{ id: 'cached', name: model.name, modelId, category: 'image', providerConfigId: 'saved',
+        executionProfile: model.executionProfile, imageCapability: model.imageCapability,
+        imageReferenceRequestMode: model.imageReferenceRequestMode }],
+    };
+    const original = structuredClone(config);
+    const capability = resolveImageParameterCapability('general/cached', 'general', config);
+    expect(capability).toMatchObject({ qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+      backgrounds: ['auto', 'opaque', 'transparent'], resolutions: model.imageCapability!.resolutions,
+      ratios: model.imageCapability!.ratios, dimensionPresets: model.imageCapability!.dimensionPresets });
+    expect(capability?.defaultQuality).toBeUndefined();
+    expect(capability?.defaultBackground).toBeUndefined();
+    expect(resolveConfiguredImageParameters(capability!, { imageSize: '2K', aspectRatio: '9:16',
+      imageQuality: 'high', imageBackground: 'transparent', count: 1 }))
+      .toEqual({ imageSize: '2K', aspectRatio: '9:16', imageQuality: 'high', imageBackground: 'transparent' });
+    expect(config).toEqual(original);
+  });
+
+  it.each(['image-2-01', 'image-2.5-flare-01', 'image-2.5-sunburst-01', 'nano-banana-2.1'])('%s 不继承普通 2.5 的质量或背景', (modelId) => {
+    const model = RELAYON_MODEL_MANIFEST.find((item) => item.id === modelId)!;
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { saved: { name: '万象连接', catalogId: 'relayonapi', apiKey: '' } },
+      generalModels: [{ id: 'saved', name: model.name, modelId, category: 'image', providerConfigId: 'saved',
+        executionProfile: model.executionProfile, imageCapability: model.imageCapability }],
+    };
+    expect(resolveImageParameterCapability('general/saved', 'general', config)?.qualities).toBeUndefined();
+    expect(resolveImageParameterCapability('general/saved', 'general', config)?.backgrounds).toBeUndefined();
+  });
+
+  it('未知同名前缀型号不推断普通 2.5 的参数能力', () => {
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { saved: { name: '万象连接', catalogId: 'relayonapi', apiKey: '' } },
+      generalModels: [{ id: 'future', name: '未知图片', modelId: 'Image-2.5-Flare-future', category: 'image', providerConfigId: 'saved',
+        executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+          submit: { method: 'POST', path: '/custom/images', body: { prompt: '{{prompt}}' } },
+          response: { type: 'json', result: { urlPath: 'url' } } } } }],
+    };
+    expect(resolveImageParameterCapability('general/future', 'general', config)).toBeUndefined();
+  });
+
+  it.each(['custom-openai', 'relayonapi'])('%s 的用户自定义协议按实际映射显示，不被同名目录强加六档', (catalogId) => {
+    const model = legacyModel('Image-2.5-Flare');
+    model.executionProfile!.protocol!.submit.path = '/custom/images';
+    model.imageCapability = { ...model.imageCapability, qualities: ['low', 'high'], defaultQuality: 'low',
+      backgrounds: ['opaque', 'transparent'], defaultBackground: 'opaque' };
+    const config: Pick<AppConfig, 'providers' | 'generalModels'> = {
+      providers: { relayonapi: { name: '自己的连接', catalogId, apiKey: '' } },
+      generalModels: [{ id: 'custom', name: model.name, modelId: model.id, category: 'image', providerConfigId: 'relayonapi',
+        executionProfile: model.executionProfile, imageCapability: model.imageCapability }],
+    };
+    const resolve = () => resolveImageParameterCapability('general/custom', 'general', config);
+    expect(resolve()?.qualities).toBeUndefined();
+    expect(resolve()?.backgrounds).toBeUndefined();
+    const body = model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+    body.quality = 'high';
+    body.background = 'opaque';
+    expect(resolve()).toMatchObject({ qualities: ['high'], defaultQuality: 'high', backgrounds: ['opaque'],
+      defaultBackground: 'opaque', backgroundIsFixed: true });
+    body.quality = '{{imageQuality}}';
+    body.background = '{{imageBackground}}';
+    expect(resolve()).toMatchObject({ qualities: ['low', 'high'], defaultQuality: 'low',
+      backgrounds: ['opaque', 'transparent'], defaultBackground: 'opaque' });
+    expect(resolve()?.backgroundIsFixed).not.toBe(true);
+  });
+});
 
 describe('custom image parameter declarations', () => {
   it('resolves a gateway model using its own saved tiers instead of a same-name provider', () => {

@@ -24,6 +24,7 @@ import { workflowApiConnection } from '../workflowApi/workflowApiAdapter';
 import { getCloudWorkflowPersistedOutput } from '../workflowExecutionService';
 import type {
   MediaGenerationIntent,
+  MediaGenerationParameters,
   MediaGenerationResult,
   MediaKind,
   MediaPersistenceStatus,
@@ -31,6 +32,9 @@ import type {
 } from '../../types/media';
 import { generateImage } from './generateImage';
 import { generateVideo } from './generateVideo';
+import { resolveImageParameterCapability } from './mediaModelCapabilities';
+import { assertSafeMediaParameterStrings, resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
+import { resolveVideoModelCapability } from './videoModelCapabilityResolver';
 import { generateAudio, persistAudioGenerationResult } from './generateAudio';
 import { findMediaModelOption } from '../../components/nodes/shared/defaultModels';
 import { videoLongSideFromLabel } from '../aiDimensions';
@@ -203,6 +207,72 @@ async function tagSavedGeneratedMedia(
   await tagGeneratedProjectAssetSafely({ filePath, projectId, prompt });
 }
 
+function mediaParameters(intent: MediaGenerationIntent, model: ResolvedMediaModel, projectId?: string | null): MediaGenerationParameters | undefined {
+  const store = useAppStore.getState();
+  const settings = store.projects.find((project) => project.id === (projectId ?? store.currentProjectId))?.settings?.generation;
+  const directVideo = ((model.provider === 'general' || model.provider === 'runninghub') && !model.workflowId)
+    || model.provider === 'workflow-api';
+  const ratio = intent.aspectRatio ?? (directVideo ? undefined : settings?.videoAspectRatio);
+  const resolution = intent.resolution ?? (directVideo ? undefined : settings?.videoResolution);
+  const duration = intent.duration ?? (directVideo ? undefined : settings?.videoDuration);
+  const imageCapability = intent.kind === 'image' && !model.workflowId && model.provider !== 'runninghub'
+    ? resolveImageParameterCapability(model.requestModel, model.provider, store.config) : undefined;
+  const imageQuality = resolveConfiguredImageQuality(imageCapability, intent.imageQuality);
+  const imageBackground = intent.imageBackground === '' ? ''
+    : resolveConfiguredImageBackground(imageCapability, intent.imageBackground);
+  const parameters: MediaGenerationParameters = intent.kind === 'image' ? {
+    resolution: settings?.imageSize || '2K',
+    aspectRatio: settings?.imageAspectRatio || '1:1',
+    ...(imageQuality !== undefined ? { imageQuality } : {}),
+    ...(imageBackground !== undefined ? { imageBackground } : {}),
+  } : intent.kind === 'video' ? {
+    ...(ratio !== undefined ? { aspectRatio: ratio } : {}),
+    ...(resolution !== undefined ? { resolution } : {}),
+    ...(duration !== undefined ? { duration } : {}),
+    ...(intent.videoFps !== undefined ? { videoFps: intent.videoFps } : {}),
+    ...(intent.generateAudio !== undefined ? { generateAudio: intent.generateAudio } : {}),
+  } : {};
+  return Object.keys(parameters).length || intent.kind === 'video' ? parameters : undefined;
+}
+
+/** 显式参数必须属于当前模型，不能被底层缺省逻辑静默丢弃。 */
+function assertExplicitMediaParameters(intent: MediaGenerationIntent, model: ResolvedMediaModel): void {
+  if (intent.kind !== 'image' && (intent.imageQuality !== undefined || intent.imageBackground !== undefined)) {
+    throw new Error('图片质量和背景只能用于图片生成');
+  }
+  if (intent.kind !== 'video' && (intent.videoFps !== undefined || intent.generateAudio !== undefined)) {
+    throw new Error('帧率和生成音轨只能用于视频生成');
+  }
+  if ((model.workflowId || model.provider === 'runninghub')
+    && [intent.imageQuality, intent.imageBackground, intent.videoFps, intent.generateAudio].some((value) => value !== undefined)) {
+    throw new Error('RunningHub 和工作流使用自己的参数定义，请使用模型或工作流专属参数');
+  }
+  const config = useAppStore.getState().config;
+  if (intent.kind === 'image' && (intent.imageQuality !== undefined || intent.imageBackground !== undefined)) {
+    const capability = resolveImageParameterCapability(model.requestModel, model.provider, config);
+    if (intent.imageQuality !== undefined && !capability?.qualities?.length) throw new Error('所选模型未声明图片质量参数');
+    if (intent.imageBackground !== undefined && intent.imageBackground !== '' && !capability?.backgrounds?.length) {
+      throw new Error('所选模型未声明图片背景参数');
+    }
+    if (intent.imageBackground === '' && capability?.backgroundIsFixed) {
+      throw new Error('所选模型的背景由协议固定，不能选择接口默认');
+    }
+    resolveConfiguredImageQuality(capability, intent.imageQuality);
+    resolveConfiguredImageBackground(capability, intent.imageBackground);
+  }
+  if (intent.kind === 'video' && (intent.videoFps !== undefined || intent.generateAudio !== undefined
+    || (intent.duration !== undefined && intent.duration <= 0))) {
+    const capability = resolveVideoModelCapability(model.configId, config, intent.resolution);
+    if (intent.videoFps !== undefined && (!Number.isFinite(intent.videoFps)
+      || !capability?.frameRates?.includes(intent.videoFps))) throw new Error('所选模型未声明或不支持该视频帧率');
+    if (intent.generateAudio !== undefined && capability?.supportsAudio !== true) throw new Error('所选模型未声明可调生成音轨开关');
+    if (intent.duration !== undefined && intent.duration <= 0
+      && (intent.duration === 0 || !Number.isFinite(intent.duration) || intent.duration !== capability?.automaticDurationValue)) {
+      throw new Error('所选模型不支持该自动时长值');
+    }
+  }
+}
+
 export async function runMediaGeneration(
   intent: MediaGenerationIntent,
   projectId?: string | null,
@@ -215,6 +285,10 @@ export async function runMediaGeneration(
     .some((value) => value !== undefined)) throw new Error('音频参数只能用于音频生成');
   if (!stripModelMentions(intent.prompt)) throw new Error('媒体生成提示词不能为空');
   const model = resolveMediaModel(intent.kind, intent.modelRef);
+  assertSafeMediaParameterStrings(intent);
+  const parameters = mediaParameters(intent, model, projectId);
+  assertSafeMediaParameterStrings(parameters);
+  assertExplicitMediaParameters(intent, model);
   ensureMediaMessageRecoveryHandler();
   const nativeCloud = ['runninghubwf', 'runninghub', 'workflow-api'].includes(model.provider);
   const trackingId = targetNodeId ?? (!nativeCloud && runninghubTaskContext
@@ -228,10 +302,12 @@ export async function runMediaGeneration(
     deliveryMode: runninghubTaskContext ? intent.deliveryMode === 'chat' ? 'message' : 'node+message' : 'node',
     canvasNodeId: targetNodeId,
     modelId: model.configId,
+    ...(parameters ? { parameters } : {}),
   }, (receipt) => { operationReceipt = receipt; }) : undefined;
   const finishOperation = trackingId ? registerMediaNodeOperation(trackingId) : undefined;
   try {
-    const artifact = await generateMediaArtifact(intent, projectId, signal, trackingId, runninghubTaskContext, model);
+    const artifact = await generateMediaArtifact(intent, projectId, signal, trackingId, runninghubTaskContext, model, parameters);
+    if (parameters) artifact.parameters = parameters;
     if (!artifact.taskReceipt && operationReceipt && getPendingTasksForProject(operationReceipt.projectId).some((task) =>
       task.nodeId === operationReceipt!.nodeId && task.taskId === operationReceipt!.taskId && task.attemptId === operationReceipt!.attemptId)) {
       artifact.taskReceipt = operationReceipt;
@@ -259,6 +335,7 @@ async function generateMediaArtifact(
   targetNodeId: string | undefined,
   runninghubTaskContext: import('../../types/runninghub').RunningHubTaskContext | undefined,
   model: ResolvedMediaModel,
+  parameters?: MediaGenerationParameters,
 ): Promise<MediaGenerationResult> {
   throwIfAborted(signal);
 
@@ -310,8 +387,10 @@ async function generateMediaArtifact(
       prompt: effectivePrompt,
       model: model.requestModel,
       provider: model.provider,
-      imageSize: projectSettings?.generation?.imageSize || '2K',
-      aspectRatio: projectSettings?.generation?.imageAspectRatio || '1:1',
+      imageSize: parameters?.resolution ?? '2K',
+      aspectRatio: parameters?.aspectRatio ?? '1:1',
+      ...(parameters?.imageQuality !== undefined ? { imageQuality: parameters.imageQuality } : {}),
+      ...(parameters?.imageBackground !== undefined ? { imageBackground: parameters.imageBackground } : {}),
       workflowId: model.workflowId,
       workflowInputs: intent.workflowInputs, runninghubModelParameters: model.provider === 'runninghub' ? runninghubModelParameters : undefined,
       nodeId: targetNodeId,
@@ -352,12 +431,9 @@ async function generateMediaArtifact(
 
   if (intent.kind === 'video') {
     const directGeneralProtocol = ((model.provider === 'general' || model.provider === 'runninghub') && !model.workflowId) || model.provider === 'workflow-api';
-    const aspectRatio = intent.aspectRatio
-      ?? (directGeneralProtocol ? undefined : projectSettings?.generation?.videoAspectRatio);
-    const resolution = intent.resolution
-      ?? (directGeneralProtocol ? undefined : projectSettings?.generation?.videoResolution);
-    const duration = intent.duration
-      ?? (directGeneralProtocol ? undefined : projectSettings?.generation?.videoDuration);
+    const aspectRatio = parameters?.aspectRatio;
+    const resolution = parameters?.resolution;
+    const duration = parameters?.duration;
     const result = await generateVideo({
       prompt: effectivePrompt,
       model: model.requestModel,
@@ -365,6 +441,8 @@ async function generateMediaArtifact(
       seedanceRatio: aspectRatio,
       seedanceResolution: resolution,
       seedanceDuration: duration,
+      ...(intent.videoFps !== undefined ? { videoFps: intent.videoFps } : {}),
+      ...(intent.generateAudio !== undefined ? { generateAudio: intent.generateAudio } : {}),
       // 工作流只认数字长边，档位换算后再传
       videoResolution: directGeneralProtocol ? undefined : videoLongSideFromLabel(resolution),
       workflowId: model.workflowId,
@@ -565,6 +643,7 @@ async function recoverMediaMessage(task: PendingTask, urls: string[], signal?: A
     if (persisted.status === 'failed') throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     const artifact: MediaGenerationResult = {
       ...previous,
+      ...(context.parameters ? { parameters: context.parameters } : {}),
       id: previous?.id ?? `recovered-${task.attemptId ?? task.taskId}`,
       kind,
       taskReceipt: receipt,

@@ -7,7 +7,7 @@ import {
   type ProviderConfigDraftInput,
 } from '../../../src/services/chat/providerConfigDraftService';
 import { buildModelProtocolRequest } from '../../../src/services/ai/modelProtocol';
-import type { ModelExecutionProtocol, VideoModelCapability } from '../../../src/types/aiTypes';
+import type { ImageModelCapability, ModelExecutionProtocol, VideoModelCapability } from '../../../src/types/aiTypes';
 import type { ProviderModelSelection } from '../../../src/types';
 
 describe('provider model field merge', () => {
@@ -90,6 +90,86 @@ const IMAGE_RESPONSE = `{
 }`;
 
 describe('media parameters in each imported model', () => {
+  const optionsProtocol: ModelExecutionProtocol = {
+    version: 2, mode: 'sync', auth: { type: 'bearer' },
+    submit: { method: 'POST', path: '/images/generations', body: {
+      model: '{{model}}', prompt: '{{prompt}}', size: '{{size}}',
+      quality: '{{imageQuality}}', background: '{{imageBackground}}', output_format: 'png',
+    } },
+    response: { type: 'json', result: { urlPath: 'data.0.url' } },
+  };
+  const draftForImageCapability = (imageCapability: ImageModelCapability): ProviderConfigDraftInput => ({
+    connectionName: 'Relay', baseUrl: 'https://gateway.example.com/v1', models: [{
+      modelId: 'image-options', category: 'image', protocolSource: 'declarative',
+      executionProtocol: structuredClone(optionsProtocol), imageCapability,
+    }],
+  });
+
+  it('creates a locally validated image draft with quality, background and exact pixels', () => {
+    const capability: ImageModelCapability = { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
+      qualities: ['low', 'high'], defaultQuality: 'high', backgrounds: ['opaque', 'transparent'], defaultBackground: 'opaque',
+      hasResolutionField: true, resolutionField: 'size', dimensionPresets: { '1K': { '1:1': [1024, 1024] } } };
+    const draft = createProviderConfigDraft('image-options', draftForImageCapability(capability));
+    expect(draft.config.selectedModels?.[0].imageCapability).toEqual(capability);
+    expect(draft.config.selectedModels?.[0].executionProfile?.protocol?.submit.body).toMatchObject({
+      quality: '{{imageQuality}}', background: '{{imageBackground}}', output_format: 'png',
+    });
+  });
+
+  it('rejects invalid defaults, fixed mappings and unsafe or unbounded dynamic pixel matrices', () => {
+    expect(() => createProviderConfigDraft('invalid-default', draftForImageCapability({ qualities: ['low'], defaultQuality: 'high' })))
+      .toThrow('defaultQuality');
+    const fixed = draftForImageCapability({ qualities: ['low', 'high'] });
+    fixed.models[0].executionProtocol!.submit.body = { model: '{{model}}', prompt: '{{prompt}}', quality: 'high' };
+    expect(() => createProviderConfigDraft('fixed-quality', fixed)).toThrow('可调质量');
+    const dimensions = (table: unknown) => draftForImageCapability({ dimensionPresets: table as ImageModelCapability['dimensionPresets'] });
+    expect(() => createProviderConfigDraft('dangerous-key', dimensions(JSON.parse('{"__proto__":{"1:1":[1,1]}}'))))
+      .toThrow('不允许的对象键');
+    expect(() => createProviderConfigDraft('non-plain', dimensions(new Date()))).toThrow('普通 JSON 对象');
+    expect(() => createProviderConfigDraft('too-wide', dimensions({ '1K': { '1:1': [65_537, 1] } }))).toThrow('宽高');
+    expect(() => createProviderConfigDraft('too-many', dimensions(Object.fromEntries(
+      Array.from({ length: 17 }, (_, index) => [`${index}K`, { '1:1': [1024, 1024] }]),
+    )))).toThrow('分辨率键');
+  });
+
+  it('merges partial image capabilities before validating the effective protocol and preserves inputs', () => {
+    const previous: ProviderModelSelection = { id: 'image-options', name: 'Image', category: 'image', provider: 'custom',
+      executionProfile: { preset: 'custom', protocol: structuredClone(optionsProtocol) },
+      imageCapability: { resolutions: ['1K'], defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
+        dimensionPresets: { '1K': { '1:1': [1024, 1024] } } } };
+    const update: ProviderModelSelection = { id: previous.id, name: previous.name, category: 'image', provider: previous.provider,
+      imageCapability: { resolutions: ['1K', '2K'], qualities: ['low', 'high'], defaultQuality: 'high',
+        backgrounds: ['opaque', 'transparent'], defaultBackground: 'opaque', dimensionPresets: { '2K': { '1:1': [2048, 2048] } } } };
+    const before = structuredClone({ previous, update });
+    const merged = mergeProviderModels([previous], [update], { [previous.id]: ['imageCapability'] }).merged[0];
+    expect(merged.imageCapability).toMatchObject({ defaultResolution: '1K', ratios: ['1:1'], defaultRatio: '1:1',
+      qualities: ['low', 'high'], defaultQuality: 'high', backgrounds: ['opaque', 'transparent'],
+      dimensionPresets: { '1K': { '1:1': [1024, 1024] }, '2K': { '1:1': [2048, 2048] } } });
+    expect({ previous, update }).toEqual(before);
+    expect(() => mergeProviderModels([previous], [{ ...update, imageCapability: { qualities: ['low'], defaultQuality: 'high' } }],
+      { [previous.id]: ['imageCapability'] })).toThrow('defaultQuality');
+  });
+
+  it('merges per-operation video capability fields without dropping previously configured limits', () => {
+    const previous: ProviderModelSelection = { id: 'video-options', name: 'Video', category: 'video', provider: 'custom',
+      executionProfile: { preset: 'custom', protocol: { version: 2, mode: 'sync',
+        submit: { method: 'POST', path: '/videos', body: { prompt: '{{prompt}}', ratio: '{{aspectRatio}}', duration: '{{duration}}' } },
+        response: { type: 'json', result: { urlPath: 'data.0.url' } } } },
+      videoCapability: { operations: ['text-to-video'], ratios: ['16:9', '9:16'], defaultRatio: '16:9', minDuration: 4, maxDuration: 15,
+        operationCapabilities: { 'text-to-video': { ratios: ['16:9', '9:16'], defaultRatio: '16:9' } } } };
+    const update: ProviderModelSelection = { id: previous.id, name: previous.name, category: 'video', provider: 'custom',
+      videoCapability: { operations: ['text-to-video'], automaticDurationValue: -1, maxVideoAudioReferences: 3,
+        operationCapabilities: { 'text-to-video': { automaticDurationOnly: true } } } };
+    const before = structuredClone({ previous, update });
+    const merged = mergeProviderModels([previous], [update], { [previous.id]: ['videoCapability'] }).merged[0];
+    expect(merged.videoCapability).toMatchObject({ ratios: ['16:9', '9:16'], minDuration: 4, maxDuration: 15,
+      automaticDurationValue: -1, maxVideoAudioReferences: 3,
+      operationCapabilities: { 'text-to-video': { ratios: ['16:9', '9:16'], defaultRatio: '16:9', automaticDurationOnly: true } } });
+    expect({ previous, update }).toEqual(before);
+    expect(() => mergeProviderModels([previous], [{ ...update, videoCapability: { operations: ['text-to-video'],
+      automaticDurationValue: 1 } }], { [previous.id]: ['videoCapability'] })).toThrow('automaticDurationValue');
+  });
+
   it('keeps different image tiers per model and reports undeclared parameters', () => {
     const draft = createProviderConfigDraft('image-parameters', { connectionName: 'Relay', models: [
       { modelId: 'image-pro', category: 'image', submitRequest: IMAGE_REQUEST, submitResponse: IMAGE_RESPONSE,

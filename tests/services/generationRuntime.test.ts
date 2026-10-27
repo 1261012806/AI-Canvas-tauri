@@ -153,6 +153,143 @@ describe('media generation cancellation', () => {
 });
 
 describe('media generation project settings', () => {
+  function configureVisualModels() {
+    mocks.storeState.config.providers.custom = { name: '自定义', catalogId: 'custom-openai', apiKey: 'fixture', baseUrl: 'https://gateway.example' };
+    mocks.storeState.config.generalModels = [
+      { id: 'image-model', name: '图片', modelId: 'image-x', category: 'image', providerConfigId: 'custom',
+        imageCapability: { resolutions: ['2K'], ratios: ['1:1'], qualities: ['low', 'high'], backgrounds: ['opaque', 'transparent'] } },
+      { id: 'video-model', name: '视频', modelId: 'video-x', category: 'video', providerConfigId: 'custom',
+        videoCapability: { operations: ['text-to-video'], frameRates: [24, 30], supportsAudio: true,
+          minDuration: 4, maxDuration: 15, automaticDurationValue: -1 } },
+    ];
+  }
+
+  it('图片质量和显式接口默认背景贯通生成、结果及原任务快照', async () => {
+    configureVisualModels();
+    const result = await runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat', imageQuality: 'high', imageBackground: '' }, 'project-1', undefined, 'image-node');
+    expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: 'high', imageBackground: '' }), undefined);
+    expect(result.parameters).toEqual({ resolution: '2K', aspectRatio: '1:1', imageQuality: 'high', imageBackground: '' });
+    expect(mocks.bindMediaTaskContext).toHaveBeenCalledWith('image-node', expect.objectContaining({
+      parameters: { resolution: '2K', aspectRatio: '1:1', imageQuality: 'high', imageBackground: '' },
+    }), expect.any(Function));
+  });
+
+  it('锁定模型声明的默认质量和背景，显式接口默认仍能覆盖背景默认值', async () => {
+    configureVisualModels();
+    const capability = mocks.storeState.config.generalModels[0].imageCapability!;
+    capability.defaultQuality = 'high';
+    capability.defaultBackground = 'transparent';
+    const intent = { kind: 'image' as const, prompt: '山谷', modelRef: 'general/image-model', deliveryMode: 'chat' as const };
+    const result = await runMediaGeneration(intent, 'project-1', undefined, 'image-node');
+    expect(result.parameters).toEqual({ resolution: '2K', aspectRatio: '1:1', imageQuality: 'high', imageBackground: 'transparent' });
+    expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageQuality: 'high', imageBackground: 'transparent' }), undefined);
+    capability.defaultQuality = 'low';
+    capability.defaultBackground = 'opaque';
+    expect(result.parameters).toMatchObject({ imageQuality: 'high', imageBackground: 'transparent' });
+    const explicitDefault = await runMediaGeneration({ ...intent, imageBackground: '' }, 'project-1', undefined, 'image-node');
+    expect(explicitDefault.parameters).toMatchObject({ imageQuality: 'low', imageBackground: '' });
+    expect(mocks.generateImage).toHaveBeenLastCalledWith(expect.objectContaining({ imageQuality: 'low', imageBackground: '' }), undefined);
+  });
+
+  it('未声明的视频参数保留空快照，区分没有快照的旧结果', async () => {
+    configureVisualModels();
+    const result = await runMediaGeneration({ kind: 'video', prompt: '镜头', modelRef: 'general/video-model',
+      deliveryMode: 'chat' }, 'project-1', undefined, 'video-node');
+    expect(result.parameters).toEqual({});
+    expect(mocks.bindMediaTaskContext).toHaveBeenCalledWith('video-node', expect.objectContaining({ parameters: {} }), expect.any(Function));
+  });
+
+  it.each([
+    { field: 'imageQuality', value: 'sk-example-secret' },
+    { field: 'imageBackground', value: 'Bearer example-secret' },
+    { field: 'imageQuality', value: 'https://private.example/key' },
+    { field: 'imageBackground', value: 'C:\\private\\secret' },
+  ])('拒绝敏感或路径格式的 $field，不回显参数，也不提交', async ({ field, value }) => {
+    configureVisualModels();
+    const error = await runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat', [field]: value }, 'project-1').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('格式无效');
+    expect((error as Error).message).not.toContain(value);
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.bindMediaTaskContext).not.toHaveBeenCalled();
+  });
+
+  it('项目默认分辨率是路径时在生成前拒绝且不回显路径', async () => {
+    configureVisualModels();
+    const path = 'D:\\private\\image.png';
+    mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { imageSize: path } } }];
+    const error = await runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat' }, 'project-1').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('格式无效');
+    expect((error as Error).message).not.toContain(path);
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it('合法的厂商枚举、比例和小数分辨率仍可使用', async () => {
+    configureVisualModels();
+    const capability = mocks.storeState.config.generalModels[0].imageCapability!;
+    capability.qualities = ['高清（电影）'];
+    capability.resolutions = ['0.5K'];
+    capability.ratios = ['16/9'];
+    mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { imageSize: '0.5K', imageAspectRatio: '16/9' } } }];
+    const result = await runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat', imageQuality: '高清（电影）', imageBackground: '' }, 'project-1');
+    expect(result.parameters).toMatchObject({ resolution: '0.5K', aspectRatio: '16/9', imageQuality: '高清（电影）', imageBackground: '' });
+    expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageSize: '0.5K', aspectRatio: '16/9', imageQuality: '高清（电影）' }), undefined);
+  });
+
+  it('图片请求锁定项目比例和分辨率，生成期间项目设置变化不会改变结果或任务快照', async () => {
+    configureVisualModels();
+    mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { imageSize: '2K', imageAspectRatio: '9:16' } } }];
+    mocks.generateImage.mockImplementation(async () => {
+      mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { imageSize: '4K', imageAspectRatio: '1:1' } } }];
+      return { url: 'https://cdn.example/image.png', width: 1, height: 1 };
+    });
+    const result = await runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat', imageQuality: 'high' }, 'project-1', undefined, 'image-node');
+    expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ imageSize: '2K', aspectRatio: '9:16', imageQuality: 'high' }), undefined);
+    expect(result.parameters).toEqual({ resolution: '2K', aspectRatio: '9:16', imageQuality: 'high' });
+    expect(mocks.bindMediaTaskContext).toHaveBeenCalledWith('image-node', expect.objectContaining({ parameters: result.parameters }), expect.any(Function));
+  });
+
+  it('视频自动时长、帧率和关闭音轨原样传递并保存在原任务快照', async () => {
+    configureVisualModels();
+    const result = await runMediaGeneration({ kind: 'video', prompt: '移动镜头', modelRef: 'general/video-model',
+      deliveryMode: 'both', aspectRatio: '9:16', resolution: '720p', duration: -1, videoFps: 24, generateAudio: false },
+    'project-1', undefined, 'video-node');
+    expect(mocks.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ seedanceRatio: '9:16', seedanceResolution: '720p',
+      seedanceDuration: -1, videoFps: 24, generateAudio: false }), undefined);
+    expect(result.parameters).toEqual({ aspectRatio: '9:16', resolution: '720p', duration: -1, videoFps: 24, generateAudio: false });
+    expect(mocks.bindMediaTaskContext).toHaveBeenCalledWith('video-node', expect.objectContaining({ parameters: result.parameters }), expect.any(Function));
+  });
+
+  it('不支持的显式质量、帧率、音轨和自动时长在调用厂商前拒绝', async () => {
+    configureVisualModels();
+    await expect(runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model', deliveryMode: 'chat', imageQuality: 'max' }, 'project-1')).rejects.toThrow('质量');
+    await expect(runMediaGeneration({ kind: 'video', prompt: '镜头', modelRef: 'general/video-model', deliveryMode: 'chat', videoFps: 60 }, 'project-1')).rejects.toThrow('帧率');
+    await expect(runMediaGeneration({ kind: 'video', prompt: '镜头', modelRef: 'general/video-model', deliveryMode: 'chat', duration: -2 }, 'project-1')).rejects.toThrow('自动时长');
+    mocks.storeState.config.generalModels[1].videoCapability!.supportsAudio = false;
+    await expect(runMediaGeneration({ kind: 'video', prompt: '镜头', modelRef: 'general/video-model', deliveryMode: 'chat', generateAudio: false }, 'project-1')).rejects.toThrow('音轨');
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('协议固定背景时拒绝接口默认选择，避免结果参数与真实请求不一致', async () => {
+    configureVisualModels();
+    mocks.storeState.config.generalModels[0].executionProfile = { preset: 'custom', protocol: {
+      version: 2, mode: 'sync', submit: { method: 'POST', path: '/images',
+        body: { model: '{{model}}', prompt: '{{prompt}}', background: 'opaque' } },
+      response: { type: 'json', result: { urlPath: 'data.0.url' } },
+    } };
+    await expect(runMediaGeneration({ kind: 'image', prompt: '山谷', modelRef: 'general/image-model',
+      deliveryMode: 'chat', imageBackground: '' }, 'project-1')).rejects.toThrow('背景由协议固定');
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.bindMediaTaskContext).not.toHaveBeenCalled();
+  });
+
   it('passes selected general speech parameters through to the original canvas and message execution', async () => {
     mocks.storeState.config.providers.libapi = { name: 'LibAPI', apiKey: 'fixture', baseUrl: 'https://libapi.cc/v1' };
     mocks.storeState.config.generalModels = [{ id: 'audio-libapi', name: 'LibAPI TTS', modelId: 'speech-2.8',
@@ -521,6 +658,45 @@ describe('retryMediaArtifactPersist', () => {
 });
 
 describe('async media task identity', () => {
+  it('图片原任务恢复时沿用提交时的分辨率和比例，而不是当前项目默认', async () => {
+    const parameters = { resolution: '2K', aspectRatio: '9:16', imageQuality: 'high', imageBackground: 'transparent' };
+    const task: PendingTask = { projectId: 'project-1', nodeId: 'image-tracking', nodeType: 'ai-image',
+      provider: 'general', taskType: 'custom-protocol', submitted: true, taskId: 'image-task', attemptId: 'image-attempt',
+      mediaContext: { projectId: 'project-1', conversationId: 'conversation-1', messageId: 'message-1', deliveryMode: 'message',
+        modelId: 'general/image-model', parameters } };
+    mocks.storeState.projects = [{ id: 'project-1', settings: { generation: { imageSize: '4K', imageAspectRatio: '1:1' } } }];
+    mocks.storeState.messages = [{ id: 'message-1', conversationId: 'conversation-1', role: 'assistant',
+      content: '', timestamp: 1, status: 'done', mediaStatus: 'paused' }];
+    mocks.getPendingTasksForProject.mockReturnValue([task]);
+    ensureMediaMessageRecoveryHandler();
+    const handler = mocks.registerMediaMessageRecoveryHandler.mock.calls.at(-1)![0] as
+      (savedTask: PendingTask, urls: string[]) => Promise<void>;
+    await handler(task, ['https://cdn.example/image.png']);
+    expect(mocks.storeState.updateMessage).toHaveBeenCalledWith('message-1', expect.objectContaining({
+      mediaResult: expect.objectContaining({ parameters }),
+    }));
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it('续取原任务时从任务上下文恢复媒体参数，不重新生成', async () => {
+    const task: PendingTask = { projectId: 'project-1', nodeId: 'message-tracking', nodeType: 'ai-video',
+      provider: 'general', taskType: 'custom-protocol', submitted: true, taskId: 'original-task', attemptId: 'original-attempt',
+      mediaContext: { projectId: 'project-1', conversationId: 'conversation-1', messageId: 'message-1', deliveryMode: 'message',
+        modelId: 'general/video-model', parameters: { aspectRatio: '9:16', duration: -1, videoFps: 24, generateAudio: false } } };
+    mocks.getPendingTasksForProject.mockReturnValue([task]);
+    mocks.storeState.messages = [{ id: 'message-1', conversationId: 'conversation-1', role: 'assistant',
+      content: '', timestamp: 1, status: 'done', mediaStatus: 'paused' }];
+    ensureMediaMessageRecoveryHandler();
+    const handler = mocks.registerMediaMessageRecoveryHandler.mock.calls.at(-1)![0] as
+      (savedTask: PendingTask, urls: string[]) => Promise<void>;
+    await handler(task, ['https://cdn.example/video.mp4']);
+    expect(mocks.storeState.updateMessage).toHaveBeenCalledWith('message-1', expect.objectContaining({
+      mediaResult: expect.objectContaining({ parameters: { aspectRatio: '9:16', duration: -1, videoFps: 24, generateAudio: false } }),
+    }));
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.completeMediaNodeTask).toHaveBeenCalledOnce();
+  });
+
   it('does not publish a message result when its uncancellable save finishes after cancellation', async () => {
     const task: PendingTask = { projectId: 'project-1', nodeId: 'message-tracking', nodeType: 'ai-image',
       provider: 'general', taskType: 'custom-protocol', submitted: true, taskId: 'original-task', attemptId: 'original-attempt',

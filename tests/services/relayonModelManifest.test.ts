@@ -12,13 +12,14 @@ import {
   relayonImageVariables,
   relayonVideoVariables,
   resolveRelayonImageExecutionProfile,
+  resolveRelayonImageModelContract,
   usesRelayonModelProtocol,
 } from '../../src/services/ai/providers/relayonModelManifest';
 import { assertModelCapabilityProtocol } from '../../src/services/ai/modelCapabilityValidation';
 import { buildModelProtocolRequest, validateModelExecutionProtocol } from '../../src/services/ai/modelProtocol';
 import { assertVideoModelCapability } from '../../src/services/ai/videoRequestResolver';
 import { findUnusedReferenceVariables } from '../../src/services/ai/modelProtocolRuntime';
-import type { ModelExecutionProfile } from '../../src/types/aiTypes';
+import type { ImageModelCapability, ModelExecutionProfile, ProtocolJsonValue } from '../../src/types/aiTypes';
 
 function remote(id: string): ProviderModelSelection {
   return { id, name: id, provider: 'relayon-personal', category: 'text' };
@@ -97,7 +98,7 @@ function model(id: string): ProviderModelSelection {
 }
 
 describe('RelayOnAPI 已确认的媒体合同', () => {
-  it('声明九个图片、八个视频，排除会返回四候选的 MJ 和未核实的质量／背景选项', () => {
+  it('声明九个图片、八个视频，仅普通 Flare／Sunburst 开放本批确认的质量／背景候选', () => {
     expect(RELAYON_IMAGE_MODEL_IDS).toHaveLength(9);
     expect(RELAYON_VIDEO_MODEL_IDS).toHaveLength(8);
     expect(RELAYON_MODEL_MANIFEST).toHaveLength(21);
@@ -108,8 +109,15 @@ describe('RelayOnAPI 已确认的媒体合同', () => {
     expect(matchRelayonCatalog([remote('mj-v7'), remote('seedream-5.0-pro'), remote('Seedream 5.0 Pro')])
       .map((item) => [item.id, item.category])).toEqual([['Seedream 5.0 Pro', 'image']]);
     for (const id of RELAYON_IMAGE_MODEL_IDS) {
-      expect(model(id).imageCapability).not.toHaveProperty('qualities');
-      expect(model(id).imageCapability).not.toHaveProperty('backgrounds');
+      if (id === 'Image-2.5-Flare' || id === 'Image-2.5-Sunburst') {
+        expect(model(id).imageCapability).toMatchObject({ qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+          backgrounds: ['auto', 'opaque', 'transparent'] });
+      } else {
+        expect(model(id).imageCapability).not.toHaveProperty('qualities');
+        expect(model(id).imageCapability).not.toHaveProperty('backgrounds');
+      }
+      expect(model(id).imageCapability).not.toHaveProperty('defaultQuality');
+      expect(model(id).imageCapability).not.toHaveProperty('defaultBackground');
       expect(model(id).imageCapability!.maxImageReferences).toBe(RELAYON_IMAGE_REFERENCE_LIMIT);
     }
     expect(RELAYON_IMAGE_REFERENCE_LIMIT).toBe(6);
@@ -228,7 +236,7 @@ describe('RelayOnAPI 已确认的媒体合同', () => {
     }
   });
 
-  it('C1／C2 使用顶层数值时长、精确素材上限，并只转换存在的提示词编号', () => {
+  it('C1 使用顶层数值时长、精确素材上限，并只转换存在的提示词编号', () => {
     const id = 'sd-2.0-c1';
     const variables = relayonVideoVariables(id, { model: id, prompt: '图片1和图片2参考视频1与@音频1，图片3无对应素材',
       duration: 10, resolution: '720p', aspectRatio: '9:16',
@@ -246,6 +254,21 @@ describe('RelayOnAPI 已确认的媒体合同', () => {
     expect(() => relayonVideoVariables(id, { referenceAudioUrls: Array(4).fill('https://cdn.example/a.mp3') })).toThrow('最多接受 3 个参考音频');
   });
 
+  it('C2 按官方说明保留图片和音频编号，不改写用户原文或素材顺序', () => {
+    const id = 'sd-2.0-c2';
+    const prompt = '图片1和图片2配合音频1，图片3是普通文字，@图1也保持原文';
+    const variables = relayonVideoVariables(id, { model: id, prompt, duration: 5, resolution: '720p', aspectRatio: '9:16',
+      referenceImageUrls: ['https://cdn.example/i1.png', 'https://cdn.example/i2.png'],
+      referenceAudioUrls: ['https://cdn.example/a.mp3'] });
+    const built = buildModelProtocolRequest({ baseUrl: RELAYON_BASE_URL, apiKey: 'fixture',
+      protocol: model(id).executionProfile!.protocol!, variables });
+    expect(built.renderedBody).toMatchObject({ prompt, references: [
+      { type: 'image', url: 'https://cdn.example/i1.png' }, { type: 'image', url: 'https://cdn.example/i2.png' },
+      { type: 'audio', url: 'https://cdn.example/a.mp3' },
+    ] });
+    expect(variables.prompt).toBe(prompt);
+  });
+
   it('JSON 合同不接未公开的首尾帧，不把它们降级成普通参考', () => {
     for (const id of ['sd-2.0-A', 'sd-2.5-A', 'sd-2.0-c1', 'sd-2.0-c2']) {
       expect(() => relayonVideoVariables(id, { firstImage: 'https://cdn.example/i.png' })).toThrow('未公布首尾帧字段');
@@ -259,6 +282,117 @@ describe('RelayOnAPI 已确认的媒体合同', () => {
       expect(() => relayonVideoVariables(id, { referenceAudioUrls: ['https://cdn.example/a.mp3'] })).toThrow('当前应用接入尚未开放');
       expect(relayonVideoVariables(id, { referenceImageUrls: ['https://cdn.example/i.png'],
         referenceAudioUrls: ['https://cdn.example/a.mp3'] }).referenceAudioUrls).toEqual(['https://cdn.example/a.mp3']);
+    }
+  });
+});
+
+function previousImageProfile(id: string): ModelExecutionProfile {
+  const previous = structuredClone(model(id).executionProfile!);
+  const body = previous.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+  delete body.quality;
+  delete body.background;
+  return previous;
+}
+
+describe('RelayOnAPI 普通 Image 2.5 的参数兼容', () => {
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('%s 完整旧模板临时补齐质量和背景，保留既有尺寸设置', (id) => {
+    const previous = previousImageProfile(id);
+    const saved: ImageModelCapability = { ...structuredClone(model(id).imageCapability!),
+      resolutions: ['2K'], defaultResolution: '2K', ratios: ['9:16'], defaultRatio: '9:16' };
+    delete saved.qualities;
+    delete saved.backgrounds;
+    const before = structuredClone({ previous, saved });
+    const effective = resolveRelayonImageModelContract(id, previous, saved);
+    expect(usesRelayonModelProtocol(id, previous)).toBe(true);
+    expect(effective.executionProfile).toEqual(model(id).executionProfile);
+    expect(effective.imageCapability).toMatchObject({ resolutions: ['2K'], defaultResolution: '2K',
+      ratios: ['9:16'], defaultRatio: '9:16', dimensionPresets: saved.dimensionPresets,
+      qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], backgrounds: ['auto', 'opaque', 'transparent'] });
+    expect({ previous, saved }).toEqual(before);
+    expect(effective.executionProfile).not.toBe(previous);
+    expect(effective.imageCapability).not.toBe(saved);
+  });
+
+  it('用户显式收窄的候选和默认值保持原值，不扩成内置候选', () => {
+    const id = 'Image-2.5-Flare';
+    const saved: ImageModelCapability = { ...structuredClone(model(id).imageCapability!),
+      qualities: ['low', 'high'], defaultQuality: 'high', backgrounds: ['transparent'], defaultBackground: 'transparent',
+      ratios: ['9:16'], defaultRatio: '9:16' };
+    const before = structuredClone(saved);
+    const effective = resolveRelayonImageModelContract(id, previousImageProfile(id), saved);
+    expect(effective.imageCapability).toEqual(saved);
+    effective.imageCapability!.qualities!.push('medium');
+    expect(saved).toEqual(before);
+    expect(model(id).imageCapability!.qualities).toEqual(['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('修改过的路径、响应或部分参数映射不当成完整旧内置模板', () => {
+    const id = 'Image-2.5-Sunburst';
+    const capability = { qualities: ['custom-quality'], defaultQuality: 'custom-quality' };
+    for (const change of ['path', 'response', 'quality-only'] as const) {
+      const custom = previousImageProfile(id);
+      if (change === 'path') custom.protocol!.submit.path = '/user/images';
+      else if (change === 'response') custom.protocol!.response.result!.urlPath = 'custom_result';
+      else (custom.protocol!.submit.body as Record<string, ProtocolJsonValue>).quality = '{{imageQuality}}';
+      const before = structuredClone(custom);
+      expect(usesRelayonModelProtocol(id, custom)).toBe(false);
+      const effective = resolveRelayonImageModelContract(id, custom, capability);
+      expect(effective.executionProfile).toBe(custom);
+      expect(effective.imageCapability).toBe(capability);
+      expect(resolveRelayonImageExecutionProfile(id, custom, 1, 'transparent')).toBe(custom);
+      expect(custom).toEqual(before);
+    }
+    expect(resolveRelayonImageModelContract(id, undefined, capability)).toEqual({ executionProfile: undefined, imageCapability: capability });
+  });
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('%s 未选择质量／背景时均省略，不主动指定输出格式', (id) => {
+    const profile = resolveRelayonImageExecutionProfile(id, previousImageProfile(id), 0)!;
+    const variables = relayonImageVariables(id, { model: id, prompt: 'test', imageSize: '2K', aspectRatio: '9:16', n: 1 });
+    const built = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: RELAYON_BASE_URL, protocol: profile.protocol!, variables });
+    expect(built.renderedBody).toMatchObject({ resolution: '2K', aspect_ratio: '9:16', size: '1152x2048' });
+    for (const key of ['quality', 'background', 'output_format']) expect(built.renderedBody).not.toHaveProperty(key);
+  });
+
+  it.each(['auto', 'low', 'medium', 'high', 'xhigh', 'max'])('质量 %s 独立传入，不改变比例、分辨率或像素', (quality) => {
+    const id = 'Image-2.5-Flare';
+    const variables = relayonImageVariables(id, { model: id, prompt: 'test', imageSize: '2K', aspectRatio: '9:16', imageQuality: quality });
+    const built = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: RELAYON_BASE_URL,
+      protocol: resolveRelayonImageExecutionProfile(id, previousImageProfile(id), 0)!.protocol!, variables });
+    expect(built.renderedBody).toMatchObject({ quality, resolution: '2K', aspect_ratio: '9:16', size: '1152x2048' });
+    expect(built.renderedBody).not.toHaveProperty('background');
+    expect(built.renderedBody).not.toHaveProperty('output_format');
+  });
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('%s 仅透明背景临时要求 PNG，生成与编辑均保持原配置', (id) => {
+    const previous = previousImageProfile(id);
+    const before = structuredClone(previous);
+    for (const referenceCount of [0, 1]) {
+      for (const background of [undefined, 'auto', 'opaque', 'transparent']) {
+        const profile = resolveRelayonImageExecutionProfile(id, previous, referenceCount, background)!;
+        const variables = relayonImageVariables(id, { model: id, prompt: 'test', imageSize: '2K', aspectRatio: '9:16',
+          imageQuality: 'high', imageBackground: background, imageUrls: referenceCount ? ['data:image/png;base64,YQ=='] : [] });
+        const built = buildModelProtocolRequest({ apiKey: 'fixture', baseUrl: RELAYON_BASE_URL, protocol: profile.protocol!, variables });
+        expect(built.url).toBe(`${RELAYON_BASE_URL}/images/${referenceCount ? 'edits' : 'generations'}`);
+        expect(built.renderedBody).toMatchObject({ quality: 'high', resolution: '2K', aspect_ratio: '9:16', size: '1152x2048' });
+        if (background === undefined) expect(built.renderedBody).not.toHaveProperty('background');
+        else expect(built.renderedBody).toMatchObject({ background });
+        if (background === 'transparent') expect(built.renderedBody).toMatchObject({ output_format: 'png' });
+        else expect(built.renderedBody).not.toHaveProperty('output_format');
+      }
+    }
+    expect(previous).toEqual(before);
+    expect(model(id).executionProfile!.protocol!.submit.body).not.toHaveProperty('output_format');
+  });
+
+  it('不为其他型号追加质量、背景或透明输出格式', () => {
+    for (const id of ['image-2-01', 'image-2.5-flare-01', 'image-2.5-sunburst-01', 'nano-banana-2', 'Seedream 5.0 Pro']) {
+      const effective = resolveRelayonImageModelContract(id, model(id).executionProfile, model(id).imageCapability);
+      expect(effective.imageCapability).not.toHaveProperty('qualities');
+      expect(effective.imageCapability).not.toHaveProperty('backgrounds');
+      const profile = resolveRelayonImageExecutionProfile(id, model(id).executionProfile, 0, 'transparent')!;
+      expect(profile.protocol!.submit.body).not.toHaveProperty('quality');
+      expect(profile.protocol!.submit.body).not.toHaveProperty('background');
+      expect(profile.protocol!.submit.body).not.toHaveProperty('output_format');
     }
   });
 });

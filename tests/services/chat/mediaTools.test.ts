@@ -147,6 +147,97 @@ describe('media task recovery tools', () => {
 });
 
 describe('media_generate display parameters', () => {
+  function configureVisualModels() {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, custom: { name: '自定义', catalogId: 'custom-openai',
+        apiKey: 'fixture-private-key', baseUrl: 'https://private.example/v1' } },
+      generalModels: [
+        { id: 'image-custom', name: '图片', modelId: 'image-x', category: 'image', providerConfigId: 'custom',
+          imageCapability: { resolutions: ['2K'], ratios: ['1:1'], qualities: ['low', 'high'], backgrounds: ['opaque', 'transparent'] } },
+        { id: 'video-custom', name: '视频', modelId: 'video-x', category: 'video', providerConfigId: 'custom',
+          videoCapability: { operations: ['text-to-video'], frameRates: [24, 30], supportsAudio: true,
+            minDuration: 4, maxDuration: 15, automaticDurationValue: -1 } },
+      ],
+    } }));
+  }
+
+  it('普通模型能力发现只返回声明的参数，不返回连接地址、协议或 Key', async () => {
+    configureVisualModels();
+    const tool = getAgentTool('media_model_parameters')!;
+    const toolContext = { ...context, signal: new AbortController().signal };
+    const image = await tool.execute(toolContext, { modelRef: 'general/image-custom' });
+    expect(JSON.parse(image.modelContent)).toMatchObject({ kind: 'image', capability: {
+      qualities: ['low', 'high'], backgrounds: ['opaque', 'transparent'],
+    } });
+    const video = await tool.execute(toolContext, { modelRef: 'general/video-custom' });
+    expect(JSON.parse(video.modelContent)).toMatchObject({ kind: 'video', capability: {
+      frameRates: [24, 30], supportsAudio: true, automaticDurationValue: -1,
+    } });
+    for (const text of [image.modelContent, video.modelContent]) {
+      expect(text).not.toContain('fixture-private-key');
+      expect(text).not.toContain('private.example');
+      expect(text).not.toContain('executionProfile');
+    }
+  });
+
+  it.each([
+    { kind: 'image', modelRef: 'general/image-custom', imageQuality: 'high', imageBackground: '' },
+    { kind: 'video', modelRef: 'general/video-custom', duration: -1, videoFps: 24, generateAudio: false },
+  ])('$kind 工具参数通过 schema 并在审批和生成时保留', async (parameters) => {
+    configureVisualModels();
+    useAppStore.setState({ messages: [{ id: 'visual-message', conversationId: context.conversationId,
+      role: 'assistant', content: '', timestamp: 1, status: 'executing', agentTaskId: context.taskId }] });
+    const generate = vi.spyOn(generationRuntime, 'runMediaGeneration').mockResolvedValue({
+      id: 'visual-artifact', kind: parameters.kind as 'image' | 'video', deliveryMode: 'chat',
+      url: 'https://cdn.example/result', sourceUrl: 'https://cdn.example/result', persistence: 'skipped',
+      prompt: '镜头', modelId: parameters.modelRef, provider: 'general', createdAt: 1,
+    });
+    const input = { ...parameters, prompt: '镜头', deliveryMode: 'chat' };
+    const prepared = prepareAgentToolCall({ callId: 'visual', toolId: 'media_generate', input }, context);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+    const tool = getAgentTool('media_generate')!;
+    expect(tool.authorize?.(context, prepared.prepared.input).allowed).toBe(true);
+    const display = tool.buildInputDisplay?.(prepared.prepared.input, context);
+    expect(display?.fields).toEqual(expect.arrayContaining(parameters.kind === 'image'
+      ? [expect.objectContaining({ label: '生成背景', value: '接口默认' })]
+      : [expect.objectContaining({ label: '生成音轨', value: '关闭' })]));
+    await tool.execute({ ...context, signal: new AbortController().signal }, prepared.prepared.input);
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining(parameters), context.projectId, expect.any(AbortSignal),
+      undefined, expect.objectContaining({ messageId: 'visual-message' }));
+  });
+
+  it('敏感参数在解析与直接执行时都被拒绝，不创建画布占位或回显原值', async () => {
+    configureVisualModels();
+    const secret = 'sk-example-secret';
+    const input = { kind: 'image', prompt: '山谷', modelRef: 'general/image-custom', deliveryMode: 'canvas', imageQuality: secret };
+    const prepared = prepareAgentToolCall({ callId: 'unsafe-visual', toolId: 'media_generate', input }, context);
+    expect(prepared.ok).toBe(false);
+    expect(JSON.stringify(prepared)).not.toContain(secret);
+    const tool = getAgentTool('media_generate')!;
+    expect(tool.authorize?.(context, input).allowed).toBe(false);
+    const result = await tool.execute({ ...context, signal: new AbortController().signal }, input);
+    expect(result).toMatchObject({ status: 'error', errorCode: 'MEDIA_PARAMETER_INVALID' });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(useAppStore.getState().nodes).toHaveLength(1);
+  });
+
+  it('继承的项目图片默认值包含路径时，也在创建占位前拒绝且不回显', async () => {
+    configureVisualModels();
+    const path = 'D:\\private\\image.png';
+    useAppStore.setState((state) => ({ projects: state.projects.map((project) => ({ ...project,
+      settings: { ...project.settings, generation: { ...project.settings?.generation, imageSize: path } },
+    })) }));
+    const input = { kind: 'image', prompt: '山谷', modelRef: 'general/image-custom', deliveryMode: 'canvas' };
+    const prepared = prepareAgentToolCall({ callId: 'unsafe-default', toolId: 'media_generate', input }, context);
+    expect(prepared.ok).toBe(false);
+    expect(JSON.stringify(prepared)).not.toContain(path);
+    const result = await getAgentTool('media_generate')!.execute({ ...context, signal: new AbortController().signal }, input);
+    expect(result).toMatchObject({ status: 'error', errorCode: 'MEDIA_PARAMETER_INVALID' });
+    expect(JSON.stringify(result)).not.toContain(path);
+    expect(useAppStore.getState().nodes).toHaveLength(1);
+  });
+
   function configureGeneralAudio() {
     useAppStore.setState((state) => ({ config: { ...state.config,
       providers: { ...state.config.providers, 'libapi-audio': { name: 'LibAPI', catalogId: 'libapi',

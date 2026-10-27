@@ -7,6 +7,9 @@ import { isRunningHubWorkflow, isCloudWorkflow, mediaProviderConfigId, workflowE
 import { AUTODL_H3_WORKFLOW, validateWorkflowApiManifest, resolveWorkflowApiInputValues } from '../../workflowApi/autodlWorkflowManifest';
 import { completeWorkflowApiNodeTask, workflowApiConnection } from '../../workflowApi/workflowApiAdapter';
 import { getRunningHubModel, parseRunningHubModelParameter } from '../../ai/providers/runninghubModelManifest';
+import { resolveImageParameterCapability } from '../../ai/mediaModelCapabilities';
+import { assertSafeMediaParameterStrings } from '../../ai/modelCapabilityValidation';
+import { resolveVideoModelCapability } from '../../ai/videoModelCapabilityResolver';
 import { resolveRunningHubParameters, runningHubParameterKey } from '../../runninghubWorkflowService';
 import { completeRunningHubNodeTask } from '../../ai/providers/runninghubWorkflow';
 import type {
@@ -41,7 +44,8 @@ import {
   type MediaPlaceholderLifecycle,
 } from '../mediaPlaceholderLifecycle';
 
-interface GenerateMediaInput extends Pick<MediaGenerationIntent, 'audioVoice' | 'audioFormat' | 'audioSpeed' | 'musicTitle' | 'musicLyrics'> {
+interface GenerateMediaInput extends Pick<MediaGenerationIntent, 'audioVoice' | 'audioFormat' | 'audioSpeed' | 'musicTitle' | 'musicLyrics'
+  | 'imageQuality' | 'imageBackground' | 'videoFps' | 'generateAudio'> {
   kind: MediaKind;
   prompt: string;
   modelRef?: string;
@@ -63,10 +67,28 @@ function hasAudioSettings(input: GenerateMediaInput): boolean {
     .some((value) => value !== undefined);
 }
 
+/** MCP 在创建占位节点前检查用户值及将要继承的图片默认值。 */
+function assertSafeMediaToolParameters(input: GenerateMediaInput, projectId: string): void {
+  assertSafeMediaParameterStrings(input);
+  if (input.kind !== 'image') return;
+  const store = useAppStore.getState();
+  const settings = store.projects.find((project) => project.id === projectId)?.settings?.generation;
+  const option = input.modelRef ? findMediaModelOption(input.modelRef, store.config.generalModels ?? [], store.config, store.workflows) : undefined;
+  const capability = option && !option.workflowId && option.provider !== 'runninghub'
+    ? resolveImageParameterCapability(option.value, option.provider, store.config) : undefined;
+  assertSafeMediaParameterStrings({
+    resolution: settings?.imageSize || undefined,
+    aspectRatio: settings?.imageAspectRatio || undefined,
+    imageQuality: input.imageQuality ?? capability?.defaultQuality,
+    imageBackground: input.imageBackground ?? capability?.defaultBackground,
+  });
+}
+
 function resolveMediaToolInput(
   input: GenerateMediaInput,
   context: { projectId: string; mode: string },
 ): GenerateMediaInput {
+  assertSafeMediaToolParameters(input, context.projectId);
   const store = useAppStore.getState();
   const projectSettings = store.projects.find(
     (project) => project.id === context.projectId,
@@ -91,6 +113,7 @@ function resolveMediaToolInput(
     ...input,
     ...(modelRef ? { modelRef } : {}),
   };
+  assertSafeMediaToolParameters(resolved, context.projectId);
   if (input.kind !== 'video') return resolved;
   const selectedModel = modelRef
     ? findMediaModelOption(
@@ -104,12 +127,14 @@ function resolveMediaToolInput(
   // 保存的 16:9、1080p、10 秒等偏好。用户本轮显式传入的值已经保留在 resolved 中。
   if (selectedModel?.provider === 'general' && !selectedModel.workflowId) return resolved;
   if (selectedModel && ['runninghubwf', 'runninghub', 'workflow-api'].includes(selectedModel.provider)) return resolved;
-  return {
+  const withProjectDefaults = {
     ...resolved,
     aspectRatio: input.aspectRatio ?? projectSettings?.generation?.videoAspectRatio,
     resolution: input.resolution ?? projectSettings?.generation?.videoResolution,
     duration: input.duration ?? projectSettings?.generation?.videoDuration,
   };
+  assertSafeMediaToolParameters(withProjectDefaults, context.projectId);
+  return withProjectDefaults;
 }
 
 function nodeMediaKind(nodeId: string): MediaKind | undefined {
@@ -170,10 +195,16 @@ function buildMediaInputDisplay(input: GenerateMediaInput): AgentToolDisplaySnap
       },
       {
         label: '时长',
-        value: input.duration ? `${input.duration} 秒` : '模型默认',
-        source: input.duration ? 'resolved' : 'model_default',
+        value: input.duration !== undefined ? input.duration < 0 ? '自动' : `${input.duration} 秒` : '模型默认',
+        source: input.duration !== undefined ? 'resolved' : 'model_default',
       },
     );
+    if (input.videoFps !== undefined) fields.push({ label: '帧率', value: `${input.videoFps} FPS` });
+    if (input.generateAudio !== undefined) fields.push({ label: '生成音轨', value: input.generateAudio ? '开启' : '关闭' });
+  }
+  if (input.kind === 'image') {
+    if (input.imageQuality !== undefined) fields.push({ label: '生成质量', value: input.imageQuality });
+    if (input.imageBackground !== undefined) fields.push({ label: '生成背景', value: input.imageBackground || '接口默认' });
   }
   if (input.kind === 'audio') {
     if (input.audioVoice !== undefined) fields.push({ label: '音色', value: input.audioVoice });
@@ -253,15 +284,34 @@ export function registerMediaAgentTools(): Array<() => void> {
     }),
     registerAgentTool<{ modelRef: string }>({
       id: 'media_model_parameters', title: '读取模型专属参数', effect: 'read',
-      description: '读取当前可选 RunningHub 标准模型的操作、输入媒体、必填字段、默认值和限制。通过 media_generate.modelParameters 提交专属参数；首尾帧、编辑或动作控制需选择对应操作。',
+      description: '读取当前可选图片、视频模型的参数能力；RunningHub 返回专属参数，工作流使用 media_workflow_parameters。未声明的选项不代表支持。',
       inputSchema: { type: 'object', required: ['modelRef'], additionalProperties: false, properties: { modelRef: { type: 'string', minLength: 1, maxLength: 240 } } },
       authorize: (context) => ({ allowed: context.projectId === useAppStore.getState().currentProjectId, reason: '只能读取当前项目可用的模型' }),
       execute: async (_context, input) => {
         const store = useAppStore.getState();
         const option = findMediaModelOption(input.modelRef, store.config.generalModels ?? [], store.config, store.workflows);
-        const model = option?.provider === 'runninghub' ? getRunningHubModel(input.modelRef, true) : undefined;
-        if (!model) return { status: 'error', summary: '未找到可用的 RunningHub 标准模型', modelContent: '先在模型管理中启用所需操作', errorCode: 'RUNNINGHUB_MODEL_NOT_FOUND' };
-        return { status: 'success', summary: `已读取 ${model.label} 参数`, modelContent: JSON.stringify(model) };
+        if (option?.provider === 'runninghub') {
+          const model = getRunningHubModel(input.modelRef, true);
+          if (model) return { status: 'success', summary: `已读取 ${model.label} 参数`, modelContent: JSON.stringify(model) };
+        }
+        if (!option || option.workflowId || !['image', 'video'].includes(option.mediaKind)) {
+          return { status: 'error', summary: '未找到可用的图片或视频模型', modelContent: '请先启用模型；工作流使用 media_workflow_parameters', errorCode: 'MEDIA_MODEL_NOT_FOUND' };
+        }
+        const image = option.mediaKind === 'image' ? resolveImageParameterCapability(option.value, option.provider, store.config) : undefined;
+        const video = option.mediaKind === 'video' ? resolveVideoModelCapability(option.value, store.config) : undefined;
+        const capability = image ? {
+          resolutions: image.resolutions, defaultResolution: image.defaultResolution,
+          ratios: image.ratios, defaultRatio: image.defaultRatio,
+          qualities: image.qualities, defaultQuality: image.defaultQuality,
+          backgrounds: image.backgrounds, defaultBackground: image.defaultBackground,
+          backgroundIsFixed: image.backgroundIsFixed,
+          supportsBatch: image.supportsBatch, maxBatchCount: image.maxBatchCount,
+          supportsImageReference: image.supportsImageReference, maxImageReferences: image.maxImageReferences,
+        } : video;
+        return { status: 'success', summary: `已读取 ${option.label} 参数`, modelContent: JSON.stringify({
+          modelRef: option.value, kind: option.mediaKind, capability: capability ?? null,
+          note: '仅展示已声明的能力；缺省表示待确认。',
+        }) };
       },
     }),
     registerAgentTool<{ modelRef: string }>({
@@ -305,7 +355,8 @@ export function registerMediaAgentTools(): Array<() => void> {
         '若项目已设置该类型默认模型则直接使用；自主模式开启自动路由后，可依据模型能力与用户自定义说明选择。',
         '图片 prompt 可以原样包含用户提供的 @{nodeId:label} 或 @asset{path} 引用，',
         '运行时会自动解析为参考图输入；无需先读取节点原 prompt，也不要要求用户重新描述图片。',
-        '视频可显式传入 aspectRatio、resolution 和 duration；自定义 API 省略时由模型 capability / 接口默认值决定，内置模型与工作流才锁定项目默认值。',
+        '图片可按模型能力传入 imageQuality、imageBackground（空字符串表示接口默认）；视频可传 aspectRatio、resolution、duration、videoFps、generateAudio。自动时长只允许该模型声明的负数值。',
+        '自定义 API 省略视频参数时由模型 capability / 接口默认值决定，内置模型与工作流才锁定项目默认值。',
         '音频可显式传 audioVoice、audioFormat、audioSpeed，音乐可传 musicTitle 和 musicLyrics；音色使用所选模型公布的真实 ID，省略时沿用模型默认。RunningHub 与工作流仍使用各自参数。',
         '协作模式由 Policy 请求确认，自主模式直接执行。deliveryMode 控制结果显示在对话、画布或两者。',
       ].join(''),
@@ -341,6 +392,10 @@ export function registerMediaAgentTools(): Array<() => void> {
           audioSpeed: { type: 'number', minimum: 0.25, maximum: 4 },
           musicTitle: { type: 'string', maxLength: 120 },
           musicLyrics: { type: 'string', maxLength: 8000 },
+          imageQuality: { type: 'string', minLength: 1, maxLength: 64, description: '图片生成质量，必须由所选模型明确声明。' },
+          imageBackground: { type: 'string', maxLength: 64, description: '图片背景；空字符串表示接口默认。' },
+          videoFps: { type: 'number', minimum: 1, maximum: 240, description: '视频帧率，必须由所选模型明确声明。' },
+          generateAudio: { type: 'boolean', description: '是否生成视频音轨；仅用于明确支持开关的模型。' },
           aspectRatio: {
             type: 'string',
             minLength: 1,
@@ -354,10 +409,9 @@ export function registerMediaAgentTools(): Array<() => void> {
             description: '视频分辨率档位；用户明确指定时传入，合法值由所选模型 capability 校验。',
           },
           duration: {
-            type: 'integer',
-            minimum: 1,
+            type: 'number',
             maximum: 3600,
-            description: '视频时长，单位秒；用户明确指定时传入，模型范围由 capability 在提交前校验。',
+            description: '视频时长，单位秒；负数仅允许所选模型声明的自动时长值。',
           },
         },
       },
@@ -365,8 +419,17 @@ export function registerMediaAgentTools(): Array<() => void> {
       resolveInput: resolveMediaToolInput,
       authorize: (context, input) => {
         const store = useAppStore.getState();
+        try { assertSafeMediaToolParameters(input, context.projectId); } catch {
+          return { allowed: false, reason: '媒体参数格式无效，请使用所选模型声明的参数值' };
+        }
         if (hasAudioSettings(input) && input.kind !== 'audio') {
           return { allowed: false, reason: '音频参数只能用于音频生成' };
+        }
+        if (input.kind !== 'image' && (input.imageQuality !== undefined || input.imageBackground !== undefined)) {
+          return { allowed: false, reason: '图片质量和背景只能用于图片生成' };
+        }
+        if (input.kind !== 'video' && (input.videoFps !== undefined || input.generateAudio !== undefined)) {
+          return { allowed: false, reason: '帧率和生成音轨只能用于视频生成' };
         }
         if (input.audioVoice !== undefined && (typeof input.audioVoice !== 'string' || !input.audioVoice.trim()
           || input.audioVoice !== input.audioVoice.trim() || input.audioVoice.length > 256
@@ -402,6 +465,10 @@ export function registerMediaAgentTools(): Array<() => void> {
           }
           if (hasAudioSettings(input) && (option.workflowId || option.provider === 'runninghub')) {
             return { allowed: false, reason: 'RunningHub 和工作流使用自己的参数，请通过 modelParameters 或 workflowInputs 设置音频参数' };
+          }
+          if ((option.workflowId || option.provider === 'runninghub')
+            && [input.imageQuality, input.imageBackground, input.videoFps, input.generateAudio].some((value) => value !== undefined)) {
+            return { allowed: false, reason: 'RunningHub 和工作流使用自己的参数定义，请通过 modelParameters 或 workflowInputs 设置参数' };
           }
           if (input.audioVoice !== undefined && option.provider !== 'general' && !LEGACY_AUDIO_VOICES.includes(input.audioVoice)) {
             return { allowed: false, reason: '所选模型不支持该音色，请使用当前厂商公布的音色' };
@@ -495,6 +562,9 @@ export function registerMediaAgentTools(): Array<() => void> {
       buildInputDisplay: buildMediaInputDisplay,
       execute: async (context, input): Promise<AgentToolExecutionResult> => {
         const store = useAppStore.getState();
+        try { assertSafeMediaToolParameters(input, context.projectId); } catch {
+          return { status: 'error', summary: '媒体参数格式无效', modelContent: '请使用所选模型声明的参数值', errorCode: 'MEDIA_PARAMETER_INVALID' };
+        }
         if (!input.modelRef) {
           return {
             status: 'error',
@@ -540,6 +610,10 @@ export function registerMediaAgentTools(): Array<() => void> {
           aspectRatio: input.aspectRatio,
           resolution: input.resolution,
           duration: input.duration,
+          imageQuality: input.imageQuality,
+          imageBackground: input.imageBackground,
+          videoFps: input.videoFps,
+          generateAudio: input.generateAudio,
           runninghubModelParameters: input.modelParameters ? Object.fromEntries(input.modelParameters.map((field) => [field.name, field.value])) : undefined,
           workflowInputs: input.workflowInputs ? Object.fromEntries(input.workflowInputs.map((field) => [runningHubParameterKey(field), field.value])) : undefined,
         };

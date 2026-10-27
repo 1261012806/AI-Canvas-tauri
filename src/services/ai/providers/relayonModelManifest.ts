@@ -1,7 +1,8 @@
 /**
  * RelayOnAPI 已核对目录（2026-10-27）。来源：https://relayonapi.com/docs。
  * 媒体结果映射采用用户确认的 OpenAI 兼容合同，尚未进行厂商真实生成验收。
- * 仅保留已公布的型号、参数和 JSON 参考方式；不推断质量、背景或未公开的首尾帧合同。
+ * 普通 Flare／Sunburst 的质量和背景候选采用用户确认的兼容选项，未据此宣称平台实测通过。
+ * 其余型号不推断质量、背景或未公开的首尾帧合同。
  */
 import type { ProviderModelSelection } from '../../../types';
 import type { ImageModelCapability, ModelExecutionProfile, NormalizedModelExecutionProtocol, ProtocolJsonValue, VideoModelCapability } from '../../../types/aiTypes';
@@ -84,17 +85,20 @@ const SEEDREAM_PIXELS: ImageDimensions = {
 };
 
 function imageModel(id: string, name: string, pixels: ImageDimensions, maxReferences: number): ProviderModelSelection {
+  const hasImageOptions = id === 'Image-2.5-Flare' || id === 'Image-2.5-Sunburst';
   const protocol: NormalizedModelExecutionProtocol = {
     version: 2, mode: 'sync', auth: { type: 'bearer' },
     submit: { method: 'POST', path: '/images/generations', bodyEncoding: 'json',
       body: { model: '{{model}}', prompt: '{{prompt}}', resolution: '{{imageSize}}',
-        aspect_ratio: '{{aspectRatio}}', size: '{{size}}', n: 1, response_format: 'url', image: '{{imageUrls}}' } },
+        aspect_ratio: '{{aspectRatio}}', size: '{{size}}', n: 1, response_format: 'url', image: '{{imageUrls}}',
+        ...(hasImageOptions ? { quality: '{{imageQuality}}', background: '{{imageBackground}}' } : {}) } },
     response: { type: 'json', errorPath: 'error.message', result: { urlPath: 'data.*.url' } },
   };
   return { id, name, provider: 'relayonapi', category: 'image', inputModalities: ['text', 'image'],
     imageReferenceRequestMode: 'generation-json-image-data-urls',
     imageCapability: { resolutions: Object.keys(pixels), defaultResolution: '1K',
       ratios: Object.keys(pixels['1K']), defaultRatio: '1:1', dimensionPresets: structuredClone(pixels),
+      ...(hasImageOptions ? { qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], backgrounds: ['auto', 'opaque', 'transparent'] } : {}),
       supportsBatch: false, maxBatchCount: 1, supportsImageReference: true,
       maxImageReferences: Math.min(RELAYON_IMAGE_REFERENCE_LIMIT, maxReferences), supportsDataUrlReference: true },
     executionProfile: { preset: 'custom', protocol } };
@@ -207,19 +211,49 @@ export function usesRelayonModelProtocol(modelId: string, profile: ModelExecutio
   const known = MODEL_BY_ID.get(modelId);
   if (!known || known.category === 'text') return false;
   const actual = comparableProtocol(profile);
-  return actual !== undefined && actual === comparableProtocol(known.executionProfile);
+  if (actual === undefined) return false;
+  if (actual === comparableProtocol(known.executionProfile)) return true;
+  if (known.category !== 'image' || !known.imageCapability?.qualities || !known.imageCapability.backgrounds) return false;
+  // 上版普通 Flare／Sunburst 完整模板尚未映射 quality 和 background；其他字段必须全部一致。
+  const previous = structuredClone(known.executionProfile!);
+  const body = previous.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+  delete body.quality;
+  delete body.background;
+  return actual === comparableProtocol(previous);
+}
+
+/** 只为真实连接的完整新旧内置合同补临时能力；原配置、用户显式能力和自定义协议保持原值。 */
+export function resolveRelayonImageModelContract(
+  modelId: string, profile?: ModelExecutionProfile, capability?: ImageModelCapability,
+): { executionProfile?: ModelExecutionProfile; imageCapability?: ImageModelCapability } {
+  const known = MODEL_BY_ID.get(modelId);
+  if (known?.category !== 'image' || !usesRelayonModelProtocol(modelId, profile)) {
+    return { executionProfile: profile, imageCapability: capability };
+  }
+  const imageCapability = { ...structuredClone(known.imageCapability), ...structuredClone(capability) };
+  // 缺少字段才添加兼容候选；显式缩窄过的候选及默认值不被覆盖。
+  if (known.imageCapability?.qualities && capability?.qualities === undefined) {
+    imageCapability.qualities = [...known.imageCapability.qualities];
+  }
+  if (known.imageCapability?.backgrounds && capability?.backgrounds === undefined) {
+    imageCapability.backgrounds = [...known.imageCapability.backgrounds];
+  }
+  return { executionProfile: structuredClone(known.executionProfile), imageCapability };
 }
 
 export function resolveRelayonImageExecutionProfile(
-  modelId: string, profile: ModelExecutionProfile | undefined, referenceCount: number,
+  modelId: string, profile: ModelExecutionProfile | undefined, referenceCount: number, imageBackground?: string,
 ): ModelExecutionProfile | undefined {
   if (!usesRelayonModelProtocol(modelId, profile) || MODEL_BY_ID.get(modelId)?.category !== 'image') return profile;
   const maximum = MODEL_BY_ID.get(modelId)!.imageCapability!.maxImageReferences!;
   if (!Number.isInteger(referenceCount) || referenceCount < 0 || referenceCount > maximum) {
     throw new Error(`RelayOnAPI 图片模型“${modelId}”最多接受 ${maximum} 张参考图`);
   }
-  const result = structuredClone(profile!);
+  const result = resolveRelayonImageModelContract(modelId, profile).executionProfile!;
   result.protocol!.submit.path = referenceCount ? '/images/edits' : '/images/generations';
+  if (imageBackground?.toLowerCase() === 'transparent' && MODEL_BY_ID.get(modelId)!.imageCapability?.backgrounds) {
+    (result.protocol!.submit.body as Record<string, ProtocolJsonValue>).output_format = 'png';
+  }
   return result;
 }
 
@@ -263,7 +297,7 @@ export function relayonImageVariables(modelId: string, variables: ModelProtocolV
     imageUrls: urls.length ? urls : undefined };
 }
 
-/** 普通参考按类别原序传递；C 渠道将现有素材编号转换为文档要求的 @图／视频／音频编号。 */
+/** 普通参考按类别原序传递；C1 转换为 @图／视频／音频编号，C2 保留图片／音频编号。 */
 export function relayonVideoVariables(modelId: string, variables: ModelProtocolVariables): ModelProtocolVariables {
   const capability = MODEL_BY_ID.get(modelId)?.videoCapability;
   if (!capability) throw new Error(`RelayOnAPI 视频模型“${modelId}”尚未适配`);
@@ -284,7 +318,7 @@ export function relayonVideoVariables(modelId: string, variables: ModelProtocolV
     throw new Error('RelayOnAPI 当前应用接入尚未开放仅使用参考音频生成视频，请同时提供图片或视频参考');
   }
   let prompt = variables.prompt;
-  if (modelId === 'sd-2.0-c1' || modelId === 'sd-2.0-c2') {
+  if (modelId === 'sd-2.0-c1') {
     const counts: Record<string, number> = { 图片: imageUrls.length, 视频: videoUrls.length, 音频: audioUrls.length };
     if (typeof prompt === 'string') prompt = prompt.replace(/@?(图片|视频|音频)(\d+)/gu, (label, kind: string, index: string) => (
       Number(index) >= 1 && Number(index) <= counts[kind] ? `@${kind === '图片' ? '图' : kind}${index}` : label

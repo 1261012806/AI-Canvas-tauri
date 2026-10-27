@@ -39,7 +39,7 @@ import { resolveBuiltInImageRequestContract, validateBuiltInImageResponse } from
 import { buildGoogleImageParts, resolveImageTemplateDimensions } from './imageModelTemplates';
 import { assertToapisImageInput, resolveToapisImageModelContract, toapisImageReferences } from './providers/toapisModelManifest';
 import { assertLibapiImageInput, libapiImageExecutionProfile, libapiImageVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
-import { relayonImageVariables, resolveRelayonImageExecutionProfile, usesRelayonModelProtocol } from './providers/relayonModelManifest';
+import { relayonImageVariables, resolveRelayonImageExecutionProfile, resolveRelayonImageModelContract, usesRelayonModelProtocol } from './providers/relayonModelManifest';
 import { resolveImageParameterCapability } from './mediaModelCapabilities';
 import { DREAMINA_IMAGE_RATIOS } from './dreaminaModels';
 import { compileVideoReferencePrompt } from './referencePrompt';
@@ -151,10 +151,15 @@ export async function generateImagesBatch(
     throw new Error(`未配置 CCC API ${group}的 API Key\n请在「设置 → API Key」中配置对应连接`);
   }
   const catalogModel = providerDefinition?.models?.find((item) => item.id === modelName);
+  const selectedModel = providerConfig?.selectedModels?.find((item) => item.id === modelName);
   const toapisContract = providerDefinition?.id === 'toapis' && !params.workflowId
     ? resolveToapisImageModelContract(modelName, generalModel?.executionProfile, generalModel?.imageCapability)
     : undefined;
-  const effectiveProfile = toapisContract?.executionProfile ?? generalModel?.executionProfile;
+  const relayonContract = providerDefinition?.id === 'relayonapi' && !params.workflowId
+    ? resolveRelayonImageModelContract(modelName, generalModel?.executionProfile ?? selectedModel?.executionProfile,
+      generalModel?.imageCapability ?? selectedModel?.imageCapability)
+    : undefined;
+  const effectiveProfile = toapisContract?.executionProfile ?? relayonContract?.executionProfile ?? generalModel?.executionProfile;
   const parameterCapability = params.workflowId ? undefined : resolveImageParameterCapability(model, provider, config);
   const imageQuality = resolveConfiguredImageQuality(parameterCapability, params.imageQuality);
   const imageBackground = resolveConfiguredImageBackground(parameterCapability, params.imageBackground);
@@ -166,7 +171,7 @@ export async function generateImagesBatch(
   const builtInContract = params.workflowId ? undefined
     : resolveBuiltInImageRequestContract(providerDefinition, modelName, imageSize, aspectRatio, imageQuality, imageBackground);
   const configuredCapability = !params.workflowId && !builtInContract
-    ? toapisContract?.imageCapability ?? generalModel?.imageCapability : undefined;
+    ? toapisContract?.imageCapability ?? relayonContract?.imageCapability ?? generalModel?.imageCapability : undefined;
   if (!builtInContract && generalModel) {
     assertModelCapabilityProtocol({ id: generalModel.modelId, name: generalModel.name, category: 'image',
       provider: connectionId, executionProfile: effectiveProfile,
@@ -186,8 +191,8 @@ export async function generateImagesBatch(
   const imageReferenceRequestMode = builtInContract?.kind === 'standard' ? builtInContract.imageReferenceRequestMode
     : builtInContract ? undefined
     : generalModel?.imageReferenceRequestMode
-      ?? (executionProfile?.preset === 'custom' ? undefined
-        : providerConfig?.selectedModels?.find((item) => item.id === modelName)?.imageReferenceRequestMode
+      ?? (executionProfile?.preset === 'custom' && !usesRelayonProtocol ? undefined
+        : selectedModel?.imageReferenceRequestMode
           ?? catalogModel?.imageReferenceRequestMode);
   const usesImageDataUrls = !params.workflowId
     && (builtInContract?.kind === 'protocol' && builtInContract.referenceInput === 'data-url'
@@ -306,7 +311,7 @@ export async function generateImagesBatch(
   if (usesLibapiProtocol) assertLibapiImageInput(modelName, allImageUrls.length, requestedCount);
   const libapiExecutionProfile = usesLibapiProtocol ? libapiImageExecutionProfile(modelName, allImageUrls.length) : undefined;
   const relayonExecutionProfile = usesRelayonProtocol
-    ? resolveRelayonImageExecutionProfile(modelName, executionProfile, allImageUrls.length) : undefined;
+    ? resolveRelayonImageExecutionProfile(modelName, executionProfile, allImageUrls.length, imageBackground) : undefined;
   // multipart 直接读取原始参考图，避免本地图片先上传图床再下载回来的额外网络依赖。
   allImageUrls = provider === 'runninghub' || usesImageMultipart ? allImageUrls : usesImageDataUrls || usesCustomImageFiles
     ? await resolveImageDataUrlArray(allImageUrls, signal)

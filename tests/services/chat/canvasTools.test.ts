@@ -7,6 +7,7 @@ import { validateAgentToolInput } from '../../../src/services/chat/agentToolSche
 import {
   clearAgentToolRegistryForTests,
   getAgentTool,
+  prepareAgentToolCall,
   type AgentToolContext,
 } from '../../../src/services/chat/toolRegistry';
 import type { BaseNodeData } from '../../../src/types';
@@ -62,6 +63,65 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it('MCP 创建、查询和更新图片质量背景及视频帧率音轨，保留自动时长和 false', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      providers: { ...state.config.providers, video: { name: '视频连接', catalogId: 'custom-openai', apiKey: 'fixture' } },
+      generalModels: [
+        { id: 'image-options', name: '图片模型', modelId: 'image-options', category: 'image', providerConfigId: 'video',
+          imageCapability: { qualities: ['low', 'high'], backgrounds: ['opaque', 'transparent'] } },
+        { id: 'video-auto', name: '视频模型', modelId: 'video-auto', category: 'video', providerConfigId: 'video',
+          videoCapability: { operations: ['text-to-video'], automaticDurationValue: -1, frameRates: [24], supportsAudio: true } },
+      ],
+    } }));
+    const create = getAgentTool('canvas_create_nodes')!;
+    const input = { nodes: [
+      { type: 'ai-image', label: '透明图', model: 'general/image-options', imageQuality: 'high', imageBackground: 'transparent' },
+      { type: 'ai-video', label: '视频', model: 'general/video-auto', videoDuration: -1, videoFps: 24, generateAudio: false },
+    ] };
+    expect(validateAgentToolInput(create.inputSchema, input).valid).toBe(true);
+    expect((await create.execute(context(), input)).status).toBe('success');
+    const image = useAppStore.getState().nodes.find((item) => item.data.label === '透明图')!;
+    const video = useAppStore.getState().nodes.find((item) => item.data.label === '视频')!;
+    expect(image.data).toMatchObject({ imageQuality: 'high', imageBackground: 'transparent' });
+    expect(video.data).toMatchObject({ seedanceDuration: -1, videoFps: 24, generateAudio: false });
+    const update = getAgentTool('canvas_update_nodes')!;
+    const patch = { nodeIds: [image.id], imageBackground: '' };
+    expect(validateAgentToolInput(update.inputSchema, patch).valid).toBe(true);
+    expect((await update.execute(context(), patch)).status).toBe('success');
+    const query = await getAgentTool('canvas_query')!.execute(context(), { nodeIds: [image.id, video.id], detail: true });
+    const nodes = JSON.parse(query.modelContent).nodes;
+    expect(nodes.find((item: { id: string }) => item.id === image.id)).toMatchObject({ imageQuality: 'high', imageBackground: '' });
+    expect(nodes.find((item: { id: string }) => item.id === video.id)).toMatchObject({ videoDuration: -1, videoFps: 24, generateAudio: false });
+    expect((await update.execute(context(), { nodeIds: [video.id], videoFps: 30 })).status).toBe('error');
+    expect((await update.execute(context(), { nodeIds: [image.id], imageQuality: 'max' })).status).toBe('error');
+    expect(useAppStore.getState().nodes.find((item) => item.id === video.id)?.data.videoFps).toBe(24);
+    expect(useAppStore.getState().nodes.find((item) => item.id === image.id)?.data.imageQuality).toBe('high');
+    // 即使节点在别处被改成不受当前模型支持的值，运行入口也不能静默丢弃后调用模型。
+    useAppStore.getState().updateNodeDataTransient(image.id, { imageQuality: 'max' });
+    const run = await getAgentTool('canvas_run_nodes')!.execute(context(), { nodeIds: [image.id] });
+    expect(run.status).toBe('error');
+    expect(JSON.parse(run.modelContent).results[0].message).toContain('质量');
+    expect(executeGeneration).not.toHaveBeenCalled();
+  });
+
+  it('拒绝未声明的自动时长及跨类型参数，不写入画布', async () => {
+    const before = useAppStore.getState().nodes;
+    const tool = getAgentTool('canvas_create_nodes')!;
+    expect((await tool.execute(context(), { nodes: [{ type: 'ai-video', label: '视频', videoDuration: -1 }] })).status).toBe('error');
+    expect((await tool.execute(context(), { nodes: [{ type: 'ai-image', label: '图片', videoFps: 24 }] })).status).toBe('error');
+    expect(useAppStore.getState().nodes).toBe(before);
+  });
+
+  it('创建前拒绝把疑似凭据放进媒体参数，错误不回显原值', () => {
+    const secret = 'sk-test-secret-fixture';
+    const result = prepareAgentToolCall({ callId: 'unsafe', toolId: 'canvas_create_nodes', input: { nodes: [
+      { type: 'ai-image', label: '图片', imageQuality: secret },
+    ] } }, context());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.result.summary).not.toContain(secret);
+    expect(useAppStore.getState().nodes).toHaveLength(2);
+  });
+
   it('routes ready video bindings to the generated-video column and images to frame without replacing either reference', async () => {
     const frame = { nodeId: 'old-image', kind: 'image' as const, url: 'old.png' };
     useAppStore.setState({ nodes: [node('sheet', { type: 'ai-shotlist', shotlistRows: [{ id: 'r', shotNo: '1', frame, duration: 4 }] }),

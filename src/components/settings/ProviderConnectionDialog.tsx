@@ -165,8 +165,11 @@ export default function ProviderConnectionDialog({
       .map((workflow) => ({ id: workflow.id, name: workflow.name, manifest: editableWorkflowApiManifest(workflow.workflowApi!) })));
   const [workflowValid, setWorkflowValid] = useState(false);
   const [models, setModels] = useState<ProviderModelSelection[]>(
-    () => mergeModels(mergeModels(initialLocalModels, initialCatalogModels), initialSelectedModels)
-      .map((model) => applyKnownVideoTemplateDefaults(model, initialBaseUrl)),
+    () => {
+      const options = { preferIncomingConfiguration: initialDefinition?.id === 'relayonapi' };
+      return mergeModels(mergeModels(initialLocalModels, initialCatalogModels, options), initialSelectedModels, options)
+        .map((model) => applyKnownVideoTemplateDefaults(model, initialBaseUrl));
+    },
   );
   const [selectedIds, setSelectedIds] = useState(() =>
     new Set(initialSelectedModels.map((model) => model.id)),

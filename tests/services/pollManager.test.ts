@@ -225,6 +225,38 @@ describe('pending generation task recovery', () => {
     expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('observer');
   });
 
+  it('原任务仅持久化允许的媒体参数，保留 false、空背景及负数自动时长', () => {
+    const parameters = { aspectRatio: '9:16', resolution: '720p', duration: -1, videoFps: 24,
+      generateAudio: false, imageBackground: '', imageQuality: 'high', prompt: '不应保存', apiKey: 'secret' };
+    const release = bindMediaTaskContext('media-parameters', { projectId: 'project-1', messageId: 'message', parameters });
+    savePendingTask({ projectId: 'project-1', nodeId: 'media-parameters', nodeType: 'ai-video', provider: 'general',
+      taskType: 'general', taskId: 'original-task', submitted: true });
+    release();
+    const saved = getPendingTasksForProject('project-1')[0];
+    expect(saved.mediaContext?.parameters).toEqual({ aspectRatio: '9:16', resolution: '720p', duration: -1,
+      videoFps: 24, generateAudio: false, imageBackground: '', imageQuality: 'high' });
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('secret');
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('不应保存');
+  });
+
+  it('显式空参数快照与旧任务无快照区分，敏感参数从恢复记录中剔除', () => {
+    const release = bindMediaTaskContext('empty-parameters', { projectId: 'project-1', parameters: {} });
+    savePendingTask({ projectId: 'project-1', nodeId: 'empty-parameters', nodeType: 'ai-video', provider: 'general',
+      taskType: 'general', taskId: 'empty-task', submitted: true });
+    release();
+    const unsafe = { aspectRatio: 'https://private.example/file', resolution: 'C:\\private\\file',
+      imageQuality: 'sk-example-secret', imageBackground: 'Bearer example-secret', generateAudio: false };
+    const releaseUnsafe = bindMediaTaskContext('unsafe-parameters', { projectId: 'project-1', parameters: unsafe });
+    savePendingTask({ projectId: 'project-1', nodeId: 'unsafe-parameters', nodeType: 'ai-video', provider: 'general',
+      taskType: 'general', taskId: 'unsafe-task', submitted: true });
+    releaseUnsafe();
+    const tasks = getPendingTasksForProject('project-1');
+    expect(tasks.find((task) => task.nodeId === 'empty-parameters')?.mediaContext?.parameters).toEqual({});
+    expect(tasks.find((task) => task.nodeId === 'unsafe-parameters')?.mediaContext?.parameters).toEqual({ generateAudio: false });
+    const saved = localStorage.getItem('ai_canvas_pending_tasks')!;
+    for (const value of [unsafe.aspectRatio, unsafe.resolution, unsafe.imageQuality, unsafe.imageBackground]) expect(saved).not.toContain(value);
+  });
+
   it('keeps an unknown submission without allowing a resume request or completion acknowledgement', async () => {
     const receipt = savePendingTask({ nodeId: 'unknown-node', projectId: 'project-1', nodeType: 'ai-image',
       provider: 'general', taskType: 'general', submitted: false, taskId: '' });

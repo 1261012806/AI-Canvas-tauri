@@ -12,6 +12,7 @@ import { getRunningHubModel } from './providers/runninghubModelManifest';
 import { getGrsaiImageCapability } from './grsaiModels';
 import { getProviderDefinition } from './providerCatalogService';
 import { resolveToapisImageModelContract } from './providers/toapisModelManifest';
+import { resolveRelayonImageModelContract } from './providers/relayonModelManifest';
 import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
 
 /* ── 生图能力表 ── */
@@ -586,6 +587,13 @@ export function resolveImageParameterCapability(
   }
   if (definition?.id === 'toapis') {
     const contract = resolveToapisImageModelContract(modelId, profile, declared);
+    if (contract.imageCapability) {
+      const effective = imageCapabilityForProtocol({ modelId, resolutionStyle: 'none', ...contract.imageCapability }, contract.executionProfile);
+      return { ...effective, resolutions: effective.resolutions ?? [], ratios: effective.ratios ?? [] };
+    }
+  }
+  if (definition?.id === 'relayonapi') {
+    const contract = resolveRelayonImageModelContract(modelId, profile ?? selection?.executionProfile, declared);
     if (contract.imageCapability) {
       const effective = imageCapabilityForProtocol({ modelId, resolutionStyle: 'none', ...contract.imageCapability }, contract.executionProfile);
       return { ...effective, resolutions: effective.resolutions ?? [], ratios: effective.ratios ?? [] };

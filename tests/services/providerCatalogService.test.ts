@@ -951,6 +951,74 @@ describe('厂商图片有效合同校验与连接导入', () => {
     return model;
   }
 
+  function legacyRelayonModel(modelId = 'Image-2.5-Flare'): ProviderModelSelection {
+    const model = structuredClone(RELAYON_MODEL_MANIFEST.find((item) => item.id === modelId)!);
+    const body = model.executionProfile!.protocol!.submit.body as Record<string, ProtocolJsonValue>;
+    delete body.quality;
+    delete body.background;
+    return model;
+  }
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('旧 %s 协议合并新能力后按临时有效副本校验，不改保存原文', (modelId) => {
+    const model = legacyRelayonModel(modelId);
+    const original = structuredClone(model);
+    expect(() => assertModelCapabilityProtocol(model)).toThrow('质量');
+    const effective = resolveProviderImageModelForValidation(getProviderDefinition('relayonapi'), model);
+    expect(() => assertModelCapabilityProtocol(effective)).not.toThrow();
+    expect(effective.executionProfile!.protocol!.submit.body).toMatchObject({ quality: '{{imageQuality}}', background: '{{imageBackground}}' });
+    expect(effective.executionProfile!.protocol!.submit.body).not.toHaveProperty('output_format');
+    expect(model).toEqual(original);
+  });
+
+  it.each([false, true])('RelayOnAPI 旧缓存导入、保存校验与分享保留原始协议和能力（已有新候选 %s）', (hasOptions) => {
+    const model = legacyRelayonModel();
+    if (!hasOptions) {
+      delete model.imageCapability!.qualities;
+      delete model.imageCapability!.defaultQuality;
+      delete model.imageCapability!.backgrounds;
+      delete model.imageCapability!.defaultBackground;
+    }
+    const config: ApiProviderConfig = { name: '旧万象连接', apiKey: '', catalogId: 'relayonapi',
+      selectedModels: [model], catalogModels: [model] };
+    const original = structuredClone(config);
+    expect(() => assertModelCapabilityProtocol(resolveProviderImageModelForValidation(getProviderDefinition('relayonapi'), model)))
+      .not.toThrow();
+    const serialized = serializeConnection(config);
+    const exported = JSON.parse(serialized).connection;
+    expect(exported.selectedModels[0].executionProfile).toEqual(model.executionProfile);
+    expect(exported.selectedModels[0].imageCapability).toEqual(model.imageCapability);
+    const parsed = parseConnectionShare(serialized)!;
+    expect(parsed.diagnostics).toEqual([]);
+    for (const imported of [parsed.config.selectedModels![0], parsed.config.catalogModels![0]]) {
+      expect(imported.executionProfile).toEqual(model.executionProfile);
+      expect(imported.imageCapability).toEqual(model.imageCapability);
+    }
+    expect(config).toEqual(original);
+  });
+
+  it.each(['custom-openai', 'relayonapi'])('%s 中改过的同名协议仍按自身映射严格校验', (catalogId) => {
+    const model = legacyRelayonModel();
+    model.executionProfile!.protocol!.submit.path = '/custom/images';
+    const effective = resolveProviderImageModelForValidation(getProviderDefinition(catalogId), model);
+    expect(effective.executionProfile).toBe(model.executionProfile);
+    expect(effective.imageCapability).toBe(model.imageCapability);
+    expect(() => assertModelCapabilityProtocol(effective)).toThrow('质量');
+    const parsed = parseConnectionShare(serializeConnection({ name: '自己配置的接口', apiKey: '', catalogId, selectedModels: [model] }))!;
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ modelId: model.id })]));
+    expect(parsed.config.selectedModels).toEqual([]);
+  });
+
+  it.each(['https://attacker.invalid/images', 'javascript:alert(1)'])('RelayOnAPI 旧协议的不安全路径 %s 不因兼容升级放行', (path) => {
+    const model = legacyRelayonModel();
+    model.executionProfile!.protocol!.submit.path = path;
+    expect(() => resolveProviderImageModelForValidation(getProviderDefinition('relayonapi'), model)).toThrow();
+    const parsed = parseConnectionShare(serializeConnection({ name: '旧万象连接', apiKey: '', catalogId: 'relayonapi', selectedModels: [model] }))!;
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: 'connection.selectedModels.0.executionProfile.protocol.submit.path',
+    })]));
+    expect(parsed.config.selectedModels).toEqual([]);
+  });
+
   it('CCC 只用标准合同副本校验，原能力、旧协议和待保存模型保持原样', () => {
     const model = legacyCccModel();
     const original = JSON.stringify(model);

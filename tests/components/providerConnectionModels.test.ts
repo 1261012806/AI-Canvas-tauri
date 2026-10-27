@@ -16,7 +16,7 @@ it('preserves configured image tiers and video limits when refreshing a raw cata
   expect(refreshed[1].videoCapability).toEqual(configured[1].videoCapability);
 });
 
-it.each(['cccapi', 'toapis', 'libapi'])('%s 刷新目录保留当前连接的显式协议和能力，不借用同名其他厂商合同', (catalogId) => {
+it.each(['cccapi', 'toapis', 'libapi', 'relayonapi'])('%s 刷新目录保留当前连接的显式协议和能力，不借用同名其他厂商合同', (catalogId) => {
   const catalog = structuredClone(getProviderDefinition(catalogId)!.models!.find((model) => model.category === 'image')!);
   const configured: ProviderModelSelection = { ...catalog, provider: catalogId,
     imageCapability: { resolutions: ['1K'] },
@@ -34,6 +34,74 @@ it.each(['cccapi', 'toapis', 'libapi'])('%s 刷新目录保留当前连接的显
   const other: ProviderModelSelection = { ...configured, provider: 'other-relay', executionProfile: { preset: 'openai-gpt-image' } };
   expect(mergeModels([other], [{ id: other.id, name: other.name, category: other.category, provider: 'other-relay' }])[0].executionProfile)
     .toEqual({ preset: 'openai-gpt-image' });
+});
+
+describe('RelayOnAPI 编辑初始化保留已保存配置', () => {
+  const savedProtocol = (path: string): ModelExecutionProtocol => ({ version: 2, mode: 'sync',
+    submit: { method: 'POST', path, body: { prompt: '{{prompt}}' } },
+    response: { type: 'json', result: { urlPath: 'output' } },
+  });
+  const preferSaved = { preferIncomingConfiguration: true };
+
+  it('本地模板、目录缓存、已选模型依次合并时保留已选自定义协议和比例', () => {
+    const definition = getProviderDefinition('relayonapi')!;
+    const local = structuredClone(definition.models!.filter((model) => ['Image-2.5-Flare', 'sd-2.0-c1'].includes(model.id)));
+    const cached = local.map((model): ProviderModelSelection => ({ ...model,
+      executionProfile: { preset: 'custom', protocol: savedProtocol('/cached/generate') },
+      ...(model.category === 'image' ? { imageCapability: { resolutions: ['1K'], ratios: ['3:4'] } }
+        : { videoCapability: { minDuration: 10, maxDuration: 15, ratios: ['3:4'] } }),
+    }));
+    const selected = cached.map((model): ProviderModelSelection => ({ ...model,
+      executionProfile: { preset: 'custom', protocol: savedProtocol('/user/generate') },
+      ...(model.category === 'image' ? { imageCapability: { resolutions: ['2K'], ratios: ['9:16'], maxImageReferences: 2 } }
+        : { videoCapability: { minDuration: 10, maxDuration: 12, ratios: ['9:16'] } }),
+    }));
+    const original = JSON.stringify({ local, cached, selected });
+    const merged = mergeModels(mergeModels(local, cached, preferSaved), selected, preferSaved);
+    expect(merged).toHaveLength(2);
+    for (const saved of selected) {
+      const result = merged.find((model) => model.id === saved.id)!;
+      expect(result.executionProfile).toEqual(saved.executionProfile);
+      expect(result.imageCapability).toEqual(saved.imageCapability);
+      expect(result.videoCapability).toEqual(saved.videoCapability);
+    }
+    expect(JSON.stringify({ local, cached, selected })).toBe(original);
+  });
+
+  it('未选择的型号保留缓存配置，未保存的字段仍由已有配置提供', () => {
+    const local = structuredClone(getProviderDefinition('relayonapi')!.models!.find((model) => model.id === 'Image-2.5-Flare')!);
+    const cached: ProviderModelSelection = { ...local,
+      executionProfile: { preset: 'custom', protocol: savedProtocol('/cached/images') },
+      imageCapability: { resolutions: ['1K'], ratios: ['4:3'] },
+    };
+    const initialized = mergeModels(mergeModels([local], [cached], preferSaved), [], preferSaved);
+    expect(initialized[0].executionProfile).toEqual(cached.executionProfile);
+    expect(initialized[0].imageCapability).toEqual(cached.imageCapability);
+    const partial: ProviderModelSelection = { id: cached.id, name: cached.name, provider: cached.provider,
+      category: 'image', executionProfile: undefined, imageCapability: undefined, videoCapability: undefined };
+    expect(mergeModels(initialized, [partial], preferSaved)[0]).toMatchObject({
+      executionProfile: cached.executionProfile, imageCapability: cached.imageCapability,
+    });
+  });
+
+  it('该选项不改变手动元数据规则，其他调用仍默认保留当前协议和能力', () => {
+    const current: ProviderModelSelection = { id: 'fixture', name: '当前友好名称', category: 'image', categoryManual: true,
+      provider: 'custom', description: '人工说明', descriptionManual: true, inputModalities: ['text'], inputModalitiesManual: true,
+      imageCapability: { ratios: ['9:16'] }, executionProfile: { preset: 'custom', protocol: savedProtocol('/current') } };
+    const incoming: ProviderModelSelection = { id: 'fixture', name: 'fixture', category: 'video', provider: 'custom',
+      description: '目录说明', inputModalities: ['text', 'image'],
+      imageCapability: { ratios: ['1:1'] }, executionProfile: { preset: 'custom', protocol: savedProtocol('/incoming') } };
+    const normal = mergeModels([current], [incoming])[0];
+    expect(normal.imageCapability).toEqual(current.imageCapability);
+    expect(normal.executionProfile).toEqual(current.executionProfile);
+    const preferred = mergeModels([current], [incoming], preferSaved)[0];
+    expect(preferred.imageCapability).toEqual(incoming.imageCapability);
+    expect(preferred.executionProfile).toEqual(incoming.executionProfile);
+    for (const result of [normal, preferred]) {
+      expect(result).toMatchObject({ name: current.name, category: current.category,
+        description: current.description, descriptionManual: true, inputModalities: ['text'], inputModalitiesManual: true });
+    }
+  });
 });
 
 describe('legacy connection image protocol', () => {

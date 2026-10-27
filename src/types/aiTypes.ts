@@ -411,6 +411,8 @@ export interface MediaTaskContext {
   deliveryMode?: 'node' | 'message' | 'node+message';
   canvasNodeId?: string;
   modelId?: string;
+  /** 原任务恢复与回填所需的媒体参数，不包含提示词或素材。 */
+  parameters?: import('./media').MediaGenerationParameters;
 }
 
 /** 保留既有数组调用约定，同时携带当次任务回执，禁止事后读取另一轮身份。 */

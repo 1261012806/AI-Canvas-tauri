@@ -1,8 +1,36 @@
 /** 自定义媒体模型的能力与请求映射一致性；不推断厂商参数或发送网络请求。 */
 import { t } from '../../i18n';
 import type { GeneralModelCategory, ProviderModelSelection } from '../../types';
-import type { ImageModelCapability, ModelProtocolPresetId, NormalizedModelExecutionProtocol } from '../../types/aiTypes';
+import type { ImageModelCapability, ModelProtocolPresetId, NormalizedModelExecutionProtocol, VideoGenerationInputMode, VideoGenerationOperation, VideoModelCapability } from '../../types/aiTypes';
+import type { MediaGenerationParameters } from '../../types/media';
 import { modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
+
+export const MEDIA_PARAMETER_TEXT_FIELDS = ['aspectRatio', 'resolution', 'imageQuality', 'imageBackground'] as const;
+
+/** 允许常见厂商枚举与比例，禁止地址、路径和常见密钥格式进入媒体参数快照。 */
+export function isSafeMediaParameterText(value: unknown, key: typeof MEDIA_PARAMETER_TEXT_FIELDS[number]): value is string {
+  if (typeof value !== 'string' || value.length > 64) return false;
+  if (value === '') return key === 'imageBackground';
+  if (value !== value.trim() || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)) return false;
+  if (/[a-z][a-z\d+.-]*:\/\//i.test(value) || /^(?:file|data|asset|blob|javascript|mailto|tel):/i.test(value)
+    || /^(?:[a-z]:[\\/]|[\\/]|~[\\/])/i.test(value)
+    || /(?:^|\s)bearer(?:\s+|[:=_-])\S/i.test(value)
+    || /^basic\s+[a-z\d+\x2f=]{16,}$/i.test(value)
+    || /(?:^|\s)(?:sk|mk|rk|pk|ak|key|token|api[-_]?key)[-_]/i.test(value)
+    || /^(?:AIza[a-z\d_-]{15,}|gh[pousr]_[a-z\d]{10,}|github_pat_|xox[baprs]-|hf_)/i.test(value)
+    || /^(?:www\.[^\s]+|[a-z\d.-]+\.[a-z]{2,}(?::\d+)?\/)/i.test(value)) return false;
+  return true;
+}
+
+/** 提交前拒绝敏感值，不在错误信息中回显原参数。 */
+export function assertSafeMediaParameterStrings(value: MediaGenerationParameters | undefined): void {
+  if (!value) return;
+  for (const key of MEDIA_PARAMETER_TEXT_FIELDS) {
+    if (value[key] !== undefined && !isSafeMediaParameterText(value[key], key)) {
+      throw new Error(`媒体参数 ${key} 格式无效；请使用所选模型声明的参数值`);
+    }
+  }
+}
 
 const RESULT_CATEGORY_LABELS: Record<GeneralModelCategory, string> = {
   text: '文本', image: '图片', video: '视频', audio: '音频',
@@ -190,6 +218,38 @@ export function assertConfiguredImageReferences(capability: ImageModelCapability
   }
 }
 
+/** 按生成解析器的输入模式优先级，收集实际可用操作的比例候选。 */
+function reachableVideoRatios(capability: VideoModelCapability): Set<string> {
+  const operations: readonly VideoGenerationOperation[] = capability.operations?.length
+    ? capability.operations : ['text-to-video', 'image-to-video', 'video-to-video'];
+  const imagesAllowed = capability.maxImageReferences !== 0;
+  const videosAllowed = capability.maxVideoReferences !== 0 && capability.maxVideoAudioReferences !== 0;
+  const audioAllowed = capability.maxAudioReferences !== 0 && capability.maxVideoAudioReferences !== 0;
+  const ratios = new Set<string>();
+  for (const operation of operations) {
+    const modes: VideoGenerationInputMode[] = [];
+    if (operation === 'text-to-video') {
+      if (!capability.requiresReference) modes.push('text');
+      if (audioAllowed && capability.supportsStandaloneAudio !== false) modes.push('reference');
+    } else if (operation === 'image-to-video' && imagesAllowed) {
+      modes.push('keyframe', 'reference');
+      if (capability.allowFrameAndReferenceMix !== false
+        && (capability.maxImageReferences === undefined || capability.maxImageReferences >= 2 || audioAllowed)) modes.push('mixed');
+    } else if (operation === 'video-to-video' && videosAllowed) {
+      modes.push('reference');
+      if (imagesAllowed && capability.allowFrameAndReferenceMix !== false) modes.push('mixed');
+    }
+    for (const mode of modes) {
+      const modeCapability = capability.inputModeCapabilities?.[mode];
+      const operationCapability = capability.operationCapabilities?.[operation];
+      const options = modeCapability?.ratios ?? operationCapability?.ratios ?? capability.ratios;
+      const fallback = modeCapability?.defaultRatio ?? operationCapability?.defaultRatio ?? capability.defaultRatio;
+      for (const ratio of options ?? (fallback ? [fallback] : [])) ratios.add(ratio.toLowerCase());
+    }
+  }
+  return ratios;
+}
+
 /** 多选项必须消费动态变量；单一固定值允许由厂商协议固定输出。 */
 export function assertModelCapabilityProtocol(model: ProviderModelSelection): void {
   if (model.executionProfile && !isModelProtocolPresetId(model.executionProfile.preset)) {
@@ -246,9 +306,8 @@ export function assertModelCapabilityProtocol(model: ProviderModelSelection): vo
   } else if (model.category === 'video') {
     const capability = model.videoCapability;
     if (!capability) return;
-    const modeRatios = Object.values(capability.inputModeCapabilities ?? {}).flatMap((value) => value?.ratios ?? []);
     requireMapping((capability.resolutions?.length ?? 0) > 1, '分辨率', ['seedanceResolution', 'resolution', 'videoResolution', 'size', 'width', 'height']);
-    requireMapping((capability.ratios?.length ?? 0) > 1 || new Set(modeRatios).size > 1, '比例', ['aspectRatio', 'seedanceRatio', 'size', 'width', 'height']);
+    requireMapping(reachableVideoRatios(capability).size > 1, '比例', ['aspectRatio', 'seedanceRatio', 'size', 'width', 'height']);
     requireMapping((capability.frameRates?.length ?? 0) > 1, '帧率', ['fps', 'videoFps', 'frames8n1', 'frames', 'videoFrames']);
     requireMapping((capability.durations?.length ?? 0) > 1
       || (capability.minDuration !== undefined && capability.maxDuration !== undefined && capability.minDuration !== capability.maxDuration),

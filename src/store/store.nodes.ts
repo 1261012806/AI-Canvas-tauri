@@ -25,7 +25,7 @@ import type {
   StoryboardCellOverride,
 } from '../types';
 import { createCanvasNoteData, STORYBOARD_CELL_SOURCE_TYPES } from '../types';
-import type { MediaGenerationIntent, MediaGenerationResult } from '../types/media';
+import type { MediaGenerationIntent, MediaGenerationParameters, MediaGenerationResult, MediaKind } from '../types/media';
 import { parseShotlistRowMentionId, resolveShotVideoDuration } from '../types/shotlist';
 import { generateId, getNextDisplayId } from './store.utils';
 import { BATCH_NODE_LIMIT } from './store.chat';
@@ -42,6 +42,34 @@ import { AI_APP_COPY_MESSAGE, AI_APP_CREATION_MESSAGE, assertAiAppNodeInsertion,
 import { getGenerationNodeType } from '../utils/nodeGeneration';
 import { collectCanvasDescendantIds } from '../utils/canvasHierarchy';
 import { normalizeShotlistPromptReferences, resolveSingleShotlistRowReference } from '../services/shotlistPromptService';
+
+/** 只投影本次真实传入的媒体参数，保留 false、接口默认背景与自动时长。 */
+function mediaParametersToNodeData(kind: MediaKind, parameters?: MediaGenerationParameters): Partial<BaseNodeData> {
+  if (!parameters) return {};
+  if (kind === 'image') return {
+    ...(parameters.aspectRatio !== undefined ? { aspectRatio: parameters.aspectRatio } : {}),
+    ...(parameters.resolution !== undefined ? { imageSize: parameters.resolution } : {}),
+    ...(parameters.imageQuality !== undefined ? { imageQuality: parameters.imageQuality } : {}),
+    ...(parameters.imageBackground !== undefined ? { imageBackground: parameters.imageBackground } : {}),
+  };
+  if (kind === 'video') return {
+    ...(parameters.aspectRatio !== undefined ? { seedanceRatio: parameters.aspectRatio } : {}),
+    ...(parameters.resolution !== undefined ? (/^\d+$/.test(parameters.resolution)
+      ? { videoResolution: Number(parameters.resolution) } : { seedanceResolution: parameters.resolution }) : {}),
+    ...(parameters.duration !== undefined ? { seedanceDuration: parameters.duration } : {}),
+    ...(parameters.videoFps !== undefined ? { videoFps: parameters.videoFps } : {}),
+    ...(parameters.generateAudio !== undefined ? { generateAudio: parameters.generateAudio } : {}),
+  };
+  return {};
+}
+
+/** 通用视频未显式选择参数时按模型默认生成，项目默认不能伪装成此次请求。 */
+function retainMediaModelDefaults(data: BaseNodeData, provider: string | undefined, parameters?: MediaGenerationParameters): void {
+  if (data.type !== 'ai-video' || !provider || !['general', 'runninghub', 'workflow-api'].includes(provider)) return;
+  if (parameters?.aspectRatio === undefined) delete data.seedanceRatio;
+  if (parameters?.resolution === undefined) delete data.seedanceResolution;
+  if (parameters?.duration === undefined) delete data.seedanceDuration;
+}
 
 interface GroupNodeDataAccess {
   groupId: string;
@@ -976,6 +1004,11 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
       nodeWidth: 280,
       nodeHeight: intent.kind === 'image' ? 158 : 160,
     }, settings);
+    const mediaProvider = intent.modelRef && !intent.modelRef.includes('/')
+      && state.config.generalModels?.some((model) => model.id === intent.modelRef)
+      ? 'general' : intent.modelRef?.split('/')[0];
+    retainMediaModelDefaults(nodeData, mediaProvider, intent);
+    Object.assign(nodeData, mediaParametersToNodeData(intent.kind, intent));
     state.commitToHistory();
     set((current) => ({
       nodes: [...current.nodes, {
@@ -997,6 +1030,9 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
     set((state) => ({
       nodes: state.nodes.map((node) => {
         if (node.id !== nodeId) return node;
+        const recoveredParameters = mediaParametersToNodeData(artifact.kind, artifact.parameters);
+        const missingParameters = Object.fromEntries(Object.entries(recoveredParameters)
+          .filter(([key]) => node.data[key as keyof BaseNodeData] === undefined));
         const mediaField = artifact.kind === 'image'
           ? { imageUrl: artifact.url, imageWidth: artifact.width, imageHeight: artifact.height }
           : artifact.kind === 'video'
@@ -1006,6 +1042,7 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
           ...node,
           data: {
             ...node.data,
+            ...missingParameters,
             ...mediaField,
             artifactId: artifact.id,
             prompt: artifact.prompt,
@@ -1070,6 +1107,13 @@ export const createNodeSlice: StateCreator<AppState, [], [], NodeSlice> = (set, 
       nodeWidth: 280,
       nodeHeight: artifact.kind === 'image' ? 158 : 160,
     }, settings);
+    if (artifact.parameters !== undefined) retainMediaModelDefaults(nodeData, artifact.provider, artifact.parameters);
+    Object.assign(nodeData, mediaParametersToNodeData(artifact.kind, artifact.parameters));
+    if (artifact.parameters?.aspectRatio) {
+      const dimensions = artifact.kind === 'image' ? getImageNodeDimensionsForAspectRatio(artifact.parameters.aspectRatio)
+        : artifact.kind === 'video' ? videoNodeDimensionsForAspectRatio(artifact.parameters.aspectRatio) : null;
+      if (dimensions) Object.assign(nodeData, dimensions);
+    }
     state.commitToHistory();
     set((current) => ({
       nodes: [...current.nodes, {

@@ -28,6 +28,7 @@ export function materializeLegacyImageProtocolDefault(
 export function mergeModels(
   current: ProviderModelSelection[],
   incoming: ProviderModelSelection[],
+  options: { preferIncomingConfiguration?: boolean } = {},
 ): ProviderModelSelection[] {
   const models = new Map(current.map((model) => [model.id, model]));
   for (const model of incoming) {
@@ -38,6 +39,9 @@ export function mergeModels(
     const preserveExistingMetadata = incomingHasOnlyRawName && existingHasFriendlyName;
     // 用户手动指定过分类时，重新拉取目录或合并模型不再覆盖该分类。
     const preserveExistingCategory = Boolean(existing?.categoryManual) || preserveExistingMetadata;
+    // 编辑初始化可显式让保存值覆盖本地新模板；目录刷新仍默认保留当前编辑值。
+    const configuration = options.preferIncomingConfiguration ? model : existing;
+    const fallbackConfiguration = options.preferIncomingConfiguration ? existing : model;
     models.set(model.id, {
       ...existing,
       ...model,
@@ -52,9 +56,9 @@ export function mergeModels(
         : model.inputModalities ?? existing?.inputModalities,
       inputModalitiesManual: existing?.inputModalitiesManual ?? model.inputModalitiesManual,
       categoryManual: existing?.categoryManual ?? model.categoryManual,
-      imageCapability: existing?.imageCapability ?? model.imageCapability,
-      videoCapability: existing?.videoCapability ?? model.videoCapability,
-      executionProfile: existing?.executionProfile ?? model.executionProfile,
+      imageCapability: configuration?.imageCapability ?? fallbackConfiguration?.imageCapability,
+      videoCapability: configuration?.videoCapability ?? fallbackConfiguration?.videoCapability,
+      executionProfile: configuration?.executionProfile ?? fallbackConfiguration?.executionProfile,
     });
   }
   return [...models.values()];

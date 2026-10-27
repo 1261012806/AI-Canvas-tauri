@@ -38,6 +38,9 @@ import {
 } from '../toolRegistry';
 import { listConfiguredModels } from './appTools';
 import { normalizeAiAppReference } from '../../aiApps/aiAppSchema';
+import { resolveVideoModelCapability } from '../../ai/videoModelCapabilityResolver';
+import { resolveImageParameterCapability } from '../../ai/mediaModelCapabilities';
+import { isSafeMediaParameterText, resolveConfiguredImageBackground, resolveConfiguredImageQuality } from '../../ai/modelCapabilityValidation';
 import { findDramaAsset, listGlobalDramaAssets, preferDramaLibraryReferences, preferredDramaMentionForNode } from '../../dramaAssetPrompt';
 import { AGENT_NODE_LAYOUT, AGENT_NODE_LAYOUT_GUIDANCE } from '../agentCanvasLayout';
 
@@ -121,17 +124,46 @@ function visibleVideoResolution(data: BaseNodeData): string | undefined {
 
 /** 创建和更新共用校验；错误必须在任何 Store 写入前返回，避免半批节点。 */
 function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodesInput, currentData?: BaseNodeData): string | undefined {
+  const store = useAppStore.getState();
+  const kind = type === 'ai-image' ? 'image' : type === 'ai-video' ? 'video' : undefined;
+  const projectDefault = kind && store.projects.find((project) => project.id === store.currentProjectId)?.settings?.defaultModels?.[kind];
+  const originalModelRef = input.model ?? (currentData?.model || projectDefault);
+  const modelProvider = parseProjectModelRef(originalModelRef)?.provider ?? currentData?.provider;
+  const modelRef = originalModelRef && modelProvider && !originalModelRef.includes('/')
+    ? `${modelProvider}/${originalModelRef}` : originalModelRef;
+  const existingWorkflowId = input.model === undefined ? currentData?.workflowId : undefined;
   if (input.aspectRatio !== undefined && !VISUAL_NODE_TYPES.has(type)) return 'aspectRatio 只能用于图片或视频节点';
-  if (input.imageSize !== undefined || input.batchCount !== undefined) {
-    if (type !== 'ai-image') return 'imageSize / batchCount 只能用于生图节点';
+  if (input.imageSize !== undefined || input.batchCount !== undefined
+    || input.imageQuality !== undefined || input.imageBackground !== undefined) {
+    if (type !== 'ai-image') return '图片参数只能用于生图节点';
     if (input.imageSize !== undefined && !PROJECT_IMAGE_SIZES.includes(input.imageSize as typeof PROJECT_IMAGE_SIZES[number]))
       return 'imageSize 不在支持的图片尺寸档位中';
     if (input.batchCount !== undefined && (!Number.isInteger(input.batchCount)
       || input.batchCount < 1 || input.batchCount > MAX_IMAGE_BATCH_COUNT)) return 'batchCount 超出图片批量范围';
+    if (input.imageQuality !== undefined && !isSafeMediaParameterText(input.imageQuality, 'imageQuality'))
+      return 'imageQuality 格式无效，请使用模型声明的质量选项';
+    if (input.imageBackground !== undefined && !isSafeMediaParameterText(input.imageBackground, 'imageBackground'))
+      return 'imageBackground 格式无效，请使用模型声明的背景选项或接口默认';
+    if (input.imageQuality !== undefined || input.imageBackground !== undefined) {
+      if (!modelRef || !modelProvider) return '设置图片质量或背景前请先选择模型';
+      if (existingWorkflowId || ['comfyui', 'runninghub', 'runninghubwf', 'workflow-api'].includes(modelProvider))
+        return '工作流与 RunningHub 请使用专属参数设置质量和背景';
+      const capability = resolveImageParameterCapability(modelRef, modelProvider, store.config);
+      if (input.imageQuality !== undefined && !capability?.qualities?.length) return '所选模型未声明图片质量参数';
+      if (input.imageBackground !== undefined && input.imageBackground !== '' && !capability?.backgrounds?.length)
+        return '所选模型未声明图片背景参数';
+      if (input.imageBackground === '' && capability?.backgroundIsFixed) return '所选模型的背景由协议固定，不能选择接口默认';
+      try {
+        resolveConfiguredImageQuality(capability, input.imageQuality);
+        resolveConfiguredImageBackground(capability, input.imageBackground);
+      } catch (error) { return error instanceof Error ? error.message : '图片参数无效'; }
+    }
   }
-  if (input.videoResolution !== undefined || input.videoLongSide !== undefined || input.videoDuration !== undefined) {
-    if (type !== 'ai-video') return '视频分辨率 / 时长只能用于视频节点';
-    if (input.videoResolution !== undefined && !input.videoResolution.trim()) return 'videoResolution 不能为空';
+  if (input.videoResolution !== undefined || input.videoLongSide !== undefined || input.videoDuration !== undefined
+    || input.videoFps !== undefined || input.generateAudio !== undefined) {
+    if (type !== 'ai-video') return '视频参数只能用于视频节点';
+    if (input.videoResolution !== undefined && !isSafeMediaParameterText(input.videoResolution, 'resolution'))
+      return 'videoResolution 格式无效，请使用模型声明的分辨率';
     if (input.videoResolution !== undefined && /^\d+$/.test(input.videoResolution.trim())
       && (Number(input.videoResolution) < 128 || Number(input.videoResolution) > 4096))
       return '视频长边必须在 128–4096 像素之间';
@@ -140,8 +172,31 @@ function mediaSettingsIssue(type: NodeType, input: CreateNodeInput | UpdateNodes
       return 'videoLongSide 必须是 128–4096 的整数像素';
     if (input.videoLongSide !== undefined && input.videoResolution !== undefined)
       return 'videoLongSide 与 videoResolution 只能传一个';
-    if (input.videoDuration !== undefined && resolveShotVideoDuration(input.videoDuration) === undefined)
-      return 'videoDuration 必须是大于 0 且不超过 3600 的秒数';
+    if (input.videoFps !== undefined && (!Number.isFinite(input.videoFps) || input.videoFps < 1 || input.videoFps > 240))
+      return 'videoFps 必须在 1–240 之间';
+    if (input.videoFps !== undefined || input.generateAudio !== undefined) {
+      if (!modelRef || !modelProvider) return '设置视频帧率或音轨前请先选择模型';
+      const isLocalWorkflow = modelProvider === 'comfyui';
+      if (['runninghub', 'runninghubwf', 'workflow-api'].includes(modelProvider)
+        || (existingWorkflowId && !isLocalWorkflow)) return 'RunningHub 和云工作流请使用专属参数';
+      if (isLocalWorkflow && input.generateAudio !== undefined) return '本地工作流请使用工作流音轨参数';
+      if (!isLocalWorkflow) {
+        const capability = resolveVideoModelCapability(modelRef, store.config, input.videoResolution ?? currentData?.seedanceResolution);
+        if (input.videoFps !== undefined && !capability?.frameRates?.includes(input.videoFps))
+          return '所选模型未声明或不支持该视频帧率';
+        if (input.generateAudio !== undefined && capability?.supportsAudio !== true)
+          return '所选模型未声明可调生成音轨开关';
+      }
+    }
+    if (input.videoDuration !== undefined) {
+      if (input.videoDuration < 0) {
+        const capability = modelRef ? resolveVideoModelCapability(modelRef, store.config, input.videoResolution ?? currentData?.seedanceResolution) : undefined;
+        if (capability?.automaticDurationValue !== input.videoDuration)
+          return 'videoDuration 的自动时长值必须由所选模型明确支持';
+      } else if (resolveShotVideoDuration(input.videoDuration) === undefined) {
+        return 'videoDuration 必须是大于 0 且不超过 3600 的秒数，或所选模型支持的自动时长值';
+      }
+    }
   }
   const audioInput = input.audioPurpose !== undefined || input.audioVoice !== undefined
     || input.audioFormat !== undefined || input.audioSpeed !== undefined
@@ -208,10 +263,14 @@ interface CreateNodesInput {
     dramaAssetId?: string;
     aspectRatio?: string;
     imageSize?: string;
+    imageQuality?: string;
+    imageBackground?: string;
     batchCount?: number;
     videoResolution?: string;
     videoLongSide?: number;
     videoDuration?: number;
+    videoFps?: number;
+    generateAudio?: boolean;
     audioPurpose?: AudioGenerationPurpose;
     audioVoice?: AudioTtsVoice;
     audioFormat?: AudioOutputFormat;
@@ -263,12 +322,16 @@ interface UpdateNodesInput extends NodeTargetInput {
   model?: string;
   aspectRatio?: string;
   imageSize?: string;
+  imageQuality?: string;
+  imageBackground?: string;
   batchCount?: number;
   /** 统一视频参数名；节点内部继续兼容 seedanceResolution。 */
   videoResolution?: string;
   videoLongSide?: number;
   /** 统一视频参数名；节点内部继续兼容 seedanceDuration。 */
   videoDuration?: number;
+  videoFps?: number;
+  generateAudio?: boolean;
   audioPurpose?: AudioGenerationPurpose;
   audioVoice?: AudioTtsVoice;
   audioFormat?: AudioOutputFormat;
@@ -303,9 +366,13 @@ interface NodeAuditSnapshot {
   model?: string;
   aspectRatio?: string;
   imageSize?: string;
+  imageQuality?: string;
+  imageBackground?: string;
   batchCount?: number;
   videoResolution?: string;
   videoDuration?: number;
+  videoFps?: number;
+  generateAudio?: boolean;
   audioPurpose?: AudioGenerationPurpose;
   audioVoice?: AudioTtsVoice;
   audioFormat?: AudioOutputFormat;
@@ -332,7 +399,11 @@ function createNodesInputDisplay(input: CreateNodesInput): AgentToolDisplaySnaps
       fields: [
         { label: '类型', value: nodeInput.type },
         ...(nodeInput.videoDuration !== undefined
-          ? [{ label: '生成时长（秒）', value: Math.ceil(nodeInput.videoDuration) }] : []),
+          ? [{ label: '生成时长（秒）', value: nodeInput.videoDuration < 0 ? '自动' : Math.ceil(nodeInput.videoDuration) }] : []),
+        ...(nodeInput.imageQuality !== undefined ? [{ label: '生成质量', value: nodeInput.imageQuality }] : []),
+        ...(nodeInput.imageBackground !== undefined ? [{ label: '生成背景', value: nodeInput.imageBackground || '接口默认' }] : []),
+        ...(nodeInput.videoFps !== undefined ? [{ label: '视频帧率', value: nodeInput.videoFps }] : []),
+        ...(nodeInput.generateAudio !== undefined ? [{ label: '生成音轨', value: nodeInput.generateAudio }] : []),
         ...(nodeInput.aspectRatio
           ? [{ label: '比例', value: nodeInput.aspectRatio }]
           : []),
@@ -365,9 +436,13 @@ function captureNodeAudit(node: Node<BaseNodeData>): NodeAuditSnapshot {
     model: typeof data.model === 'string' ? data.model : undefined,
     aspectRatio: typeof aspectRatio === 'string' ? aspectRatio : undefined,
     imageSize: typeof data.imageSize === 'string' ? data.imageSize : undefined,
+    imageQuality: data.imageQuality,
+    imageBackground: data.imageBackground,
     batchCount: typeof data.batchCount === 'number' ? data.batchCount : undefined,
     videoResolution: visibleVideoResolution(data),
     videoDuration: typeof data.seedanceDuration === 'number' ? data.seedanceDuration : undefined,
+    videoFps: data.videoFps,
+    generateAudio: data.generateAudio,
     audioPurpose: data.audioPurpose,
     audioVoice: data.audioVoice,
     audioFormat: data.audioFormat,
@@ -399,9 +474,13 @@ const UPDATE_DISPLAY_FIELDS: Array<{
   { inputKey: 'model', auditKey: 'model', label: '模型' },
   { inputKey: 'aspectRatio', auditKey: 'aspectRatio', label: '画面比例' },
   { inputKey: 'imageSize', auditKey: 'imageSize', label: '图片尺寸' },
+  { inputKey: 'imageQuality', auditKey: 'imageQuality', label: '生成质量' },
+  { inputKey: 'imageBackground', auditKey: 'imageBackground', label: '生成背景' },
   { inputKey: 'batchCount', auditKey: 'batchCount', label: '批量数量' },
   { inputKey: 'videoResolution', auditKey: 'videoResolution', label: '视频分辨率' },
   { inputKey: 'videoDuration', auditKey: 'videoDuration', label: '视频时长' },
+  { inputKey: 'videoFps', auditKey: 'videoFps', label: '视频帧率' },
+  { inputKey: 'generateAudio', auditKey: 'generateAudio', label: '生成音轨' },
   { inputKey: 'audioPurpose', auditKey: 'audioPurpose', label: '音频用途' },
   { inputKey: 'audioVoice', auditKey: 'audioVoice', label: '音色' },
   { inputKey: 'audioFormat', auditKey: 'audioFormat', label: '音频格式' },
@@ -590,11 +669,15 @@ function describeNode(node: Node<BaseNodeData>, globalAssets?: readonly DramaAss
     model: data.model,
     aspectRatio: data.type === 'ai-video' ? data.seedanceRatio : data.aspectRatio,
     imageSize: data.imageSize,
+    imageQuality: data.imageQuality,
+    imageBackground: data.imageBackground,
     batchCount: data.batchCount,
     videoResolution: visibleVideoResolution(data),
     videoLongSide: data.videoResolution,
     videoResolutionPreset: data.seedanceResolution,
     videoDuration: data.seedanceDuration,
+    videoFps: data.videoFps,
+    generateAudio: data.generateAudio,
     audioPurpose: data.audioPurpose,
     audioVoice: data.audioVoice,
     audioFormat: data.audioFormat,
@@ -985,10 +1068,14 @@ function createCanvasNode(
       ...(prompt ? { prompt } : {}),
       ...(dramaAsset ? { dramaAssetId: dramaAsset.id, dramaAssetKind: dramaAsset.kind } : {}),
       ...(input.imageSize !== undefined ? { imageSize: input.imageSize } : {}),
+      ...(input.imageQuality !== undefined ? { imageQuality: input.imageQuality } : {}),
+      ...(input.imageBackground !== undefined ? { imageBackground: input.imageBackground } : {}),
       ...(input.batchCount !== undefined ? { batchCount: input.batchCount } : {}),
       ...(type === 'ai-video' ? videoResolutionPatch(input) : {}),
       ...(type === 'ai-video' && input.videoDuration !== undefined
-        ? { seedanceDuration: resolveShotVideoDuration(input.videoDuration) } : {}),
+        ? { seedanceDuration: input.videoDuration < 0 ? input.videoDuration : resolveShotVideoDuration(input.videoDuration) } : {}),
+      ...(input.videoFps !== undefined ? { videoFps: input.videoFps } : {}),
+      ...(input.generateAudio !== undefined ? { generateAudio: input.generateAudio } : {}),
       ...(type === 'ai-audio' ? {
         ...(input.audioPurpose !== undefined ? { audioPurpose: input.audioPurpose } : {}),
         ...(input.audioVoice !== undefined ? { audioVoice: input.audioVoice } : {}),
@@ -1162,7 +1249,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '产物是镜头的用 ai-video，配乐旁白用 ai-audio，多宫格图片也用 ai-image。分镜表不是视频生成的必建前置；仅需直接制作视频时不额外创建 ai-shotlist 或剧本快照，只有需要逐镜审稿、统一时长或按表剪辑时才建表，并先查询复用已有表。',
         '从外部剧本或分镜导入视频时，必须把来源中明确的每镜秒数传入 videoDuration，不能只写在 prompt 中；小数秒向上取整到实际生成时长。未提供时保留项目默认值，不猜测提示词中的数字。已明确使用软件内现有分镜表制作时，用 shotlist_prepare_production，保留镜头来源和自动时长关联；不默认额外复制每镜全文为文本节点。',
         '直接引用软件内某镜创建视频时，先用 shotlist_read 取得该行 mention，再原样放入 prompt，附加要求写在胶囊外；自动读取最新景别、运镜、画面、对白和音效。省略 videoDuration 跟随该镜时长，明确传入则视为手动覆盖；只连接所属表，不引用整表或编造虚拟镜头 ID。',
-        '已确定的模型、图片尺寸/批量、视频长边、语音或音乐参数请在创建时一并传入；本地工作流长边像素用 videoLongSide（如 832），API 画质档位用 videoResolution（如 720p）。未提供的字段沿用项目或模型默认值。音频参考素材用 @ 引用，工作流特有参数仍在工作流配置中设置。',
+        '已确定的模型、图片尺寸/质量/背景/批量、视频长边/帧率/音轨、语音或音乐参数请在创建时一并传入；本地工作流长边像素用 videoLongSide（如 832），API 画质档位用 videoResolution（如 720p）。负数自动时长仅允许所选模型明确声明的值。未提供的字段沿用项目或模型默认值。音频参考素材用 @ 引用，工作流特有参数仍在工作流配置中设置。',
         'ai-storyboard 是把已有图片进行宫格裁切后产生的素材节点，本工具不能直接创建，也不能给它提示词或运行生成。',
         '产物本身就是文字的用 ai-text（markdown 排版用 ai-markdown）。',
         '文本节点分 prompt 和 content 两个口，别混：',
@@ -1200,13 +1287,17 @@ export function registerCanvasAgentTools(): Array<() => void> {
                   description: '仅 ai-image：已有项目人物/场景/道具 ID；新节点作为其参考图，生成后自动回填资产库。不是提示词输入引用。' },
                 aspectRatio: { type: 'string', enum: ASPECT_RATIOS },
                 imageSize: { type: 'string', enum: [...PROJECT_IMAGE_SIZES] },
+                imageQuality: { type: 'string', minLength: 1, maxLength: 40, description: '仅图片模型声明支持的质量档位。' },
+                imageBackground: { type: 'string', maxLength: 40, description: '仅图片模型声明支持的背景；空字符串表示接口默认。' },
                 batchCount: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_BATCH_COUNT },
                 videoResolution: { type: 'string', minLength: 1, maxLength: 40,
                   description: 'API 画质档位，如 720p；兼容旧客户端传入数字字符串 832 并映射为长边像素。' },
                 videoLongSide: { type: 'integer', minimum: 128, maximum: 4096,
                   description: '本地 ComfyUI / RunningHub 视频长边像素，如 832。' },
-                videoDuration: { type: 'number', minimum: 0.01, maximum: 3600,
-                  description: '仅 ai-video：来源分镜的秒数，支持小数并向上取整，写入实际生成时长控件。' },
+                videoDuration: { type: 'number', maximum: 3600,
+                  description: '仅 ai-video：秒数支持小数并向上取整；负数仅允许所选模型声明的自动时长值。' },
+                videoFps: { type: 'number', minimum: 1, maximum: 240, description: '视频帧率，须符合模型能力。' },
+                generateAudio: { type: 'boolean', description: '视频生成音轨开关，须符合模型能力。' },
                 audioPurpose: { type: 'string', enum: ['music', 'speech'] },
                 audioVoice: { type: 'string', minLength: 1, maxLength: 256, description: '当前模型公布的音色 ID，不含控制字符。' },
                 audioFormat: { type: 'string', enum: AUDIO_FORMATS },
@@ -1229,6 +1320,16 @@ export function registerCanvasAgentTools(): Array<() => void> {
         },
       },
       effect: 'canvas_write',
+      resolveInput: (input) => {
+        for (const node of input.nodes) {
+          if ((node.imageQuality !== undefined && !isSafeMediaParameterText(node.imageQuality, 'imageQuality'))
+            || (node.imageBackground !== undefined && !isSafeMediaParameterText(node.imageBackground, 'imageBackground'))
+            || (node.videoResolution !== undefined && !isSafeMediaParameterText(node.videoResolution, 'resolution'))) {
+            throw new Error('媒体参数格式无效，请使用模型声明的参数值');
+          }
+        }
+        return input;
+      },
       authorize: authorizeCurrentProject,
       summarizeInput: (input) => `新建 ${input.nodes.length} 个画布节点`,
       buildInputDisplay: createNodesInputDisplay,
@@ -1316,7 +1417,8 @@ export function registerCanvasAgentTools(): Array<() => void> {
         // 即使该节点暂时没有提示词。沿用创建的同一条撤销历史。
         const explicitKeys = [
           'model', 'provider', 'workflowId', 'workflowInputs', 'aspectRatio', 'imageSize',
-          'batchCount', 'seedanceRatio', 'seedanceResolution', 'videoResolution', 'seedanceDuration',
+          'imageQuality', 'imageBackground', 'batchCount', 'seedanceRatio', 'seedanceResolution', 'videoResolution', 'seedanceDuration',
+          'videoFps', 'generateAudio',
           'audioPurpose', 'audioVoice', 'audioFormat', 'audioSpeed', 'audioSpeechSettings',
           'musicDuration', 'musicBpm', 'musicTitle', 'musicLyrics', 'autoGenerateLyrics',
         ] as const;
@@ -1408,10 +1510,15 @@ export function registerCanvasAgentTools(): Array<() => void> {
           model: { type: 'string', minLength: 1, maxLength: 240 },
           aspectRatio: { type: 'string', enum: ASPECT_RATIOS },
           imageSize: { type: 'string', enum: [...PROJECT_IMAGE_SIZES] },
+          imageQuality: { type: 'string', minLength: 1, maxLength: 40 },
+          imageBackground: { type: 'string', maxLength: 40, description: '空字符串表示接口默认。' },
           batchCount: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_BATCH_COUNT },
           videoResolution: { type: 'string', minLength: 1, maxLength: 40 },
           videoLongSide: { type: 'integer', minimum: 128, maximum: 4096 },
-          videoDuration: { type: 'integer', minimum: 1, maximum: 3600 },
+          videoDuration: { type: 'number', maximum: 3600,
+            description: '负数仅允许所选模型声明的自动时长值。' },
+          videoFps: { type: 'number', minimum: 1, maximum: 240 },
+          generateAudio: { type: 'boolean' },
           audioPurpose: { type: 'string', enum: ['music', 'speech'] },
           audioVoice: { type: 'string', minLength: 1, maxLength: 256, description: '当前模型公布的音色 ID，不含控制字符。' },
           audioFormat: { type: 'string', enum: AUDIO_FORMATS },
@@ -1459,9 +1566,14 @@ export function registerCanvasAgentTools(): Array<() => void> {
           ...(input.height !== undefined ? { nodeHeight: Math.round(input.height) } : {}),
           ...(input.aspectRatio !== undefined ? { aspectRatio: input.aspectRatio } : {}),
           ...(input.imageSize !== undefined ? { imageSize: input.imageSize } : {}),
+          ...(input.imageQuality !== undefined ? { imageQuality: input.imageQuality } : {}),
+          ...(input.imageBackground !== undefined ? { imageBackground: input.imageBackground } : {}),
           ...(input.batchCount !== undefined ? { batchCount: input.batchCount } : {}),
           ...videoResolutionPatch(input),
-          ...(input.videoDuration !== undefined ? { seedanceDuration: input.videoDuration } : {}),
+          ...(input.videoDuration !== undefined ? { seedanceDuration: input.videoDuration < 0
+            ? input.videoDuration : resolveShotVideoDuration(input.videoDuration) } : {}),
+          ...(input.videoFps !== undefined ? { videoFps: input.videoFps } : {}),
+          ...(input.generateAudio !== undefined ? { generateAudio: input.generateAudio } : {}),
           ...(input.audioPurpose !== undefined ? { audioPurpose: input.audioPurpose } : {}),
           ...(input.audioVoice !== undefined ? { audioVoice: input.audioVoice } : {}),
           ...(input.audioFormat !== undefined ? { audioFormat: input.audioFormat } : {}),
@@ -1815,6 +1927,22 @@ export function registerCanvasAgentTools(): Array<() => void> {
           }
           if (node.data.status === 'loading') {
             results.push({ nodeId, status: 'skipped', message: '节点正在生成中' });
+            continue;
+          }
+          // 校验当前模型，而非仅信任此前配置过参数时的模型；本地及云工作流继续使用各自参数合同。
+          const data = node.data;
+          const kind = getProjectModelKind(data.type);
+          const projectModel = kind && useAppStore.getState().projects.find((project) => project.id === context.projectId)
+            ?.settings?.defaultModels?.[kind];
+          const provider = parseProjectModelRef(data.model || projectModel)?.provider ?? data.provider;
+          const usesWorkflow = Boolean(data.workflowId) || ['comfyui', 'runninghub', 'runninghubwf', 'workflow-api'].includes(provider ?? '');
+          const parameters = data.type === 'ai-image' ? { imageQuality: data.imageQuality, imageBackground: data.imageBackground }
+            : data.type === 'ai-video' ? { videoFps: data.videoFps, generateAudio: data.generateAudio,
+              ...(data.seedanceDuration !== undefined && data.seedanceDuration < 0 ? { videoDuration: data.seedanceDuration } : {}) }
+              : undefined;
+          const issue = !usesWorkflow && parameters ? mediaSettingsIssue(data.type, parameters, data) : undefined;
+          if (issue) {
+            results.push({ nodeId, status: 'failed', message: issue });
             continue;
           }
           const result = await executeGeneration(nodeId);

@@ -506,6 +506,133 @@ describe('RelayOnAPI 图片请求与连接身份', () => {
   });
 });
 
+describe('RelayOnAPI 普通 2.5 旧连接的质量与背景', () => {
+  function configureLegacyOptions(modelId = 'Image-2.5-Flare') {
+    const selected = structuredClone(getProviderDefinition('relayonapi')!.models!.find((model) => model.id === modelId)!);
+    const body = selected.executionProfile!.protocol!.submit.body as Record<string, unknown>;
+    delete body.quality;
+    delete body.background;
+    delete selected.imageCapability!.qualities;
+    delete selected.imageCapability!.defaultQuality;
+    delete selected.imageCapability!.backgrounds;
+    delete selected.imageCapability!.defaultBackground;
+    useAppStore.getState().saveProviderConfig('relayon-old-options', {
+      name: '旧万象连接', catalogId: 'relayonapi', apiKey: 'relayon-options-fixture', baseUrl: 'https://relayonapi.com/v1',
+      selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'relayon-old-options')!;
+    return { params: { provider: 'general', model: `general/${model.id}`, prompt: '生成角色立绘', imageSize: '2K', aspectRatio: '9:16' },
+      original: structuredClone({ selected, model }) };
+  }
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('旧 %s 选择 high 与透明时文生和编辑均请求 PNG，保持用户尺寸及保存配置', async (modelId) => {
+    const { params, original } = configureLegacyOptions(modelId);
+    const reference = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8Z0AAAAASUVORK5CYII=';
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应使用公共图床'));
+    transportMocks.corsSafeFetch.mockImplementation(async () => jsonResponse({ data: [{ url: 'https://cdn.example/relayon-alpha.png' }] }));
+    for (const image_urls of [undefined, [reference]]) {
+      await expect(generateImagesBatch({ ...params, imageQuality: 'high', imageBackground: 'transparent', image_urls }, 1))
+        .resolves.toMatchObject({ results: [{ url: 'https://cdn.example/relayon-alpha.png', width: 1152, height: 2048 }] });
+    }
+    expect(transportMocks.corsSafeFetch.mock.calls.map(([url]) => url)).toEqual([
+      'https://relayonapi.com/v1/images/generations', 'https://relayonapi.com/v1/images/edits',
+    ]);
+    const bodies = transportMocks.corsSafeFetch.mock.calls.map(([, init]) => {
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer relayon-options-fixture' });
+      return JSON.parse(String(init.body));
+    });
+    for (const body of bodies) expect(body).toMatchObject({ model: modelId, quality: 'high', background: 'transparent',
+      output_format: 'png', size: '1152x2048', aspect_ratio: '9:16', resolution: '2K', n: 1 });
+    expect(bodies[0]).not.toHaveProperty('image');
+    expect(bodies[1].image).toEqual([reference]);
+    expect(directFetch).not.toHaveBeenCalled();
+    const config = useAppStore.getState().config;
+    expect(config.providers['relayon-old-options'].selectedModels).toEqual([original.selected]);
+    const savedModel = config.generalModels!.find((model) => model.id === original.model.id)!;
+    expect(savedModel.executionProfile).toEqual(original.model.executionProfile);
+    expect(savedModel.imageCapability).toEqual(original.model.imageCapability);
+  });
+
+  it('通用模型缓存缺协议、能力和参考模式时沿用所选旧合同编辑，且不回写缓存或上传到公共图床', async () => {
+    const { params, original } = configureLegacyOptions();
+    useAppStore.setState((state) => ({ config: { ...state.config,
+      generalModels: state.config.generalModels!.map((model) => {
+        if (model.id !== original.model.id) return model;
+        const incomplete = { ...model };
+        delete incomplete.executionProfile;
+        delete incomplete.imageCapability;
+        delete incomplete.imageReferenceRequestMode;
+        return incomplete;
+      }),
+    } }));
+    const cachedBefore = structuredClone(useAppStore.getState().config.generalModels!.find((model) => model.id === original.model.id)!);
+    for (const field of ['executionProfile', 'imageCapability', 'imageReferenceRequestMode']) {
+      expect(cachedBefore).not.toHaveProperty(field);
+    }
+    const reference = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j8Z0AAAAASUVORK5CYII=';
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('不应使用公共图床'));
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/relayon-recovered-options.png' }] }));
+
+    await expect(generateImagesBatch({ ...params, imageQuality: 'high', imageBackground: 'transparent', image_urls: [reference] }, 1))
+      .resolves.toMatchObject({ results: [{ url: 'https://cdn.example/relayon-recovered-options.png', width: 1152, height: 2048 }] });
+
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://relayonapi.com/v1/images/edits', expect.anything());
+    expect(JSON.parse(String(transportMocks.corsSafeFetch.mock.calls[0][1].body))).toMatchObject({
+      image: [reference], quality: 'high', background: 'transparent', output_format: 'png',
+      size: '1152x2048', aspect_ratio: '9:16', resolution: '2K', n: 1,
+    });
+    expect(directFetch).not.toHaveBeenCalled();
+    const after = useAppStore.getState().config;
+    expect(after.providers['relayon-old-options'].selectedModels).toEqual([original.selected]);
+    expect(after.generalModels!.find((model) => model.id === original.model.id)).toEqual(cachedBefore);
+  });
+
+  it.each([
+    { label: '接口默认', imageQuality: undefined, imageBackground: undefined },
+    { label: '仅设置质量', imageQuality: 'high', imageBackground: undefined },
+    { label: '清空背景', imageQuality: undefined, imageBackground: '' },
+    { label: '自动背景', imageQuality: undefined, imageBackground: 'auto' },
+    { label: '不透明背景', imageQuality: undefined, imageBackground: 'opaque' },
+  ])('$label 不补造其他参数或强制 PNG', async ({ imageQuality, imageBackground }) => {
+    const { params } = configureLegacyOptions();
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/relayon-options.png' }] }));
+    await generateImagesBatch({ ...params, imageQuality, imageBackground }, 1);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse(String(transportMocks.corsSafeFetch.mock.calls[0][1].body));
+    if (imageQuality === undefined) expect(body).not.toHaveProperty('quality');
+    else expect(body.quality).toBe(imageQuality);
+    if (!imageBackground) expect(body).not.toHaveProperty('background');
+    else expect(body.background).toBe(imageBackground);
+    expect(body).not.toHaveProperty('output_format');
+    expect(body).toMatchObject({ size: '1152x2048', aspect_ratio: '9:16', resolution: '2K', n: 1 });
+  });
+
+  it('用户改过的普通 2.5 协议保留固定值和输出格式，不替换为内置请求', async () => {
+    const selected = structuredClone(getProviderDefinition('relayonapi')!.models!.find((model) => model.id === 'Image-2.5-Flare')!);
+    selected.executionProfile!.protocol!.submit.path = '/custom/images';
+    const body = selected.executionProfile!.protocol!.submit.body as Record<string, unknown>;
+    body.quality = 'high';
+    body.background = 'opaque';
+    body.output_format = 'webp';
+    selected.imageCapability = { ...selected.imageCapability, qualities: ['high'], defaultQuality: 'high',
+      backgrounds: ['opaque'], defaultBackground: 'opaque' };
+    const original = structuredClone(selected);
+    useAppStore.getState().saveProviderConfig('relayon-custom-options', {
+      name: '自行调整过的万象协议', catalogId: 'relayonapi', apiKey: 'custom-options-fixture', baseUrl: 'https://relayonapi.com/v1',
+      selectedModels: [selected],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'relayon-custom-options')!;
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url: 'https://cdn.example/relayon-custom.webp' }] }));
+    await generateImagesBatch({ provider: 'general', model: `general/${model.id}`, prompt: '保留自己配置的图片协议',
+      imageSize: '2K', aspectRatio: '9:16', imageQuality: 'high', imageBackground: 'opaque' }, 1);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledExactlyOnceWith('https://relayonapi.com/v1/custom/images', expect.anything());
+    expect(JSON.parse(String(transportMocks.corsSafeFetch.mock.calls[0][1].body))).toMatchObject({
+      quality: 'high', background: 'opaque', output_format: 'webp', size: '1152x2048', aspect_ratio: '9:16', resolution: '2K',
+    });
+    expect(selected).toEqual(original);
+  });
+});
+
 describe('LibAPI 图片原任务与请求合同', () => {
   function configureLibapiImage() {
     const selected = LIBAPI_MODEL_MANIFEST.find((model) => model.id === 'gt-image-2.5-flare')!;

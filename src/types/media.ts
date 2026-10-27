@@ -7,7 +7,18 @@ export type AudioGenerationPurpose = 'music' | 'speech';
 
 export type MediaDeliveryMode = 'chat' | 'canvas' | 'both';
 
-export interface MediaGenerationIntent {
+/** 用户显式选择或审批前锁定的媒体参数；不包含提示词、素材和凭据。 */
+export interface MediaGenerationParameters {
+  aspectRatio?: string;
+  resolution?: string;
+  duration?: number;
+  imageQuality?: string;
+  imageBackground?: string;
+  videoFps?: number;
+  generateAudio?: boolean;
+}
+
+export interface MediaGenerationIntent extends MediaGenerationParameters {
   kind: MediaKind;
   prompt: string;
   /** GeneralModelConfig.id 或供应商模型 value。 */
@@ -21,10 +32,6 @@ export interface MediaGenerationIntent {
   audioSpeed?: number;
   musicTitle?: string;
   musicLyrics?: string;
-  /** 审批前锁定的视频有效参数；缺省表示沿用模型默认。 */
-  aspectRatio?: string;
-  resolution?: string;
-  duration?: number;
   /** 云工作流按节点/字段映射的本轮参数。 */
   workflowInputs?: Record<string, string>;
   runninghubModelParameters?: Record<string, string>;
@@ -53,6 +60,7 @@ export type CanvasMaterializationStatus =
 export type MediaPersistenceStatus = 'saved' | 'skipped' | 'failed';
 
 export interface MediaGenerationResult {
+  parameters?: MediaGenerationParameters;
   /** 异步生成的交付回执；只有保存及目标回填成功后才能确认。 */
   taskReceipt?: import('./aiTypes').MediaTaskReceipt;
   workflowApiOutputs?: import('./workflowApi').CloudWorkflowOutput[];

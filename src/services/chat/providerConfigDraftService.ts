@@ -726,6 +726,74 @@ function normalizeBaseUrl(value: string, chatApiProtocol: ChatApiProtocol): stri
   return url.toString().replace(/\/$/, '');
 }
 
+/** MCP 动态能力对象不能依赖工具 schema 校验任意键；只接受有界、无危险键的普通 JSON。 */
+function assertSafeDraftCapability(value: unknown): void {
+  let nodes = 0;
+  const visit = (item: unknown, depth: number): void => {
+    if (++nodes > 2_048 || depth > 8) throw new Error('模型能力声明过大或嵌套过深');
+    if (!item || typeof item !== 'object') return;
+    if (Array.isArray(item)) {
+      if (item.length > 512) throw new Error('模型能力数组过长');
+      item.forEach((entry) => visit(entry, depth + 1));
+      return;
+    }
+    const prototype = Object.getPrototypeOf(item);
+    if (prototype !== Object.prototype && prototype !== null) throw new Error('模型能力必须使用普通 JSON 对象');
+    for (const [key, child] of Object.entries(item)) {
+      if (DANGEROUS_OBJECT_KEYS.has(key.toLowerCase())) throw new Error('模型能力包含不允许的对象键');
+      visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+}
+
+/** 限制像素表的动态键与矩阵大小；完整性由共享图片能力校验进一步检查。 */
+function assertDraftDimensions(value: unknown): void {
+  if (value === undefined) return;
+  const validKey = (key: string) => key.length > 0 && key.length <= 40 && key === key.trim()
+    && !Array.from(key).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    && !DANGEROUS_OBJECT_KEYS.has(key.toLowerCase());
+  const plainRecord = (item: unknown): item is Record<string, unknown> => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const prototype = Object.getPrototypeOf(item);
+    return prototype === Object.prototype || prototype === null;
+  };
+  if (!plainRecord(value)) throw new Error('dimensionPresets 必须是按分辨率和比例索引的普通对象');
+  const resolutions = Object.entries(value);
+  if (resolutions.length < 1 || resolutions.length > 16
+    || resolutions.some(([key]) => !validKey(key))
+    || new Set(resolutions.map(([key]) => key.toLowerCase())).size !== resolutions.length) {
+    throw new Error('dimensionPresets 的分辨率键必须是 1 至 16 个不重复的有效字符串');
+  }
+  for (const [, ratios] of resolutions) {
+    if (!plainRecord(ratios)) throw new Error('dimensionPresets 的比例表必须是普通对象');
+    const entries = Object.entries(ratios);
+    if (entries.length < 1 || entries.length > 32 || entries.some(([key]) => !validKey(key))
+      || new Set(entries.map(([key]) => key.toLowerCase())).size !== entries.length) {
+      throw new Error('dimensionPresets 的比例键必须是 1 至 32 个不重复的有效字符串');
+    }
+    for (const [, dimensions] of entries) {
+      if (!Array.isArray(dimensions) || dimensions.length !== 2
+        || dimensions.some((dimension) => !Number.isSafeInteger(dimension) || dimension < 1 || dimension > 65_536)) {
+        throw new Error('dimensionPresets 的宽高必须是 1 至 65536 的整数');
+      }
+    }
+  }
+}
+
+/** 仅合并明确提供的能力子字段；数组作为完整候选替换，不改原始配置。 */
+function mergeCapabilityRecords<T extends object>(previous: T | undefined, patch: T): T {
+  const merge = (oldValue: unknown, newValue: unknown): unknown => {
+    if (newValue === undefined) return oldValue;
+    if (!newValue || typeof newValue !== 'object' || Array.isArray(newValue)) return structuredClone(newValue);
+    const current: Record<string, unknown> = oldValue && typeof oldValue === 'object' && !Array.isArray(oldValue)
+      ? { ...oldValue } : {};
+    for (const [key, value] of Object.entries(newValue)) current[key] = merge(current[key], value);
+    return current;
+  };
+  return merge(previous, patch) as T;
+}
+
 function pruneExpiredDrafts(now: number): void {
   for (const [draftId, draft] of drafts) {
     if (draft.expiresAt <= now) drafts.delete(draftId);
@@ -743,6 +811,9 @@ function createModelSelection(
   declaredBaseUrl?: string,
   chatApiProtocol: ChatApiProtocol = 'openai-compatible',
 ): { selection: ProviderModelSelection; baseUrl: string; updateFields: Array<keyof ProviderModelSelection> } {
+  assertSafeDraftCapability(examples.imageCapability);
+  assertSafeDraftCapability(examples.videoCapability);
+  assertDraftDimensions(examples.imageCapability?.dimensionPresets);
   const templateMatch = examples.modelId?.trim()
     ? resolveSeedanceAutoTemplate({
         modelId: examples.modelId,
@@ -975,6 +1046,20 @@ export function mergeProviderModels(
       return key !== 'id'
         && (!fields || fields.includes(field))
         && (value !== undefined || Boolean(fields?.includes(field)));
+    }).map(([key, value]): [string, unknown] => {
+      if (key === 'imageCapability' && value !== undefined) {
+        const capability = value as ImageModelCapability;
+        assertSafeDraftCapability(capability);
+        assertDraftDimensions(capability.dimensionPresets);
+        const mergedCapability = mergeCapabilityRecords(model.imageCapability, capability);
+        if (capability.dimensionPresets !== undefined) assertDraftDimensions(mergedCapability.dimensionPresets);
+        return [key, mergedCapability];
+      }
+      if (key === 'videoCapability' && value !== undefined) {
+        assertSafeDraftCapability(value);
+        return [key, mergeCapabilityRecords(model.videoCapability, value as VideoModelCapability)];
+      }
+      return [key, value];
     });
     const patch = Object.fromEntries(entries) as Partial<ProviderModelSelection>;
     const updated = entries
@@ -992,6 +1077,7 @@ export function mergeProviderModels(
     const mergedModel = { ...model, ...patch };
     if (updated.some((field) => ['executionProfile', 'imageCapability', 'videoCapability', 'imageReferenceRequestMode'].includes(field))) {
       // 协议更新可能保留旧能力；必须核对合并后的实际配置，不能只校验本轮字段。
+      if (mergedModel.videoCapability) assertVideoModelCapability(mergedModel.videoCapability);
       assertModelCapabilityProtocol(mergedModel);
     }
     updatedIds.push(model.id);

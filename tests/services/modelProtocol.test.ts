@@ -614,6 +614,42 @@ describe('declarative model execution protocol', () => {
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith('https://gateway.example/v1/tasks/original', expect.objectContaining({ method: 'GET' }));
   });
 
+  it('checks video ratio mappings across reachable operations and input modes', () => {
+    const protocol: ModelExecutionProtocol = { version: 2, mode: 'sync',
+      submit: { method: 'POST', path: '/videos', body: { prompt: '{{prompt}}', aspect_ratio: '16:9' } },
+      response: { type: 'json', result: { urlPath: 'url' } } };
+    const model = { id: 'custom-video', name: 'Custom Video', provider: 'custom', category: 'video' as const,
+      executionProfile: { preset: 'custom' as const, protocol } };
+
+    const operationMulti = { operations: ['text-to-video' as const], supportsStandaloneAudio: false,
+      operationCapabilities: { 'text-to-video': { ratios: ['16:9', '9:16'] } } };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: operationMulti })).toThrow('可调比例');
+
+    const operationSingles = { operations: ['text-to-video' as const, 'image-to-video' as const],
+      supportsStandaloneAudio: false, allowFrameAndReferenceMix: false,
+      operationCapabilities: { 'text-to-video': { ratios: ['16:9'] }, 'image-to-video': { ratios: ['9:16'] } } };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: operationSingles })).toThrow('可调比例');
+
+    const differentModes = { operations: ['image-to-video' as const], allowFrameAndReferenceMix: false,
+      inputModeCapabilities: { keyframe: { ratios: ['16:9'] }, reference: { ratios: ['9:16'] } } };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: differentModes })).toThrow('可调比例');
+
+    protocol.submit.body = { prompt: '{{prompt}}', aspect_ratio: '{{aspectRatio}}' };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: operationMulti })).not.toThrow();
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: operationSingles })).not.toThrow();
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: differentModes })).not.toThrow();
+
+    protocol.submit.body = { prompt: '{{prompt}}', aspect_ratio: '16:9' };
+    const singleReachable = { operations: ['text-to-video' as const], supportsStandaloneAudio: false,
+      ratios: ['9:16'], operationCapabilities: { 'text-to-video': { ratios: ['16:9'] },
+        'video-to-video': { ratios: ['9:16'] } } };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: singleReachable })).not.toThrow();
+    const singleMode = { operations: ['text-to-video' as const], supportsStandaloneAudio: false,
+      operationCapabilities: { 'text-to-video': { ratios: ['16:9', '9:16'] } },
+      inputModeCapabilities: { text: { ratios: ['16:9'] } } };
+    expect(() => assertModelCapabilityProtocol({ ...model, videoCapability: singleMode })).not.toThrow();
+  });
+
   it('keeps interface-default background distinct from an explicit auto parameter', () => {
     const capability = { backgrounds: ['auto', 'opaque', 'transparent'] };
     expect(resolveConfiguredImageBackground(undefined, 'transparent')).toBeUndefined();

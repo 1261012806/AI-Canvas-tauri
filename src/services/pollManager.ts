@@ -20,7 +20,7 @@ import { ComfyPendingError, pollComfyHistory } from './comfyPolling';
 import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from './canvasDerivationGuard';
 import { pollResolvedModelProtocol } from './ai/modelProtocol';
-import { assertModelProtocolResult } from './ai/modelCapabilityValidation';
+import { assertModelProtocolResult, isSafeMediaParameterText, MEDIA_PARAMETER_TEXT_FIELDS } from './ai/modelCapabilityValidation';
 import {
   extractFlowMusicLyrics,
   extractFlowMusicTrack,
@@ -252,10 +252,29 @@ export function isMediaTaskPausedError(error: unknown): error is VideoPollingPau
   return error instanceof Error && pausedErrors.has(error);
 }
 
+/** 只保存有限的媒体选项，避免恢复记录混入提示词、路径或任意对象。 */
+function sanitizeMediaParameters(value: MediaTaskContext['parameters']): MediaTaskContext['parameters'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: NonNullable<MediaTaskContext['parameters']> = {};
+  for (const key of MEDIA_PARAMETER_TEXT_FIELDS) {
+    const item = value[key];
+    if (isSafeMediaParameterText(item, key)) result[key] = item;
+  }
+  if (typeof value.duration === 'number' && Number.isFinite(value.duration) && value.duration !== 0
+    && value.duration <= 3600) result.duration = value.duration;
+  if (typeof value.videoFps === 'number' && Number.isFinite(value.videoFps)
+    && value.videoFps >= 1 && value.videoFps <= 240) result.videoFps = value.videoFps;
+  if (typeof value.generateAudio === 'boolean') result.generateAudio = value.generateAudio;
+  // 空对象是新任务的显式快照，与没有快照的旧任务不同。
+  return result;
+}
+
 export function bindMediaTaskContext(trackingId: string, context: MediaTaskContext,
   observer?: (receipt: MediaTaskReceipt) => void): () => void {
+  const parameters = sanitizeMediaParameters(context.parameters);
   const safe: MediaTaskContext = { projectId: context.projectId, conversationId: context.conversationId,
-    messageId: context.messageId, deliveryMode: context.deliveryMode, canvasNodeId: context.canvasNodeId, modelId: context.modelId };
+    messageId: context.messageId, deliveryMode: context.deliveryMode, canvasNodeId: context.canvasNodeId, modelId: context.modelId,
+    ...(parameters ? { parameters } : {}) };
   mediaTaskContexts.set(trackingId, safe);
   if (observer) mediaTaskObservers.set(trackingId, observer);
   else mediaTaskObservers.delete(trackingId);
@@ -601,6 +620,7 @@ function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
   const { baseUrl: legacyBaseUrl, ...safeTask } = task;
   delete safeTask.apiKey;
   const providerConfigId = inferLegacyProviderConfigId(task);
+  const parameters = sanitizeMediaParameters(task.mediaContext?.parameters);
   return {
     ...safeTask,
     nodeType: getGenerationNodeType(safeTask.nodeType),
@@ -608,7 +628,8 @@ function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
     ...(task.taskType === 'comfyui' && legacyBaseUrl ? { baseUrl: legacyBaseUrl } : {}),
     ...(task.mediaContext ? { mediaContext: { projectId: task.projectId,
       conversationId: task.mediaContext.conversationId, messageId: task.mediaContext.messageId,
-      deliveryMode: task.mediaContext.deliveryMode, canvasNodeId: task.mediaContext.canvasNodeId, modelId: task.mediaContext.modelId } } : {}),
+      deliveryMode: task.mediaContext.deliveryMode, canvasNodeId: task.mediaContext.canvasNodeId, modelId: task.mediaContext.modelId,
+      ...(parameters ? { parameters } : {}) } } : {}),
   };
 }
 
