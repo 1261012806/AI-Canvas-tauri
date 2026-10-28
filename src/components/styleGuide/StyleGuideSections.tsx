@@ -1641,7 +1641,7 @@ function VideoPlayerSection() {
   const [compact, setCompact] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => () => { if (media) URL.revokeObjectURL(media.src); }, [media]);
-  return <Section id="sg-video-player" desc="公用 VideoPlayer；支持进度、倍速、音量、悬停预览、全屏和减少动态效果。选择本地视频试播，样例仅在本窗口使用，关闭或替换时释放资源。切点与分段交互见独立的时间轴分区。">
+  return <Section id="sg-video-player" desc="公用 VideoPlayer；支持暂停时拖动进度，聚焦播放器或进度条后用左右键每次微调 0.1 秒，并保持播放或暂停状态。提供倍速、音量、悬停预览、全屏和减少动态效果。选择本地视频试播，样例仅在本窗口使用，关闭或替换时释放资源。切点与分段交互见独立的时间轴分区。">
     <Demo label="播放器与本地视频" code={'<VideoPlayer src={videoUrl} name="示例视频" compact={compact} unavailable={!videoUrl} /> · ui-video-player--compact'}>
       <div className="ui-stack">
         <div className="ui-row">
@@ -1659,6 +1659,7 @@ function VideoPlayerSection() {
         <div className={`${compact ? 'h-[158px] w-[280px] max-w-full' : 'h-[380px]'} min-w-0 rounded-lg bg-canvas-bg`}>
           <VideoPlayer key={media?.src ?? 'empty'} src={media?.src} name={media?.name ?? '视频样例'} unavailable={!media} compact={compact} />
         </div>
+        <p className="text-xs text-canvas-text-secondary">暂停后拖动进度条，画面应定位且不开始播放；点击进度条或用 Tab 聚焦播放控件，再按 ← / → 微调 0.1 秒。音量与倍速滑杆保留各自的方向键操作。</p>
       </div>
     </Demo>
   </Section>;
@@ -1834,7 +1835,7 @@ export const STYLE_GUIDE_GROUPS = [
       { id: 'sg-models', title: '模型选择', keywords: ['ModelPicker', 'ModelMenu', 'ProviderBadge', 'ui-model-menu', 'ui-model-pill', 'prompt-btn', '厂商', '胶囊'], component: ModelsSection },
       { id: 'sg-references', title: '引用与素材选择', keywords: ['MentionPicker', 'ExpandableSearch', 'buildReferenceChipEl', 'ui-reference-chip', 'ui-expandable-search', '@', '引用胶囊', '搜索'], component: ReferencesSection },
       { id: 'sg-markdown-editor', title: 'Markdown 编辑器', keywords: ['MarkdownEditor', 'ui-markdown-editor', '预览', '查找', '替换', '撤销'], component: MarkdownEditorSection },
-      { id: 'sg-video-player', title: '视频播放器', keywords: ['VideoPlayer', 'ui-video-player', '倍速', '音量', '全屏', '播放'], component: VideoPlayerSection },
+      { id: 'sg-video-player', title: '视频播放器', keywords: ['VideoPlayer', 'ui-video-player', '倍速', '音量', '全屏', '播放', '暂停', '进度', '拖动', '左右键', '微调'], component: VideoPlayerSection },
       { id: 'sg-timeline', title: '时间轴', keywords: ['Timeline', 'TimelineRuler', 'TimelineThumbnails', 'ui-timeline', '切点', '分段', '缩放', '播放头'], component: TimelineSection },
       { id: 'sg-generation-effects', title: '生成特效', keywords: ['PolishMetalFx', '动效', '流光', '思考球', '金属', '边框'], component: GenerationEffectsSection },
       { id: 'sg-mascot', title: '吉祥物', keywords: ['mascot', '角色', '表情', '动作', '循环'], component: MascotSection },

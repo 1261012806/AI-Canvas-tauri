@@ -26,6 +26,8 @@ export interface VideoPlayerProps {
   onVolumeChange?: (volume: number, muted: boolean) => void;
   onPosterError?: () => void;
   onRequestPlayback?: () => void;
+  /** 封面状态下按需挂载媒体以定位，不触发播放。 */
+  onRequestSeek?: () => void;
   onFullscreen?: () => void;
   onMetadata?: (metadata: VideoPlayerMetadata) => void;
   onError?: () => void;
@@ -72,7 +74,7 @@ function VideoSeekPreview({ src, time }: { src: string; time: number }) {
 }
 
 /** UI Kit 视频播放器：展示源复用宿主媒体通道，生成历史和状态仍由调用方管理。 */
-export default function VideoPlayer({ src: source, poster: sourcePoster, name, autoPlay = false, unavailable = false, className = '', compact = false, active = true, durationHint = 0, mediaRef, crossOrigin, onLoadedMetadata, onPlay, onPause, onVolumeChange, onPosterError, onRequestPlayback, onFullscreen, onMetadata, onError, onEnded, onEscape }: VideoPlayerProps) {
+export default function VideoPlayer({ src: source, poster: sourcePoster, name, autoPlay = false, unavailable = false, className = '', compact = false, active = true, durationHint = 0, mediaRef, crossOrigin, onLoadedMetadata, onPlay, onPause, onVolumeChange, onPosterError, onRequestPlayback, onRequestSeek, onFullscreen, onMetadata, onError, onEnded, onEscape }: VideoPlayerProps) {
   const t = useT();
   const [retryingSource, setRetryingSource] = useState(false);
   const failedNativeSource = useRef<string | undefined>(undefined);
@@ -91,12 +93,13 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
   const popupRef = useRef<HTMLDivElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const progressInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingSeekRef = useRef<{ source: string; time: number } | null>(null);
   const scrubPointerRef = useRef<{ pointerId: number; value: number } | null>(null);
   const finishScrub = useCallback(() => {
     scrubPointerRef.current = null;
     progressRef.current?.classList.remove('is-scrubbing', 'is-scrubbing-forward', 'is-scrubbing-backward');
   }, []);
-  const paintProgress = useCallback((video: HTMLVideoElement, position = video.currentTime) => {
+  const paintProgress = useCallback((video: Pick<HTMLVideoElement, 'duration' | 'currentTime'>, position = video.currentTime) => {
     const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
     const clamped = Math.min(duration, Math.max(0, position));
     progressRef.current?.style.setProperty('--video-played', `${duration ? clamped / duration * 100 : 0}%`);
@@ -120,10 +123,12 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
     onError?.();
   });
   const failure = failed && (failed.src === src || failed.src === source) ? failed : null;
-  const [dimensions, setDimensions] = useState<{ src: string; width: number; height: number; duration: number } | null>(null);
-  const mediaInfo = dimensions?.src === src ? dimensions : null;
+  // 时长绑定原始来源，暂停释放原生媒体租约后仍可操作进度。
+  const [dimensions, setDimensions] = useState<{ source: string; width: number; height: number; duration: number } | null>(null);
+  const mediaInfo = dimensions?.source === source ? dimensions : null;
   const knownDuration = mediaInfo?.duration ?? durationHint;
   const duration = Number.isFinite(knownDuration) && knownDuration > 0 ? knownDuration : 0;
+  const canSeek = !!source && duration > 0 && (active || !!onRequestSeek);
   const buffered = duration ? Math.min(100, Math.max(time, bufferedEnd) / duration * 100) : 0;
   const silent = muted || volume === 0;
   const handlePlayFailure = useCallback((video: HTMLVideoElement, source: string, error: unknown) => {
@@ -150,6 +155,23 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
       if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) >= video.currentTime) end = video.buffered.end(i);
     }
     setBufferedEnd(end);
+  };
+  const applyPendingSeek = (video: HTMLVideoElement) => {
+    const pending = pendingSeekRef.current;
+    if (!pending || pending.source !== source || video.readyState === 0 || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    video.currentTime = Math.min(video.duration, Math.max(0, pending.time));
+    pendingSeekRef.current = null;
+    paintProgress(video);
+    setTime(video.currentTime);
+  };
+  const seek = (position: number) => {
+    if (!source || !canSeek || !Number.isFinite(position)) return;
+    const next = Math.min(duration, Math.max(0, position));
+    pendingSeekRef.current = { source, time: next };
+    paintProgress({ duration, currentTime: next });
+    setTime(next);
+    if (!active) onRequestSeek?.();
+    if (videoRef.current) applyPendingSeek(videoRef.current);
   };
   const play = () => {
     if (!source) return;
@@ -306,16 +328,29 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
   }, [menu]);
 
   return (
-    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} tabIndex={compact ? 0 : undefined} aria-label={t('{name} 视频播放器', { name })}>
+    <div ref={stageRef} className={`ui-video-player [&:fullscreen]:pt-3${compact ? ' ui-video-player--compact' : ''} ${className}`} tabIndex={compact ? 0 : undefined} aria-label={t('{name} 视频播放器', { name })}
+      onKeyDown={(event) => {
+        if (!canSeek || !['ArrowLeft', 'ArrowRight'].includes(event.key) || event.nativeEvent.isComposing
+          || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
+        const target = event.target as HTMLElement;
+        const control = target.closest('input, textarea, select, [contenteditable="true"], [role="menu"], [role="dialog"]');
+        if (target !== progressInputRef.current && control && event.currentTarget.contains(control)) return;
+        event.preventDefault(); event.stopPropagation();
+        const pending = pendingSeekRef.current;
+        const video = videoRef.current;
+        const position = pending?.source === source ? pending.time : video && video.readyState > 0 ? video.currentTime : time;
+        seek(position + (event.key === 'ArrowRight' ? 0.1 : -0.1));
+      }}>
         <div className="ui-video-player__view">
         {src && active ? <>
           <video ref={bindVideo} src={src} poster={poster} crossOrigin={crossOrigin} playsInline preload="metadata" aria-label={t('{name} 视频播放', { name })}
             onLoadedMetadata={(event) => {
               const video = event.currentTarget;
-              setDimensions({ src, width: video.videoWidth, height: video.videoHeight, duration: video.duration });
+              setDimensions({ source: source ?? src, width: video.videoWidth, height: video.videoHeight, duration: video.duration });
               updateBuffer(video);
               onMetadata?.({ width: video.videoWidth, height: video.videoHeight, duration: video.duration });
               onLoadedMetadata?.(event);
+              applyPendingSeek(video);
             }}
             onTimeUpdate={(event) => { setTime(event.currentTarget.currentTime); updateBuffer(event.currentTarget); }}
             onProgress={(event) => updateBuffer(event.currentTarget)}
@@ -354,7 +389,7 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
             }} onPointerLeave={() => setHover(null)}>
           <div className="ui-video-player__progress-track" aria-hidden="true"><span className="ui-video-player__progress-empty" /><span className="ui-video-player__progress-buffer" /><span className="ui-video-player__progress-played" /></div>
           {duration > 0 && <span className="ui-video-player__progress-marker" aria-hidden="true" />}
-          <input ref={progressInputRef} type="range" data-native-range className="ui-video-player__range-hit" min={0} max={duration || 1} step={0.01} defaultValue={0} disabled={!duration || !active}
+          <input ref={progressInputRef} type="range" data-native-range className="ui-video-player__range-hit" min={0} max={duration || 1} step={0.01} defaultValue={0} disabled={!canSeek}
             aria-label={t('播放进度')} aria-valuetext={`${timeLabel(time)} / ${timeLabel(duration)}`}
             onPointerDown={(event) => {
               if (event.button !== 0 || event.currentTarget.disabled || scrubPointerRef.current) return;
@@ -372,8 +407,7 @@ export default function VideoPlayer({ src: source, poster: sourcePoster, name, a
                 progressRef.current?.classList.toggle('is-scrubbing-backward', position < scrub.value);
                 scrub.value = position;
               }
-              const video = videoRef.current;
-              if (video && duration) { video.currentTime = position; paintProgress(video); setTime(video.currentTime); }
+              seek(position);
             }} />
           {hover && src && <div className="ui-video-player__seek-anchor" style={{ '--video-hover': `${hover.ratio * 100}%` } as CSSProperties}><VideoSeekPreview key={src} src={src} time={hover.time} /></div>}
           </div>

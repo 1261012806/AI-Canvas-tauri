@@ -959,6 +959,10 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
         style={{ height: nodeHeight }}
       >
         <div className={`node-preview compact${data.videoUrl || data.thumbnailUrl ? ' has-media' : ''}`}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)
+              && (!videoRef.current || videoRef.current.paused) && pendingVideoOperations.current.size === 0) setActivatedSource(null);
+          }}
           onDoubleClick={(event) => { event.stopPropagation(); handleOpenFullscreen(); }}>
           {data.videoUrl ? (
             <VideoPlayer
@@ -979,6 +983,7 @@ function AIVideoNode({ id, data, selected }: { id: string; data: BaseNodeData; s
               onEnded={() => { setPlayingSource(null); setActivatedSource(null); }}
               onPosterError={() => { if (suppliedCover) setFailedCover(suppliedCover); }}
               onRequestPlayback={requestPlayback}
+              onRequestSeek={() => { dismissInitialCover(); activateCompactVideo(); }}
               onFullscreen={handleOpenFullscreen}
             />
           ) : data.thumbnailUrl ? (
