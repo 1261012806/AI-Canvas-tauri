@@ -10,6 +10,7 @@ import {
 import { generateText } from './ai/generateText';
 import { normalizeAssetKey } from './dramaAssetExtract';
 import { copyGlobalDramaAssetsToProject } from './dramaAssetTransferService';
+import { expandCharacterWeaponDependencies, remapCharacterWeaponIds } from './characterWeapons';
 import {
   buildSeriesAssetExtractionPrompt, getAssetExtractionContextVersion, parseAssetExtractionCandidates, resolveAssetExtractionTextModel, withAssetPublication,
 } from './seriesAssetExtractionService';
@@ -183,14 +184,38 @@ async function materializeTarget(context: EpisodeContext, kind: EpisodeAssetKind
   assertContext(context);
   const existing = useAppStore.getState().dramaAssets[listKey(kind)].find((asset) => asset.id === copiedId);
   if (existing) return existing.id;
+  const initial = useAppStore.getState();
+  const globals = [...initial.globalCharacters, ...initial.globalScenes, ...initial.globalProps];
+  const sources = expandCharacterWeaponDependencies([source], globals);
+  const stableIds = await Promise.all(sources.map((asset) => stableAssetId(`global:${context.ownerId}:${asset.kind}:${asset.id}`)));
   const assertCurrent = () => {
     assertContext(context);
-    if (libraryAsset(kind, targetId, 'global') !== source) throw new Error(t('资产已变化，请重新选择'));
+    const state = useAppStore.getState();
+    const current = [...state.globalCharacters, ...state.globalScenes, ...state.globalProps];
+    if (sources.some((asset) => current.find((item) => item.kind === asset.kind && item.id === asset.id) !== asset)) {
+      throw new Error(t('资产已变化，请重新选择'));
+    }
   };
-  await copyGlobalDramaAssetsToProject({ ownerId: context.ownerId, assets: [source], commit: async (assets) => {
+  assertCurrent();
+  await copyGlobalDramaAssetsToProject({ ownerId: context.ownerId, assets: sources, allAssets: sources, commit: async (assets) => {
     assertCurrent();
-    if (assets.length !== 1 || assets[0].kind !== kind) throw new Error(t('资产已变化，请重新选择'));
-    await useAppStore.getState().importDramaAssets([{ ...assets[0], id: copiedId }], { assertCurrent });
+    if (assets.length !== sources.length || assets.some((asset, index) => asset.kind !== sources[index].kind)) {
+      throw new Error(t('资产已变化，请重新选择'));
+    }
+    const rootIds = new Map(assets.map((asset, index) => [`${asset.kind}:${asset.id}`, stableIds[index]]));
+    const remapped = assets.map((asset) => ({ ...remapCharacterWeaponIds(asset, rootIds), id: rootIds.get(`${asset.kind}:${asset.id}`)! }));
+    const library = useAppStore.getState().dramaAssets;
+    const existingAssets = [...library.characters, ...library.scenes, ...library.props];
+    const additions = remapped.filter((asset) => {
+      const previous = existingAssets.find((item) => item.id === asset.id);
+      if (!previous) return true;
+      // 已物化的武器可由多个角色复用；重试不覆盖本地编辑或创建重复卡片。
+      if (previous.kind !== 'prop' || previous.propType !== 'weapon' || asset.kind !== 'prop' || asset.propType !== 'weapon') {
+        throw new Error(t('资产已变化，请重新选择'));
+      }
+      return false;
+    });
+    await useAppStore.getState().importDramaAssets(additions, { assertCurrent });
   } }, { assertCurrent });
   assertContext(context);
   return libraryAsset(kind, copiedId, 'project').id;

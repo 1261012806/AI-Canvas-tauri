@@ -6,6 +6,7 @@ import { assertDramaAssetWriteCurrent, normalizeDramaCharacter, normalizeDramaVi
 import { dramaAssetIdentityKey } from './dramaAssetSearch';
 import { copyGlobalDramaAssetsToProject, copyProjectDramaAssetsToGlobal } from './dramaAssetTransferService';
 import { isTauriEnv } from './fileService';
+import { expandCharacterWeaponDependencies, remapCharacterWeaponIds } from './characterWeapons';
 
 function materializeSourceNodes(source: DramaAsset): DramaAsset {
   const nodes = useAppStore.getState().nodes;
@@ -28,11 +29,11 @@ function materializeSourceNodes(source: DramaAsset): DramaAsset {
 }
 
 /** 新卡片及嵌套条目使用新身份，媒体文件仍由既有目标作用域保存入口处理。 */
-function copyAsset(source: DramaAsset): DramaAsset {
-  const asset = source.kind === 'character' ? normalizeDramaCharacter(source) : normalizeDramaVisualAsset(source);
+function copyAsset(source: DramaAsset, rootIds: ReadonlyMap<string, string>): DramaAsset {
+  const asset = remapCharacterWeaponIds(source.kind === 'character' ? normalizeDramaCharacter(source) : normalizeDramaVisualAsset(source), rootIds);
   const now = Date.now();
   const referenceIds = new Map((asset.referenceImages ?? []).map((reference) => [reference.id, crypto.randomUUID()]));
-  const base = { ...asset, id: `${asset.kind}-${crypto.randomUUID()}`, imageNodeId: undefined,
+  const base = { ...asset, id: rootIds.get(dramaAssetIdentityKey(asset))!, imageNodeId: undefined,
     createdAt: now, updatedAt: now, source: 'manual' as const,
     referenceImages: asset.referenceImages?.map((reference) => ({ ...reference,
       id: referenceIds.get(reference.id)!, sourceNodeId: undefined, createdAt: now, updatedAt: now })),
@@ -64,12 +65,16 @@ export async function copyDramaAssetSelection(from: 'project' | 'global', select
   const source = from === 'project' ? [...initial.dramaAssets.characters, ...initial.dramaAssets.scenes, ...initial.dramaAssets.props]
     : [...initial.globalCharacters, ...initial.globalScenes, ...initial.globalProps];
   const keys = new Set(selected.map(dramaAssetIdentityKey));
-  const assets = source.filter((asset) => keys.has(dramaAssetIdentityKey(asset)));
-  if (assets.length !== keys.size || !assets.length) throw new Error(t('资产已删除，请重新选择'));
-  const copies = assets.map((asset) => copyAsset(from === 'project' ? materializeSourceNodes(asset) : asset));
+  const selectedAssets = source.filter((asset) => keys.has(dramaAssetIdentityKey(asset)));
+  if (selectedAssets.length !== keys.size || !selectedAssets.length) throw new Error(t('资产已删除，请重新选择'));
+  const assets = expandCharacterWeaponDependencies(selectedAssets, source);
+  // 先复制依赖，Web 的逐项保存也不会产生指向尚未保存武器的角色。
+  assets.sort((left, right) => Number(left.kind === 'character') - Number(right.kind === 'character'));
+  const rootIds = new Map(assets.map((asset) => [dramaAssetIdentityKey(asset), `${asset.kind}-${crypto.randomUUID()}`]));
+  const copies = assets.map((asset) => copyAsset(from === 'project' ? materializeSourceNodes(asset) : asset, rootIds));
   if (from === 'global') {
     if (isTauriEnv()) {
-      const result = await copyGlobalDramaAssetsToProject({ ownerId, assets: copies,
+      const result = await copyGlobalDramaAssetsToProject({ ownerId, assets: copies, allAssets: copies,
         commit: async (assets) => { await initial.importDramaAssets(assets, { ...options, assertCurrent }); },
       }, { ...options, assertCurrent });
       return result.assetCount;
@@ -78,7 +83,7 @@ export async function copyDramaAssetSelection(from: 'project' | 'global', select
     return copies.length;
   }
   if (isTauriEnv()) {
-    const result = await copyProjectDramaAssetsToGlobal({ ownerId, assets: copies, nodes: initial.nodes,
+    const result = await copyProjectDramaAssetsToGlobal({ ownerId, assets: copies, allAssets: copies, nodes: initial.nodes,
       commit: async (assets) => { await useAppStore.getState().importGlobalDramaAssets(assets, { ...options, assertCurrent }); },
     }, { ...options, assertCurrent });
     return result.assetCount;

@@ -15,7 +15,7 @@ import type {
   DramaAssetKind,
   DramaCharacter,
 } from '../../../types/dramaAssets';
-import { buildDramaActionMentionId, buildDramaMentionId, buildDramaVoiceMentionId, formatDramaMention, normalizeDramaCharacter } from '../../../types/dramaAssets';
+import { buildDramaActionMentionId, buildDramaMentionId, buildDramaVoiceMentionId, formatDramaMention, MAX_CHARACTER_WEAPONS, normalizeDramaCharacter } from '../../../types/dramaAssets';
 import { formatDramaAssetTextBrief, listDramaAssetsFlat, resolveDramaAssetImageRef } from '../../dramaAssetPrompt';
 import {
   registerAgentTool,
@@ -29,9 +29,9 @@ const DRAMA_ASSET_IMPORTANCES: DramaAssetImportance[] = ['main', 'supporting', '
 const SCOPES: CharacterLibraryScope[] = ['project', 'global'];
 /** 各类资产可写的专属字段；写入时用它拦截跨类型字段。 */
 const KIND_FIELDS: Record<DramaAssetKind, string[]> = {
-  character: ['identity', 'personality', 'wardrobeDefault', 'voiceNotes'],
+  character: ['identity', 'personality', 'wardrobeDefault', 'voiceNotes', 'weaponIds'],
   scene: ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'],
-  prop: ['ownerName', 'category', 'significance'],
+  prop: ['ownerName', 'category', 'significance', 'propType'],
 };
 const SHARED_FIELDS = ['name', 'summary', 'visualNotes', 'storyRole', 'importance'];
 
@@ -88,6 +88,7 @@ function summarizeAsset(asset: DramaAsset, scope?: CharacterLibraryScope) {
   return {
     id: asset.id,
     kind: asset.kind,
+    ...(asset.kind === 'prop' ? { propType: asset.propType } : {}),
     name: asset.name,
     summary: asset.summary || undefined,
     importance: asset.importance,
@@ -97,6 +98,7 @@ function summarizeAsset(asset: DramaAsset, scope?: CharacterLibraryScope) {
     referenceImageCount: asset.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
     voiceClipCount: character?.voiceClips?.length ?? 0,
     actionCount: character?.actions?.length ?? 0,
+    ...(character ? { weaponIds: character.weaponIds ?? [] } : {}),
     hasVoice: Boolean(character?.primaryVoiceClipId),
   };
 }
@@ -272,6 +274,9 @@ const upsertInputSchema: AgentToolSchema = {
     ownerName: textField,
     category: textField,
     significance: textField,
+    propType: { type: 'string', enum: ['weapon', ''], description: '武器用 weapon，普通道具用空字符串。' },
+    weaponIds: { type: 'array', maxItems: MAX_CHARACTER_WEAPONS,
+      items: { type: 'string', minLength: 1, maxLength: 128 }, description: '同一作用域内的武器卡片 ID；空数组解除所有武器绑定。' },
   },
 };
 
@@ -311,6 +316,7 @@ function collectAssetPatch(
   const patch: Record<string, unknown> = {};
   for (const field of allowed) {
     const value = input[field];
+    if (field === 'propType' && value === '') { patch.propType = undefined; continue; }
     if (typeof value === 'string') {
       const trimmed = value.trim();
       if (trimmed) patch[field] = trimmed;
@@ -381,11 +387,13 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
           modelContent: JSON.stringify({
             id: asset.id,
             kind: asset.kind,
+            ...(asset.kind === 'prop' ? { propType: asset.propType } : {}),
             name: asset.name,
             mention: assetMention(asset, input.scope),
             imageReady: Boolean(resolveDramaAssetImageRef(asset, input.scope === 'global' ? [] : useAppStore.getState().nodes)),
             ...(input.scope !== 'global' ? { imageNodeId: asset.imageNodeId } : {}),
             brief: formatDramaAssetTextBrief(asset),
+            ...(character ? { weaponIds: character.weaponIds ?? [] } : {}),
             referenceImageCount: asset.referenceImages?.length ?? (asset.imageUrl ? 1 : 0),
             referenceImages: asset.referenceImages?.map((reference) => ({
               id: reference.id, ...('kind' in reference ? { kind: reference.kind } : { label: reference.label }),
@@ -420,7 +428,8 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         '新增或修改人物、场景、道具设定。给 assetId 表示改已有资产，省略则新建。',
         'scope=project（默认）写当前项目资产库；scope=global 写跨项目的人物、场景与道具。',
         '专属字段按类型区分：人物 identity/personality/wardrobeDefault/voiceNotes，',
-        '场景 placeType/timeOfDay/atmosphere/spatialNotes，道具 ownerName/category/significance。',
+        '场景 placeType/timeOfDay/atmosphere/spatialNotes，道具 ownerName/category/significance/propType。武器仍使用 kind=prop、propType=weapon；propType 为空字符串表示普通道具。',
+        '人物 weaponIds 为同作用域的武器卡片 ID 数组，可绑定多个武器，空数组解除绑定。绑定本身不会自动向生成任务添加武器图片。',
         '人物/场景/道具的已有参考图通过 drama_reference_image_add 从画布节点绑定；仅项目资产的新建 ai-image 可传 dramaAssetId，生成后自动回填。全局资产先生成图片，再以 scope=global 绑定。人物音色用 drama_voice_add。返回的 mention 应优先用于下游提示词，减少节点连线。',
       ].join(''),
       inputSchema: upsertInputSchema,
@@ -449,6 +458,18 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
         }
         if (!existing && !input.name) {
           return { status: 'error', summary: '新建资产必须提供 name', modelContent: '新建资产必须提供 name' };
+        }
+        const scopedAssets = listScopedAssets(input.scope);
+        if (Array.isArray(input.weaponIds) && input.weaponIds.some((id) => !scopedAssets.some((asset) =>
+          asset.kind === 'prop' && asset.propType === 'weapon' && asset.id === id))) {
+          const message = '武器不存在或不属于当前资产库，请先查询同作用域武器';
+          return { status: 'error', summary: message, modelContent: message };
+        }
+        if (existing?.kind === 'prop' && existing.propType === 'weapon' && 'propType' in collected.patch
+          && collected.patch.propType !== 'weapon' && scopedAssets.some((asset) =>
+            asset.kind === 'character' && asset.weaponIds?.includes(existing.id))) {
+          const message = '该武器仍被角色绑定，请先解除绑定';
+          return { status: 'error', summary: message, modelContent: message };
         }
 
         const now = Date.now();
@@ -489,7 +510,10 @@ export function registerDramaAssetAgentTools(): Array<() => void> {
             return { status: 'error', summary: '角色保存失败', modelContent: '角色保存失败' };
           }
         } else {
-          store.upsertDramaAsset(merged);
+          if (!store.upsertDramaAsset(merged)) {
+            const message = '资产保存被拒绝，请重新查询资产与武器绑定后重试';
+            return { status: 'error', summary: message, modelContent: message };
+          }
         }
         return {
           status: 'success',

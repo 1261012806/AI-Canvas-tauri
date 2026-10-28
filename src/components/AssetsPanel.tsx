@@ -75,7 +75,8 @@ import AssetImagePreview from './assets/AssetImagePreview';
 import AssetFileContextMenu from './assets/AssetFileContextMenu';
 import { useResourceVideoPreview } from '../hooks/useResourceVideoPreview';
 import type { AssetImageBatchEntry } from '../types/assetImage';
-import type { DramaAssetKind } from '../types/dramaAssets';
+import type { DramaAssetCategory, DramaAssetKind } from '../types/dramaAssets';
+import { matchesDramaAssetCategory } from '../services/dramaAssetSearch';
 import type { AssetRepairTarget } from '../services/fs/assetRepair';
 
 const AssetTextPreview = lazy(() => import('./assets/AssetTextPreview'));
@@ -190,9 +191,11 @@ export default function AssetsPanel() {
     );
 
   const [activeTab, setActiveTab] = useState<FileTabKey>('project');
-  const [globalCreativeKind, setGlobalCreativeKind] = useState<DramaAssetKind | null>(null);
+  const [globalCreativeKind, setGlobalCreativeKind] = useState<DramaAssetCategory | null>(null);
   const [creativeFile, setCreativeFile] = useState<{ file: AssetFileEntry; kind: DramaAssetKind; scope: string } | null>(null);
-  const creativeCounts = useAppStore(useShallow((state) => ({ character: state.globalCharacters?.length ?? 0, scene: state.globalScenes?.length ?? 0, prop: state.globalProps?.length ?? 0 })));
+  const creativeCounts = useAppStore(useShallow((state) => ({ character: state.globalCharacters?.length ?? 0, scene: state.globalScenes?.length ?? 0,
+    prop: (state.globalProps ?? []).filter((asset) => matchesDramaAssetCategory(asset, 'prop')).length,
+    weapon: (state.globalProps ?? []).filter((asset) => matchesDramaAssetCategory(asset, 'weapon')).length })));
   const loadGlobalDramaAssets = useAppStore((state) => state.loadGlobalDramaAssets);
   const [arkLibraryOpen, setArkLibraryOpen] = useState(false);
   const [refmodLibraryOpen, setRefmodLibraryOpen] = useState(false);
@@ -1889,8 +1892,8 @@ export default function AssetsPanel() {
     </Suspense>}
     {assetsPanelOpen && creativeFile?.scope === previewScope && <Suspense fallback={<p role="status">{translate("正在打开创作资产…")}</p>}>
       <GlobalCreativeAssetFileDialog key={`${creativeFile.kind}:${creativeFile.file.assetId ?? creativeFile.file.path}`} file={creativeFile.file} kind={creativeFile.kind}
-        onClose={() => setCreativeFile(null)} onSaved={() => {
-          switchTab('permanent'); setGlobalCreativeKind(creativeFile.kind); setCreativeFile(null); toast('已添加到全局创作资产');
+        onClose={() => setCreativeFile(null)} onSaved={(category) => {
+          switchTab('permanent'); setGlobalCreativeKind(category); setCreativeFile(null); toast('已添加到全局创作资产');
         }} />
     </Suspense>}
     {assetsPanelOpen && textPreview?.scope === previewScope && <Suspense fallback={<p role="status">{translate("正在打开文档…")}</p>}>

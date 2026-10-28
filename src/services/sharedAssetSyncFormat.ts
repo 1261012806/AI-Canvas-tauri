@@ -1,6 +1,6 @@
 /** 项目共享的纯格式边界：不读取文件、历史、配置或全局资产。 */
 import type { DramaAsset, DramaCharacter } from '../types/dramaAssets';
-import { normalizeDramaVisualAsset, parseDramaMentionId } from '../types/dramaAssets';
+import { MAX_CHARACTER_WEAPONS, normalizeDramaVisualAsset, parseDramaMentionId } from '../types/dramaAssets';
 import type { SharedSyncCardPayload, SharedSyncDraft, SharedSyncFilePayload, SharedSyncMedia,
   SharedSyncMediaKind, SharedSyncMemberKind, SharedSyncRevision } from '../types/assetSync';
 import { DRAMA_ASSET_TRANSFER_FORMAT, DRAMA_ASSET_TRANSFER_VERSION, DRAMA_ASSET_TRANSFER_LIMITS,
@@ -19,7 +19,7 @@ const BASE = ['id', 'kind', 'name', 'key', 'summary', 'visualNotes', 'storyRole'
   'appearances', 'imageUrl', 'confirmed', 'createdAt', 'updatedAt', 'source'];
 const CHARACTER = ['aliases', 'identity', 'ageBand', 'gender', 'personality', 'relationships', 'wardrobeDefault',
   'voiceNotes', 'referenceImages', 'primaryReferenceImageId', 'avatarReferenceImageId', 'avatarCrop',
-  'voiceClips', 'primaryVoiceClipId', 'actions'];
+  'voiceClips', 'primaryVoiceClipId', 'actions', 'weaponIds'];
 const VISUAL = ['referenceImages', 'primaryReferenceImageId'];
 const REFERENCE = ['id', 'kind', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
 const VISUAL_REFERENCE = ['id', 'label', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
@@ -99,10 +99,27 @@ export function getSharedAssetSyncMediaIds(payload: SharedSyncRevision['payload'
     : cardMedia(payload.data).map((entry) => tokenId(entry.value)))];
 }
 
+/** 武器是独立卡片依赖，不属于参考图、声音或动作成员。 */
+export function getSharedAssetSyncDependencies(payload: SharedSyncRevision['payload']): string[] {
+  const mentions = [...JSON.stringify(payload).matchAll(/@drama\{([^:}]+):/g)]
+    .map((match) => parseDramaMentionId(match[1]).assetId);
+  return [...new Set([...mentions, ...(payload.kind === 'character' && payload.data.kind === 'character' ? payload.data.weaponIds ?? [] : [])])];
+}
+
+function mapWeaponIds(value: readonly string[], mapId?: (value: string) => string): string[] {
+  const ids = list(value, MAX_CHARACTER_WEAPONS).map(id);
+  unique(ids);
+  if (!ids.length) return [];
+  if (!mapId) throw new Error('角色武器尚未建立共享映射，请先纳入对应项目资产');
+  const mapped = ids.map((value) => id(mapId(value)));
+  unique(mapped);
+  return mapped;
+}
+
 function validateCard(payload: SharedSyncCardPayload, media: readonly SharedSyncMedia[]): void {
   if (payload.data.kind !== payload.kind) fail();
   keys(object(payload.data), [...BASE, ...(payload.kind === 'character' ? CHARACTER : [...VISUAL,
-    ...(payload.kind === 'scene' ? ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'] : ['ownerName', 'category', 'significance'])])]);
+    ...(payload.kind === 'scene' ? ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'] : ['ownerName', 'category', 'significance', 'propType'])])]);
   const asset = JSON.parse(JSON.stringify(payload.data)) as DramaAsset;
   const rewrite = (value: string | undefined) => value === undefined ? undefined : `aicasset-media:${tokenId(value)}`;
   asset.imageUrl = rewrite(asset.imageUrl);
@@ -117,6 +134,11 @@ function validateCard(payload: SharedSyncCardPayload, media: readonly SharedSync
       path: `media/${entry.id}.${entry.extension}`, bytes: entry.bytes, sha256: entry.sha256 })) });
   strings(payload.data);
   id(payload.data.id);
+  if (payload.data.kind === 'character' && payload.data.weaponIds !== undefined) {
+    const weapons = list(payload.data.weaponIds, MAX_CHARACTER_WEAPONS).map(id);
+    unique(weapons);
+    if (weapons.includes(payload.data.id)) fail();
+  }
   const memberIds: string[] = [];
   for (const reference of payload.data.referenceImages ?? []) memberIds.push(id(reference.id));
   if (payload.data.kind === 'character') {
@@ -214,6 +236,7 @@ export interface SharedDramaAssetSerialization {
   mediaId: (source: { assetId?: string; relativePath?: string; filePath?: string; sourceNodeId?: string;
     url?: string; assetSource?: 'global'; kind: SharedSyncMediaKind; label: string }) => string | Promise<string>;
   mapMentionId?: (localMentionId: string) => string;
+  mapWeaponId?: (localWeaponId: string) => string;
   /** 仅出站时把已确定归属项目资产的节点胶囊转换为本机 @drama，随后仍须映射共享身份。 */
   mapProjectNodeReferences?: (value: string) => string;
 }
@@ -244,7 +267,7 @@ export async function serializeSharedDramaAsset(
   const source = input.kind === 'character' ? input : normalizeDramaVisualAsset(input);
   if (source.imageAssetId) throw new Error('资产包含全局主图，请先物化为项目资产后共享');
   const fields = source.kind === 'character' ? CHARACTER : [...VISUAL,
-    ...(source.kind === 'scene' ? ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'] : ['ownerName', 'category', 'significance'])];
+    ...(source.kind === 'scene' ? ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'] : ['ownerName', 'category', 'significance', 'propType'])];
   const result = pick(source, [...BASE, ...fields]); result.id = id(sharedAssetId);
   const media = async (reference: { assetId?: string; relativePath?: string; filePath?: string; sourceNodeId?: string;
     imageUrl?: string; audioUrl?: string; url?: string; assetSource?: 'global' }, kind: SharedSyncMediaKind, label: string) => {
@@ -263,6 +286,7 @@ export async function serializeSharedDramaAsset(
   }
   if (source.primaryReferenceImageId) result.primaryReferenceImageId = id(mapping.memberId('referenceImage', source.primaryReferenceImageId));
   if (source.kind === 'character') {
+    if (source.weaponIds !== undefined) result.weaponIds = mapWeaponIds(source.weaponIds, mapping.mapWeaponId);
     if (source.relationships) result.relationships = source.relationships.map((relation) => pick(relation, ['targetName', 'relation']));
     if (source.avatarCrop) result.avatarCrop = pick(source.avatarCrop, ['x', 'y', 'width', 'height']);
     result.voiceClips = await Promise.all((source.voiceClips ?? []).map(async (voice) => ({ ...pick(voice, VOICE),
@@ -282,6 +306,7 @@ export interface SharedDramaAssetRestoration {
   memberId: (kind: SharedSyncMemberKind, sharedId: string, parentSharedId?: string) => string;
   mediaById: ReadonlyMap<string, { assetId: string; relativePath: string; url: string }>;
   mapMentionId?: (sharedMentionId: string) => string;
+  mapWeaponId?: (sharedWeaponId: string) => string;
 }
 
 /** 远端新媒体不保留源节点指针，避免当前画布旧输出遮蔽已下载内容。 */
@@ -310,6 +335,7 @@ export function restoreSharedDramaAsset(payload: SharedSyncCardPayload, localEnt
   asset.referenceImages = references as DramaAsset['referenceImages'];
   asset.primaryReferenceImageId = asset.primaryReferenceImageId ? referenceIds.get(asset.primaryReferenceImageId) : undefined;
   if (asset.kind === 'character') {
+    if (asset.weaponIds !== undefined) asset.weaponIds = mapWeaponIds(asset.weaponIds, mapping.mapWeaponId);
     asset.avatarReferenceImageId = asset.avatarReferenceImageId ? referenceIds.get(asset.avatarReferenceImageId) : undefined;
     const voices = new Map<string, string>();
     asset.voiceClips = asset.voiceClips?.map((voice) => {

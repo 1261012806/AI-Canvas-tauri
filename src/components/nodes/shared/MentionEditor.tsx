@@ -36,7 +36,7 @@ import {
   buildDramaActionMentionId,
   buildDramaVoiceMentionId,
 } from '../../../types/dramaAssets';
-import type { CharacterReferenceImage, DramaAssetReferenceImage, DramaAssetKind } from '../../../types/dramaAssets';
+import type { CharacterReferenceImage, DramaAssetReferenceImage, DramaAssetCategory } from '../../../types/dramaAssets';
 import { parseShotlistRowMentionId } from '../../../types/shotlist';
 import { findReferencePreviewSource, REFERENCE_PREVIEW_EVENT, requestReferencePreview } from '../../../utils/referencePreviewEvents';
 import { AVATAR_ASPECT, CHARACTER_REFERENCE_KIND_LABELS } from '../../character/characterReferencePresentation';
@@ -106,7 +106,7 @@ const MEDIA_ICONS: Record<'image' | 'video' | 'audio' | 'text', string> = {
   audio: 'mdi:music-note-outline',
   text: 'mdi:text-box-outline',
 };
-const DRAMA_KIND_LABELS: Record<string, string> = { character: '角色', scene: '场景', prop: '道具' };
+const DRAMA_KIND_LABELS: Record<string, string> = { character: '角色', scene: '场景', prop: '道具', weapon: '武器' };
 const SEARCH_PAGE_SIZE = 60;
 
 // ── Props ──
@@ -341,7 +341,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const [assetFolderEntries, setAssetFolderEntries] = useState<AssetFolderEntry[]>([]);
   const [assetGlobalRootPath, setAssetGlobalRootPath] = useState<string | null>(null);
   const [assetFolderSelection, setAssetFolderSelection] = useState<AssetFolderSelection>({ kind: 'all' });
-  const [assetCreativeKind, setAssetCreativeKind] = useState<DramaAssetKind | null>(null);
+  const [assetCreativeKind, setAssetCreativeKind] = useState<DramaAssetCategory | null>(null);
   const assetPickerDialogRef = useRef<HTMLDivElement>(null);
   const [assetTagMap, setAssetTagMap] = useState<Record<string, string[]>>({});
   const [assetLoading, setAssetLoading] = useState(false);
@@ -1149,9 +1149,10 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const creativePickerItems = useMemo(() => showAssetPicker && assetCreativeKind ? resolveGlobalAssetPickerItems(globalAssets, assetCreativeKind, assetSearch, currentNodeType) : [],
     [showAssetPicker, globalAssets, assetCreativeKind, assetSearch, currentNodeType]);
   const creativePickerCounts = useMemo(() => ({
-    character: globalPickerItems.filter((item) => item.kind === 'character').length,
-    scene: globalPickerItems.filter((item) => item.kind === 'scene').length,
-    prop: globalPickerItems.filter((item) => item.kind === 'prop').length,
+    character: globalPickerItems.filter((item) => item.category === 'character').length,
+    scene: globalPickerItems.filter((item) => item.category === 'scene').length,
+    prop: globalPickerItems.filter((item) => item.category === 'prop').length,
+    weapon: globalPickerItems.filter((item) => item.category === 'weapon').length,
   }), [globalPickerItems]);
   const assetTagList = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1744,7 +1745,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
   const dramaKindChips: MentionPickerChip[] = (() => {
     if (drillItem) return [];
     const counts = new Map<string, number>();
-    for (const item of dramaMentionItems) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+    for (const item of dramaMentionItems) counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
     if (counts.size === 0) return [];
     return [
       { id: 'all', label: t('全部'), count: dramaMentionItems.length },
@@ -1783,7 +1784,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       thumbnailCrop: avatarCrop,
       disabled: emptyCharacter,
       title: emptyCharacter ? t('该角色暂无可引用的素材') : undefined,
-      icon: isAudioNode ? MEDIA_ICONS.audio : item.kind === 'scene' ? 'lucide:mountain' : item.kind === 'prop' ? 'lucide:box' : 'mdi:account-box-outline',
+      icon: isAudioNode ? MEDIA_ICONS.audio : item.category === 'weapon' ? 'lucide:swords' : item.kind === 'scene' ? 'lucide:mountain' : item.kind === 'prop' ? 'lucide:box' : 'mdi:account-box-outline',
       badge: isAudioNode ? t('音频') : multiRef ? t('{count} 图', { count: references.length }) : thumb ? undefined : t('简介'),
       onSelect: () => {
         if (emptyCharacter || !isCurrentEditorOwner()) return;
@@ -1888,7 +1889,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       }] : []),
     ]
     : dramaMentionItems
-      .filter((item) => dramaKind === 'all' || item.kind === dramaKind)
+      .filter((item) => dramaKind === 'all' || item.category === dramaKind)
       .map(buildDramaPickerItem);
 
   // 首次打开优先展示有内容的分类；手动切换后保留选择，工作流取消时回到普通分类。
@@ -1909,7 +1910,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
         .filter((item) => matchesMentionQuery(query, item.searchValues ?? [item.id, item.label, item.displayId]))
         .map((item) => ({ source: 'node' as const, item })),
       ...allDramaMentionItems
-        .filter((item) => matchesMentionQuery(query, [item.id, item.name, DRAMA_KIND_LABELS[item.kind], ...(item.aliases ?? [])]))
+        .filter((item) => matchesMentionQuery(query, [item.id, item.name, DRAMA_KIND_LABELS[item.category], ...(item.aliases ?? [])]))
         .map((item) => ({ source: 'drama' as const, item })),
       ...taggedAssets
         .filter((item) => item.category === 'image' && matchesMentionQuery(query, [item.name, item.assetId, ...(item.tags ?? [])]))
@@ -1937,7 +1938,7 @@ const MentionEditor = forwardRef<MentionEditorHandle, MentionEditorProps>(functi
       };
     } else if (candidate.source === 'drama') {
       item = buildDramaPickerItem(candidate.item);
-      item.badge = candidate.item.id.startsWith('global/') ? t('全局{kind}', { kind: t(DRAMA_KIND_LABELS[candidate.item.kind]) }) : t(DRAMA_KIND_LABELS[candidate.item.kind]);
+      item.badge = candidate.item.id.startsWith('global/') ? t('全局{kind}', { kind: t(DRAMA_KIND_LABELS[candidate.item.category]) }) : t(DRAMA_KIND_LABELS[candidate.item.category]);
     } else if (candidate.source === 'file') {
       const file = candidate.item;
       item = {

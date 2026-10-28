@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
 import type { AssetFolderEntry, AssetFolderSelection } from '../../services/fileService';
-import type { DramaAssetKind } from '../../types/dramaAssets';
+import type { DramaAssetCategory } from '../../types/dramaAssets';
+import { DRAMA_ASSET_CATEGORY_LABEL } from '../../types/dramaAssets';
 
 export interface AssetFolderNavigationProps {
   folders: AssetFolderEntry[];
@@ -22,9 +23,9 @@ export interface AssetFolderNavigationProps {
   onCopy?: (selection: AssetFolderSelection) => void;
   onPaste?: (selection: AssetFolderSelection) => void;
   dropTarget?: AssetFolderSelection | null;
-  creativeKind?: DramaAssetKind | null;
-  creativeCounts?: Record<DramaAssetKind, number>;
-  onSelectCreative?: (kind: DramaAssetKind) => void;
+  creativeKind?: DramaAssetCategory | null;
+  creativeCounts?: Partial<Record<DramaAssetCategory, number>>;
+  onSelectCreative?: (kind: DramaAssetCategory) => void;
 }
 
 function folderKey(folder: AssetFolderEntry): string {
@@ -152,7 +153,8 @@ export default function AssetFolderNavigation({
     <h4 className="px-2 pb-1 pt-3 text-xs text-canvas-text-muted">{t("创作分类")}</h4>
     {([{ kind: 'character', label: t('人物'), icon: 'lucide:contact-round' },
       { kind: 'scene', label: t('场景'), icon: 'lucide:landmark' },
-      { kind: 'prop', label: t('道具'), icon: 'lucide:box' }] as const).map((item) => (
+      { kind: 'prop', label: t('道具'), icon: 'lucide:box' },
+      { kind: 'weapon', label: t('武器'), icon: 'lucide:swords' }] as const).map((item) => (
       <div key={item.kind} className={`assets-folder-item${creativeKind === item.kind ? ' is-active' : ''}`}>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm assets-folder-select" aria-pressed={creativeKind === item.kind}
           onClick={() => onSelectCreative(item.kind)}>
@@ -255,7 +257,7 @@ export default function AssetFolderNavigation({
   return compact ? (
     <details className="assets-folder-picker">
       <summary className="ui-btn ui-btn--ghost ui-btn--sm">
-        <Icon icon="lucide:folder" aria-hidden="true" />{creativeKind ? t('创作分类 · {kind}', { kind: t({ character: '人物', scene: '场景', prop: '道具' }[creativeKind]) }) : t('文件夹 · {name}', { name: label })}
+        <Icon icon="lucide:folder" aria-hidden="true" />{creativeKind ? t('创作分类 · {kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[creativeKind]) }) : t('文件夹 · {name}', { name: label })}
         <Icon icon="lucide:chevron-down" className="ml-auto" aria-hidden="true" />
       </summary>
       {navigation}

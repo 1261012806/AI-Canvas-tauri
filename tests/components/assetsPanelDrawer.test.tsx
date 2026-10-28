@@ -574,7 +574,10 @@ describe('全局创作资产工具条', () => {
     driver.exportGlobalDrama.mockImplementation(() => new Promise((resolve) => { finishExport = () => resolve({ assetCount: 1, mediaCount: 0 }); }));
     click(exportSingle); renderGlobal('scene');
     expect(driver.exportGlobalDrama).toHaveBeenCalledOnce();
-    expect(driver.exportGlobalDrama.mock.calls[0][0]).toEqual({ libraryName: '全局场景', assetName: '最新场景', assets: [latest] });
+    expect(driver.exportGlobalDrama.mock.calls[0][0]).toEqual({
+      libraryName: '全局场景', assetName: '最新场景', assets: [latest],
+      allAssets: [{ ...state.globalCharacters[0], id: latest.id }, latest, state.globalScenes[1], ...state.globalProps],
+    });
     expect(button('导出资产「最新场景」').props.disabled).toBe(true);
     expect(button('导入全局创作资产').props.disabled).toBe(true);
     click(exportAll); click(exportSingle);

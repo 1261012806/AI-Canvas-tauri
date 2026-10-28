@@ -36,7 +36,6 @@ const assetManagement: Record<string, string> = {
   "管理参考图": "Manage reference images",
   "剪辑工程": "Video editing project",
   "角度、时段或细节": "Angle, time of day, or detail",
-  "仅导入所选资产及其绑定媒体；同名条目会作为新副本追加。": "Only selected assets and their linked media will be imported. Matching names are added as new copies.",
   "仅元数据匹配，需逐项确认": "Only metadata matches. Confirm each item individually.",
   "类型或文件大小不一致，未执行修复": "The type or file size does not match. No repair was made.",
   "目标存在身份冲突或属于旧路径保护范围，未自动重连": "The destination has an identity conflict or is protected by an old path. It was not relinked automatically.",

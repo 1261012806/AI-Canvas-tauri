@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import { useT } from '../../i18n';
-import { DRAMA_ASSET_KIND_LABEL } from '../../types/dramaAssets';
+import { DRAMA_ASSET_CATEGORY_LABEL } from '../../types/dramaAssets';
 import type { DramaAssetIdentity, DramaAssetImportPreview } from '../../services/dramaAssetTransferFormat';
 import { formatSize } from '../../utils/assetFormat';
 import ModalOverlay from '../shared/ModalOverlay';
@@ -15,10 +15,12 @@ export default function DramaAssetImportDialog({ preview, onChoose }: DramaAsset
   const checkboxId = useId();
   const [selected, setSelected] = useState(() => new Set(preview.items.map((item) => `${item.kind}:${item.id}`)));
   const summary = useMemo(() => {
-    const items = preview.items.filter((item) => selected.has(`${item.kind}:${item.id}`));
+    const required = new Set(preview.items.filter((item) => item.kind === 'character' && selected.has(`${item.kind}:${item.id}`))
+      .flatMap((item) => (item.weaponIds ?? []).map((weaponId) => `prop:${weaponId}`)));
+    const items = preview.items.filter((item) => selected.has(`${item.kind}:${item.id}`) || required.has(`${item.kind}:${item.id}`));
     const mediaIds = new Set(items.flatMap((item) => item.mediaIds));
     const media = preview.media.filter((item) => mediaIds.has(item.id));
-    return { items, mediaCount: media.length, bytes: media.reduce((total, item) => total + item.bytes, 0) };
+    return { items, required, mediaCount: media.length, bytes: media.reduce((total, item) => total + item.bytes, 0) };
   }, [preview, selected]);
   const mediaById = useMemo(() => new Map(preview.media.map((media) => [media.id, media])), [preview]);
 
@@ -27,11 +29,11 @@ export default function DramaAssetImportDialog({ preview, onChoose }: DramaAsset
     <header className="min-w-0 shrink-0">
       <h3 className="text-sm font-semibold text-canvas-text">{t('选择要导入的创作资产')}</h3>
       <p className="mt-1 break-words text-xs text-canvas-text-secondary">{preview.name}</p>
-      <p className="mt-1 text-xs text-canvas-text-muted">{t('仅导入所选资产及其绑定媒体；同名条目会作为新副本追加。')}</p>
+      <p className="mt-1 text-xs text-canvas-text-muted">{t('导入所选资产、角色绑定武器及其媒体；同名条目会作为新副本追加。')}</p>
     </header>
     <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-canvas-text-secondary">
-      {(['character', 'scene', 'prop'] as const).map((kind) => <span key={kind}>
-        {t(DRAMA_ASSET_KIND_LABEL[kind])} {preview.items.filter((item) => item.kind === kind).length}
+      {(['character', 'scene', 'prop', 'weapon'] as const).map((category) => <span key={category}>
+        {t(DRAMA_ASSET_CATEGORY_LABEL[category])} {preview.items.filter((item) => (item.category ?? item.kind) === category).length}
       </span>)}
       <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ml-auto" onClick={() => {
         setSelected(selected.size === preview.items.length ? new Set() : new Set(preview.items.map((item) => `${item.kind}:${item.id}`)));
@@ -42,7 +44,8 @@ export default function DramaAssetImportDialog({ preview, onChoose }: DramaAsset
         const key = `${item.kind}:${item.id}`;
         const bytes = item.mediaIds.reduce((total, mediaId) => total + (mediaById.get(mediaId)?.bytes ?? 0), 0);
         return <div key={key} className="ui-list__item relative">
-          <input id={`${checkboxId}-${index}`} type="checkbox" className="ui-checkbox" checked={selected.has(key)}
+          <input id={`${checkboxId}-${index}`} type="checkbox" className="ui-checkbox"
+            checked={selected.has(key) || summary.required.has(key)} disabled={summary.required.has(key)}
             onChange={(event) => {
               const checked = event.target.checked;
               setSelected((current) => {
@@ -55,8 +58,9 @@ export default function DramaAssetImportDialog({ preview, onChoose }: DramaAsset
             <span className="min-w-0 flex-1">
               <span className="block break-words text-sm text-canvas-text">{item.name}</span>
               <span className="block text-xs text-canvas-text-muted">
-                {t(DRAMA_ASSET_KIND_LABEL[item.kind])} · {t('{count} 份媒体 · {size}', { count: item.mediaIds.length, size: formatSize(bytes) })}
+                {t(DRAMA_ASSET_CATEGORY_LABEL[item.category ?? item.kind])} · {t('{count} 份媒体 · {size}', { count: item.mediaIds.length, size: formatSize(bytes) })}
               </span>
+              {summary.required.has(key) && <span className="block text-xs text-canvas-text-secondary">{t('角色必需武器，将随角色一起导入')}</span>}
               {item.sameName && <span className="block text-xs text-canvas-text-secondary">{t('存在同名条目，将新增副本')}</span>}
             </span>
           </label>

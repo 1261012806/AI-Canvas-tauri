@@ -7,13 +7,17 @@ const mocks = vi.hoisted(() => ({
   state: {
     currentProjectId: 'p', revision: 1, getCurrentRevision: (): number => 1,
     config: { comfyUIUrl: 'http://comfy.test:8188' },
+    projects: [],
     workflows: [] as WorkflowDefinition[],
     nodes: [] as Array<{ id: string; type: string; data: { prompt: string; role?: string } }>,
   },
 }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.state } }));
 vi.mock('../../src/services/comfyRefmodService', () => ({ loadComfyRefmodCatalog: mocks.catalog, resolveComfyRefmodServerIdentity: mocks.identity }));
-vi.mock('../../src/services/videoBatchPlanning', () => ({ videoInputFingerprint: (node: { data: unknown }) => JSON.stringify(node.data) }));
+vi.mock('../../src/services/videoBatchPlanning', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/services/videoBatchPlanning')>(),
+  videoInputFingerprint: (node: { data: unknown }) => JSON.stringify(node.data),
+}));
 vi.mock('../../src/services/comfyPolling', () => ({
   comfyFetch: mocks.fetch, pollComfyHistory: mocks.poll, ComfyPendingError: class extends Error {},
 }));

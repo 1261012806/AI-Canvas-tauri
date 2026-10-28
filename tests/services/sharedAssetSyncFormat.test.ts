@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { DramaAssetLibrary, DramaCharacter } from '../../src/types/dramaAssets';
+import type { DramaAssetLibrary, DramaCharacter, DramaProp } from '../../src/types/dramaAssets';
 import type { SharedSyncFilePayload, SharedSyncMedia, SharedSyncRevision } from '../../src/types/assetSync';
-import { getSharedAssetSyncMediaIds, parseSharedAssetSyncDraft, parseSharedAssetSyncRevision,
+import { getSharedAssetSyncDependencies, getSharedAssetSyncMediaIds, parseSharedAssetSyncDraft, parseSharedAssetSyncRevision,
   restoreSharedDramaAsset, serializeSharedDramaAsset, sharedSyncMediaToken } from '../../src/services/sharedAssetSyncFormat';
 import { preferDramaLibraryReferences } from '../../src/services/dramaAssetPrompt';
 
@@ -36,6 +36,59 @@ function revision(payload: SharedSyncRevision['payload'], files = media): Shared
 }
 
 describe('共享项目资产格式', () => {
+  it('角色武器使用顶层卡片映射，单卡修订允许武器位于另一个修订', async () => {
+    const source = { ...character(), weaponIds: ['local-sword', 'local-bow'] };
+    const payload = await serializeSharedDramaAsset(source, 'shared-card', {
+      ...mapping, mapWeaponId: (value) => value.replace('local-', 'shared-'),
+    });
+    expect(parseSharedAssetSyncRevision(revision(payload)).payload).toMatchObject({
+      data: { weaponIds: ['shared-sword', 'shared-bow'] },
+    });
+    const restored = restoreSharedDramaAsset(payload, 'other-card', {
+      memberId: (_kind, value) => `other-${value}`,
+      mapWeaponId: (value) => value.replace('shared-', 'other-'),
+      mediaById: new Map(media.map((entry) => [entry.id, { assetId: `other-${entry.id}`,
+        relativePath: `Library/${entry.id}.${entry.extension}`, url: `asset://localhost/Library/${entry.id}.${entry.extension}` }])),
+    }) as DramaCharacter;
+    expect(restored.weaponIds).toEqual(['other-sword', 'other-bow']);
+    expect(source.weaponIds).toEqual(['local-sword', 'local-bow']);
+    expect(getSharedAssetSyncDependencies(payload)).toEqual(['shared-sword', 'shared-bow']);
+  });
+
+  it('武器绑定缺少映射、重复、越界或使用全局身份时拒绝共享', async () => {
+    const source = { ...character(), weaponIds: ['local-sword'] };
+    await expect(serializeSharedDramaAsset(source, 'shared-card', mapping)).rejects.toThrow('武器尚未建立共享映射');
+    for (const weaponIds of [['same', 'same'], ['global/weapon'], Array.from({ length: 65 }, (_, i) => `weapon-${i}`)]) {
+      await expect(serializeSharedDramaAsset({ ...source, weaponIds }, 'shared-card', {
+        ...mapping, mapWeaponId: (value) => value,
+      })).rejects.toThrow();
+    }
+    const payload = await serializeSharedDramaAsset(source, 'shared-card', { ...mapping, mapWeaponId: () => 'shared-sword' });
+    expect(() => restoreSharedDramaAsset(payload, 'other-card', { memberId: (_kind, value) => value,
+      mediaById: new Map(media.map((entry) => [entry.id, { assetId: `other-${entry.id}`,
+        relativePath: `Library/${entry.id}.${entry.extension}`, url: `asset://localhost/Library/${entry.id}.${entry.extension}` }]))
+    })).toThrow('武器尚未建立共享映射');
+    const invalid = structuredClone(payload);
+    if (invalid.data.kind === 'character') invalid.data.weaponIds = ['shared-card'];
+    expect(() => parseSharedAssetSyncRevision(revision(invalid))).toThrow();
+  });
+
+  it('武器保留道具协议并校验固定子分类，普通道具维持兼容', async () => {
+    const weapon: DramaProp = { id: 'weapon', kind: 'prop', propType: 'weapon', name: '长剑', key: '长剑',
+      summary: '', visualNotes: '', importance: 'supporting', source: 'manual', confirmed: true, createdAt: 1, updatedAt: 2 };
+    const payload = await serializeSharedDramaAsset(weapon, 'shared-card', mapping);
+    expect(parseSharedAssetSyncRevision(revision(payload, [])).payload).toMatchObject({ kind: 'prop', data: { propType: 'weapon' } });
+    const restored = restoreSharedDramaAsset(payload, 'other-weapon', {
+      memberId: (_kind, value) => value, mediaById: new Map(),
+    }) as DramaProp;
+    expect(restored.propType).toBe('weapon');
+    const invalid = structuredClone(payload);
+    Object.assign(invalid.data, { propType: 'unknown' });
+    expect(() => parseSharedAssetSyncRevision(revision(invalid, []))).toThrow();
+    const ordinary = await serializeSharedDramaAsset({ ...weapon, propType: undefined }, 'shared-card', mapping);
+    expect(parseSharedAssetSyncRevision(revision(ordinary, [])).payload).toEqual(ordinary);
+  });
+
   it('图声动作闭包保留稳定共享ID、头像和主音色指针，剥离本机运行身份', async () => {
     const source = character();
     Object.assign(source, { libraryOrder: 4, filePath: 'C:/private/image.png',

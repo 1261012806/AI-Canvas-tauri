@@ -10,7 +10,8 @@ import type {
   DramaProp,
   DramaScene,
 } from '../types/dramaAssets';
-import { buildDramaMentionId, DRAMA_ASSET_KIND_LABEL, formatDramaMention, parseDramaMentionId } from '../types/dramaAssets';
+import { buildDramaMentionId, DRAMA_ASSET_CATEGORY_LABEL, formatDramaMention, parseDramaMentionId } from '../types/dramaAssets';
+import { getDramaAssetCategory } from './dramaAssetSearch';
 
 export type DramaAssetPromptPurpose = 'lookbook' | 'scene_plate' | 'prop_ref';
 
@@ -78,7 +79,7 @@ export function formatDramaAssetTextBrief(asset: DramaAsset): string {
       : asset.importance === 'supporting' ? '（次要）'
         : '';
   const lines: string[] = [
-    `## ${DRAMA_ASSET_KIND_LABEL[asset.kind]}：${asset.name}${imp}`,
+    `## ${DRAMA_ASSET_CATEGORY_LABEL[getDramaAssetCategory(asset)]}：${asset.name}${imp}`,
   ];
 
   if (asset.kind === 'character') {

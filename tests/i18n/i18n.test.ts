@@ -61,7 +61,7 @@ describe('i18n runtime', () => {
  * en-US 是基准字典，ja-JP / ko-KR 的 key 集合必须与之完全一致。
  */
 describe('locale dictionaries', () => {
-  const SRC = join(__dirname, '../../src');
+  const SOURCE_ROOTS = [join(__dirname, '../../src'), join(__dirname, '../../src-tauri/src')];
   const DICTS = { enUS, jaJP, koKR } as const;
 
   function collectSources(dir: string, out: string[] = []): string[] {
@@ -70,14 +70,14 @@ describe('locale dictionaries', () => {
       if (entry.name === 'locales') continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) collectSources(full, out);
-      else if (/\.tsx?$/.test(entry.name)) out.push(readFileSync(full, 'utf8'));
+      else if (/\.(?:tsx?|rs)$/.test(entry.name)) out.push(readFileSync(full, 'utf8'));
     }
     return out;
   }
 
   // 全仓同步文件扫描随源码增长，单独预留 CI 文件 I/O 预算，不改变扫描或断言范围。
   it('has no entry whose Chinese source text disappeared from the codebase', () => {
-    const sources = collectSources(SRC).join('\n');
+    const sources = SOURCE_ROOTS.flatMap((root) => collectSources(root)).join('\n');
     // 多个字典共用大量 key，每个唯一 key 只扫描一次源码，保留逐字典的完整断言。
     const keys = new Set(Object.values(DICTS).flatMap((dict) => Object.keys(dict)));
     // 含反斜杠或换行的 key 会被 TS 转义改写，源码原始文本与运行时字符串值不一致，

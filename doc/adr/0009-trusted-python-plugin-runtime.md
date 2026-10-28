@@ -72,6 +72,6 @@
 
 ## 参考
 
-- `doc/plans/2026-08-26-trusted-python-plugins.md`
+- [当前可信 Python 合同与验收边界](../插件平台模块.md#可信-python-运行时)
 - `doc/plans/2026-08-23-user-plugin-platform.md`
 - `doc/插件开发规范.md`

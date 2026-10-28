@@ -14,7 +14,7 @@ import { getAllAssetMeta, getAllProjects, getAssetImageRecords, getAssetIndexByI
 import { loadSharedAssetSyncState, patchSharedAssetSyncOperation, putSharedAssetSyncPlan,
   type SharedAssetSyncCommitInput, type SharedAssetSyncCommitResult } from '../indexedDb/sharedAssetSyncRepository';
 import { configValuesEqual } from '../configPatch';
-import { mapSharedAssetSyncText, parseSharedAssetSyncDraft, parseSharedAssetSyncRevision,
+import { getSharedAssetSyncDependencies, mapSharedAssetSyncText, parseSharedAssetSyncDraft, parseSharedAssetSyncRevision,
   restoreSharedDramaAsset, serializeSharedDramaAsset } from '../sharedAssetSyncFormat';
 import { sha256BytesHex } from '../mediaDataUrl';
 import { localMediaUrlToPath } from '../../utils/mediaUrl';
@@ -103,7 +103,7 @@ const flat = (library: DramaAssetLibrary): DramaAsset[] => [...library.character
 const pending = (operation: SharedAssetOutboxEntry) => operation.errorCode === 'ack_pending' || !['completed', 'conflict'].includes(operation.phase);
 function guard(context: SharedAssetSyncContext): void { context.signal?.throwIfAborted(); context.assertCurrent(); }
 function publicError(error: unknown): string {
-  if (error instanceof Error && /^(?:资产|全局|项目|图片|参考图|共享|本次|待同步|素材|未找到|云存储|版本|目标存储|连接)/.test(error.message)
+  if (error instanceof Error && /^(?:资产|角色|全局|项目|图片|参考图|共享|本次|待同步|素材|未找到|云存储|版本|目标存储|连接)/.test(error.message)
     && !/(?:https?:\/\/|[A-Za-z]:[\\/]|\\\\)/.test(error.message) && error.message.length <= 180) return error.message;
   return '共享资产操作未完成，请重新预览或恢复';
 }
@@ -287,6 +287,19 @@ function mention(session: SharedAssetSyncSession, raw: string, reverse = false):
   }
   return buildDramaMentionId(entityId, parsed.mergeAll ? 'all' : parsed.referenceImageId !== undefined ? find('referenceImage', parsed.referenceImageId) : undefined);
 }
+
+function weaponIdentity(session: SharedAssetSyncSession, raw: string, reverse = false): string {
+  if (!reverse && !session.context.library.props.some((asset) => asset.id === raw && asset.propType === 'weapon')) {
+    throw new Error('角色绑定的项目武器已失效，请先修复绑定');
+  }
+  const matches = session.mappings.filter((mapping) => mapping.kind === 'prop'
+    && (reverse ? mapping.sharedAssetId === raw : mapping.localEntityId === raw));
+  if (matches.length !== 1) throw new Error('角色武器缺少唯一的共享映射，请先纳入对应项目资产');
+  if (reverse && !session.expectedLibrary.props.some((asset) => asset.id === matches[0].localEntityId && asset.propType === 'weapon')) {
+    throw new Error('角色绑定的项目武器已失效，请先修复绑定');
+  }
+  return reverse ? matches[0].localEntityId : matches[0].sharedAssetId;
+}
 function newMapping(binding: SharedProjectBinding, kind: SharedAssetMapping['kind'], localId: string, sharedId: string = crypto.randomUUID()): SharedAssetMapping {
   return { ...identity(binding), id: crypto.randomUUID(), kind, localEntityId: localId, sharedAssetId: sharedId,
     members: [], media: [], updatedAt: Date.now() };
@@ -410,6 +423,16 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
     completed: 0, executing: false, savedMappings: new Map(stored.mappings.map((mapping) => [mapping.id, structuredClone(mapping)])) };
   context.onStatus({ ownerId, stage: 'scanning', items: [], completed: 0, total: 0 });
   const remote = await remoteAssets(session); const remoteById = new Map(remote.map((asset) => [asset.head.sharedAssetId, asset]));
+  for (const asset of remote) {
+    const payload = asset.revision.payload;
+    if (payload.kind !== 'character' || payload.data.kind !== 'character') continue;
+    for (const weaponId of payload.data.weaponIds ?? []) {
+      const weapon = remoteById.get(weaponId)?.revision.payload;
+      if (!weapon || weapon.kind !== 'prop' || weapon.data.kind !== 'prop' || weapon.data.propType !== 'weapon') {
+        throw new Error('共享角色的武器依赖缺失或类型不符，请先恢复对应武器');
+      }
+    }
+  }
   const localCards = flat(context.library);
   for (const asset of localCards) {
     let mapping = session.mappings.find((item) => item.kind === asset.kind && item.localEntityId === asset.id);
@@ -619,6 +642,7 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
         payload = await serializeSharedDramaAsset(card, mapping.sharedAssetId, {
           memberId: (kind, localId, parent) => member(mapping, kind, localId, false, parent),
           mapMentionId: (value) => mention(session, value),
+          mapWeaponId: (value) => weaponIdentity(session, value),
           mapProjectNodeReferences,
           mediaId: async (source) => {
             if (source.assetSource === 'global') throw new Error('全局参考图须先物化为项目资产后共享');
@@ -708,11 +732,20 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
       if (item.acknowledgeOnly) continue;
       const payload = item.operation.revision?.payload ?? item.operation.draft?.payload;
       if (!payload) continue;
-      const unresolved = [...JSON.stringify(payload).matchAll(/@drama\{([^:}]+):/g)].some((match) => {
-        const sharedId = parseDramaMentionId(match[1]).assetId;
+      const unresolved = getSharedAssetSyncDependencies(payload).some((sharedId) => {
         return !remoteById.has(sharedId) && !publishing.has(sharedId);
       });
-      if (!unresolved) continue;
+      const missingLocalWeapon = item.operation.direction === 'download' && payload.kind === 'character'
+        && payload.data.kind === 'character' && (payload.data.weaponIds ?? []).some((sharedId) => {
+          const target = session.mappings.find((mapping) => mapping.kind === 'prop' && mapping.sharedAssetId === sharedId);
+          if (target && session.expectedLibrary.props.some((asset) => asset.id === target.localEntityId && asset.propType === 'weapon')) return false;
+          return !session.operations.some((entry) => {
+            const dependency = entry.operation.revision?.payload ?? entry.operation.draft?.payload;
+            return entry.operation.direction === 'download' && !entry.acknowledgeOnly && entry.mapping.sharedAssetId === sharedId
+              && dependency?.kind === 'prop' && dependency.data.kind === 'prop' && dependency.data.propType === 'weapon';
+          });
+        });
+      if (!unresolved && !missingLocalWeapon) continue;
       await operationPhase(item, 'paused', { errorCode: 'dependency_missing' });
       session.operations = session.operations.filter((entry) => entry !== item); dependenciesChanged = true;
       session.items = session.items.map((entry) => entry.id === item.mapping.id ? { ...entry, direction: 'blocked',
@@ -720,6 +753,12 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
     }
   }
   const unresolved = session.items.some((item) => item.direction === 'blocked' || item.direction === 'conflict');
+  // 先发布／下载武器，再提交引用它的角色，取消后也不会留下未发布的武器依赖。
+  const weaponPriority = (item: SessionOperation) => {
+    const payload = item.operation.revision?.payload ?? item.operation.draft?.payload;
+    return payload?.kind === 'prop' && payload.data.kind === 'prop' && payload.data.propType === 'weapon' ? 0 : 1;
+  };
+  session.operations.sort((left, right) => weaponPriority(left) - weaponPriority(right));
   context.onStatus({ stage: session.operations.length ? 'preview' : unresolved ? 'paused' : 'completed',
     items: [...session.items], completed: 0, total: session.operations.length,
     ...(!session.operations.length && !unresolved ? { lastSyncedAt: Date.now() } : {}) });
@@ -872,7 +911,8 @@ async function applyDownloaded(session: SharedAssetSyncSession, item: SessionOpe
       const restored = restoreSharedDramaAsset(payload, mapping.localEntityId, { mediaById,
         memberId: (kind, sharedId, parentSharedId) => member(mapping, kind, sharedId, true,
           parentSharedId ? member(mapping, 'action', parentSharedId, true) : undefined),
-        mapMentionId: (value) => mention(session, value, true) });
+        mapMentionId: (value) => mention(session, value, true),
+        mapWeaponId: (value) => weaponIdentity(session, value, true) });
       const existing = flat(session.expectedLibrary).find((asset) => asset.kind === restored.kind && asset.id === restored.id);
       if (existing?.kind === 'character' && restored.kind === 'character') {
         restored.libraryOrder = existing.libraryOrder; restored.refmods = existing.refmods; restored.volcengineBinding = existing.volcengineBinding;

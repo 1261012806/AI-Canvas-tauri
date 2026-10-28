@@ -5,7 +5,8 @@ import type { AgentMode, AgentTask } from '../types/agent';
 import type { ConversationContextSummary } from '../types/chat';
 import type { ProjectMemory } from '../types/memory';
 import type { DramaAsset, DramaAssetWriteOptions, DramaCharacter, DramaProp, DramaScene } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, MAX_CHARACTER_WEAPONS, normalizeCharacterWeaponIds } from '../types/dramaAssets';
+import { t } from '../i18n';
 import type { ProjectVisualDescription } from '../types/visualMemory';
 import type { AssetUsageRecord } from '../types/assetUsage';
 import { StorageError } from './storageDiagnostics';
@@ -353,6 +354,13 @@ export async function updateProjectSnapshot(id: string, snapshot: string | undef
 // Global character library CRUD
 // ============================================
 
+function checkedGlobalWeaponIds(value: unknown): string[] {
+  const ids = normalizeCharacterWeaponIds(value);
+  if (!Array.isArray(value) || value.length > MAX_CHARACTER_WEAPONS
+    || value.some((id) => typeof id !== 'string' || !ids.includes(id))) throw new Error(t('武器绑定无效，请重新选择'));
+  return ids;
+}
+
 async function putGlobalLibraryRecord(
   storeName: string,
   asset: DramaCharacter | DramaScene | DramaProp,
@@ -362,7 +370,7 @@ async function putGlobalLibraryRecord(
   const db = await openDB();
   assertDramaAssetWriteCurrent(options);
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([storeName, STORE_METADATA], 'readwrite');
+    const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_GLOBAL_DRAMA_ASSETS, STORE_METADATA], 'readwrite');
     const store = tx.objectStore(storeName);
     const abort = () => { try { tx.abort(); } catch { /* 已结束的事务无需再次中止。 */ } };
     options.signal?.addEventListener('abort', abort, { once: true });
@@ -372,9 +380,10 @@ async function putGlobalLibraryRecord(
         assertDramaAssetWriteCurrent(options);
         if (current.result && current.result.kind !== asset.kind) throw new Error('资产分类已变化，请重新加载');
         // 编辑器可能早于一次排序打开，人物正文保存不能覆盖最新手动顺序。
-        const next = asset.kind === 'character' && current.result
-          ? { ...asset, libraryOrder: (current.result as DramaCharacter).libraryOrder } : asset;
-        withRelocatedMedia(tx, next, (relocated) => {
+        const next = asset.kind === 'character'
+          ? { ...asset, libraryOrder: current.result ? (current.result as DramaCharacter).libraryOrder : asset.libraryOrder,
+            weaponIds: asset.weaponIds ?? (current.result as DramaCharacter | undefined)?.weaponIds } : asset;
+        const save = () => withRelocatedMedia(tx, next, (relocated) => {
           try {
             assertDramaAssetWriteCurrent(options);
             store.put(relocated);
@@ -383,6 +392,35 @@ async function putGlobalLibraryRecord(
             reject(error);
           }
         });
+        const fail = (error: unknown) => { tx.abort(); reject(error); };
+        if (next.kind === 'character' && next.weaponIds !== undefined) {
+          const ids = checkedGlobalWeaponIds(next.weaponIds);
+          next.weaponIds = ids;
+          let pending = ids.length;
+          if (!pending) save();
+          for (const id of ids) {
+            const weapon = tx.objectStore(STORE_GLOBAL_DRAMA_ASSETS).get(id);
+            weapon.onsuccess = () => {
+              try {
+                assertDramaAssetWriteCurrent(options);
+                if (weapon.result?.kind !== 'prop' || weapon.result.propType !== 'weapon') throw new Error(t('武器绑定无效，请重新选择'));
+                if (--pending === 0) save();
+              } catch (error) { fail(error); }
+            };
+          }
+        } else if (current.result?.kind === 'prop' && current.result.propType === 'weapon'
+          && next.kind === 'prop' && next.propType !== 'weapon') {
+          const characters = tx.objectStore(STORE_GLOBAL_CHARACTERS).getAll();
+          characters.onsuccess = () => {
+            try {
+              assertDramaAssetWriteCurrent(options);
+              if ((characters.result as DramaCharacter[]).some((character) => character.weaponIds?.includes(next.id))) {
+                throw new Error(t('请先解除角色的武器绑定，再改为普通道具'));
+              }
+              save();
+            } catch (error) { fail(error); }
+          };
+        } else save();
       } catch (error) {
         tx.abort();
         reject(error);
@@ -396,6 +434,42 @@ async function putGlobalLibraryRecord(
 
 export async function putGlobalCharacter(character: DramaCharacter, options?: DramaAssetWriteOptions): Promise<void> {
   return putGlobalLibraryRecord(STORE_GLOBAL_CHARACTERS, character, options);
+}
+
+/** 绑定只改关联字段；与武器删除/分类转换共用两表事务，不重写媒体或角色正文。 */
+export async function putGlobalCharacterWeapons(characterId: string, weaponIds: string[], options: DramaAssetWriteOptions = {}): Promise<void> {
+  const ids = checkedGlobalWeaponIds(weaponIds);
+  assertDramaAssetWriteCurrent(options);
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_GLOBAL_CHARACTERS, STORE_GLOBAL_DRAMA_ASSETS], 'readwrite');
+    let failure: unknown;
+    const fail = (error: unknown) => { failure ??= error; try { tx.abort(); } catch { /* 已结束事务不再撤销。 */ } };
+    const abort = () => fail(new Error(t('角色武器保存失败，请重试')));
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const character = tx.objectStore(STORE_GLOBAL_CHARACTERS).get(characterId);
+    let remaining = ids.length + 1;
+    const checked = () => {
+      if (--remaining || failure) return;
+      try {
+        assertDramaAssetWriteCurrent(options);
+        if (character.result?.kind !== 'character') throw new Error(t('角色或项目已变化，请重新选择武器'));
+        tx.objectStore(STORE_GLOBAL_CHARACTERS).put({ ...character.result, weaponIds: ids, updatedAt: Date.now() });
+      } catch (error) { fail(error); }
+    };
+    character.onsuccess = checked;
+    for (const id of ids) {
+      const weapon = tx.objectStore(STORE_GLOBAL_DRAMA_ASSETS).get(id);
+      weapon.onsuccess = () => {
+        if (weapon.result?.kind !== 'prop' || weapon.result.propType !== 'weapon') fail(new Error(t('武器绑定无效，请重新选择')));
+        else checked();
+      };
+    }
+    const cleanup = () => options.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(failure ?? tx.error ?? new Error(t('角色武器保存失败，请重试'))); };
+  });
 }
 
 export async function putGlobalDramaAsset(asset: DramaScene | DramaProp, options?: DramaAssetWriteOptions): Promise<void> {
@@ -568,7 +642,31 @@ async function deleteGlobalLibraryRecord(storeName: string, id: string, options:
 }
 
 export async function deleteGlobalDramaAsset(id: string, options?: DramaAssetWriteOptions): Promise<void> {
-  return deleteGlobalLibraryRecord(STORE_GLOBAL_DRAMA_ASSETS, id, options);
+  assertDramaAssetWriteCurrent(options);
+  const db = await openDB();
+  assertDramaAssetWriteCurrent(options);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_GLOBAL_DRAMA_ASSETS, STORE_GLOBAL_CHARACTERS], 'readwrite');
+    let failure: unknown;
+    const fail = (error: unknown) => { failure ??= error; try { tx.abort(); } catch { /* 已结束事务不再撤销。 */ } };
+    const abort = () => fail(new Error(t('角色武器保存失败，请重试')));
+    options?.signal?.addEventListener('abort', abort, { once: true });
+    const characters = tx.objectStore(STORE_GLOBAL_CHARACTERS).getAll();
+    characters.onsuccess = () => {
+      try {
+        assertDramaAssetWriteCurrent(options);
+        for (const character of characters.result as DramaCharacter[]) {
+          if (!character.weaponIds?.includes(id)) continue;
+          tx.objectStore(STORE_GLOBAL_CHARACTERS).put({ ...character,
+            weaponIds: character.weaponIds.filter((weaponId) => weaponId !== id), updatedAt: Date.now() });
+        }
+        tx.objectStore(STORE_GLOBAL_DRAMA_ASSETS).delete(id);
+      } catch (error) { fail(error); }
+    };
+    const cleanup = () => options?.signal?.removeEventListener('abort', abort);
+    tx.oncomplete = () => { cleanup(); resolve(); };
+    tx.onerror = tx.onabort = () => { cleanup(); reject(failure ?? tx.error ?? new Error(t('全局创作资产删除失败'))); };
+  });
 }
 
 export async function getAllGlobalCharacters(): Promise<DramaCharacter[]> {

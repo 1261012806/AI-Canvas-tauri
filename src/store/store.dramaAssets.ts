@@ -15,6 +15,7 @@ import type {
   CharacterVoiceKind,
   DramaAsset,
   DramaAssetKind,
+  DramaAssetCategory,
   DramaAssetLibrary,
   DramaAssetWriteOptions,
   DramaAssetReferenceImage,
@@ -22,7 +23,7 @@ import type {
   DramaProp,
   DramaScene,
 } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent, emptyDramaAssetLibrary, normalizeDramaCharacter, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary, MAX_DRAMA_REFERENCE_IMAGES } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, emptyDramaAssetLibrary, normalizeDramaCharacter, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary, MAX_DRAMA_REFERENCE_IMAGES, MAX_CHARACTER_WEAPONS, normalizeCharacterWeaponIds } from '../types/dramaAssets';
 import type { DramaExtractParseResult } from '../services/dramaAssetExtract';
 import { mergeDramaExtractIntoLibrary, normalizeAssetKey } from '../services/dramaAssetExtract';
 import {
@@ -55,6 +56,8 @@ import {
   type GlobalDramaAssetSaveOptions,
 } from '../services/globalDramaAssetService';
 import { reorderCharacterSubset, sortCharactersForLibrary } from '../services/characterOrder';
+import { putGlobalCharacterWeapons } from '../services/indexedDbService';
+import { configValuesEqual } from '../services/configPatch';
 
 const characterOrderSaves = new Set<string>();
 const dramaAssetImports = new Set<string>();
@@ -138,7 +141,7 @@ export interface DramaAssetsSlice {
     meta?: { sourceNodeId?: string; modelId?: string },
   ) => void;
   /** 按 id 新增或整体覆盖一个资产；角色建议走 saveCharacterCard 以便归一化参考图。 */
-  upsertDramaAsset: (asset: DramaAsset) => void;
+  upsertDramaAsset: (asset: DramaAsset) => boolean;
   /** 追加资产包生成的新身份，等待项目/剧集落盘；不按名称覆盖现有条目。 */
   importDramaAssets: (assets: readonly DramaAsset[], options?: DramaAssetWriteOptions) => Promise<number>;
   confirmDramaAsset: (kind: DramaAssetKind, id: string, confirmed?: boolean) => void;
@@ -146,9 +149,10 @@ export interface DramaAssetsSlice {
   updateDramaAssetFields: (
     kind: DramaAssetKind,
     id: string,
-    patch: Partial<Pick<DramaAsset, 'summary' | 'visualNotes' | 'storyRole' | 'name'>>,
-  ) => void;
-  clearDramaAssetsByKind: (kind: DramaAssetKind) => void;
+    patch: Partial<Pick<DramaAsset, 'summary' | 'visualNotes' | 'storyRole' | 'name'>> & { propType?: 'weapon' },
+  ) => boolean;
+  clearDramaAssetsByKind: (kind: DramaAssetCategory) => void;
+  setCharacterWeapons: (scope: CharacterLibraryScope, characterId: string, weaponIds: string[], options?: DramaAssetWriteOptions) => Promise<boolean>;
   /** 绑定画布图像节点 */
   bindDramaAssetImage: (
     kind: DramaAssetKind,
@@ -309,6 +313,30 @@ function mapKindList(
 
 function silentSave(get: () => AppState) {
   void get().saveCurrentProjectSilent?.();
+}
+
+function checkedCharacterWeapons(character: DramaCharacter, props: readonly DramaProp[], previous?: DramaCharacter): string[] | undefined {
+  const raw = character.weaponIds ?? previous?.weaponIds;
+  if (raw === undefined) return;
+  const ids = normalizeCharacterWeaponIds(raw);
+  if (!Array.isArray(raw) || raw.length > MAX_CHARACTER_WEAPONS
+    || raw.some((id) => typeof id !== 'string' || !ids.includes(id))
+    || ids.some((id) => !props.some((prop) => prop.id === id && prop.propType === 'weapon'))) {
+    throw new Error(t('武器绑定无效，请重新选择'));
+  }
+  return ids;
+}
+
+function removesBoundWeapon(previous: DramaAsset | undefined, next: DramaAsset, characters: readonly DramaCharacter[]): boolean {
+  return previous?.kind === 'prop' && previous.propType === 'weapon'
+    && next.kind === 'prop' && next.propType !== 'weapon'
+    && characters.some((character) => character.weaponIds?.includes(previous.id));
+}
+
+function withoutCharacterWeapons(characters: DramaCharacter[], ids: ReadonlySet<string>): DramaCharacter[] {
+  return characters.map((character) => character.weaponIds?.some((id) => ids.has(id))
+    ? { ...character, weaponIds: character.weaponIds.filter((id) => !ids.has(id)), updatedAt: Date.now() }
+    : character);
 }
 
 /** 读取期间发生的增删改优先于旧快照，避免并发加载覆盖已经保存的编辑。 */
@@ -573,6 +601,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const ids = new Set<string>();
     const existing = new Set([...initial.dramaAssets.characters, ...initial.dramaAssets.scenes, ...initial.dramaAssets.props]
       .map((asset) => asset.id));
+    const availableWeapons = [...initial.dramaAssets.props, ...assets.filter((asset): asset is DramaProp => asset.kind === 'prop')];
     const additions = assets.map((asset) => {
       if (!asset || !['character', 'scene', 'prop'].includes(asset.kind) || !asset.id?.trim()
         || typeof asset.name !== 'string' || !asset.name.trim() || ids.has(asset.id) || existing.has(asset.id)) {
@@ -580,7 +609,8 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       }
       ids.add(asset.id);
       return asset.kind === 'character'
-        ? syncCharacterPrimaryImage(normalizeDramaCharacter({ ...asset, libraryOrder: undefined })) : asset;
+        ? syncCharacterPrimaryImage(normalizeDramaCharacter({ ...asset, libraryOrder: undefined,
+          weaponIds: checkedCharacterWeapons(asset, availableWeapons) })) : asset;
     });
     assertDramaAssetWriteCurrent(options);
     dramaAssetImports.add(ownerId);
@@ -616,6 +646,15 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   upsertDramaAsset: (asset) => {
     if (asset.kind !== 'character') asset = syncDramaVisualAssetPrimary(asset);
     const lib = get().dramaAssets;
+    const previous = findDramaAssetByKind(lib, asset.kind, asset.id);
+    if (removesBoundWeapon(previous, asset, lib.characters)) {
+      get().showToast?.(t('请先解除角色的武器绑定，再改为普通道具'), 'error');
+      return false;
+    }
+    if (asset.kind === 'character') {
+      try { asset = { ...asset, weaponIds: checkedCharacterWeapons(asset, lib.props, previous?.kind === 'character' ? previous : undefined) }; }
+      catch { get().showToast?.(t('武器绑定无效，请重新选择'), 'error'); return false; }
+    }
     set({
       dramaAssets: mapKindList(lib, asset.kind, (list) => (
         list.some((item) => item.id === asset.id)
@@ -626,6 +665,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       )),
     });
     silentSave(get);
+    return true;
   },
 
   confirmDramaAsset: (kind, id, confirmed = true) => {
@@ -646,13 +686,20 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     } else if (kind === 'scene') {
       set({ dramaAssets: { ...lib, scenes: lib.scenes.filter((c) => c.id !== id) } });
     } else {
-      set({ dramaAssets: { ...lib, props: lib.props.filter((c) => c.id !== id) } });
+      set({ dramaAssets: { ...lib, props: lib.props.filter((c) => c.id !== id),
+        characters: withoutCharacterWeapons(lib.characters, new Set([id])) } });
     }
     silentSave(get);
   },
 
   updateDramaAssetFields: (kind, id, patch) => {
     const lib = get().dramaAssets;
+    const previous = findDramaAssetByKind(lib, kind, id);
+    if (!previous || ('propType' in patch && (kind !== 'prop' || (patch.propType !== undefined && patch.propType !== 'weapon')))) return false;
+    if (removesBoundWeapon(previous, { ...previous, ...patch } as DramaAsset, lib.characters)) {
+      get().showToast?.(t('请先解除角色的武器绑定，再改为普通道具'), 'error');
+      return false;
+    }
     // 改名时同步 key，保证后续重提取 merge 仍能对上
     const nextPatch: Partial<DramaAsset> = { ...patch };
     if (typeof patch.name === 'string' && patch.name.trim()) {
@@ -664,6 +711,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       ),
     });
     silentSave(get);
+    return true;
   },
 
   clearDramaAssetsByKind: (kind) => {
@@ -673,7 +721,11 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       set({ dramaAssets: { ...lib, characters: [] } });
     }
     else if (kind === 'scene') set({ dramaAssets: { ...lib, scenes: [] } });
-    else set({ dramaAssets: { ...lib, props: [] } });
+    else {
+      const removed = new Set(lib.props.filter((prop) => kind === 'weapon' ? prop.propType === 'weapon' : prop.propType !== 'weapon').map((prop) => prop.id));
+      set({ dramaAssets: { ...lib, props: lib.props.filter((prop) => !removed.has(prop.id)),
+        characters: withoutCharacterWeapons(lib.characters, removed) } });
+    }
     silentSave(get);
   },
 
@@ -1006,6 +1058,10 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const initial = get();
     const previous = (asset.kind === 'scene' ? initial.globalScenes : initial.globalProps)
       .find((item) => item.id === asset.id);
+    if (removesBoundWeapon(previous, asset, initial.globalCharacters)) {
+      get().showToast?.(t('请先解除角色的武器绑定，再改为普通道具'), 'error');
+      return false;
+    }
     const normalized = normalizeDramaVisualAsset(asset);
     const sourceIds = [...new Set((normalized.referenceImages ?? []).flatMap((reference) => reference.sourceNodeId ? [reference.sourceNodeId] : []))];
     const sources = sourceIds.map((id) => initial.nodes.find((node) => node.id === id));
@@ -1065,7 +1121,8 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
       await deleteGlobalDramaAssetCard(kind, id, options);
       assertDramaAssetWriteCurrent(options);
       if (kind === 'scene') set((current) => ({ globalScenes: current.globalScenes.filter((asset) => asset.id !== id) }));
-      else set((current) => ({ globalProps: current.globalProps.filter((asset) => asset.id !== id) }));
+      else set((current) => ({ globalProps: current.globalProps.filter((asset) => asset.id !== id),
+        globalCharacters: withoutCharacterWeapons(current.globalCharacters, new Set([id])) }));
       return true;
     } catch {
       if (!options?.signal?.aborted) get().showToast?.('全局创作资产删除失败', 'error');
@@ -1170,6 +1227,10 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     const projectId = initial.currentProjectId;
     if (!projectId || initial.projectLoadStatus !== 'ready') return false;
     const previous = findDramaAssetByKind(initial.dramaAssets, asset.kind, asset.id);
+    if (removesBoundWeapon(previous, asset, initial.dramaAssets.characters)) {
+      get().showToast?.(t('请先解除角色的武器绑定，再改为普通道具'), 'error');
+      return false;
+    }
     set((state) => ({ dramaAssets: mapKindList(state.dramaAssets, asset.kind, (list) =>
       list.some((item) => item.id === asset.id) ? list.map((item) => item.id === asset.id ? normalized : item) : [...list, normalized]) }));
     try {
@@ -1231,9 +1292,79 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     return get().saveDramaVisualAsset(scope, { ...asset, primaryReferenceImageId: referenceId, updatedAt: Date.now() }, options);
   },
 
+  setCharacterWeapons: async (scope, characterId, weaponIds, options = {}) => {
+    if (scope !== 'project' && scope !== 'global') return false;
+    const initial = get();
+    const projectId = initial.currentProjectId;
+    const ownerId = projectId ? seriesOwnerId(initial.projects, projectId) : undefined;
+    const owner = initial.projects.find((project) => project.id === ownerId);
+    const characters = scope === 'project' ? initial.dramaAssets.characters : initial.globalCharacters;
+    const original = characters.find((character) => character.id === characterId);
+    if (!original || (scope === 'project' && (!projectId || initial.projectLoadStatus !== 'ready' || !owner || owner.parentId))) return false;
+    let ids: string[];
+    try { ids = checkedCharacterWeapons({ ...original, weaponIds }, scope === 'project' ? initial.dramaAssets.props : initial.globalProps) ?? []; }
+    catch { initial.showToast?.(t('武器绑定无效，请重新选择'), 'error'); return false; }
+    let expected = original;
+    let accepted = false;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const assertCurrent = () => {
+      assertDramaAssetWriteCurrent(options);
+      if (controller.signal.aborted) throw new Error(t('角色或项目已变化，请重新选择武器'));
+      const current = get();
+      if (current.currentProjectId !== projectId || current.isCreatingProject || current.isReturningToStartPage
+        || current.switchingProjectName !== null || (scope === 'project'
+          && (current.projectLoadStatus !== 'ready' || !projectId || seriesOwnerId(current.projects, projectId) !== ownerId))) {
+        throw new Error(t('角色或项目已变化，请重新选择武器'));
+      }
+      checkedCharacterWeapons({ ...original, weaponIds: ids }, scope === 'project' ? current.dramaAssets.props : current.globalProps);
+      if (!configValuesEqual((scope === 'project' ? current.dramaAssets.characters : current.globalCharacters).find((character) => character.id === characterId), expected)) {
+        throw new Error(t('角色或项目已变化，请重新选择武器'));
+      }
+    };
+    const unsubscribe = api.subscribe(() => { try { assertCurrent(); } catch { controller.abort(); } });
+    try {
+      assertCurrent();
+      if (scope === 'global') {
+        await putGlobalCharacterWeapons(characterId, ids, { ...options, assertCurrent, signal: controller.signal });
+        assertCurrent();
+        unsubscribe();
+        set((state) => ({ globalCharacters: state.globalCharacters.map((character) => character.id === characterId
+          ? { ...character, weaponIds: ids, updatedAt: Date.now() } : character) }));
+        return true;
+      }
+      const next = { ...original, weaponIds: ids, updatedAt: Date.now() };
+      expected = next;
+      set((state) => ({ dramaAssets: { ...state.dramaAssets,
+        characters: state.dramaAssets.characters.map((character) => character.id === characterId ? next : character) } }));
+      if (await get().saveCurrentProjectSilent() !== projectId) throw new Error(t('角色武器保存失败，请重试'));
+      accepted = true;
+      assertCurrent();
+      return true;
+    } catch {
+      const current = get();
+      if (!accepted && scope === 'project' && current.currentProjectId
+        && seriesOwnerId(current.projects, current.currentProjectId) === ownerId) {
+        set((state) => ({ dramaAssets: { ...state.dramaAssets, characters: state.dramaAssets.characters.map((character) =>
+          character.id === characterId && character.weaponIds === ids
+            ? { ...character, weaponIds: original.weaponIds } : character) } }));
+      }
+      if (!controller.signal.aborted) get().showToast?.(t('角色武器保存失败，请重试'), 'error');
+      return false;
+    } finally {
+      unsubscribe();
+      options.signal?.removeEventListener('abort', abort);
+    }
+  },
+
   saveCharacterCard: async (scope, character, options) => {
+    if (scope !== 'project' && scope !== 'global') return false;
     const characters = scope === 'project' ? get().dramaAssets.characters : get().globalCharacters;
     const existing = characters.find((item) => item.id === character.id);
+    try { character = { ...character, weaponIds: checkedCharacterWeapons(character,
+      scope === 'project' ? get().dramaAssets.props : get().globalProps, existing) }; }
+    catch { get().showToast?.(t('武器绑定无效，请重新选择'), 'error'); return false; }
     const normalized = syncCharacterPrimaryImage(normalizeDramaCharacter(existing
       ? { ...character, libraryOrder: existing.libraryOrder } : character));
     if (scope === 'project') {
@@ -1256,6 +1387,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
     options?.signal?.addEventListener('abort', abort, { once: true });
     const assertCurrent = () => {
       assertDramaAssetWriteCurrent(options);
+      checkedCharacterWeapons(normalized, get().globalProps);
       const current = get().globalCharacters.find((item) => item.id === character.id);
       if (controller.signal.aborted || !sameCharacterContent(existing, current)) {
         throw new Error('角色已修改或删除，请重新保存');
@@ -1312,6 +1444,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   copyCharacterToGlobal: async (characterId) => {
     const character = get().dramaAssets.characters.find((item) => item.id === characterId);
     if (!character) return null;
+    if (character.weaponIds?.length) { get().showToast?.(t('请使用资产复制入口一并复制角色武器'), 'info'); return null; }
     const copy = cloneCharacter(character);
     return await get().saveCharacterCard('global', copy) ? copy.id : null;
   },
@@ -1319,6 +1452,7 @@ export const createDramaAssetsSlice: StateCreator<AppState, [], [], DramaAssetsS
   copyGlobalCharacterToProject: (characterId) => {
     const character = get().globalCharacters.find((item) => item.id === characterId);
     if (!character) return null;
+    if (character.weaponIds?.length) { get().showToast?.(t('请使用资产复制入口一并复制角色武器'), 'info'); return null; }
     const copy = cloneCharacter(character);
     void get().saveCharacterCard('project', copy);
     return copy.id;

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@iconify/react';
+import { Swords } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { generateId, useAppStore } from '../store/useAppStore';
 import { isEligibleCharacterVoiceNode } from '../store/store.dramaAssets';
@@ -35,6 +36,7 @@ import { useT } from '../i18n';
 import CharacterAssetDialog from './CharacterAssetDialog';
 import CharacterReferenceGallery from './character/CharacterReferenceGallery';
 import CharacterDock from './character/CharacterDock';
+import CharacterWeaponDialog from './character/CharacterWeaponDialog';
 import { sortCharactersForLibrary } from '../services/characterOrder';
 import type { ReferenceStageBox } from './character/CharacterReferenceGallery';
 import {
@@ -45,6 +47,8 @@ import {
 } from './character/characterReferencePresentation';
 import { readAudioDuration } from './character/characterVoiceMedia';
 import { acquireComfyMediaSource } from '../services/comfyMediaSource';
+import { copyDramaAssetSelection } from '../services/dramaAssetBatchCopy';
+import { configValuesEqual } from '../services/configPatch';
 
 type CharacterLibraryScope = 'project' | 'global';
 
@@ -284,6 +288,10 @@ export default function CharacterLibraryPanel() {
   const [bindingVoice, setBindingVoice] = useState(false);
   const [captureNodeId, setCaptureNodeId] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [weaponTarget, setWeaponTarget] = useState<{ scope: CharacterLibraryScope; id: string; projectId: string | null } | null>(null);
+  const [weaponCopyBusy, setWeaponCopyBusy] = useState(false);
+  const weaponCopyPending = useRef(false);
+  const copyViewVersion = useRef(0);
   const [actionCategory, setActionCategory] = useState<CharacterActionCategory>('standing');
   const [actionFilter, setActionFilter] = useState<CharacterActionCategory | 'all'>('all');
   const [actionName, setActionName] = useState('');
@@ -351,6 +359,7 @@ export default function CharacterLibraryPanel() {
   const selectedCharacter = characters.find(
     (character) => character.id === selectedCharacterId,
   ) ?? characters[0] ?? null;
+  useEffect(() => () => { copyViewVersion.current += 1; }, [open, scope, currentProjectId, selectedCharacter?.id]);
   const effectiveReferenceId = selectedCharacter?.referenceImages?.some(
     (reference) => reference.id === selectedReferenceId,
   )
@@ -424,6 +433,7 @@ export default function CharacterLibraryPanel() {
   useEffect(() => stopVoicePlayback, [open, scope, selectedCharacter?.id, stopVoicePlayback]);
 
   const switchScope = (nextScope: CharacterLibraryScope) => {
+    setWeaponTarget(null);
     setScope(nextScope);
     setSelectedCharacterId(null);
     setSelectedReferenceId(null);
@@ -649,6 +659,37 @@ export default function CharacterLibraryPanel() {
 
   const handleCopy = async () => {
     if (!selectedCharacter) return;
+    if (selectedCharacter.weaponIds?.length) {
+      if (weaponCopyPending.current) return;
+      weaponCopyPending.current = true;
+      setWeaponCopyBusy(true);
+      const version = copyViewVersion.current;
+      const state = useAppStore.getState();
+      const before = new Set((scope === 'project' ? state.globalCharacters : state.dramaAssets.characters).map((character) => character.id));
+      const assertCurrent = () => {
+        const latest = useAppStore.getState();
+        const source = (scope === 'project' ? latest.dramaAssets.characters : latest.globalCharacters).find((character) => character.id === selectedCharacter.id);
+        if (latest.currentProjectId !== currentProjectId || !latest.characterLibraryOpen || copyViewVersion.current !== version
+          || !configValuesEqual(source, selectedCharacter)) throw new Error(t('角色或项目已变化，请重新选择武器'));
+      };
+      try {
+        if (scope === 'global') await state.loadGlobalDramaAssets();
+        assertCurrent();
+        await copyDramaAssetSelection(scope, [{ kind: 'character', id: selectedCharacter.id }], { assertCurrent });
+        assertCurrent();
+        const latest = useAppStore.getState();
+        if (latest.currentProjectId !== currentProjectId) return;
+        const copied = (scope === 'project' ? latest.globalCharacters : latest.dramaAssets.characters).filter((character) => !before.has(character.id));
+        if (copied.length !== 1) throw new Error(t('复制失败，请重试'));
+        setWeaponTarget(null);
+        setScope(scope === 'project' ? 'global' : 'project');
+        setSelectedCharacterId(copied[0].id);
+        setSelectedReferenceId(null);
+        showToast(t(scope === 'project' ? '已复制到全局资产' : '已复制到本项目'));
+      } catch (error) { showToast(error instanceof Error ? error.message : t('复制失败，请重试'), 'error'); }
+      finally { weaponCopyPending.current = false; setWeaponCopyBusy(false); }
+      return;
+    }
     if (scope === 'project') {
       const copiedId = await copyCharacterToGlobal(selectedCharacter.id);
       if (!copiedId) return;
@@ -953,6 +994,11 @@ export default function CharacterLibraryPanel() {
                     <p>{selectedCharacter.summary || selectedCharacter.visualNotes || t('尚未填写角色简介')}</p>
                   </div>
                   <div className="character-library-profile-actions">
+                    <button type="button" data-tooltip={t('绑定角色武器')} aria-label={t('绑定角色武器')}
+                      onClick={() => setWeaponTarget({ scope, id: selectedCharacter.id, projectId: currentProjectId })}>
+                      <Swords width="16" height="16" aria-hidden="true" />
+                      <span className="text-[10px]">{selectedCharacter.weaponIds?.length ?? 0}</span>
+                    </button>
                     {selectedReference ? (
                       <button type="button" data-tooltip={canvasActionLabel} aria-label={canvasActionLabel} onClick={handleCanvasAction}>
                         <Icon icon={canvasActionIcon} width="16" height="16" aria-hidden="true" />
@@ -1013,6 +1059,7 @@ export default function CharacterLibraryPanel() {
                       type="button"
                       data-tooltip={scope === 'project' ? t('复制到全局资产') : t('复制到本项目')}
                       aria-label={scope === 'project' ? t('复制到全局资产') : t('复制到本项目')}
+                      disabled={weaponCopyBusy}
                       onClick={() => void handleCopy()}
                     >
                       <Icon icon="lucide:copy-plus" width="16" height="16" aria-hidden="true" />
@@ -1068,6 +1115,7 @@ export default function CharacterLibraryPanel() {
             selectedId={selectedCharacter?.id}
             renderAvatar={(character) => <CharacterAvatar character={character} />}
             onSelect={(id) => {
+              setWeaponTarget(null);
               setSelectedCharacterId(id);
               setSelectedReferenceId(null);
             }}
@@ -1079,6 +1127,11 @@ export default function CharacterLibraryPanel() {
           />
         </footer>
       </ModalOverlay>
+
+      {open && weaponTarget && weaponTarget.scope === scope && weaponTarget.id === selectedCharacter?.id
+        && weaponTarget.projectId === currentProjectId && <CharacterWeaponDialog
+          key={`${scope}:${currentProjectId}:${weaponTarget.id}`} scope={scope} characterId={weaponTarget.id}
+          onClose={() => setWeaponTarget(null)} />}
 
       {dialogOpen ? createPortal(
         <CharacterAssetDialog

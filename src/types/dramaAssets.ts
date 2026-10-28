@@ -7,6 +7,9 @@ import type { ComfyRefmodSelection } from './comfyRefmod';
 import { normalizeCharacterRefmods } from '../utils/comfyRefmod';
 
 export type DramaAssetKind = 'character' | 'scene' | 'prop';
+/** 展示分类独立于持久化类型；武器复用道具的媒体与存储协议。 */
+export type DramaAssetCategory = DramaAssetKind | 'weapon';
+export const MAX_CHARACTER_WEAPONS = 64;
 export type DramaAssetImportance = 'main' | 'supporting' | 'minor';
 export type DramaAssetSource = 'ai' | 'manual' | 'merge';
 
@@ -218,6 +221,8 @@ export interface DramaCharacter extends DramaAssetBase {
   refmods?: ComfyRefmodSelection[];
   /** 与角色绑定的动作库。 */
   actions?: CharacterAction[];
+  /** 同一作用域资产库中的武器卡片 ID，不是媒体索引 ID。 */
+  weaponIds?: string[];
 }
 
 export interface DramaScene extends DramaAssetBase {
@@ -232,6 +237,7 @@ export interface DramaScene extends DramaAssetBase {
 
 export interface DramaProp extends DramaAssetBase {
   kind: 'prop';
+  propType?: 'weapon';
   referenceImages?: DramaAssetReferenceImage[];
   primaryReferenceImageId?: string;
   ownerName?: string;
@@ -271,6 +277,18 @@ export const DRAMA_ASSET_KIND_LABEL: Record<DramaAssetKind, string> = {
   scene: '场景',
   prop: '道具',
 };
+
+export const DRAMA_ASSET_CATEGORY_LABEL: Record<DramaAssetCategory, string> = {
+  ...DRAMA_ASSET_KIND_LABEL,
+  weapon: '武器',
+};
+
+/** 单卡加载只规范身份，不依据尚未落地的关联卡片裁剪绑定。 */
+export function normalizeCharacterWeaponIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((id): id is string => typeof id === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)))].slice(0, MAX_CHARACTER_WEAPONS);
+}
 
 /** 提示词中的标记，生成完成后用于识别并格式化输出 */
 export const DRAMA_EXTRACT_MARKER: Record<DramaAssetKind, string> = {
@@ -558,6 +576,7 @@ export function normalizeDramaCharacter(character: DramaCharacter): DramaCharact
     primaryVoiceClipId,
     actions,
     refmods: normalizeCharacterRefmods(character.refmods),
+    ...(character.weaponIds !== undefined ? { weaponIds: normalizeCharacterWeaponIds(character.weaponIds) } : {}),
   };
 }
 
@@ -616,7 +635,8 @@ export function normalizeDramaVisualAsset<T extends DramaScene | DramaProp>(asse
   }
   const primaryReferenceImageId = referenceImages.some((reference) => reference.id === asset.primaryReferenceImageId)
     ? asset.primaryReferenceImageId : referenceImages[0]?.id;
-  return { ...asset, referenceImages, primaryReferenceImageId };
+  return { ...asset, referenceImages, primaryReferenceImageId,
+    ...(asset.kind === 'prop' ? { propType: asset.propType === 'weapon' ? 'weapon' : undefined } : {}) };
 }
 
 /** 主图是指定参考图的兼容投影；明确清空后同时移除旧单图身份。 */

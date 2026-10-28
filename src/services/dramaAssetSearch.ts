@@ -1,4 +1,14 @@
-import type { DramaAsset } from '../types/dramaAssets';
+import type { DramaAsset, DramaAssetCategory } from '../types/dramaAssets';
+
+/** 武器保留 prop 领域身份，展示分类使用固定子类型。 */
+export function getDramaAssetCategory(asset: DramaAsset): DramaAssetCategory {
+  return asset.kind === 'prop' && asset.propType === 'weapon' ? 'weapon' : asset.kind;
+}
+
+/** 普通道具分类不包含武器；全部视图由调用方直接使用完整列表。 */
+export function matchesDramaAssetCategory(asset: DramaAsset, category: DramaAssetCategory): boolean {
+  return getDramaAssetCategory(asset) === category;
+}
 
 /** 素材库与 @ 共用领域字段；不把路径或远端绑定加入可检索文本。 */
 export function matchesDramaAssetQuery(asset: DramaAsset, query: string): boolean {
@@ -12,7 +22,7 @@ export function matchesDramaAssetQuery(asset: DramaAsset, query: string): boolea
       ...(asset.actions ?? []).flatMap((action) => [action.name, action.prompt])]
     : asset.kind === 'scene'
       ? [asset.placeType, asset.timeOfDay, asset.atmosphere, asset.spatialNotes]
-      : [asset.ownerName, asset.category, asset.significance];
+      : [asset.ownerName, asset.category, asset.significance, asset.propType === 'weapon' ? '武器 weapon' : undefined];
   const values = [asset.name, asset.id, asset.key, asset.summary, asset.visualNotes, asset.storyRole, ...details,
     ...(asset.referenceImages ?? []).flatMap((reference) => ['label' in reference ? reference.label : '', reference.prompt])]
     .filter((value): value is string => typeof value === 'string').map(normalize);

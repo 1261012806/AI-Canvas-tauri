@@ -220,8 +220,8 @@ impl Revision {
     fn validate_card(&self, media: &HashMap<&str, &str>, used: &mut HashSet<String>) -> Result<(), StorageError> {
         let payload = object(&self.payload, &["kind", "data"])?;
         let mut allowed = vec!["id", "kind", "name", "key", "summary", "visualNotes", "storyRole", "importance", "firstSeen", "appearances", "imageUrl", "confirmed", "createdAt", "updatedAt", "source", "referenceImages", "primaryReferenceImageId"];
-        allowed.extend(if self.kind() == "character" { vec!["aliases", "identity", "ageBand", "gender", "personality", "relationships", "wardrobeDefault", "voiceNotes", "avatarReferenceImageId", "avatarCrop", "voiceClips", "primaryVoiceClipId", "actions"] }
-            else if self.kind() == "scene" { vec!["placeType", "timeOfDay", "atmosphere", "spatialNotes"] } else { vec!["ownerName", "category", "significance"] });
+        allowed.extend(if self.kind() == "character" { vec!["aliases", "identity", "ageBand", "gender", "personality", "relationships", "wardrobeDefault", "voiceNotes", "avatarReferenceImageId", "avatarCrop", "voiceClips", "primaryVoiceClipId", "actions", "weaponIds"] }
+            else if self.kind() == "scene" { vec!["placeType", "timeOfDay", "atmosphere", "spatialNotes"] } else { vec!["ownerName", "category", "significance", "propType"] });
         let map = object(&payload["data"], &allowed)?;
         if id(&map["id"])? != self.shared_asset_id || map["kind"].as_str() != Some(self.kind()) || text(&map["name"], 64 * 1024)?.trim().is_empty() || !map["confirmed"].is_boolean() { return Err(invalid()); }
         for field in ["key", "summary", "visualNotes"] { text(&map[field], 64 * 1024)?; }
@@ -231,6 +231,14 @@ impl Revision {
         if let Some(appearances) = map.get("appearances") { for appearance in array(appearances, 1000)? { text(appearance, 64 * 1024)?; } }
         optional_texts(map, &["identity", "ageBand", "gender", "personality", "wardrobeDefault", "voiceNotes", "placeType", "timeOfDay", "atmosphere", "spatialNotes", "ownerName", "category", "significance"])?;
         if self.kind() == "character" { text(&map["identity"], 64 * 1024)?; }
+        if let Some(prop_type) = map.get("propType") { choice(prop_type, &["weapon"])?; }
+        if let Some(weapons) = map.get("weaponIds") {
+            let mut weapon_ids = HashSet::new();
+            for value in array(weapons, 64)? {
+                let weapon_id = id(value)?;
+                if weapon_id == self.shared_asset_id || !weapon_ids.insert(weapon_id) { return Err(invalid()); }
+            }
+        }
         if let Some(value) = map.get("imageUrl") { media_token(value, "image", media, used)?; }
         let mut ids = HashSet::new(); let mut reference_ids = HashSet::new(); let mut voice_ids = HashSet::new();
         if let Some(references) = map.get("referenceImages") { for value in array(references, if self.kind() == "character" { 1000 } else { 32 })? {
@@ -275,6 +283,26 @@ impl Head {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn character_weapon_links_use_card_ids_and_fixed_prop_subtype() {
+        let mut revision: Revision = serde_json::from_value(serde_json::json!({"format":"ai-canvas-shared-asset","version":1,"libraryId":"l","sharedProjectId":"p","sharedAssetId":"a","revisionId":"r","operationId":"o","createdAt":1,
+            "payload":{"kind":"character","data":{"id":"a","kind":"character","name":"role","key":"role","summary":"","visualNotes":"","identity":"","importance":"main","confirmed":true,"source":"manual","createdAt":1,"updatedAt":1,"weaponIds":["sword","bow"]}},"media":[]})).unwrap();
+        assert!(revision.validate(false).is_ok());
+        for weapons in [serde_json::json!(["sword", "sword"]), serde_json::json!(["global/sword"]), serde_json::json!(["a"]),
+            serde_json::json!((0..65).map(|index| format!("weapon-{index}")).collect::<Vec<_>>())] {
+            revision.payload["data"]["weaponIds"] = weapons;
+            assert!(revision.validate(false).is_err());
+        }
+        revision.payload["kind"] = serde_json::json!("prop");
+        let card = revision.payload["data"].as_object_mut().unwrap();
+        card.remove("weaponIds"); card.remove("identity");
+        card.insert("kind".into(), serde_json::json!("prop"));
+        card.insert("propType".into(), serde_json::json!("weapon"));
+        assert!(revision.validate(false).is_ok());
+        revision.payload["data"]["propType"] = serde_json::json!("unsupported");
+        assert!(revision.validate(false).is_err());
+    }
+
     #[test]
     fn rejects_local_paths_and_unused_media() {
         let mut revision: Revision = serde_json::from_value(serde_json::json!({"format":"ai-canvas-shared-asset","version":1,"libraryId":"l","sharedProjectId":"p","sharedAssetId":"a","revisionId":"r","operationId":"o","createdAt":1,

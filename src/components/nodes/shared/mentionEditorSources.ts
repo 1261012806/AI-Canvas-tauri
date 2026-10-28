@@ -8,9 +8,9 @@ import type { AppState } from '../../../store/useAppStore';
 import type { BaseNodeData, NodeType, StoryboardCellOverride, WorkflowIONodeType } from '../../../types';
 import { bestNodeThumb } from './mentionEditorDom';
 import { resolveDramaVoiceRef } from '../../../services/dramaAssetPrompt';
-import type { DramaAsset, DramaAssetKind } from '../../../types/dramaAssets';
+import type { DramaAsset, DramaAssetCategory } from '../../../types/dramaAssets';
 import { emptyDramaAssetLibrary } from '../../../types/dramaAssets';
-import { matchesDramaAssetQuery } from '../../../services/dramaAssetSearch';
+import { getDramaAssetCategory, matchesDramaAssetCategory, matchesDramaAssetQuery } from '../../../services/dramaAssetSearch';
 import { buildShotlistRowMentionId } from '../../../types/shotlist';
 
 export interface CanvasMentionItem {
@@ -214,6 +214,7 @@ export function resolveDramaMentionItems(
     name: asset.name,
     aliases: asset.kind === 'character' ? asset.aliases : undefined,
     kind: asset.kind as string,
+    category: getDramaAssetCategory(asset),
     imageNodeId: asset.id.startsWith('global/') ? undefined : asset.imageNodeId,
     imageUrl: asset.imageUrl,
     referenceImages: asset.referenceImages,
@@ -227,12 +228,12 @@ export function resolveDramaMentionItems(
 /** 全局弹框独立于 @ 菜单开关，只从原始全局资产生成带作用域的候选。 */
 export function resolveGlobalAssetPickerItems(
   globalAssets: readonly DramaAsset[],
-  kind: DramaAssetKind | null,
+  kind: DramaAssetCategory | null,
   query: string,
   nodeType?: NodeType,
 ) {
   const filtered = globalAssets.filter((asset) => {
-    if (kind !== null && asset.kind !== kind) return false;
+    if (kind !== null && !matchesDramaAssetCategory(asset, kind)) return false;
     return matchesDramaAssetQuery(asset, query);
   });
   return resolveDramaMentionItems(emptyDramaAssetLibrary(), '', nodeType, filtered);

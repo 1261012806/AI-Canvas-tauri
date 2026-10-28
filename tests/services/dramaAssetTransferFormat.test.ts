@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { DramaCharacter, DramaScene } from '../../src/types/dramaAssets';
+import type { DramaCharacter, DramaProp, DramaScene } from '../../src/types/dramaAssets';
+import { MAX_CHARACTER_WEAPONS, normalizeDramaCharacter, normalizeDramaVisualAsset } from '../../src/types/dramaAssets';
+import { expandCharacterWeaponDependencies } from '../../src/services/characterWeapons';
 import {
   buildDramaAssetTransferDocument, detachDramaAssetTransferMentions, DRAMA_ASSET_TRANSFER_LIMITS,
   parseDramaAssetTransferDocument, remapImportedAssets,
@@ -30,6 +32,12 @@ function character(): DramaCharacter {
   };
 }
 
+function weaponAsset(): DramaProp {
+  return { id: 'source-weapon', kind: 'prop', propType: 'weapon', category: '剑', name: '剑', key: '剑',
+    summary: '', visualNotes: '', importance: 'supporting', source: 'manual', confirmed: true,
+    createdAt: 1, updatedAt: 2, imageUrl: token('image') };
+}
+
 function document(): DramaAssetTransferDocument {
   const scene: DramaScene = { id: 'source-scene', kind: 'scene', name: '客厅', key: '客厅', summary: '', visualNotes: '',
     importance: 'supporting', source: 'manual', confirmed: true, createdAt: 1, updatedAt: 2, imageUrl: token('image'), placeType: '室内' };
@@ -37,6 +45,65 @@ function document(): DramaAssetTransferDocument {
 }
 
 describe('创作资产包纯格式', () => {
+  it('武器子类型与角色绑定有界归一化，单卡保留尚未落地的目标身份', () => {
+    const value = { ...character(), weaponIds: ['later-weapon', 'later-weapon', '', '../invalid', ...Array.from({ length: 70 }, (_, index) => `weapon-${index}`)] };
+    const normalized = normalizeDramaCharacter(value);
+    expect(normalized.weaponIds).toHaveLength(MAX_CHARACTER_WEAPONS);
+    expect(normalized.weaponIds?.[0]).toBe('later-weapon');
+    expect(normalized.weaponIds).not.toContain('../invalid');
+    const prop = weaponAsset();
+    expect(normalizeDramaVisualAsset(prop)).toMatchObject({ propType: 'weapon', category: '剑' });
+    expect(normalizeDramaVisualAsset({ ...prop, propType: 'future' as 'weapon' }).propType).toBeUndefined();
+  });
+
+  it('角色依赖按同库武器身份展开，共用武器只加入一次且不按名称补配', () => {
+    const role = { ...character(), weaponIds: ['blade'] };
+    const weapon: DramaProp = { ...weaponAsset(), id: 'blade', category: '刀' };
+    const second = { ...role, id: 'second-role' };
+    expect(expandCharacterWeaponDependencies([role, second], [role, second, weapon])).toEqual([role, second, weapon]);
+    expect(() => expandCharacterWeaponDependencies([role], [{ ...weapon, id: 'same-name' }])).toThrow();
+    expect(() => expandCharacterWeaponDependencies([role], [{ ...weapon, propType: undefined }])).toThrow();
+    expect(() => expandCharacterWeaponDependencies([role], [weapon, { ...weapon }])).toThrow();
+    expect(expandCharacterWeaponDependencies([character()], [])).toHaveLength(1);
+  });
+
+  it('选择角色强制保留武器闭包与媒体，整批重映射后绑定指向新武器副本', () => {
+    const role = { ...character(), weaponIds: ['blade', 'shield'] };
+    const weapon: DramaProp = { ...weaponAsset(), id: 'blade', category: '刀', imageUrl: token('weapon-image') };
+    const shield: DramaProp = { ...weapon, id: 'shield', name: '盾', imageUrl: undefined };
+    const allMedia = [...media, { ...media[0], id: 'weapon-image', path: 'media/weapon.png' }];
+    const value = buildDramaAssetTransferDocument({ exportedAt: 3, name: '武器包', assets: [role, weapon, shield], media: allMedia });
+    const preview = buildDramaAssetImportPreview(value);
+    expect(preview.items[0]).toMatchObject({ category: 'character', weaponIds: ['blade', 'shield'] });
+    expect(preview.items[1]).toMatchObject({ category: 'weapon' });
+    const selected = selectDramaAssetTransferDocument(value, [{ kind: 'character', id: role.id }]);
+    expect(selected.assets).toHaveLength(3);
+    expect(selected.media).toHaveLength(4);
+    const local = new Map<string, ImportedDramaAssetMedia>(allMedia.map((entry) => [entry.id, {
+      assetId: `local-${entry.id}`, relativePath: entry.path, url: `asset://localhost/project/${entry.path}`,
+    }]));
+    let sequence = 0;
+    const restored = remapImportedAssets(selected.assets, local, () => `fresh-${++sequence}`);
+    const imported = restored[0] as DramaCharacter;
+    expect(imported.weaponIds).toEqual(restored.slice(1).map((asset) => asset.id));
+    expect(imported.weaponIds).not.toContain('blade');
+    expect(restored[1]).toMatchObject({ kind: 'prop', propType: 'weapon', category: '刀', assetId: 'local-weapon-image' });
+    expect(role.weaponIds).toEqual(['blade', 'shield']);
+  });
+
+  it('单卡格式校验兼容云端跨卡关系，实际导入拒绝缺失武器与无效绑定字段', () => {
+    const value = buildDramaAssetTransferDocument({ exportedAt: 3, name: '共享单卡', assets: [{ ...character(), weaponIds: ['remote-weapon'] }], media });
+    expect((parseDramaAssetTransferDocument(value).assets[0] as DramaCharacter).weaponIds).toEqual(['remote-weapon']);
+    expect(() => buildDramaAssetImportPreview(value)).toThrow();
+    expect(() => selectDramaAssetTransferDocument(value, [{ kind: 'character', id: value.assets[0].id }])).toThrow();
+    expect(() => remapImportedAssets(value.assets, new Map())).toThrow();
+    for (const weaponIds of [['same', 'same'], ['../invalid'], Array.from({ length: MAX_CHARACTER_WEAPONS + 1 }, (_, index) => `weapon-${index}`)]) {
+      expect(() => parseDramaAssetTransferDocument({ ...value, assets: [{ ...value.assets[0], weaponIds }] })).toThrow();
+    }
+    const prop = { ...document().assets[1], kind: 'prop', propType: 'future' };
+    expect(() => parseDramaAssetTransferDocument({ ...value, assets: [prop], media: [media[0]] })).toThrow();
+  });
+
   it('导出只保留白名单字段，移除本机身份、服务绑定及旧引用的执行语义', () => {
     const source = character();
     source.imageNodeId = 'local-node'; source.imageAssetId = 'old-image'; source.imageRelativePath = 'old.png';

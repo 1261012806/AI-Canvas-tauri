@@ -1,6 +1,7 @@
-import type { DramaAsset, DramaCharacter } from '../types/dramaAssets';
-import { MAX_DRAMA_REFERENCE_IMAGES } from '../types/dramaAssets';
+import type { DramaAsset, DramaAssetCategory, DramaCharacter } from '../types/dramaAssets';
+import { MAX_CHARACTER_WEAPONS, MAX_DRAMA_REFERENCE_IMAGES, normalizeCharacterWeaponIds } from '../types/dramaAssets';
 import { localMediaUrlToPath } from '../utils/mediaUrl';
+import { expandCharacterWeaponDependencies, remapCharacterWeaponIds } from './characterWeapons';
 
 export const DRAMA_ASSET_TRANSFER_FORMAT = 'ai-canvas-creative-assets';
 export const DRAMA_ASSET_TRANSFER_VERSION = 1;
@@ -35,7 +36,7 @@ export interface ImportedDramaAssetMedia {
 export interface DramaAssetIdentity { kind: DramaAsset['kind']; id: string }
 export interface DramaAssetImportPreview {
   name: string;
-  items: Array<DramaAssetIdentity & { name: string; mediaIds: string[]; sameName: boolean }>;
+  items: Array<DramaAssetIdentity & { name: string; category?: DramaAssetCategory; weaponIds?: string[]; mediaIds: string[]; sameName: boolean }>;
   media: Array<Pick<DramaAssetTransferMedia, 'id' | 'kind' | 'bytes'>>;
 }
 
@@ -45,10 +46,10 @@ const BASE_KEYS = ['id', 'kind', 'name', 'key', 'summary', 'visualNotes', 'story
   'appearances', 'imageUrl', 'confirmed', 'createdAt', 'updatedAt', 'source'];
 const CHARACTER_KEYS = ['libraryOrder', 'aliases', 'identity', 'ageBand', 'gender', 'personality', 'relationships',
   'wardrobeDefault', 'voiceNotes', 'referenceImages', 'primaryReferenceImageId', 'avatarReferenceImageId', 'avatarCrop',
-  'voiceClips', 'primaryVoiceClipId', 'actions'];
+  'voiceClips', 'primaryVoiceClipId', 'actions', 'weaponIds'];
 const VISUAL_KEYS = ['referenceImages', 'primaryReferenceImageId'];
 const SCENE_KEYS = ['placeType', 'timeOfDay', 'atmosphere', 'spatialNotes'];
-const PROP_KEYS = ['ownerName', 'category', 'significance'];
+const PROP_KEYS = ['ownerName', 'category', 'significance', 'propType'];
 const VISUAL_REFERENCE_KEYS = ['id', 'label', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
 const REFERENCE_KEYS = ['id', 'kind', 'imageUrl', 'prompt', 'createdAt', 'updatedAt'];
 const VOICE_KEYS = ['id', 'kind', 'label', 'audioUrl', 'transcript', 'durationSec', 'createdAt', 'updatedAt'];
@@ -189,7 +190,8 @@ function readAssets(value: unknown, context: ReadContext): DramaAsset[] {
     if (asset.appearances !== undefined) asset.appearances = list(asset.appearances).map((item) => text(item));
     mediaField(asset, 'imageUrl', 'image', context);
     if (kind !== 'character') {
-      textFields(asset, [], kind === 'scene' ? SCENE_KEYS : PROP_KEYS);
+      textFields(asset, [], kind === 'scene' ? SCENE_KEYS : ['ownerName', 'category', 'significance']);
+      if (kind === 'prop' && asset.propType !== undefined) choice(asset.propType, ['weapon']);
       if (asset.referenceImages !== undefined) {
         const references = list(asset.referenceImages, MAX_DRAMA_REFERENCE_IMAGES).map((item) => {
           const reference = readMember(item, VISUAL_REFERENCE_KEYS);
@@ -204,6 +206,12 @@ function readAssets(value: unknown, context: ReadContext): DramaAsset[] {
       return asset;
     }
     textFields(asset, ['identity'], ['ageBand', 'gender', 'personality', 'wardrobeDefault', 'voiceNotes']);
+    if (asset.weaponIds !== undefined) {
+      const weaponIds = list(asset.weaponIds, MAX_CHARACTER_WEAPONS).map(id);
+      if (new Set(weaponIds).size !== weaponIds.length) invalid('武器绑定身份重复');
+      if (normalizeCharacterWeaponIds(weaponIds).length !== weaponIds.length) invalid('武器绑定身份无效');
+      asset.weaponIds = weaponIds;
+    }
     if (asset.libraryOrder !== undefined) asset.libraryOrder = number(asset.libraryOrder);
     if (asset.aliases !== undefined) asset.aliases = list(asset.aliases).map((item) => text(item));
     if (asset.relationships !== undefined) asset.relationships = list(asset.relationships).map((item) => {
@@ -330,12 +338,15 @@ export function getDramaAssetTransferMediaIds(asset: DramaAsset): string[] {
 export function buildDramaAssetImportPreview(
   document: DramaAssetTransferDocument, existingAssets: readonly DramaAsset[] = [],
 ): DramaAssetImportPreview {
-  const nameKey = (asset: Pick<DramaAsset, 'kind' | 'name'>) => `${asset.kind}:${asset.name.normalize('NFKC').trim().toLowerCase()}`;
+  expandCharacterWeaponDependencies(document.assets, document.assets);
+  const nameKey = (asset: DramaAsset) => `${asset.kind === 'prop' && asset.propType === 'weapon' ? 'weapon' : asset.kind}:${asset.name.normalize('NFKC').trim().toLowerCase()}`;
   const existing = new Set(existingAssets.map(nameKey));
   const names = new Map<string, number>();
   for (const asset of document.assets) names.set(nameKey(asset), (names.get(nameKey(asset)) ?? 0) + 1);
   return { name: document.name,
     items: document.assets.map((asset) => ({ kind: asset.kind, id: asset.id, name: asset.name,
+      category: asset.kind === 'prop' && asset.propType === 'weapon' ? 'weapon' : asset.kind,
+      ...(asset.kind === 'character' && asset.weaponIds !== undefined ? { weaponIds: [...asset.weaponIds] } : {}),
       mediaIds: getDramaAssetTransferMediaIds(asset), sameName: existing.has(nameKey(asset)) || names.get(nameKey(asset))! > 1 })),
     media: document.media.map(({ id: mediaId, kind, bytes }) => ({ id: mediaId, kind, bytes })),
   };
@@ -353,7 +364,7 @@ export function selectDramaAssetTransferDocument(
     selected.add(key);
   }
   if (!selected.size) invalid('没有选择创作资产');
-  const assets = document.assets.filter((asset) => selected.has(`${asset.kind}:${asset.id}`));
+  const assets = expandCharacterWeaponDependencies(document.assets.filter((asset) => selected.has(`${asset.kind}:${asset.id}`)), document.assets);
   const used = new Set(assets.flatMap(getDramaAssetTransferMediaIds));
   return { ...document, assets, media: document.media.filter((media) => used.has(media.id)) };
 }
@@ -365,6 +376,7 @@ export function remapImportedAssets(
 ): DramaAsset[] {
   const context: ReadContext = { media: new Map([...mediaById.keys()].map((key) => [key, undefined])), used: new Set() };
   const safeAssets = readAssets(assets, context);
+  expandCharacterWeaponDependencies(safeAssets, safeAssets);
   const allocated = new Set(safeAssets.flatMap((asset) => [asset.id, ...(asset.referenceImages ?? []).map((reference) => reference.id), ...(asset.kind === 'character' ? [
     ...(asset.voiceClips ?? []).map((voice) => voice.id),
     ...(asset.actions ?? []).flatMap((action) => [action.id, ...(action.media ?? []).map((media) => media.id)]),
@@ -373,14 +385,16 @@ export function remapImportedAssets(
     const next = id(createId());
     if (allocated.has(next)) invalid('新资产 ID 冲突'); allocated.add(next); return next;
   };
+  const rootIds = new Map(safeAssets.map((asset) => [`${asset.kind}:${asset.id}`, allocate()]));
   const bind = (token: string | undefined, field: 'imageUrl' | 'audioUrl' | 'url'): Data => {
     if (token === undefined) return {};
     const target = mediaById.get(mediaToken(token));
     if (!target || !localMediaUrlToPath(target.url)) invalid('导入媒体没有本地文件');
     return { assetId: id(target.assetId), relativePath: path(target.relativePath), [field]: target.url };
   };
-  return safeAssets.map((asset) => {
-    const next = { ...asset, ...bind(asset.imageUrl, 'imageUrl'), id: allocate() };
+  return safeAssets.map((source) => {
+    const asset = remapCharacterWeaponIds(source, rootIds);
+    const next = { ...asset, ...bind(asset.imageUrl, 'imageUrl'), id: rootIds.get(`${asset.kind}:${asset.id}`)! };
     if (asset.kind !== 'character') {
       const referenceIds = new Map<string, string>();
       const referenceImages = (asset.referenceImages ?? []).map((reference) => {

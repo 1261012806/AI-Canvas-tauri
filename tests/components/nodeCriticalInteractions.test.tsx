@@ -6,6 +6,10 @@ import type { BatchContext } from '../../src/utils/batchExecute';
 import type { ComfyNodeProgress } from '../../src/types/comfyProgress';
 import type { AppConfig } from '../../src/types';
 
+const confirmVideoReferencesBeforeGeneration = vi.fn<
+  (nodeId: string, overridePrompt?: string) => Promise<boolean>
+>();
+
 interface ElementLike {
   type: unknown;
   props: Record<string, unknown> & { children?: unknown };
@@ -399,6 +403,9 @@ beforeEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // These component tests cover delegation; the real reference guard has its own suite.
+  confirmVideoReferencesBeforeGeneration.mockReset().mockResolvedValue(true);
+  vi.doMock('../../src/services/videoReferenceConfirmation', () => ({ confirmVideoReferencesBeforeGeneration }));
   // The hook driver renders element trees directly, including the dialog's body portal.
   vi.doMock('react-dom', () => ({ createPortal: (children: unknown) => children }));
   vi.stubGlobal('document', { body: {}, documentElement: { getAttribute: () => null } });
@@ -1674,6 +1681,11 @@ describe('critical canvas node interactions', () => {
       const { executeGeneration } = await import('../../src/services/generationService');
       expect(await executeGeneration('source-node')).toEqual({ success: true });
     }
+    if (entry === 'dialog' && generationType === 'ai-video') {
+      expect(confirmVideoReferencesBeforeGeneration).toHaveBeenCalledExactlyOnceWith('source-node', undefined);
+    } else {
+      expect(confirmVideoReferencesBeforeGeneration).not.toHaveBeenCalled();
+    }
     const expectedGenerator = generationType === 'ai-text' ? generateText : generationType === 'ai-video' ? generateVideo : generateAudio;
     expect(expectedGenerator).toHaveBeenCalledWith(expect.objectContaining({
       prompt: '参考 @{reference:原始素材} 生成', model: 'general/new-model', provider: 'general',
@@ -1778,7 +1790,7 @@ describe('critical canvas node interactions', () => {
     });
 
     it.each(['ai-video', 'source-video'].flatMap((type) => (
-      ['submit', 'project-switch', 'node-replaced', 'comfy-recovery'].map((scenario) => ({ type, scenario }))
+      ['submit', 'reference-cancel', 'project-switch', 'node-replaced', 'comfy-recovery'].map((scenario) => ({ type, scenario }))
     )))('delegates $type safely after loading the executor: $scenario', async ({ type, scenario }) => {
       const store = createStore([{
         id: 'video-node', type, position: { x: 0, y: 0 },
@@ -1803,6 +1815,7 @@ describe('critical canvas node interactions', () => {
       const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
       const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
       const overridePrompt = '@{sheet/shot/stable-row:第1镜} 保留附加要求';
+      if (scenario === 'reference-cancel') confirmVideoReferencesBeforeGeneration.mockResolvedValueOnce(false);
       const submission = (panel.props.onSubmit as (prompt: string) => Promise<void>)(overridePrompt);
       if (scenario === 'comfy-recovery') {
         await submission;
@@ -1816,8 +1829,14 @@ describe('critical canvas node interactions', () => {
         await submission;
       }
       if (scenario === 'submit') {
+        expect(confirmVideoReferencesBeforeGeneration).toHaveBeenCalledExactlyOnceWith('video-node', overridePrompt);
         expect(executeGeneration).toHaveBeenCalledExactlyOnceWith('video-node', overridePrompt);
       } else {
+        if (scenario === 'reference-cancel') {
+          expect(confirmVideoReferencesBeforeGeneration).toHaveBeenCalledExactlyOnceWith('video-node', overridePrompt);
+        } else {
+          expect(confirmVideoReferencesBeforeGeneration).not.toHaveBeenCalled();
+        }
         expect(executeGeneration).not.toHaveBeenCalled();
       }
       expect(store.updateNodeDataTransient).not.toHaveBeenCalled();

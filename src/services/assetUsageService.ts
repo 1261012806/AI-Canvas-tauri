@@ -85,6 +85,9 @@ export function matchesAssetUsage(value: unknown, target: AssetUsageTarget | rea
         && assetUsagePathKey(joinPath(context.root, data.relativePath)) === assetUsagePathKey(target.path)) return true;
       if (!context.global && context.nodeIds && [data.imageNodeId, data.sourceNodeId].some((id) => typeof id === 'string' && context.nodeIds!.has(id))) return true;
     } else {
+      if (data.kind === 'character' && target.assetKind === 'prop'
+        && Array.isArray(data.weaponIds) && data.weaponIds.includes(target.assetId)
+        && (target.scope === 'global' ? context.global === true : context.global !== true && context.ownerId === target.ownerId)) return true;
       if (data.dramaAssetId === target.assetId && (data.dramaAssetKind === undefined || data.dramaAssetKind === target.assetKind)
         && target.scope === 'project' && context.ownerId === target.ownerId) return true;
       for (const item of Array.isArray(data.characterLibraryLinks) ? data.characterLibraryLinks : []) {

@@ -3,10 +3,11 @@ import type { Node } from '@xyflow/react';
 import type { BaseNodeData } from '../types';
 import { t } from '../i18n';
 import type { DramaAsset, DramaAssetWriteOptions } from '../types/dramaAssets';
-import { assertDramaAssetWriteCurrent, normalizeDramaVisualAsset } from '../types/dramaAssets';
+import { assertDramaAssetWriteCurrent, normalizeDramaAssetLibrary, normalizeDramaVisualAsset } from '../types/dramaAssets';
 import { getAssetIndexById, putAssetIndex, deleteImportedAssetIndexes } from './indexedDbService';
 import { getAssetUrlFromPath, getGlobalFilesDir, getProjectDataDir, isTauriEnv, joinPath, sanitizeFileName, stripVerbatimPrefix } from './fileService';
 import { prepareGlobalCharacter } from './characterLibraryService';
+import { expandCharacterWeaponDependencies, remapCharacterWeaponIds } from './characterWeapons';
 import { localMediaUrlToPath } from '../utils/mediaUrl';
 import {
   buildDramaAssetTransferDocument, parseDramaAssetTransferDocument, remapImportedAssets,
@@ -35,6 +36,8 @@ export interface ExportProjectDramaAssetsInput {
   /** 显式单资产导出名称；批量导出即使只有一张卡也使用项目名称。 */
   assetName?: string;
   assets: readonly DramaAsset[];
+  /** 所选卡片所属作用域的完整快照，用于补齐角色绑定武器。 */
+  allAssets?: readonly DramaAsset[];
   nodes: readonly Node<BaseNodeData>[];
 }
 export interface ImportProjectDramaAssetsInput {
@@ -47,6 +50,7 @@ export interface ExportGlobalDramaAssetsInput {
   libraryName: string;
   assetName?: string;
   assets: readonly DramaAsset[];
+  allAssets?: readonly DramaAsset[];
 }
 export interface ImportGlobalDramaAssetsInput {
   existingAssets?: readonly DramaAsset[];
@@ -55,10 +59,11 @@ export interface ImportGlobalDramaAssetsInput {
 export interface CopyGlobalDramaAssetsToProjectInput {
   ownerId: string;
   assets: readonly DramaAsset[];
+  allAssets?: readonly DramaAsset[];
   commit: (assets: DramaAsset[]) => Promise<void>;
 }
 
-type ExportInput = { name: string; assetName?: string; assets: readonly DramaAsset[] } & (
+type ExportInput = { name: string; assetName?: string; assets: readonly DramaAsset[]; allAssets?: readonly DramaAsset[] } & (
   { scope: 'project'; ownerId: string; nodes: readonly Node<BaseNodeData>[] } | { scope: 'global' }
 );
 type ImportInput = { existingAssets?: readonly DramaAsset[]; commit: (assets: DramaAsset[]) => Promise<void> } & (
@@ -172,6 +177,29 @@ async function resolveMediaSource(
   throw new Error(t('创作资产媒体缺失，请先修复素材引用'));
 }
 
+async function completeExportSelection(input: ExportInput, options: DramaAssetTransferOptions): Promise<ExportInput> {
+  let all = input.allAssets ?? input.assets;
+  const needsSource = !input.allAssets && input.assets.some((asset) => asset.kind === 'character'
+    && asset.weaponIds?.some((weaponId) => !all.some((item) => item.kind === 'prop' && item.id === weaponId)));
+  if (needsSource) {
+    if (input.scope === 'global') {
+      const { loadGlobalDramaAssetCards } = await import('./globalDramaAssetService');
+      all = await guardedDramaAssetTransfer(loadGlobalDramaAssetCards, options);
+    } else {
+      const { getProjectById } = await import('./indexedDbService');
+      const project = await guardedDramaAssetTransfer(() => getProjectById(input.ownerId), options);
+      const library = normalizeDramaAssetLibrary(project?.dramaAssets);
+      all = [...library.characters, ...library.scenes, ...library.props];
+    }
+    // 所选内容可能比持久化快照更新；只用源库补缺，不覆盖本次明确选择。
+    all = [...new Map([...all, ...input.assets].map((asset) => [`${asset.kind}:${asset.id}`, asset])).values()];
+  }
+  assertDramaAssetWriteCurrent(options);
+  const assets = expandCharacterWeaponDependencies(input.assets, all);
+  if (!assets.length || assets.length > DRAMA_ASSET_TRANSFER_LIMITS.assets) throw new Error(t('没有可导出的资产或数量超过限制'));
+  return { ...input, assets };
+}
+
 async function prepareExportAssets(input: ExportInput, workspace: DramaAssetArchiveWorkspace, options: DramaAssetTransferOptions) {
   const rootDirectory = await guardedDramaAssetTransfer(() => input.scope === 'global' ? getGlobalFilesDir() : getProjectDataDir(input.ownerId), options);
   if (!rootDirectory) throw new Error(input.scope === 'global' ? t('全局素材目录不可用') : t('项目素材目录不可用'));
@@ -247,8 +275,9 @@ async function prepareExportAssets(input: ExportInput, workspace: DramaAssetArch
       imageUrl: primary?.imageUrl ?? (hasMedia(topSource) ? await collect(topSource, 'image', asset, t('主图')) : undefined) });
   }
   // 项目库按类型管理卡片 ID，包格式使用全局唯一 ID；包内重建避免合法跨类同 ID 冲突。
+  const rootIds = new Map(assets.map((asset) => [`${asset.kind}:${asset.id}`, crypto.randomUUID()]));
   return buildDramaAssetTransferDocument({ exportedAt: Date.now(), name: input.name,
-    assets: assets.map((asset) => ({ ...asset, id: crypto.randomUUID() })), media });
+    assets: assets.map((asset) => ({ ...remapCharacterWeaponIds(asset, rootIds), id: rootIds.get(`${asset.kind}:${asset.id}`)! })), media });
 }
 
 function cleanupProgress(options: DramaAssetTransferOptions, text: string) {
@@ -282,7 +311,7 @@ async function cleanup(directory: string | undefined, options: DramaAssetTransfe
 async function exportDramaAssets(input: ExportInput, options: DramaAssetTransferOptions): Promise<DramaAssetTransferResult | null> {
   assertDramaAssetWriteCurrent(options);
   if (!isTauriEnv()) throw new Error(t('创作资产包导出仅支持桌面应用'));
-  if (!input.assets.length || input.assets.length > DRAMA_ASSET_TRANSFER_LIMITS.assets) throw new Error(t('没有可导出的资产或数量超过限制'));
+  input = await completeExportSelection(input, options);
   const outputPath = await guardedDramaAssetTransfer(() => save({ title: t('导出创作资产'),
     defaultPath: `${sanitizeFileName(input.assetName || input.name || t('创作资产'))}-${t('资产')}.${DRAMA_ASSET_ARCHIVE_EXTENSION}`,
     filters: [{ name: t('AI Canvas 创作资产包'), extensions: [DRAMA_ASSET_ARCHIVE_EXTENSION] }],
@@ -442,7 +471,9 @@ export async function copyGlobalDramaAssetsToProject(
   try {
     workspace = await createDramaAssetArchiveWorkspace(options);
     assertDramaAssetWriteCurrent(options);
-    const document = await prepareExportAssets({ scope: 'global', name: t('全局创作资产'), assets: input.assets }, workspace, options);
+    const selection = await completeExportSelection({ scope: 'global', name: t('全局创作资产'), assets: input.assets,
+      allAssets: input.allAssets }, options);
+    const document = await prepareExportAssets(selection, workspace, options);
     assertDramaAssetWriteCurrent(options);
     return await commitImportedDocument(document, workspace, { scope: 'project', ownerId: input.ownerId, commit: input.commit }, options);
   } catch (error) {
@@ -455,7 +486,7 @@ export async function copyGlobalDramaAssetsToProject(
 
 /** The inverse copy uses the same atomic global import and independent media identities. */
 export async function copyProjectDramaAssetsToGlobal(
-  input: { ownerId: string; assets: readonly DramaAsset[]; nodes: readonly Node<BaseNodeData>[];
+  input: { ownerId: string; assets: readonly DramaAsset[]; allAssets?: readonly DramaAsset[]; nodes: readonly Node<BaseNodeData>[];
     commit: (assets: DramaAsset[]) => Promise<void> }, options: DramaAssetTransferOptions = {},
 ): Promise<DramaAssetTransferResult> {
   assertDramaAssetWriteCurrent(options);
@@ -465,8 +496,9 @@ export async function copyProjectDramaAssetsToGlobal(
   try {
     workspace = await createDramaAssetArchiveWorkspace(options);
     assertDramaAssetWriteCurrent(options);
-    const document = await prepareExportAssets({ scope: 'project', name: t('创作资产'), ownerId: input.ownerId,
-      assets: input.assets, nodes: input.nodes }, workspace, options);
+    const selection = await completeExportSelection({ scope: 'project', name: t('创作资产'), ownerId: input.ownerId,
+      assets: input.assets, allAssets: input.allAssets, nodes: input.nodes }, options);
+    const document = await prepareExportAssets(selection, workspace, options);
     assertDramaAssetWriteCurrent(options);
     return await commitImportedDocument(document, workspace, { scope: 'global', commit: input.commit }, options);
   } catch (error) {
@@ -479,11 +511,12 @@ export async function copyProjectDramaAssetsToGlobal(
 
 export function exportProjectDramaAssets(input: ExportProjectDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {
   return exportDramaAssets({ scope: 'project', name: input.projectName, assetName: input.assetName,
-    assets: input.assets, ownerId: input.ownerId, nodes: input.nodes }, options);
+    assets: input.assets, allAssets: input.allAssets, ownerId: input.ownerId, nodes: input.nodes }, options);
 }
 
 export function exportGlobalDramaAssets(input: ExportGlobalDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {
-  return exportDramaAssets({ scope: 'global', name: input.libraryName, assetName: input.assetName, assets: input.assets }, options);
+  return exportDramaAssets({ scope: 'global', name: input.libraryName, assetName: input.assetName, assets: input.assets,
+    allAssets: input.allAssets }, options);
 }
 
 export function importProjectDramaAssets(input: ImportProjectDramaAssetsInput, options: DramaAssetTransferOptions = {}): Promise<DramaAssetTransferResult | null> {

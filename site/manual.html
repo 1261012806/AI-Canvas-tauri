@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="AI Canvas 0.10.18 操作说明书：项目资产云同步与万象分组，S3 项目媒体手动共享、仅云端清空与删除、分组连接与密钥，以及素材预览和桌面更新修复。">
-<title>AI Canvas 0.10.18 · 操作说明书</title>
+<meta name="description" content="AI Canvas 0.10.19 操作说明书：本集角色与道具清单、角色多武器绑定、无参考视频生成确认、ComfyUI H3 与 Windows 更新。">
+<title>AI Canvas 0.10.19 · 操作说明书</title>
 <style>
 /* Standalone document: a small copy of the application's base.css color tokens. */
 :root{color-scheme:dark;--theme-bg:#0a0a0f;--theme-surface:#14141c;--theme-card:#1a1a26;--theme-border:#2a2a3a;--theme-hover:#252535;--theme-text:#dddde4;--theme-text-secondary:#8888a0;--brand:#6366f1;--brand-light:#818cf8;--brand-pale:#a5b4fc;--node-markdown:#a855f7;--success:#22c55e;--success-bg:rgba(16,185,129,.15);--warning:#f97316;--warning-bg:rgba(249,115,22,.15);--danger:#ef4444;--white:#fff;--black-alpha-30:rgba(0,0,0,.3)}
@@ -34,7 +34,7 @@ dialog .character-actions-shot{width:1912px}
 <body>
 <a class="skip" href="#main">跳到正文</a>
 <nav class="toc" aria-label="说明书目录">
-<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.18 · 操作说明书<br>从素材整理到逐镜制作</small>
+<div class="toc-head"><strong>AI Canvas</strong><button class="action toc-toggle" id="toc-toggle" type="button" aria-expanded="true" aria-controls="toc-links">收起目录</button></div><small>0.10.19 · 操作说明书<br>从素材整理到逐镜制作</small>
 <a class="back" href="index.html">← 返回软件首页</a>
 <label for="search">查找章节或操作</label><input id="search" type="search" placeholder="如：文件夹、回收站、视频批次" autocomplete="off" aria-describedby="search-status" aria-controls="search-results toc-links">
 <p id="search-status" class="search-status" role="status">支持空格分隔关键词；Ctrl + F 查找全文。</p>
@@ -47,7 +47,8 @@ dialog .character-actions-shot{width:1912px}
 <a href="#connection">06 · 添加厂商与模型</a><a href="#provider-sites">↳ 国内 / 国际站切换</a><a href="#image-quick-templates">↳ 图片快速模板</a><a href="#connection-transfer">↳ JSON 文件导入导出</a><a href="#import">07 · 接口说明与手动配置</a><a href="#protocol">08 · 调用协议与视频预设</a><a href="#protocol-json-editor">↳ JSON 变量插入与预览</a><a href="#variables">09 · 变量与结果路径</a><a href="#sync">10 · 同步图像接口示例</a><a href="#async">11 · 异步视频接口示例</a><a href="#async-download">↳ 完成后同源下载</a><a href="#api-check">12 · 验证与接口排错</a>
 <div class="group">日常制作与维护</div>
 <a href="#comfy">13 · 本地与云端工作流</a><a href="#comfy-install">↳ 安装官方 ComfyUI</a><a href="#assets">14 · 资源库、文件夹与创作资产</a><a href="#asset-image-batch-reverse">↳ 批量反推提示词与标签</a><a href="#assistant">15 · AI 助手与任务</a><a href="#ai-app">↳ AI 应用节点</a><a href="#director">16 · 分镜制作与 3D 导演台</a><a href="#plugins">17 · 插件与 MCP 控制</a><a href="#mcp-ai-app">↳ 调用 AI 应用动作</a><a href="#storage">18 · 保存、备份与迁移</a><a href="#shortcuts">19 · 快捷键速查</a><a href="#faq">20 · 常见问题</a><a href="#checklist">21 · 使用前检查单</a><a href="#appearance">22 · 外观主题与预设</a><a href="#about">说明书范围与版本</a>
-<div class="group">0.10.18 更新入口</div>
+<div class="group">0.10.19 更新入口</div>
+<a href="#episode-assets">↳ 本集角色与道具清单</a><a href="#character-weapons">↳ 角色武器绑定</a><a href="#video-no-references">↳ 无参考视频确认</a>
 <a href="#project-cloud-sync">项目资产云同步与云端清理</a>
 <a href="#relayon-groups">万象 API 分组连接</a>
 <div class="group">0.10.17 更新入口</div>
@@ -65,9 +66,10 @@ dialog .character-actions-shot{width:1912px}
 <div class="eyebrow">AI CANVAS · USER MANUAL</div>
 <h1>AI Canvas 操作说明书<br>从首次生成到完整创作</h1>
 <p>从启动页选择项目，在资源库整理素材，再用无限画布连接文本、图像、视频与音频。按步骤完成首次出图、剧本分集、逐镜生成和剪辑；需要接入自己的服务时，查阅接口与工作流示例。</p>
-<span class="badge">0.10.18 说明书</span><span class="badge">2026-10-27 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
+<span class="badge">0.10.19 说明书</span><span class="badge">2026-10-28 增量核对</span><span class="badge">截图内嵌 · 可离线阅读</span>
 </header>
 <div class="actions"><button class="action" id="print" type="button">打印 / 保存为 PDF</button><button class="action" id="theme" type="button" aria-pressed="false">切换深色阅读</button><a class="action" href="#project-settings">先看项目设置 →</a><a class="action" href="#connection">直接看自定义接口 →</a></div>
+<aside class="tip"><b>0.10.19 · 本集资产与角色武器：</b><a href="#episode-assets">本集角色／道具</a>先由 AI 提取为清单，再选择添加或绑定资产；<a href="#character-weapons">角色可绑定多把武器</a>，资产包、复制和项目同步保留关联。<a href="#video-no-references">无参考手动视频生成</a>增加确认，并改善 ComfyUI H3 与 Windows 按需更新授权。当前状态以<a href="#about">文末记录</a>为准。</aside>
 <aside class="tip"><b>0.10.18 · 项目资产云同步与万象分组：</b>通过 <a href="#project-cloud-sync">S3 兼容存储手动共享项目资产</a>，预览后同步项目媒体与人物、场景、道具；云端清空和删除保留本地文件。<a href="#relayon-groups">万象 API 分组</a>分别管理连接和密钥。本版也改善资源库预加载、ComfyUI 原生媒体取件和引用输入，并修复 Windows 更新时进程占用。页面说明源码能力，发布准备与验收范围以<a href="#about">文末记录</a>为准。</aside>
 <aside class="tip"><b>0.10.16 · 素材复用与多厂商生成：</b>新增 <a href="#libapi-models">LibAPI 四类预置模型</a>，切换视频型号时<a href="#video-parameters">保留已有比例和兼容参数</a>；快捷指令可<a href="#preset-sharing">参考原图、按依赖并发并通过 JSON 分享</a>。创作资产支持<a href="#creative-asset-selection">多选、搜索和排序</a>、<a href="#creative-asset-transfer">资产包迁移</a>与<a href="#visual-asset-references">单图精确引用</a>。失效素材可<a href="#asset-repair">重连</a>或确认后<a href="#asset-cleanup">清理记录</a>；同时补齐<a href="#interface-language">四语界面</a>和<a href="#mcp-discovery">MCP 分页发现</a>。数据库沿用 v23，安装包公开状态和验收边界见<a href="#about">文末说明</a>。</aside>
 <aside class="tip"><b>0.10.15 · 创作资产与媒体生成恢复：</b>在<a href="#global-creative-assets">全局资产</a>管理人物、场景与道具，按<a href="#asset-sorting">名称、时间、大小或最近使用排序</a>；异步图片、视频和音频可<a href="#media-task-recovery">续取原任务</a>。图片参数增加<a href="#image-quality-background">质量与透明背景</a>；分镜表的<a href="#shotlist-generated-video">生成视频列</a>独立保存成片，时间轴只采用该列的就绪视频。<b>0.10.15 数据库升至 v23，从更早版本升级前请先<a href="#upgrade-0-10-15">备份项目与全局资料</a>。</b>即梦样片模式尚未接入，具体范围与待验收项见<a href="#about">文末说明</a>。</aside>
@@ -1063,9 +1065,21 @@ dialog .character-actions-shot{width:1912px}
 <p>在厂商连接中按万象 API 分组分别保存连接与密钥，并选择已适配的文本、图片或视频模型。旧连接和已提交任务继续保留原身份；内置目录不表示账号权限、额度或真实调用已验证。</p>
 </section>
 
+<section id="updates-0-10-19"><h2>0.10.19 · 本集资产与角色武器</h2>
+<h3 id="episode-assets">本集角色与本集道具</h3>
+<ol><li>打开剧本创作工作台，选择分集，进入“本集角色”或“本集道具”。</li><li>使用 AI 提取并审阅预览，勾选条目后点击“加入本集清单”才保存，之后可编辑本集说明；提取不直接写入资产库。</li><li>选择“添加到资产库”创建资产，或选择绑定已有资产。绑定全局角色时先复制到本剧，库中资料与本集说明分开管理。</li></ol>
+<h3 id="character-weapons">武器分类与角色绑定</h3>
+<ol><li>在项目创作资产或全局资产选择“武器”，建立武器卡片；武器可以暂时没有参考图。</li><li>在角色库选择角色，点击武器图标，搜索并多选同库武器后保存。解绑只移除关系，保留武器；删除武器时同步清理角色的绑定。</li><li>导出角色、跨库复制或项目手动云同步时会纳入所需武器，并重建目标库 ID 关系。引用角色不会自动把武器加入视频参考；需要时显式 @ 武器。MCP 使用既有道具接口的 <code>propType: "weapon"</code> 和角色的 <code>weaponIds</code> 字段。</li></ol>
+<h3 id="video-no-references">无参考视频生成确认</h3>
+<p>手动点击视频生成时，若没有有效图片、视频、音频、首尾帧或角色参考，将提示仅根据提示词生成。可继续生成或返回添加参考；取消不提交任务，也不清空已有视频。批量任务、Agent／MCP 与恢复任务沿用原有流程。</p>
+<p>ComfyUI H3 低显存优化默认关闭，启用前核对工作流和后端插件。Windows 更新受保护目录时按需请求同账户 UAC，标准用户不能通过另一个管理员账户继续安装。以上能力须在桌面端按实际工作流验收。</p>
+</section>
+
 <section id="about"><h2>说明书范围与版本</h2>
-<p>本说明书面向 <b>0.10.18「项目资产云同步与万象分组」</b>，<b>2026-10-27</b> 按源码增量核对项目资产手动共享、仅云端清空与删除、万象 API 分组及桌面媒体修复。此前能力、旧锚点和截图继续保留。当前版本正在发布准备中，安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.18">对应 GitHub Release</a>为准；截图用于辨认位置，不代表所有按钮与最新界面完全一致。</p>
-<p>发版门禁及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-27-release-0.10.18.md">0.10.18 发布计划</a>，旧版本门禁不作为本轮通过证据。当前数据库为 <b>v26</b>；升级前备份项目与应用数据，安装旧程序不能直接回退已升级的数据。真实 S3 读写与清理、模型调用、各平台安装升级和双客户端交互仍需按发布计划验收。</p>
+<p>本说明书面向 <b>0.10.19「本集资产与角色武器」</b>，<b>2026-10-28</b> 按源码增量核对本集清单、武器关系、无参考视频生成确认、ComfyUI 与 Windows 更新。此前能力、旧锚点和截图继续保留。当前版本正在发布准备中，安装包是否已公开，以<a href="https://github.com/Tenney95/AI-Canvas-tauri/releases/tag/v0.10.19">对应 GitHub Release</a>为准；截图用于辨认位置，不代表所有按钮与最新界面完全一致。</p>
+<p>发版门禁及实际结果记录在<a href="https://github.com/Tenney95/AI-Canvas-tauri/blob/master/doc/plans/2026-10-28-release-0.10.19.md">0.10.19 发布计划</a>，旧版本门禁不作为本轮通过证据。当前数据库为 <b>v26</b>；升级前备份项目与应用数据，安装旧程序不能直接回退已升级的数据。真实 S3 读写与清理、模型调用、各平台安装升级和双客户端交互仍需按发布计划验收。</p>
+<h3 id="source-updates-0-10-19">0.10.19 范围与兼容提示</h3>
+<ul><li>武器仍为道具子类型，数据库维持 v26；旧客户端不支持新武器字段，团队应统一升级。</li><li>本集清单和资产库分别管理；提取不直接入库，角色引用不自动加入武器参考。</li><li>项目云同步仍为手动，不共享全局资产，也未新增自动监听或删除传播。</li></ul>
 <h3 id="source-updates-0-10-18">0.10.18「项目资产云同步与万象分组」范围与兼容提示</h3>
 <ul><li>项目云同步为手动双向，按已绑定的共享项目范围操作；全局资产、自动同步和删除传播暂未启用。</li><li>云端清理只处理当前共享项目的 RustFS／S3 对象，本地素材和资料保留；操作前所有成员须暂停同步，先查看数量与大小并确认名称。</li><li>万象 API 分组具有独立连接和密钥；模型是否可用取决于账号权限、额度及接口实际能力。</li><li>资源库提前加载附近图片并保留滚回时的内容高度；ComfyUI 统一桌面原生媒体取件；参考角色复用项目与全局角色选择框，MCP 可分块读取节点媒体原文件。</li><li>修复引用胶囊前退格带来的换行问题，以及 Windows 软件内更新前本地推理进程残留占用主程序的问题。</li><li>数据库为 v26。升级前导出重要项目并备份应用数据；不清库、不强降版本，兼容说明继续沿用<a href="#upgrade-0-10-15">备份与回退限制</a>。</li></ul>
 <h3 id="source-updates-0-10-17">0.10.17「图片无损压缩与画布修复」范围与兼容提示</h3>
@@ -1079,7 +1093,7 @@ dialog .character-actions-shot{width:1912px}
 <p>内容依据当前版本的启动页、资源库、设置界面、应用帮助与相关操作实现核对。接口示例用于本地配置校验，<b>未调用真实厂商接口</b>；所有 example.com 地址与示例模型 ID 均为占位内容。按钮准备草稿、创建节点、实际模型生成和媒体保存是不同步骤，请按各章检查实际结果。</p>
 <p class="small">页面所需样式、脚本和十一张截图均在当前 HTML 内，无外部字体或 CDN 依赖。可直接双击离线打开；点击“返回软件首页”需同时保留 site 目录中的首页。打印按钮使用浏览器打印功能，可选择保存为 PDF。</p>
 </section>
-<footer>AI Canvas · 0.10.18 操作说明书 · 2026-10-27 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
+<footer>AI Canvas · 0.10.19 操作说明书 · 2026-10-28 增量核对<br>从一个节点开始，逐步完成你的创作。</footer>
 </main>
 <dialog id="zoom" aria-label="放大界面截图"><button class="action" id="zoom-close" type="button">关闭放大图（Esc）</button><div class="zoom-box"></div></dialog>
 <script>

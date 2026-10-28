@@ -54,7 +54,7 @@ type ReferenceSuggestion =
   | { key: string; kind: 'drama'; item: DramaMentionItem }
   | { key: string; kind: 'model'; model: MediaModelOption };
 
-const DRAMA_KIND_LABELS: Record<string, string> = { character: '角色', scene: '场景', prop: '道具' };
+const DRAMA_KIND_LABELS: Record<string, string> = { character: '角色', scene: '场景', prop: '道具', weapon: '武器' };
 const TAB_NOUNS: Record<PickerTab, string> = { nodes: '节点', assets: '资产', models: '模型' };
 
 const MEDIA_KIND_LABELS: Record<string, string> = { image: '图片', video: '视频', audio: '音频' };
@@ -318,7 +318,7 @@ export default function ChatInput({
   );
   const assetKindChips = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of filteredDramaAssets) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+    for (const item of filteredDramaAssets) counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
     if (counts.size === 0) return [];
     return [
       { id: 'all', label: t('全部'), count: filteredDramaAssets.length },
@@ -326,7 +326,7 @@ export default function ChatInput({
     ];
   }, [filteredDramaAssets, t]);
   const kindedDramaAssets = useMemo(
-    () => (assetKind === 'all' ? filteredDramaAssets : filteredDramaAssets.filter((a) => a.kind === assetKind)),
+    () => (assetKind === 'all' ? filteredDramaAssets : filteredDramaAssets.filter((a) => a.category === assetKind)),
     [assetKind, filteredDramaAssets],
   );
 
@@ -565,8 +565,8 @@ export default function ChatInput({
         domId: index == null ? undefined : `chat-reference-suggestion-${index}`,
         label: item.name,
         thumbnailUrl,
-        icon: 'mdi:account-box-outline',
-        badge: `${item.id.startsWith('global/') ? `${t('全局')} · ` : ''}${t(DRAMA_KIND_LABELS[item.kind] ?? item.kind)}`,
+        icon: item.category === 'weapon' ? 'lucide:swords' : item.kind === 'scene' ? 'lucide:mountain' : item.kind === 'prop' ? 'lucide:box' : 'mdi:account-box-outline',
+        badge: `${item.id.startsWith('global/') ? `${t('全局')} · ` : ''}${t(DRAMA_KIND_LABELS[item.category] ?? item.category)}`,
         title: thumbnailUrl ? t('{name}（引用参考图）', { name: item.name }) : t('{name}（引用设定文字）', { name: item.name }),
         onSelect: () => insertDramaMention(item),
       };

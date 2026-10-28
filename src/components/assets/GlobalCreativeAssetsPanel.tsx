@@ -4,14 +4,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { t, useT } from '../../i18n';
 import { useAppStore } from '../../store/useAppStore';
 import { generateId } from '../../store/store.utils';
-import type { DramaAsset, DramaAssetKind, DramaAssetWriteOptions, DramaCharacter } from '../../types/dramaAssets';
-import { DRAMA_ASSET_KIND_LABEL, MAX_DRAMA_REFERENCE_IMAGES, normalizeDramaVisualAsset } from '../../types/dramaAssets';
+import type { DramaAsset, DramaAssetCategory, DramaAssetKind, DramaAssetWriteOptions, DramaCharacter } from '../../types/dramaAssets';
+import { DRAMA_ASSET_CATEGORY_LABEL, MAX_DRAMA_REFERENCE_IMAGES, normalizeDramaVisualAsset } from '../../types/dramaAssets';
 import { normalizeAssetKey } from '../../services/dramaAssetExtract';
 import { formatDramaAssetTextBrief } from '../../services/dramaAssetPrompt';
 import { getAssetUrlFromPath, isTauriEnv, uploadSourceFileToProject, type AssetFileEntry } from '../../services/fileService';
 import { exportGlobalDramaAssets, importGlobalDramaAssets } from '../../services/dramaAssetTransferService';
 import type { DramaAssetIdentity } from '../../services/dramaAssetTransferFormat';
-import { dramaAssetIdentityKey } from '../../services/dramaAssetSearch';
+import { dramaAssetIdentityKey, getDramaAssetCategory, matchesDramaAssetCategory } from '../../services/dramaAssetSearch';
 import { copyDramaAssetSelection } from '../../services/dramaAssetBatchCopy';
 import { useDramaAssetList } from '../../hooks/useDramaAssetList';
 import { useDramaAssetImportDialog } from '../../hooks/useDramaAssetImportDialog';
@@ -29,7 +29,8 @@ function globalAssets(kind: DramaAssetKind): DramaAsset[] {
   return kind === 'character' ? state.globalCharacters : kind === 'scene' ? state.globalScenes : state.globalProps;
 }
 
-function newAsset(kind: DramaAssetKind, name: string): DramaAsset {
+function newAsset(category: DramaAssetCategory, name: string): DramaAsset {
+  const kind: DramaAssetKind = category === 'weapon' ? 'prop' : category;
   const now = Date.now();
   const base = {
     id: `${kind}-${generateId()}`, name, key: normalizeAssetKey(name), summary: '', visualNotes: '',
@@ -37,7 +38,7 @@ function newAsset(kind: DramaAssetKind, name: string): DramaAsset {
   };
   if (kind === 'character') return { ...base, kind, identity: '' };
   if (kind === 'scene') return { ...base, kind };
-  return { ...base, kind };
+  return { ...base, kind, propType: category === 'weapon' ? 'weapon' : undefined };
 }
 
 /** 场景与道具使用创作资产卡片；人物继续打开已有角色编辑器。 */
@@ -47,15 +48,16 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
   const [summary, setSummary] = useState(asset.summary);
   const [visualNotes, setVisualNotes] = useState(asset.visualNotes);
   const [storyRole, setStoryRole] = useState(asset.storyRole ?? '');
+  const [propCategory, setPropCategory] = useState<'prop' | 'weapon'>(getDramaAssetCategory(asset) === 'weapon' ? 'weapon' : 'prop');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const close = () => { if (!pending.current) onClose(); };
-  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('编辑全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) })}
-    className="w-[min(480px,calc(100vw-24px))] p-3 gap-3">
-    <h3 className="text-sm font-semibold text-canvas-text">{creating ? t('新增全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) }) : t('编辑全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[asset.kind]) })}</h3>
+  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('编辑全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[getDramaAssetCategory(asset)]) })}
+    className="ui-dialog-surface w-[min(480px,calc(100vw-24px))] p-3 gap-3">
+    <h3 className="text-sm font-semibold text-canvas-text">{creating ? t('新增全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[getDramaAssetCategory(asset)]) }) : t('编辑全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[getDramaAssetCategory(asset)]) })}</h3>
     <form className="flex flex-col gap-3" onSubmit={(event) => {
       event.preventDefault();
       if (pending.current || !name.trim()) return;
@@ -68,6 +70,7 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
       void useAppStore.getState().saveGlobalDramaAsset({
         ...(latest ?? asset), name: name.trim(), key: normalizeAssetKey(name), summary: summary.trim(),
         visualNotes: visualNotes.trim(), storyRole: storyRole.trim() || undefined, updatedAt: Date.now(),
+        ...(asset.kind === 'prop' ? { propType: propCategory === 'weapon' ? 'weapon' as const : undefined } : {}),
       }, { signal: request.signal }).then((saved) => {
         if (!request.signal.aborted) { if (saved) onClose(); else setError('保存失败，修改仍保留，请重试'); }
       }).catch(() => { if (!request.signal.aborted) setError('保存失败，修改仍保留，请重试'); })
@@ -85,6 +88,12 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
       <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("剧情功能（可选）")}
         <input className="ui-input" value={storyRole} disabled={saving} onChange={(event) => setStoryRole(event.target.value)} />
       </label>
+      {asset.kind === 'prop' && <label className="ui-field">
+        <span className="ui-label">{t('资产分类')}</span>
+        <Select value={propCategory} size="sm" disabled={saving} fixedMenu
+          onChange={(value) => setPropCategory(value === 'weapon' ? 'weapon' : 'prop')}
+          options={[{ value: 'prop', label: t('道具') }, { value: 'weapon', label: t('武器') }]} />
+      </label>}
       {error && <p role="alert" className="ui-alert ui-alert--danger">{t(error)}</p>}
       <div className="flex justify-end gap-2">
         <button type="button" className="ui-btn ui-btn--ghost" disabled={saving} onClick={close}>{t("取消")}</button>
@@ -96,11 +105,13 @@ function GlobalAssetEditor({ asset, creating, onClose }: { asset: DramaAsset; cr
 
 /** 从文件创建或追加创作资产；文件身份与人物身份独立，不移动原文件。 */
 export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: {
-  file: AssetFileEntry; kind: DramaAssetKind; onClose: () => void; onSaved: () => void;
+  file: AssetFileEntry; kind: DramaAssetKind; onClose: () => void; onSaved: (category: DramaAssetCategory) => void;
 }) {
   useT();
-  const cards = useAppStore(useShallow((state) => kind === 'character' ? state.globalCharacters
+  const sourceCards = useAppStore(useShallow((state) => kind === 'character' ? state.globalCharacters
     : kind === 'scene' ? state.globalScenes : state.globalProps));
+  const [category, setCategory] = useState<DramaAssetCategory>(kind);
+  const cards = sourceCards.filter((asset) => matchesDramaAssetCategory(asset, category));
   const [targetId, setTargetId] = useState('');
   const [name, setName] = useState(file.name.replace(/\.[^.]+$/, ''));
   const [saving, setSaving] = useState(false);
@@ -119,7 +130,8 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
       if (request.signal.aborted) return;
       const existing = targetId ? globalAssets(kind).find((item) => item.id === targetId) : undefined;
       if (targetId && !existing) throw new Error('目标资产已删除，请重新选择');
-      let asset = existing ?? newAsset(kind, name.trim());
+      if (existing && !matchesDramaAssetCategory(existing, category)) throw new Error(t('资产已变化，请重新选择'));
+      let asset = existing ?? newAsset(category, name.trim());
       if (asset.kind === 'character') {
         const referenceId = `reference-${generateId()}`;
         const references = asset.referenceImages ?? [];
@@ -140,18 +152,23 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
           }], primaryReferenceImageId: referenceId };
       }
       if (!await useAppStore.getState().saveGlobalDramaAsset(asset, { signal: request.signal })) throw new Error('保存失败，文件和原资产仍保留，请重试');
-      if (!request.signal.aborted) onSaved();
+      if (!request.signal.aborted) onSaved(getDramaAssetCategory(asset));
     } catch (reason) {
       if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : '添加失败，请重试');
     } finally { pending.current = false; if (!request.signal.aborted) setSaving(false); }
   };
-  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('添加到全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}
-    className="w-[min(440px,calc(100vw-24px))] p-3 gap-3">
-    <h3 className="text-sm font-semibold text-canvas-text">{t('添加到全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}</h3>
+  return <ModalOverlay isOpen onClose={close} closeOnBackdrop={!saving} ariaLabel={t('添加到全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[category]) })}
+    className="ui-dialog-surface w-[min(440px,calc(100vw-24px))] p-3 gap-3">
+    <h3 className="text-sm font-semibold text-canvas-text">{t('添加到全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[category]) })}</h3>
     <p className="truncate text-xs text-canvas-text-secondary" title={file.name}>{file.name}</p>
+    {kind === 'prop' && <label className="ui-field">
+      <span className="ui-label">{t('资产分类')}</span>
+      <Select value={category} size="sm" disabled={saving} fixedMenu onChange={(value) => { setCategory(value === 'weapon' ? 'weapon' : 'prop'); setTargetId(''); }}
+        options={[{ value: 'prop', label: t('道具') }, { value: 'weapon', label: t('武器') }]} />
+    </label>}
     <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("添加方式")}
       <Select value={targetId} disabled={saving} fixedMenu onChange={setTargetId}
-        options={[{ value: '', label: t('新建{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) }) }, ...cards.map((asset) => ({ value: asset.id, label: t('添加到 {name}', { name: asset.name }) }))]} />
+        options={[{ value: '', label: t('新建{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[category]) }) }, ...cards.map((asset) => ({ value: asset.id, label: t('添加到 {name}', { name: asset.name }) }))]} />
     </label>
     {!targetId && <label className="flex flex-col gap-1 text-xs text-canvas-text-secondary">{t("名称")}
       <input autoFocus className="ui-input" value={name} disabled={saving} onChange={(event) => setName(event.target.value)} />
@@ -167,7 +184,7 @@ export function GlobalCreativeAssetFileDialog({ file, kind, onClose, onSaved }: 
   </ModalOverlay>;
 }
 
-export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: DramaAssetKind; compact: boolean }) {
+export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: DramaAssetCategory; compact: boolean }) {
   useT();
   const { characters, scenes, props, loading, loadError, nodes, currentProjectId, load, save, remove, bind, openCharacters, showToast } = useAppStore(useShallow((state) => ({
     characters: state.globalCharacters, scenes: state.globalScenes, props: state.globalProps,
@@ -197,7 +214,8 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
     });
     return () => { mounted.current = false; operation.current?.controller.abort(); unsubscribe(); };
   }, [kind]);
-  const source = kind === 'character' ? characters : kind === 'scene' ? scenes : props;
+  const source = useMemo(() => (kind === 'character' ? characters : kind === 'scene' ? scenes : props)
+    .filter((asset) => matchesDramaAssetCategory(asset, kind)), [characters, scenes, props, kind]);
   const sourceItems = useMemo(() => {
     if (!onlyImported) return source;
     const keys = new Set(lastImported.map(dramaAssetIdentityKey));
@@ -240,15 +258,15 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
   };
   const transfer = (actionKind: 'import' | 'export', selectedAsset?: DramaAsset, subset?: readonly DramaAsset[]) => run(actionKind, async (options) => {
     const allAssets = [...globalAssets('character'), ...globalAssets('scene'), ...globalAssets('prop')];
-    const assets = selectedAsset || subset ? allAssets : globalAssets(kind);
+    const assets = selectedAsset || subset ? allAssets : allAssets.filter((asset) => matchesDramaAssetCategory(asset, kind));
     const selected = selectedAsset ? assets.find((asset) => asset.kind === selectedAsset.kind && asset.id === selectedAsset.id) : undefined;
     if (selectedAsset && !selected) throw new Error(t('资产已删除，请重新选择'));
     const selectedKeys = subset ? new Set(subset.map(dramaAssetIdentityKey)) : null;
     const exportAssets = selected ? [selected] : selectedKeys ? assets.filter((asset) => selectedKeys.has(dramaAssetIdentityKey(asset))) : assets;
     if (selectedKeys && exportAssets.length !== selectedKeys.size) throw new Error(t('资产已删除，请重新选择'));
     const result = actionKind === 'export' ? await exportGlobalDramaAssets({
-      libraryName: t('全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) }),
-      ...(selected ? { assetName: selected.name } : {}), assets: exportAssets,
+      libraryName: t('全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[kind]) }),
+      ...(selected ? { assetName: selected.name } : {}), assets: exportAssets, allAssets,
     }, options) : await importGlobalDramaAssets({ existingAssets: allAssets, commit: async (assets) => {
       options.assertCurrent?.();
       await useAppStore.getState().importGlobalDramaAssets(assets, options);
@@ -290,7 +308,7 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
   });
   return <div className={`flex min-h-0 min-w-0 flex-1 flex-col${compact ? ' drama-assets--compact' : ''}`}>
     <div className="flex min-w-0 flex-wrap items-center gap-2 p-3">
-      <h3 className="shrink-0 text-sm font-medium text-canvas-text">{onlyImported ? t('本次导入') : t('全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })} <span className="text-canvas-text-muted">{sourceItems.length}</span></h3>
+      <h3 className="shrink-0 text-sm font-medium text-canvas-text">{onlyImported ? t('本次导入') : t('全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[kind]) })} <span className="text-canvas-text-muted">{sourceItems.length}</span></h3>
       <DramaAssetListControls inline sortBy={list.sortBy} sortOrder={list.sortOrder} onSort={list.changeSort}
         selecting={list.selecting} onSelecting={list.toggleSelecting} selectedCount={list.selected.length} visibleCount={items.length}
         onSelectAll={list.selectAll} onExport={() => void transfer('export', undefined, list.selected)}
@@ -306,14 +324,14 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
           <Upload size={14} aria-hidden="true" />{t('上传图片')}
         </button>
         <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={busy || loading || Boolean(loadError)} onClick={() => setEditing({ asset: newAsset(kind, ''), creating: true })}>
-          <Plus size={14} aria-hidden="true" />{t('新增{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}
+          <Plus size={14} aria-hidden="true" />{t('新增{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[kind]) })}
         </button>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || loading || Boolean(loadError) || !isTauriEnv()}
-          aria-label={t('导入全局创作资产')} title={t('追加导入全局创作资产，按人物、场景、道具分类保存')} onClick={() => void transfer('import')}>
+          aria-label={t('导入全局创作资产')} title={t('追加导入全局创作资产，按人物、场景、道具、武器分类保存')} onClick={() => void transfer('import')}>
           <Upload size={14} aria-hidden="true" />{t('导入')}
         </button>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={busy || loading || Boolean(loadError) || !source.length || !isTauriEnv()}
-          aria-label={t('导出全部全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })} title={t('导出当前分类的全部全局资产及媒体，不受搜索影响')} onClick={() => void transfer('export')}>
+          aria-label={t('导出全部全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[kind]) })} title={t('导出当前分类的全部全局资产及媒体，不受搜索影响')} onClick={() => void transfer('export')}>
           <Download size={14} aria-hidden="true" />{t('导出')}
         </button>
       </div>
@@ -339,7 +357,7 @@ export default function GlobalCreativeAssetsPanel({ kind, compact }: { kind: Dra
         : <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3${items.length ? ' drama-assets-grid' : ''}`}
           inert={operationKind === 'import' || undefined} aria-busy={operationKind === 'import' || undefined}>
           {items.length === 0 ? <div role="status" className="flex flex-col items-center gap-2 p-3 text-xs text-canvas-text-muted">
-            <p>{search ? t('没有匹配的资产') : t('暂无全局{kind}', { kind: t(DRAMA_ASSET_KIND_LABEL[kind]) })}</p>
+            <p>{search ? t('没有匹配的资产') : t('暂无全局{kind}', { kind: t(DRAMA_ASSET_CATEGORY_LABEL[kind]) })}</p>
             <p>{t('可新建资产、上传图片、导入资产包，或从文件右键菜单添加；保存后可跨项目使用。')}</p>
           </div> : items.map((asset) => <DramaAssetCard key={asset.id} asset={asset} thumb={asset.imageUrl}
             imageNodes={imageNodes} editing={false} uploading={busy} manageUploadedImage
