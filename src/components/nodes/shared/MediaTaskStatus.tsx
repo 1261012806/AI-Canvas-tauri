@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { RotateCw } from 'lucide-react';
 import { useAppStore } from '../../../store/useAppStore';
 import { discardMediaTask, getPendingTasksForProject, resumeMediaNodeTask } from '../../../services/pollManager';
+import { getComfyQueryAuthorizationMessage } from '../../../services/comfyPolling';
 import { useT } from '../../../i18n';
 import { GenerationWaitTime } from './NodeGenerationProgress';
 
@@ -21,9 +22,10 @@ function MediaTaskStatus({ nodeId, overlay = false }: { nodeId: string; overlay?
 
   const canQuery = task.submitted && !!task.taskId && !task.mediaSubmissionUncertain && task.mediaRecoveryState !== 'submit_unknown';
   const deliveryPending = taskState === 'delivery_pending' || task.mediaRecoveryState === 'delivery_pending';
+  const authorizationMessage = getComfyQueryAuthorizationMessage(task.comfyQueryHttpStatus);
   const message = !canQuery
     ? t('提交状态未知，请到对应平台核对；应用不会自动重新生成。')
-    : task.videoRecoveryMessage || (deliveryPending
+    : (authorizationMessage ? t(authorizationMessage) : task.videoRecoveryMessage) || (deliveryPending
       ? t('媒体已生成，保存或回填尚未完成；可继续取回原结果。')
       : t('查询已暂停，任务已保留'));
   const kind = task.nodeType === 'ai-audio' ? 'audio' : task.nodeType === 'ai-video' ? 'video' : 'image';

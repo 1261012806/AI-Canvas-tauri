@@ -1919,6 +1919,7 @@ pub fn run() {
             comfyui::management::list_comfyui_catalog,
             comfyui::management::install_comfyui_extension,
             comfyui::management::install_comfyui_dependencies,
+            comfyui::management::cancel_comfyui_dependencies,
             comfyui::model_dedupe::scan_comfyui_duplicate_models,
             comfyui::model_dedupe::choose_comfyui_model_scan_root,
             comfyui::model_dedupe::cancel_comfyui_model_scan,

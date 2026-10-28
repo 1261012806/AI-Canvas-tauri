@@ -48,10 +48,11 @@ function toOutputFiles(value: unknown): ComfyOutputFile[] {
 }
 
 /** 从单个节点输出里取某类媒体：先认已知键名，认不出再按扩展名扫描其余键 */
-function pickFromNode(node: ComfyOutputNode, kind: ComfyOutputKind, outputOnly = false): ComfyOutputFile | null {
+function pickFromNode(node: ComfyOutputNode, kind: ComfyOutputKind, storageType: 'output' | 'legacy' | 'any'): ComfyOutputFile | null {
   const extensions = OUTPUT_EXTENSIONS[kind];
   const hasMatchingExtension = (file: ComfyOutputFile) => extensions.includes(file.filename.split('.').pop()?.toLowerCase() ?? '');
-  const accepts = (file: ComfyOutputFile) => (!outputOnly || !file.type || file.type === 'output')
+  const accepts = (file: ComfyOutputFile) => (storageType === 'any'
+    || (storageType === 'legacy' ? !file.type : file.type === 'output'))
     && (kind !== 'video' || hasMatchingExtension(file));
   for (const key of OUTPUT_KEYS[kind]) {
     const file = toOutputFiles(node[key]).find(accepts);
@@ -73,11 +74,11 @@ export function findComfyOutputFile(
   kinds: ComfyOutputKind[],
 ): ComfyOutputFile | null {
   for (const kind of kinds) {
-    // 视频先找正式输出，再兼容只有临时预览的工作流，避免前置 Preview 抢走成片。
-    for (const outputOnly of kind === 'video' ? [true, false] : [false]) {
+    // 三类媒体都先找正式输出，再兼容未声明 type 的旧服务和仅有预览的工作流。
+    for (const storageType of ['output', 'legacy', 'any'] as const) {
       for (const node of Object.values(outputs)) {
         if (!node || typeof node !== 'object') continue;
-        const file = pickFromNode(node, kind, outputOnly);
+        const file = pickFromNode(node, kind, storageType);
         if (file) return file;
       }
     }

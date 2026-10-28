@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { findComfyOutputFile, resolveComfyOutputUrl, type ComfyOutputFile } from '../../src/services/comfyOutputs';
+import { findComfyOutputFile, resolveComfyOutputUrl, type ComfyOutputFile, type ComfyOutputKind } from '../../src/services/comfyOutputs';
 
 const file = (filename: string) => ({ filename, subfolder: '', type: 'output' });
 
@@ -55,6 +55,26 @@ describe('findComfyOutputFile', () => {
     };
     expect(findComfyOutputFile(outputs, ['audio', 'image'])).toEqual(file('voice.flac'));
     expect(findComfyOutputFile(outputs, ['image', 'audio'])).toEqual(file('frame.png'));
+  });
+
+  it.each([
+    ['image', 'images', 'png'], ['audio', 'audio', 'flac'], ['video', 'videos', 'mp4'],
+  ] as const)('%s 先取正式输出，再兼容未声明类型及仅预览的旧工作流', (kind, key, extension) => {
+    const preview = { ...file(`preview.${extension}`), type: 'temp' };
+    const legacy = { filename: `legacy.${extension}` };
+    const saved = file(`saved.${extension}`);
+    expect(findComfyOutputFile({ '1': { [key]: [preview] }, '2': { [key]: [legacy] }, '9': { [key]: [saved] } }, [kind]))
+      .toEqual(saved);
+    expect(findComfyOutputFile({ '1': { [key]: [preview, legacy, saved] } }, [kind])).toEqual(saved);
+    expect(findComfyOutputFile({ '1': { [key]: [preview] }, '2': { [key]: [legacy] } }, [kind])).toEqual(legacy);
+    expect(findComfyOutputFile({ '1': { [key]: [preview] } }, [kind])).toEqual(preview);
+  });
+
+  it('保留媒体类型优先级，不因另一类存在正式输出而改投', () => {
+    const preview = { ...file('preview.png'), type: 'temp' };
+    const audio = file('saved.flac');
+    const kinds: ComfyOutputKind[] = ['image', 'audio'];
+    expect(findComfyOutputFile({ '1': { images: [preview] }, '9': { audio: [audio] } }, kinds)).toEqual(preview);
   });
 
   it('ignores entries without a filename', () => {

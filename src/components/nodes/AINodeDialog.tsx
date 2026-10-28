@@ -55,6 +55,7 @@ import { getLibapiAudioCapability, usesLibapiModelProtocol } from '../../service
 import { resolveConfiguredImageBackground, resolveConfiguredImageQuality } from '../../services/ai/modelCapabilityValidation';
 import { buildGenerationCameraPrompt } from './shared/image/cameraStudio';
 import { cancelComfyUINodeTask } from '../../services/comfyWorkflowService';
+import { getComfyQueryAuthorizationMessage } from '../../services/comfyPolling';
 import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, getPendingTasksForProject, isComfyNodeDeliveryActive, isMediaTaskPausedError, pauseComfyNodeDelivery, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, resumeComfyUINodeTask, resumeRunningHubNodeTask, subscribeComfyDeliveries, updatePendingTask, removePendingTask } from '../../services/pollManager';
 import MediaTaskStatus from './shared/MediaTaskStatus';
 import { isCloudWorkflow, getCloudWorkflowPersistedOutput, workflowExecution } from '../../services/workflowExecutionService';
@@ -1252,7 +1253,7 @@ function AINodeDialog() {
                   ? t('ComfyUI 取消尚未确认，任务已保留')
                   : recoverableComfyTask.comfyRecoveryState === 'save_pending'
                     ? t('ComfyUI 已完成，结果尚未保存或回填，任务已保留')
-                    : t('ComfyUI 查询中断，任务已保留')}
+                    : t(getComfyQueryAuthorizationMessage(recoverableComfyTask.comfyQueryHttpStatus) ?? 'ComfyUI 查询中断，任务已保留')}
               </span>
               <div className="flex flex-wrap gap-2">
                 <button type="button" className="ui-btn ui-btn--sm" onClick={() => {

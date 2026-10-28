@@ -3,15 +3,16 @@ import { Icon } from '@iconify/react';
 import { setLocale, useT } from '../../i18n';
 import { applyAppearanceTheme, installSystemAppearanceListener } from '../../services/appearance/appearanceRuntime';
 import {
-  applyComfyRepositoryAction, getComfyManagementSnapshot, installComfyDependencies,
-  installComfyExtension, listComfyCatalog,
+  applyComfyRepositoryAction, cancelComfyDependencies, ComfyDependencyInstallCancelledError,
+  getComfyManagementSnapshot, installComfyDependencies, installComfyExtension, listComfyCatalog,
 } from '../../services/comfyManagementService';
-import type { ComfyCatalogEntry, ComfyDownloadProgress as DownloadProgress, ComfyManagementSnapshot, ComfyRepository, ComfyRepositoryAction } from '../../types/comfyManagement';
+import type { ComfyCatalogEntry, ComfyDependencyProgress as DependencyProgress, ComfyDownloadProgress as DownloadProgress, ComfyManagementSnapshot, ComfyRepository, ComfyRepositoryAction } from '../../types/comfyManagement';
 import ModalOverlay from '../shared/ModalOverlay';
 import Tabs from '../shared/Tabs';
 import ComfyVersionList from './ComfyVersionList';
 import ComfyLaunchSettings from './ComfyLaunchSettings';
 import ComfyDownloadProgress from './ComfyDownloadProgress';
+import ComfyDependencyProgress from './ComfyDependencyProgress';
 import ComfyModelDedupe from './ComfyModelDedupe';
 import ComfyRuntimeConsole from './ComfyRuntimeConsole';
 import { useComfyRuntime } from '../../hooks/useComfyRuntime';
@@ -45,8 +46,10 @@ export default function ComfyManagementWindow() {
   const [snapshot, setSnapshot] = useState<ComfyManagementSnapshot | null>(null);
   const [snapshotRevision, setSnapshotRevision] = useState(0);
   const [busy, setBusy] = useState(() => t('读取安装信息'));
-  const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null);
+  const [feedback, setFeedback] = useState<{ text: string; error: boolean; neutral?: boolean } | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [dependencyProgress, setDependencyProgress] = useState<DependencyProgress | null>(null);
+  const [dependencyCancelling, setDependencyCancelling] = useState(false);
   const [search, setSearch] = useState('');
   const [catalog, setCatalog] = useState<ComfyCatalogEntry[] | null>(null);
   const [catalogLimit, setCatalogLimit] = useState(80);
@@ -56,9 +59,13 @@ export default function ComfyManagementWindow() {
   const { runtime, error: runtimeError, refresh: refreshRuntime, clearDisplay } = useComfyRuntime(!!snapshot);
   const busyRef = useRef(true);
   const aliveRef = useRef(true);
+  const dependencyRequest = useRef<{ requestId: string; cancelling: boolean } | null>(null);
   const themeCleanup = useRef<() => void>(() => {});
   const onDownloadProgress = useCallback((progress: DownloadProgress) => {
     if (aliveRef.current) setDownloadProgress(progress);
+  }, []);
+  const onDependencyProgress = useCallback((progress: DependencyProgress) => {
+    if (aliveRef.current && dependencyRequest.current?.requestId === progress.requestId) setDependencyProgress(progress);
   }, []);
 
   const refreshSnapshot = useCallback((isCurrent?: () => boolean, refresh = true) => getComfyManagementSnapshot(refresh).then((next) => {
@@ -77,16 +84,19 @@ export default function ComfyManagementWindow() {
     setBusy(label); setFeedback(null); setDownloadProgress(null);
     try {
       const message = await operation();
-      if (aliveRef.current && message) setFeedback({ text: message, error: false });
+      if (aliveRef.current && message) setFeedback({ text: t(message), error: false });
       return true;
     } catch (error) {
-      if (aliveRef.current) setFeedback({ text: error instanceof Error ? error.message : String(error), error: true });
+      if (aliveRef.current) {
+        const cancelled = error instanceof ComfyDependencyInstallCancelledError;
+        setFeedback({ text: t(error instanceof Error ? error.message : String(error)), error: !cancelled, neutral: cancelled });
+      }
       return false;
     } finally {
       busyRef.current = false;
       if (aliveRef.current) { setBusy(''); setDownloadProgress(null); }
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     let active = true;
     aliveRef.current = true;
@@ -97,7 +107,10 @@ export default function ComfyManagementWindow() {
       busyRef.current = false;
       setBusy('');
     });
-    return () => { active = false; aliveRef.current = false; themeCleanup.current(); };
+    return () => {
+      active = false; aliveRef.current = false; themeCleanup.current();
+      if (dependencyRequest.current) void cancelComfyDependencies(dependencyRequest.current.requestId).catch(() => {});
+    };
   }, [refreshSnapshot]);
 
   useEffect(() => {
@@ -109,7 +122,35 @@ export default function ComfyManagementWindow() {
     setModelsRevision((value) => value + 1);
     return operation();
   };
-  const installDependencies = (repositoryId: string) => withInvalidatedModelScan(() => installComfyDependencies(repositoryId));
+  const installDependencies = (repositoryId: string) => withInvalidatedModelScan(async () => {
+    const requestId = `comfy-deps-${crypto.randomUUID()}`;
+    dependencyRequest.current = { requestId, cancelling: false };
+    setDependencyProgress({ requestId, stage: 'waiting' });
+    setDependencyCancelling(false);
+    try {
+      return await installComfyDependencies(repositoryId, { requestId, onProgress: onDependencyProgress });
+    } finally {
+      if (dependencyRequest.current?.requestId === requestId) {
+        dependencyRequest.current = null;
+        if (aliveRef.current) { setDependencyProgress(null); setDependencyCancelling(false); }
+      }
+    }
+  });
+  const cancelDependencyInstall = async () => {
+    const current = dependencyRequest.current;
+    if (!current || current.cancelling) return;
+    current.cancelling = true;
+    setDependencyCancelling(true);
+    try {
+      await cancelComfyDependencies(current.requestId);
+    } catch {
+      if (aliveRef.current && dependencyRequest.current?.requestId === current.requestId) {
+        current.cancelling = false;
+        setDependencyCancelling(false);
+        setFeedback({ text: t('取消请求失败，安装仍在进行，请重试取消。'), error: true });
+      }
+    }
+  };
   const mutate = async (request: ComfyRepositoryAction) => {
     const result = await withInvalidatedModelScan(() => applyComfyRepositoryAction(request, onDownloadProgress));
     await refreshSnapshot();
@@ -202,9 +243,11 @@ export default function ComfyManagementWindow() {
     <main className={`flex-1 min-h-0 min-w-0 p-3 ${isListTab ? 'flex flex-col gap-3 overflow-hidden' : 'ui-scroll space-y-3'}`} aria-busy={!!busy}>
       <div className="shrink-0 space-y-3">
         <div className="ui-alert ui-alert--info"><Icon icon="lucide:info" width={16} className="ui-alert__icon" /><div className="ui-alert__body">{tab === 'console' ? t('通过本应用直接启动的 ComfyUI 会在这里显示实时输出，启动参数沿用已保存的常用设置。') : tab === 'models' ? t('扫描和链接替换作用于所选范围。扫描不会修改文件；创建链接前请停止 ComfyUI 和模型下载，完成后重新启动。') : t('管理操作只作用于当前安装目录。修改版本或插件前请停止 ComfyUI，完成后重新启动。插件依赖需单独安装。')}</div></div>
-        {!!busy && <div className="ui-row text-xs text-canvas-text-secondary" role="status"><Icon icon="lucide:loader-circle" width={14} className="animate-spin" />{busy}…</div>}
+        {!!busy && !dependencyProgress && <div className="ui-row text-xs text-canvas-text-secondary" role="status"><Icon icon="lucide:loader-circle" width={14} className="animate-spin" />{busy}…</div>}
+        {!!busy && dependencyProgress && <ComfyDependencyProgress title={busy} progress={dependencyProgress}
+          cancelling={dependencyCancelling} onCancel={() => void cancelDependencyInstall()} />}
         {!!busy && downloadProgress && <ComfyDownloadProgress progress={downloadProgress} />}
-        {feedback && <div className={`ui-alert ${feedback.error ? 'ui-alert--danger' : 'ui-alert--success'}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</div>}
+        {feedback && <div className={`ui-alert ${feedback.neutral ? 'ui-alert--info' : feedback.error ? 'ui-alert--danger' : 'ui-alert--success'}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</div>}
         {!!snapshot?.warnings.length && <div className="ui-alert ui-alert--warning">
           <Icon icon="lucide:triangle-alert" width={16} className="ui-alert__icon" />
           <details className="ui-alert__body flex-1">

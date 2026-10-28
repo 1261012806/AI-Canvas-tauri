@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   ComfyCatalogEntry,
   ComfyDownloadProgress,
+  ComfyDependencyProgress,
   ComfyManagementResult,
   ComfyManagementSnapshot,
   ComfyManagementUiContext,
@@ -50,5 +51,57 @@ export const listComfyCatalog = (onProgress?: (progress: ComfyDownloadProgress) 
 export const installComfyExtension = (repositoryUrl: string, onProgress?: (progress: ComfyDownloadProgress) => void): Promise<ComfyManagementResult> =>
   invokeWithProgress('install_comfyui_extension', { repositoryUrl }, onProgress);
 
-export const installComfyDependencies = (repositoryId: string): Promise<ComfyManagementResult> =>
-  invoke('install_comfyui_dependencies', { repositoryId });
+const DEPENDENCY_STAGES = new Set<ComfyDependencyProgress['stage']>([
+  'waiting', 'confirming', 'checking', 'resolving', 'downloading', 'building', 'installing',
+  'completed', 'cancelled', 'failed',
+]);
+const DEPENDENCY_FAILURES = new Set<NonNullable<ComfyDependencyProgress['failureKind']>>([
+  'network', 'dependencyConflict', 'diskSpace', 'permission', 'build', 'environment', 'timeout', 'cancelled', 'unknown',
+]);
+
+function dependencyProgress(message: string, requestId: string): ComfyDependencyProgress | null {
+  try {
+    const value = JSON.parse(message) as Partial<ComfyDependencyProgress> | null;
+    if (!value || value.requestId !== requestId || !value.stage || !DEPENDENCY_STAGES.has(value.stage)) return null;
+    if (value.packageName != null && (typeof value.packageName !== 'string'
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(value.packageName))) return null;
+    if (value.failureKind != null && !DEPENDENCY_FAILURES.has(value.failureKind)) return null;
+    return { requestId, stage: value.stage, packageName: value.packageName, failureKind: value.failureKind };
+  } catch {
+    return null;
+  }
+}
+
+export class ComfyDependencyInstallCancelledError extends Error {
+  constructor() {
+    super('已取消依赖安装；已安装的软件包不会自动回滚。');
+    this.name = 'ComfyDependencyInstallCancelledError';
+  }
+}
+
+export async function installComfyDependencies(repositoryId: string, options?: {
+  requestId: string;
+  onProgress?: (progress: ComfyDependencyProgress) => void;
+}): Promise<ComfyManagementResult> {
+  const requestId = options?.requestId ?? `comfy-deps-${crypto.randomUUID()}`;
+  const channel = new Channel<string>();
+  let cancelled = false;
+  channel.onmessage = (message) => {
+    const progress = dependencyProgress(message, requestId);
+    if (!progress) return;
+    if (progress.stage === 'cancelled') cancelled = true;
+    options?.onProgress?.(progress);
+  };
+  try {
+    return await invoke<ComfyManagementResult>('install_comfyui_dependencies', { repositoryId, requestId, onProgress: channel });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (cancelled || message === '已取消依赖安装') throw new ComfyDependencyInstallCancelledError();
+    throw cause;
+  } finally {
+    channel.onmessage = () => {};
+  }
+}
+
+export const cancelComfyDependencies = (requestId: string): Promise<void> =>
+  invoke('cancel_comfyui_dependencies', { requestId });

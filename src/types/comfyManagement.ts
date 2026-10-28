@@ -61,3 +61,17 @@ export interface ComfyDownloadProgress {
   total?: number | null;
   unit: 'objects' | 'bytes';
 }
+
+export type ComfyDependencyStage = 'waiting' | 'confirming' | 'checking' | 'resolving' | 'downloading'
+  | 'building' | 'installing' | 'completed' | 'cancelled' | 'failed';
+
+export type ComfyDependencyFailureKind = 'network' | 'dependencyConflict' | 'diskSpace' | 'permission'
+  | 'build' | 'environment' | 'timeout' | 'cancelled' | 'unknown';
+
+/** 仅用于当前管理会话展示，不持久化原始 pip 输出或本地路径。 */
+export interface ComfyDependencyProgress {
+  requestId: string;
+  stage: ComfyDependencyStage;
+  packageName?: string | null;
+  failureKind?: ComfyDependencyFailureKind | null;
+}

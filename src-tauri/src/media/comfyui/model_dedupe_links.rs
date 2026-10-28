@@ -599,7 +599,9 @@ fn read_record(app: &tauri::AppHandle, authorization: &model_dedupe::ModelScanRo
     Ok(RecoveryRecord { authorization: authorization.clone(), journal_root, directory: directory.to_path_buf(), journal: Some(journal), id })
 }
 
-fn recovery_records(app: &tauri::AppHandle, authorization: &model_dedupe::ModelScanRoot, mut traversal_roots: Vec<PathBuf>) -> Result<Vec<RecoveryRecord>, String> {
+fn recovery_records(app: &tauri::AppHandle, authorization: &model_dedupe::ModelScanRoot, mut traversal_roots: Vec<PathBuf>,
+    check: &impl Fn() -> Result<(), String>) -> Result<Vec<RecoveryRecord>, String> {
+    check()?;
     model_dedupe::verify_model_scan_root(app, authorization)?;
     let root = &authorization.root;
     // 显式选择的深层子根先走，保留各自的深度界限；随后父根遇到已完成目录便跳过。
@@ -611,6 +613,7 @@ fn recovery_records(app: &tauri::AppHandle, authorization: &model_dedupe::ModelS
     let mut directories = 0;
     let mut records = Vec::new();
     while let Some((directory, depth)) = stack.pop() {
+        check()?;
         model_dedupe::verify_model_scan_root(app, authorization)?;
         if depth > model_dedupe::MAX_MODEL_SCAN_DEPTH { continue; }
         if !seen_directories.insert(directory.clone()) { continue; }
@@ -620,7 +623,7 @@ fn recovery_records(app: &tauri::AppHandle, authorization: &model_dedupe::ModelS
         let Ok(entries) = fs::read_dir(&directory) else { continue; };
         for entry in entries.flatten() {
             visited += 1;
-            if visited % 128 == 0 { model_dedupe::verify_model_scan_root(app, authorization)?; }
+            if visited % 128 == 0 { check()?; model_dedupe::verify_model_scan_root(app, authorization)?; }
             if visited > MAX_RECOVERY_ENTRIES { return Err("扫描范围过大，恢复记录枚举已停止，请关闭管理窗口后选择更小的文件夹".into()); }
             // Windows 的 ReadDir 已提供 file type，普通文件无须逐个再发起 metadata 读取。
             if !entry.file_type().is_ok_and(|kind| kind.is_dir() && !kind.is_symlink()) { continue; }
@@ -654,14 +657,21 @@ fn recovery_records(app: &tauri::AppHandle, authorization: &model_dedupe::ModelS
 
 /// 调用方已持有 management operation lock；避免插件目录移动后破坏恢复记录的位置。
 pub(super) async fn ensure_no_pending_recoveries(app: &tauri::AppHandle, root: &Path) -> Result<(), String> {
+    ensure_no_pending_recoveries_with_check(app, root, || Ok(())).await
+}
+
+/// 检查线程合作退出后才返回，调用者持有的操作锁不会因取消而提前释放。
+pub(super) async fn ensure_no_pending_recoveries_with_check(app: &tauri::AppHandle, root: &Path,
+    check: impl Fn() -> Result<(), String> + Send + 'static) -> Result<(), String> {
     let session_id = management::management_session_id(app)?;
     let worker_app = app.clone();
     let root = root.to_path_buf();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        check()?;
         if !model_dedupe::authorized_model_scan_roots(&worker_app)?.iter().any(|entry| entry.root == root) {
             return Err("管理或扫描目录已变化，请重新打开管理窗口".into());
         }
-        if !all_recovery_records(&worker_app)?.is_empty() {
+        if !all_recovery_records_with_check(&worker_app, &check)?.is_empty() {
             return Err("存在未处理的模型去重恢复记录，请先到模型去重页验证并恢复".into());
         }
         Ok(())
@@ -671,10 +681,16 @@ pub(super) async fn ensure_no_pending_recoveries(app: &tauri::AppHandle, root: &
 }
 
 fn all_recovery_records(app: &tauri::AppHandle) -> Result<Vec<RecoveryRecord>, String> {
+    all_recovery_records_with_check(app, &|| Ok(()))
+}
+
+fn all_recovery_records_with_check(app: &tauri::AppHandle, check: &impl Fn() -> Result<(), String>) -> Result<Vec<RecoveryRecord>, String> {
+    check()?;
     let mut records: Vec<RecoveryRecord> = Vec::new();
     let mut positions: HashMap<String, usize> = HashMap::new();
     let authorized = model_dedupe::authorized_model_scan_roots(app)?;
     for root in &authorized {
+        check()?;
         let covered_by_parent = authorized.iter().any(|parent| external_scope(parent.scope)
             && root.root.starts_with(&parent.root)
             && (root.root != parent.root || !external_scope(root.scope) || parent.id < root.id));
@@ -682,7 +698,7 @@ fn all_recovery_records(app: &tauri::AppHandle) -> Result<Vec<RecoveryRecord>, S
         let traversal_roots = authorized.iter().filter(|child| child.id == root.id
             || external_scope(root.scope) && child.root.starts_with(&root.root))
             .flat_map(model_dedupe::ModelScanRoot::traversal_roots).collect();
-        for record in recovery_records(app, root, traversal_roots)? {
+        for record in recovery_records(app, root, traversal_roots, check)? {
             if let Some(index) = positions.get(&record.id).copied() {
                 // 授权子目录可能先发现记录却不足以解析；优先展示完整授权根下的可恢复项。
                 if records[index].journal.is_none() && record.journal.is_some() { records[index] = record; }

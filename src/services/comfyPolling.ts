@@ -88,13 +88,14 @@ async function isPromptQueued(
   try {
     const queue = await withComfyQueryTimeout(async (querySignal) => {
       const response = await comfyFetch(`${baseUrl}/queue`, { signal: querySignal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      assertComfyQueryResponse(response);
       return await response.json() as Record<string, unknown>;
     }, signal);
     const lists = [queue.queue_running, queue.queue_pending].filter(Array.isArray) as unknown[][];
     if (lists.length === 0) return true;
     return lists.some((list) => list.some((item) => Array.isArray(item) && item[1] === promptId));
-  } catch {
+  } catch (error) {
+    if (error instanceof ComfyQueryAuthorizationError) throw error;
     return true;
   }
 }
@@ -110,6 +111,33 @@ export class ComfyPendingError extends Error {
     super(message);
     this.name = 'ComfyPendingError';
   }
+}
+
+const COMFY_QUERY_AUTHORIZATION_MESSAGES = {
+  401: 'ComfyUI 查询未授权（HTTP 401），请检查服务端鉴权配置；原任务已保留，修复后可继续查询',
+  403: 'ComfyUI 查询被拒绝（HTTP 403），请检查服务端访问权限或反向代理限制；原任务已保留，修复后可继续查询',
+} as const;
+
+/** 恢复记录仅保存固定状态码，展示时重建文案，不保留上游正文或地址。 */
+export function getComfyQueryAuthorizationMessage(status: unknown): string | undefined {
+  return status === 401 || status === 403 ? COMFY_QUERY_AUTHORIZATION_MESSAGES[status] : undefined;
+}
+
+export class ComfyQueryAuthorizationError extends ComfyPendingError {
+  readonly status: 401 | 403;
+
+  constructor(status: 401 | 403) {
+    super(COMFY_QUERY_AUTHORIZATION_MESSAGES[status]);
+    this.name = 'ComfyQueryAuthorizationError';
+    this.status = status;
+  }
+}
+
+function assertComfyQueryResponse(response: Response): void {
+  if (response.ok) return;
+  void response.body?.cancel().catch(() => undefined);
+  if (response.status === 401 || response.status === 403) throw new ComfyQueryAuthorizationError(response.status);
+  throw new Error(`HTTP ${response.status}`);
 }
 
 const TASK_GONE_MESSAGE = 'ComfyUI 上已找不到该任务（服务重启或队列被清空），请重新生成';
@@ -142,7 +170,7 @@ export async function pollComfyHistory<T>(
       try {
         const history = await withComfyQueryTimeout(async (querySignal) => {
           const response = await comfyFetch(`${baseUrl}/history/${promptId}`, { signal: querySignal });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          assertComfyQueryResponse(response);
           return await response.json() as Record<string, unknown>;
         }, signal);
         if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
@@ -156,6 +184,7 @@ export async function pollComfyHistory<T>(
         return { gone: missingRounds >= MISSING_ROUNDS_BEFORE_FAIL };
       } catch (error) {
         if (signal?.aborted) throw error;
+        if (error instanceof ComfyQueryAuthorizationError) throw error;
         errorRounds += 1;
         // 偶发的网络抖动不该打断一个跑了几分钟的任务，连续失败才上抛
         if (errorRounds >= FETCH_ERROR_ROUNDS_BEFORE_FAIL) throw new ComfyPendingError();

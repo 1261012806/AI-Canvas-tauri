@@ -1,4 +1,6 @@
 //! 本地 ComfyUI 内核与 custom_nodes 管理。路径只由主窗口登记，管理窗口只接受对象 ID。
+#[path = "dependencies.rs"]
+mod dependencies;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -81,7 +83,7 @@ struct ManagementSession {
 }
 
 #[derive(Default)]
-pub struct ManagementState(Mutex<Option<ManagementSession>>, Mutex<Option<CachedSnapshot>>);
+pub struct ManagementState(Mutex<Option<ManagementSession>>, Mutex<Option<CachedSnapshot>>, dependencies::TaskState);
 
 // 展示缓存与窗口会话分开：关窗仍撤销会话，但不必重跑所有仓库的 Git 查询。
 struct CachedSnapshot {
@@ -949,35 +951,86 @@ pub async fn install_comfyui_extension(webview: Webview, app: tauri::AppHandle, 
 }
 
 #[tauri::command]
-pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandle, repository_id: String) -> Result<ManagementResult, String> {
-    let _guard = OPERATION_LOCK.lock().await;
-    management_root(&webview, &app)?;
-    assert_server_stopped(&app)?;
-    let approval_app = app.clone();
-    let approved = tauri::async_runtime::spawn_blocking(move || approval_app.dialog()
-        .message("安装 requirements.txt 会下载 Python 软件包，软件包构建可能执行第三方代码，并修改当前 ComfyUI Python 环境。请确认信任该内核或扩展；建议事先备份环境。此操作不运行 install.py。")
-        .title("安装 ComfyUI 依赖？").kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom("信任并安装依赖".into(), "取消".into())).blocking_show())
-        .await.map_err(|_| "无法显示依赖安装确认".to_string())?;
-    if !approved { return Err("已取消依赖安装".into()); }
-    let root = management_root(&webview, &app)?;
-    assert_server_stopped(&app)?;
-    super::model_dedupe_links::ensure_no_pending_recoveries(&app, &root).await?;
-    super::model_dedupe::invalidate_model_scans(&app);
-    invalidate_management_cache(&app);
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = repository_path(&app, &root, &repository_id)?;
-        let requirements = path.join("requirements.txt");
-        plain_file(&app, &requirements)
-            .map_err(|_| "该仓库没有可访问的 requirements.txt".to_string())?;
-        let session = current_session(&app)?;
-        let python = super::find_python(&root, &session.installation_root).ok_or_else(|| "未找到 ComfyUI Python 环境".to_string())?;
-        assert_server_stopped(&app)?;
-        let mut command = Command::new(python);
-        command.current_dir(&path).args(["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-r", "requirements.txt"]);
-        run_command(&app, command, Duration::from_secs(600))?;
-        Ok(ManagementResult { message: "依赖安装完成，请重启 ComfyUI。".into() })
-    }).await.map_err(|_| "依赖安装失败，请检查环境后重试".to_string())?
+pub async fn install_comfyui_dependencies(webview: Webview, app: tauri::AppHandle, repository_id: String,
+    request_id: String, on_progress: Channel<String>) -> Result<ManagementResult, String> {
+    management_root(&webview, &app).map_err(|_| "依赖安装目录未获授权，请重新打开 ComfyUI 管理窗口。".to_string())?;
+    let session = current_session(&app)?;
+    // 登记早于等待锁和原生确认，取消不被长任务的操作锁阻塞。
+    let task = dependencies::begin(&app, &session, &request_id, on_progress)?;
+    let control = task.control();
+    let result: Result<(), dependencies::Failure> = async {
+        use dependencies::{Failure, FailureKind, Stage};
+        control.stage(Stage::Waiting);
+        control.check()?;
+        let lock = OPERATION_LOCK.lock();
+        tokio::pin!(lock);
+        let _guard = loop {
+            tokio::select! {
+                guard = &mut lock => break guard,
+                _ = tokio::time::sleep(Duration::from_millis(100)) => control.check()?,
+            }
+        };
+        control.check()?;
+        let root = management_root(&webview, &app).map_err(|_| Failure::environment("依赖安装目录授权已变化，请重新打开管理窗口。"))?;
+        assert_server_stopped(&app).map_err(|_| Failure::environment("ComfyUI 服务仍在运行，请先停止服务，再安装依赖。"))?;
+        let window = app.get_webview_window(WINDOW_LABEL).ok_or_else(|| Failure::new(FailureKind::Cancelled))?;
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        control.stage(Stage::Confirming);
+        app.dialog()
+            .message("安装 requirements.txt 会下载 Python 软件包，软件包构建可能执行第三方代码，并修改当前 ComfyUI Python 环境。请确认信任该内核或扩展；建议事先备份环境。此操作不运行 install.py。")
+            .parent(&window).title("安装 ComfyUI 依赖？").kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("信任并安装依赖".into(), "取消".into()))
+            .show(move |approved| { let _ = sender.send(approved); });
+        let approved = loop {
+            tokio::select! {
+                value = &mut receiver => break value.map_err(|_| Failure::new(FailureKind::Cancelled))?,
+                _ = tokio::time::sleep(Duration::from_millis(100)) => control.check()?,
+            }
+        };
+        control.check()?;
+        if !approved { return Err(Failure::new(FailureKind::Cancelled)); }
+        control.stage(Stage::Checking);
+        let verified_root = management_root(&webview, &app).map_err(|_| Failure::environment("依赖安装目录授权已变化，请重新打开管理窗口。"))?;
+        if root != verified_root { return Err(Failure::new(FailureKind::Cancelled)); }
+        assert_server_stopped(&app).map_err(|_| Failure::environment("ComfyUI 服务仍在运行，请先停止服务，再安装依赖。"))?;
+        let checking_control = control.clone();
+        let recovery_check = super::model_dedupe_links::ensure_no_pending_recoveries_with_check(&app, &root,
+            move || checking_control.check().map_err(|error| error.message.to_string())).await;
+        control.check()?;
+        recovery_check.map_err(|_| Failure::environment("模型恢复记录安全检查未完成，请先到模型去重页核对并恢复未完成记录。"))?;
+        super::model_dedupe::invalidate_model_scans(&app);
+        invalidate_management_cache(&app);
+        let worker_app = app.clone();
+        let worker_control = control.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            worker_control.check()?;
+            let verified = management_source_root(&worker_app).map_err(|_| Failure::environment("依赖安装目录授权已变化，请重新打开管理窗口。"))?;
+            if root != verified { return Err(Failure::new(FailureKind::Cancelled)); }
+            let path = repository_path(&worker_app, &root, &repository_id)
+                .map_err(|_| Failure::environment("内核或插件目录不可访问，请刷新管理列表后重试。"))?;
+            plain_file(&worker_app, &path.join("requirements.txt"))
+                .map_err(|_| Failure::environment("该仓库没有可访问的 requirements.txt。"))?;
+            let session = current_session(&worker_app).map_err(|_| Failure::new(FailureKind::Cancelled))?;
+            let python = super::find_python(&root, &session.installation_root)
+                .ok_or_else(|| Failure::environment("未找到 ComfyUI Python 环境，请核对安装目录。"))?;
+            assert_server_stopped(&worker_app).map_err(|_| Failure::environment("ComfyUI 服务仍在运行，请先停止服务，再安装依赖。"))?;
+            worker_control.check()?;
+            worker_control.stage(Stage::Resolving);
+            let mut command = Command::new(python);
+            command.current_dir(&path).args(["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-r", "requirements.txt"]);
+            dependencies::run(command, worker_control)
+        }).await.map_err(|_| Failure::new(FailureKind::Unknown))?
+    }.await;
+    control.finish(&result);
+    result.map(|()| ManagementResult { message: "依赖安装完成，请重启 ComfyUI。".into() }).map_err(|error| error.message.to_string())
+}
+
+#[tauri::command]
+pub fn cancel_comfyui_dependencies(webview: Webview, app: tauri::AppHandle, request_id: String) -> Result<(), String> {
+    // 取消只操作会话绑定的任务 ID；目录在运行中变动时也应允许停止进程树。
+    ensure_management_caller(&webview, &app).map_err(|_| "依赖取消请求不属于当前有效的安装会话。".to_string())?;
+    let session = current_session(&app)?;
+    dependencies::cancel(&app, &session, &request_id)
 }
 
 #[cfg(test)]

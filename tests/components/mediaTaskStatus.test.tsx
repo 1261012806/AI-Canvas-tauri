@@ -72,6 +72,24 @@ describe('跨媒体原任务续取入口', () => {
     expect(queryButton()).toBeDefined();
   });
 
+  it.each([401, 403])('ComfyUI HTTP %i 显示固定鉴权原因并仍只续查原任务', async (status) => {
+    mocks.tasks[0].taskType = 'comfyui';
+    mocks.tasks[0].comfyQueryHttpStatus = status;
+    mocks.tasks[0].videoRecoveryMessage = '本轮视频查询中断或等待超时';
+    const message = elements(render()).find((element) => element.type === 'span')?.props.children;
+    expect(message).toContain(`HTTP ${status}`);
+    expect(message).toContain(status === 401 ? '鉴权配置' : '访问权限');
+    (queryButton()!.props.onClick as () => void)();
+    expect(mocks.resume).toHaveBeenCalledWith('media');
+    await vi.waitFor(() => expect(mocks.busy).toBe(false));
+  });
+
+  it('恢复记录中的未知鉴权状态不成为展示文案', () => {
+    mocks.tasks[0].comfyQueryHttpStatus = '/private?token=secret';
+    const message = elements(render()).find((element) => element.type === 'span')?.props.children;
+    expect(message).toBe('查询已暂停，任务已保留');
+  });
+
   it('批量已取得部分ID但后续提交未知时仍禁止伪续取', () => {
     mocks.tasks[0].mediaSubmissionUncertain = true;
     mocks.tasks[0].mediaRecoveryState = 'submit_unknown';

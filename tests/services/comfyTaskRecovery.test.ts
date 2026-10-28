@@ -4,15 +4,15 @@ import {
   beginComfyNodeDelivery, cancelNodePolling, cleanupNodePolling, clearProjectTasks, completeComfyNodeTask, completeVideoNodeTask, getPendingTasksForProject,
   isComfyNodeDeliveryActive, subscribeComfyDeliveries,
   pauseComfyNodeDelivery, pauseVideoNodeTask, prepareVideoNodeGeneration, registerNodePolling, resumeComfyUINodeTask,
-  resumePendingTasks, resumeVideoNodeTask, savePendingTask, VideoPollingPausedError,
+  resumeMediaNodeTask, resumePendingTasks, resumeVideoNodeTask, savePendingTask, VideoPollingPausedError,
 } from '../../src/services/pollManager';
 import {
   cancelComfyUINodeTask, executeComfyUIAudioGenerate, executeComfyUIGenerate, executeComfyUIVideoGenerate,
 } from '../../src/services/comfyWorkflowService';
-import { ComfyPendingError, pollComfyHistory } from '../../src/services/comfyPolling';
+import { ComfyPendingError, ComfyQueryAuthorizationError, pollComfyHistory } from '../../src/services/comfyPolling';
 import { MediaPersistenceError } from '../../src/services/fileService';
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn(), history: vi.fn(), cancel: vi.fn(), persist: vi.fn() }));
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), history: vi.fn(), queue: vi.fn(), cancel: vi.fn(), persist: vi.fn() }));
 vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mocks.fetch }));
 vi.mock('../../src/services/fileService', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/services/fileService')>(),
@@ -31,6 +31,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const completed = () => json({ 'prompt-1': { status: { completed: true }, outputs: { '9': { images: [{ filename: 'out.png' }] } } } });
 const completedVideo = () => json({ 'prompt-1': { status: { completed: true }, outputs: {
   '9': { images: [{ filename: 'out.mp4', subfolder: 'video', type: 'output' }], animated: [true] },
+} } });
+const completedAudio = () => json({ 'prompt-1': { status: { completed: true }, outputs: {
+  '9': { audio: [{ filename: 'out.flac', type: 'output' }] },
 } } });
 const pending = () => getPendingTasksForProject('p1');
 const promptCalls = () => mocks.fetch.mock.calls.filter(([url]) => String(url).endsWith('/prompt'));
@@ -58,6 +61,7 @@ beforeEach(() => {
     workflows: [{ id: 'wf-1', name: 'test', category: 'ai-image', createdAt: 1, fileName: 'test.json', fileContent: JSON.stringify({ '9': { class_type: 'SaveImage', inputs: {} } }) }],
   });
   mocks.history.mockReset().mockResolvedValue(completed());
+  mocks.queue.mockReset().mockImplementation(async () => json({ queue_running: [], queue_pending: [] }));
   mocks.cancel.mockReset().mockResolvedValue(json({ cancelled: true }));
   mocks.persist.mockReset().mockImplementation(async (url: string) => ({ mediaUrl: url, sourceUrl: url }));
   mocks.fetch.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
@@ -65,7 +69,7 @@ beforeEach(() => {
     if (url.includes('/history/')) return mocks.history(url, init);
     if (url.includes('/api/jobs/')) return mocks.cancel(url, init);
     if (url.includes('/object_info')) return json({});
-    if (url.endsWith('/queue')) return json({ queue_running: [], queue_pending: [] });
+    if (url.endsWith('/queue')) return mocks.queue(url, init);
     throw new Error(`Unexpected test request: ${url}`);
   });
 });
@@ -502,5 +506,73 @@ describe('ComfyUI 任务恢复合同', () => {
       return completed();
     });
     await expect(pollComfyHistory(task.baseUrl, task.taskId, 'timeout', () => ({ url: 'out' }), controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+describe.each([401, 403] as const)('ComfyUI 查询鉴权失败 HTTP %i', (status) => {
+  it.each(['history', 'queue'] as const)('%s 首次拒绝就暂停查询，不消耗网络抖动重试预算', async (endpoint) => {
+    mocks.history.mockImplementation(async () => json({}, endpoint === 'history' ? status : 200));
+    mocks.queue.mockImplementation(async () => json({ detail: '/private?token=secret' }, status));
+    await expect(pollComfyHistory(task.baseUrl, task.taskId, 'timeout', () => null))
+      .rejects.toMatchObject({ name: 'ComfyQueryAuthorizationError', status });
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+    expect(mocks.queue).toHaveBeenCalledTimes(endpoint === 'queue' ? 1 : 0);
+    expect(promptCalls()).toHaveLength(0);
+  });
+
+  it.each([
+    { kind: '图片', nodeType: 'ai-image', generate: () => executeComfyUIGenerate(params), complete: completed },
+    { kind: '视频', nodeType: 'ai-video', generate: () => executeComfyUIVideoGenerate(params), complete: completedVideo },
+    { kind: '音频', nodeType: 'ai-audio', generate: () => executeComfyUIAudioGenerate(params), complete: completedAudio },
+  ] as const)('$kind 正常生成保留原任务与固定原因，重新进项目不盲目查询，修复后只续取', async ({ nodeType, generate, complete }) => {
+    if (nodeType === 'ai-video') configureVideo();
+    else useAppStore.getState().updateNodeDataTransient('n1', { type: nodeType });
+    mocks.history.mockImplementation(async () => json({ detail: '/private?token=secret' }, status));
+    await expect(generate()).rejects.toThrow(`HTTP ${status}`);
+    expect(pending()[0]).toMatchObject({ taskId: 'prompt-1', submitted: true,
+      comfyRecoveryState: 'disconnected', comfyQueryHttpStatus: status });
+    expect(JSON.stringify(pending())).not.toMatch(/private|secret/);
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+    await resumePendingTasks('p1');
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBe('paused');
+    mocks.history.mockImplementation(async () => complete());
+    await resumeComfyUINodeTask('n1');
+    expect(promptCalls()).toHaveLength(1);
+    expect(pending()).toEqual([]);
+    expect(useAppStore.getState().nodes[0].data.status).toBe('success');
+  });
+
+  it.each(['ai-image', 'ai-video', 'ai-audio'] as const)('%s 手动续查再次拒绝时保留原因和原任务', async (nodeType) => {
+    if (nodeType === 'ai-video') configureVideo();
+    else useAppStore.getState().updateNodeDataTransient('n1', { type: nodeType });
+    savePendingTask({ ...task, nodeType });
+    mocks.history.mockImplementation(async () => json({}, status));
+    await resumeComfyUINodeTask('n1');
+    expect(pending()[0]).toMatchObject({ taskId: task.taskId, comfyQueryHttpStatus: status,
+      mediaRecoveryState: 'query_paused' });
+    expect(useAppStore.getState().nodes[0].data.mediaTaskState).toBe('paused');
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+    expect(promptCalls()).toHaveLength(0);
+    await resumePendingTasks('p1');
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+  });
+
+  it('鉴权错误继承可恢复类别，并只持久化有限状态码', () => {
+    const error = new ComfyQueryAuthorizationError(status);
+    expect(error).toBeInstanceOf(ComfyPendingError);
+    savePendingTask({ ...task, comfyQueryHttpStatus: status });
+    expect(pending()[0].comfyQueryHttpStatus).toBe(status);
+    savePendingTask({ ...task, comfyQueryHttpStatus: { body: '/private?token=secret' } as unknown as 401 });
+    expect(pending()[0].comfyQueryHttpStatus).toBeUndefined();
+    expect(JSON.stringify(pending())).not.toMatch(/private|secret/);
+  });
+
+  it('共用续查入口向调用方保留鉴权原因，不会把仍保留的任务当成交付成功', async () => {
+    savePendingTask(task);
+    mocks.history.mockImplementation(async () => json({}, status));
+    await expect(resumeMediaNodeTask('n1')).rejects.toThrow(`HTTP ${status}`);
+    expect(pending()[0]).toMatchObject({ taskId: task.taskId, comfyQueryHttpStatus: status });
+    expect(promptCalls()).toHaveLength(0);
   });
 });

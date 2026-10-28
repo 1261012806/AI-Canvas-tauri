@@ -1,5 +1,21 @@
 # ComfyUI 第一批可靠性修复
 
+## 2026-10-28 正式结果、查询授权与依赖安装反馈
+
+状态：源码已实现，待用户 Tauri 桌面验收。本次未运行测试、lint、类型检查、Rust 检查、构建、应用或真实服务请求；测试源码已补充，不作为通过证据。
+
+- **结果选择**：在 `comfyOutputs.ts` 统一图片、视频和音频的选择顺序为显式 `output`、旧服务未标记类型的结果、最后兼容预览。保留媒体类型优先级、视频扩展名校验与现有单结果交付；多结果选择入口另行规划。
+- **查询授权**：`comfyPolling.ts` 对 history / queue 的 HTTP 401、403 返回固定、可恢复的权限原因，不按瞬时网络失败重试；正常生成、暂停 UI 与 `pollManager.ts` 续查只保存归一化状态码，保留原任务 ID，不读取错误正文或自动重投。
+- **依赖安装**：复用管理窗口和现有安装授权、全局操作锁与进程树回收。`management.rs` / 依赖任务模块接收请求 ID 和字符串 Channel，新增仅用于取消当前会话依赖任务的命令；`comfyManagementService.ts`、管理类型和进度组件显示固定阶段及脱敏包名。取消等待实际退出，明确已安装的软件包不会自动回滚。权限声明与注册一并同步，不开放通用 IPC 或原始 pip 输出。
+
+实现入口：`comfyOutputs.ts`、`comfyPolling.ts`、`comfyWorkflowService.ts`、`pollManager.ts`、暂停状态组件；管理前端为 `ComfyManagementWindow.tsx`、`ComfyDependencyProgress.tsx` 与 `comfyManagementService.ts`，原生入口为 `management.rs` / `dependencies.rs`。恢复枚举在 `model_dedupe_links.rs` 根、目录与每 128 个条目处合作检查取消，并等待阻塞线程退出后才返回。取消记录绑定请求、管理会话与安装，最多保留 32 条；满容量时明确拒绝新记录，不遗忘已接受的取消。错误分类保留网络失败等具体原因，不让后续通用解析失败覆盖。
+
+待用户验收：使用同时含 Preview / Save 的图片、音频、视频工作流核对正式结果优先及仅预览兼容；分别令 history、queue 返回 401 / 403，确认即时暂停并提示原因，恢复授权后只续查同一任务；在测试 ComfyUI 安装副本操作内核或插件依赖，核对原生信任确认、阶段与包名、页面内取消、确认前取消、关窗回收、固定错误分类及再次安装。管理专项边界见 [本地管理计划](./2026-10-11-comfyui-management.md)。
+
+回滚：仅撤销本节对应的结果选择、查询原因传播、依赖进度/取消前后端及权限补丁；不删除已有任务，不回滚 Python 已完成的包变更。
+
+可由用户在仓库根目录执行 `npx vitest run tests/services/comfyOutputs.test.ts tests/services/comfyTaskRecovery.test.ts tests/components/mediaTaskStatus.test.tsx tests/services/comfyDependencyInstall.test.ts tests/components/comfyManagementWindow.test.tsx`；Rust 在 `src-tauri` 执行 `cargo test comfyui::management::dependencies::tests` 和 `cargo check --locked --lib`。以上命令均尚未执行，桌面端重新编译后还需完成上述真实服务与安装副本验收。
+
 ## 2026-10-27 宿主媒体全链路原生读取
 
 状态：源码已实现，待用户 Tauri 桌面验收；本轮没有运行测试、类型检查、Rust 编译、构建、应用或真实服务请求，提交时由既有钩子执行本次前端文件的定向 ESLint。此前 `937f870c` 的检查仅对应前一批图片改动，不作为本轮验证证据。

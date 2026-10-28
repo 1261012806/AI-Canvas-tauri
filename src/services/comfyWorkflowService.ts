@@ -22,7 +22,7 @@ import {
   savePendingTask,
   updatePendingTask,
 } from './pollManager';
-import { ComfyPendingError, comfyFetch, pollComfyHistory } from './comfyPolling';
+import { ComfyPendingError, ComfyQueryAuthorizationError, comfyFetch, pollComfyHistory } from './comfyPolling';
 import { withComfyQueryTimeout } from './comfyQuery';
 import { corsSafeFetch } from './ai/httpTransport';
 import { resolveComfyOutputUrl } from './comfyOutputs';
@@ -1552,7 +1552,8 @@ export async function executeComfyUIGenerate(
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
-        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
+        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected',
+          comfyQueryHttpStatus: error instanceof ComfyQueryAuthorizationError ? error.status : undefined }, submittedTaskId);
       }
     }
     if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {
@@ -1710,7 +1711,8 @@ export async function executeComfyUIVideoGenerate(
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
-        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
+        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected',
+          comfyQueryHttpStatus: error instanceof ComfyQueryAuthorizationError ? error.status : undefined }, submittedTaskId);
       }
     }
     if (retainPending && params.nodeId && !nodeSignal?.aborted) {
@@ -1802,7 +1804,8 @@ export async function executeComfyUIAudioGenerate(
     if (submittedTaskId && (error instanceof ComfyPendingError || signal?.aborted)) {
       retainPending = true;
       if (params.nodeId && !nodeSignal?.aborted) {
-        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected' }, submittedTaskId);
+        updatePendingTask(params.nodeId, { comfyRecoveryState: 'disconnected',
+          comfyQueryHttpStatus: error instanceof ComfyQueryAuthorizationError ? error.status : undefined }, submittedTaskId);
       }
     }
     if (submittedTaskId && !(error instanceof ComfyPendingError) && !signal?.aborted) {

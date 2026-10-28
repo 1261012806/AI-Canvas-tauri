@@ -16,7 +16,7 @@ import { applyImageBatchResults } from './imageBatchService';
 import { mapImageDimensions } from './aiDimensions';
 import { parseMultiPathResponse, splitCommaSeparatedUrls } from './ai/helpers';
 import { resolveComfyOutputUrl, type ComfyOutputKind, type ComfyOutputs } from './comfyOutputs';
-import { ComfyPendingError, pollComfyHistory } from './comfyPolling';
+import { ComfyPendingError, ComfyQueryAuthorizationError, getComfyQueryAuthorizationMessage, pollComfyHistory } from './comfyPolling';
 import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 import { completeCanvasDerivation, isCanvasDerivationFresh, registerCanvasDerivation } from './canvasDerivationGuard';
 import { pollResolvedModelProtocol } from './ai/modelProtocol';
@@ -208,6 +208,8 @@ export interface PendingTask {
     | 'seedanceRatio' | 'seedanceDuration' | 'generateAudio' | 'videoResolution' | 'videoFrames' | 'videoFps'>;
   /** ComfyUI 远端终态尚未确认，保留任务并提供续查/再次取消。 */
   comfyRecoveryState?: 'disconnected' | 'cancel_pending' | 'save_pending';
+  /** 仅保留可识别的查询鉴权状态，不保存上游错误正文、地址或凭据。 */
+  comfyQueryHttpStatus?: 401 | 403;
 }
 
 // ═══════════════════════════════════════════
@@ -238,11 +240,11 @@ export type MediaTaskPauseReason = 'query_timeout' | 'query_interrupted' | 'deli
 export class MediaTaskPausedError extends VideoPollingPausedError {
   readonly reason: MediaTaskPauseReason;
 
-  constructor(receipt: MediaTaskReceipt, reason: MediaTaskPauseReason) {
-    super(receipt, reason === 'submit_unknown'
+  constructor(receipt: MediaTaskReceipt, reason: MediaTaskPauseReason, comfyQueryHttpStatus?: 401 | 403) {
+    super(receipt, getComfyQueryAuthorizationMessage(comfyQueryHttpStatus) ?? (reason === 'submit_unknown'
       ? '生成请求的提交状态未知，请先到平台确认任务，避免重复生成'
       : reason === 'delivery_pending' ? '生成已完成，保存或回填尚未完成，可继续取回原结果'
-        : '任务查询已暂停，原任务已保留，可继续查询');
+        : '任务查询已暂停，原任务已保留，可继续查询'));
     this.name = 'MediaTaskPausedError';
     this.reason = reason;
   }
@@ -337,15 +339,18 @@ function isRecoverableMediaTask(task: PendingTask): boolean {
     && ['custom-protocol', 'general', 'apimart', 'apimart-flow-music', 'volcengine', 'dreamina'].includes(task.taskType);
 }
 
-export function pauseMediaTask(receipt: MediaTaskReceipt, _error?: unknown,
+export function pauseMediaTask(receipt: MediaTaskReceipt, error?: unknown,
   reason: MediaTaskPauseReason = 'query_interrupted'): MediaTaskPausedError | undefined {
   const task = loadAll().find((item) => matchesReceipt(item, receipt));
   if (!task || !isRecoverableMediaTask(task)) return undefined;
   const unknown = task.mediaSubmissionUncertain || !task.submitted || !task.taskId || reason === 'submit_unknown';
   const resolvedReason = unknown ? 'submit_unknown' : reason;
+  const comfyQueryHttpStatus = !unknown && task.taskType === 'comfyui'
+    ? error instanceof ComfyQueryAuthorizationError ? error.status : task.comfyQueryHttpStatus : undefined;
   updatePendingTask(task.nodeId, {
     mediaRecoveryState: unknown ? 'submit_unknown' : reason === 'delivery_pending' ? 'delivery_pending' : 'query_paused',
     mediaRecoveryReason: resolvedReason,
+    comfyQueryHttpStatus,
     ...(task.nodeType === 'ai-video' && !unknown ? { videoRecoveryState: 'paused' as const } : {}),
   }, task.taskId, task.attemptId);
   const store = useAppStore.getState();
@@ -359,7 +364,10 @@ export function pauseMediaTask(receipt: MediaTaskReceipt, _error?: unknown,
         videoTaskState: 'paused' as const, generationStartedAt: task.videoGenerationStartedAt,
       } : {}) });
   }
-  return new MediaTaskPausedError(receipt, resolvedReason);
+  const paused = new MediaTaskPausedError(receipt, resolvedReason, comfyQueryHttpStatus);
+  const outcome = mediaResumeOutcomes.get(JSON.stringify([task.projectId, task.nodeId]));
+  if (comfyQueryHttpStatus && outcome && matchesReceipt(task, outcome.receipt)) outcome.error = paused;
+  return paused;
 }
 
 export function pauseMediaNodeTask(nodeId: string, expectedTaskId?: string, reason?: MediaTaskPauseReason): MediaTaskPausedError | undefined {
@@ -462,18 +470,21 @@ function guardVideoTaskQuery(task: PendingTask, signal: AbortSignal) {
 export function pauseVideoNodeTask(nodeId: string, expectedTaskId?: string, error?: unknown, reason?: keyof typeof VIDEO_PAUSE_MESSAGES): VideoPollingPausedError | undefined {
   const task = loadAll().find((item) => item.nodeId === nodeId);
   if (!task || !isRecoverableVideoTask(task) || (expectedTaskId !== undefined && task.taskId !== expectedTaskId)) return undefined;
+  const comfyQueryHttpStatus = task.taskType === 'comfyui'
+    ? error instanceof ComfyQueryAuthorizationError ? error.status : task.comfyQueryHttpStatus : undefined;
   updatePendingTask(nodeId, {
     videoRecoveryState: 'paused',
     videoRecoveryMessage: error instanceof MediaPersistenceError ? error.message : reason ? VIDEO_PAUSE_MESSAGES[reason] : undefined,
     mediaRecoveryState: reason === 'delivery_pending' ? 'delivery_pending' : 'query_paused',
     mediaRecoveryReason: reason ?? 'query_interrupted',
+    comfyQueryHttpStatus,
   }, task.taskId);
   if (isCurrentVideoTask(task)) {
     useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'idle', error: undefined, videoTaskState: 'paused',
       mediaTaskState: reason === 'delivery_pending' ? 'delivery_pending' : 'paused', mediaTaskStage: undefined,
       generationStartedAt: task.videoGenerationStartedAt });
   }
-  return new VideoPollingPausedError(receiptForTask(task));
+  return new VideoPollingPausedError(receiptForTask(task), getComfyQueryAuthorizationMessage(comfyQueryHttpStatus));
 }
 
 /** 仅在已取得任务 ID 的查询超时时转换控制状态；提交超时和远端失败不能冒充可恢复任务。 */
@@ -617,7 +628,7 @@ function inferLegacyProviderConfigId(task: LegacyPendingTask): string | undefine
 }
 
 function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
-  const { baseUrl: legacyBaseUrl, ...safeTask } = task;
+  const { baseUrl: legacyBaseUrl, comfyQueryHttpStatus, ...safeTask } = task;
   delete safeTask.apiKey;
   const providerConfigId = inferLegacyProviderConfigId(task);
   const parameters = sanitizeMediaParameters(task.mediaContext?.parameters);
@@ -626,6 +637,7 @@ function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
     nodeType: getGenerationNodeType(safeTask.nodeType),
     providerConfigId,
     ...(task.taskType === 'comfyui' && legacyBaseUrl ? { baseUrl: legacyBaseUrl } : {}),
+    ...(task.taskType === 'comfyui' && (comfyQueryHttpStatus === 401 || comfyQueryHttpStatus === 403) ? { comfyQueryHttpStatus } : {}),
     ...(task.mediaContext ? { mediaContext: { projectId: task.projectId,
       conversationId: task.mediaContext.conversationId, messageId: task.mediaContext.messageId,
       deliveryMode: task.mediaContext.deliveryMode, canvasNodeId: task.mediaContext.canvasNodeId, modelId: task.mediaContext.modelId,
@@ -1335,7 +1347,7 @@ async function resumeComfyUI(task: PendingTask, parentSignal?: AbortSignal): Pro
 
   try {
     beginComfyNodeDelivery(nodeId, taskId);
-    updatePendingTask(nodeId, { comfyRecoveryState: undefined }, taskId);
+    updatePendingTask(nodeId, { comfyRecoveryState: undefined, comfyQueryHttpStatus: undefined }, taskId);
     // 与实时生成共用轮询：ComfyUI 重启后 promptId 会彻底消失，那里会连 /queue 一起确认并直接判失败，
     // 不再让恢复出来的任务空转一小时
     const { url } = await pollComfyHistory(
@@ -1374,9 +1386,14 @@ async function resumeComfyUI(task: PendingTask, parentSignal?: AbortSignal): Pro
     if (err instanceof ComfyPendingError) {
       // 图片/音频切走后仍需恢复入口；视频另用 canvas_changed 保留本地交付状态。
       if (!(err instanceof CanvasResultStaleError) || nodeType !== 'ai-video') {
-        updatePendingTask(nodeId, { comfyRecoveryState: resultReceived ? 'save_pending' : 'disconnected' }, taskId);
+        updatePendingTask(nodeId, { comfyRecoveryState: resultReceived ? 'save_pending' : 'disconnected',
+          comfyQueryHttpStatus: err instanceof ComfyQueryAuthorizationError ? err.status : undefined }, taskId);
       }
-      if (nodeType === 'ai-video' && pauseVideoNodeTask(nodeId, taskId, undefined, err instanceof CanvasResultStaleError ? 'canvas_changed' : 'query_interrupted')) return;
+      if (err instanceof ComfyQueryAuthorizationError) {
+        pauseMediaTask(receiptForTask(task), err, 'query_interrupted');
+        return;
+      }
+      if (nodeType === 'ai-video' && pauseVideoNodeTask(nodeId, taskId, err, err instanceof CanvasResultStaleError ? 'canvas_changed' : 'query_interrupted')) return;
       if (isCurrent()) useAppStore.getState().updateNodeDataTransient(nodeId, { status: 'error', error: err.message });
     } else {
       await maybeAutoReleaseComfyMemory(
@@ -2063,7 +2080,7 @@ export async function resumePendingTasks(projectId: string): Promise<void> {
         pauseMediaTask(receiptForTask(task), undefined, 'submit_unknown');
         continue;
       }
-      if (task.mediaRecoveryState || (task.nodeType === 'ai-video' && task.videoRecoveryState === 'paused')) {
+      if (task.mediaRecoveryState || task.comfyQueryHttpStatus || (task.nodeType === 'ai-video' && task.videoRecoveryState === 'paused')) {
         pauseMediaTask(receiptForTask(task), undefined,
           task.mediaRecoveryState === 'delivery_pending' ? 'delivery_pending' : task.mediaRecoveryReason ?? 'query_interrupted');
         continue;

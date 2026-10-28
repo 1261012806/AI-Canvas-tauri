@@ -8,6 +8,7 @@ commands.allow = [
   "list_comfyui_catalog",
   "install_comfyui_extension",
   "install_comfyui_dependencies",
+  "cancel_comfyui_dependencies",
   "get_comfyui_launch_settings",
   "save_comfyui_launch_settings",
   "start_comfyui_managed",
