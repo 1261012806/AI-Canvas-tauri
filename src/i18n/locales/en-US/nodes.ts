@@ -1350,6 +1350,12 @@ const nodes = {
   '无法编码视频帧': 'Cannot encode the video frame',
   '按 @ 引用连线图片或完整分镜表，描述空间、人物走位和运镜；\nShift+Enter 生成 AI 镜头预演，Enter 换行。':
     'Reference a connected image or the full shot list with @, then describe the space, blocking and camera movement;\nShift+Enter generates an AI shot preview, Enter inserts a line break.',
+  "未添加参考素材": "No reference media added",
+  "未添加参考素材，将仅根据提示词生成视频，是否继续？": "No reference media has been added. Generate the video using only the prompt?",
+  "继续生成": "Continue generation",
+  "返回添加参考": "Go back and add references",
+  "画布或生成输入已变化，请重新生成": "The canvas or generation inputs changed. Start generation again.",
+  "参考素材检查失败，请检查引用后重试": "Reference media validation failed. Check your references and try again.",
 };
 
 export default nodes;

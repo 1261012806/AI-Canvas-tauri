@@ -392,9 +392,24 @@ function AINodeDialog() {
       // 源视频的生成映射会创建新对象，异步加载后仍核对原始节点身份。
       const originalData = latestNode!.data;
       const originalProjectId = store.currentProjectId;
-      const { executeGeneration } = await import('../../services/generationService');
+      const [{ executeGeneration }, referenceConfirmation] = await Promise.all([
+        import('../../services/generationService'),
+        latestData.type === 'ai-video' ? import('../../services/videoReferenceConfirmation') : Promise.resolve(null),
+      ]);
       const live = useAppStore.getState();
-      if (live.currentProjectId !== originalProjectId || live.nodes.find((item) => item.id === latestNode!.id)?.data !== originalData) return;
+      if (live.currentProjectId !== originalProjectId || live.activeNodeId !== latestNode!.id
+        || live.nodes.find((item) => item.id === latestNode!.id)?.data !== originalData) return;
+      if (referenceConfirmation) {
+        try {
+          if (!await referenceConfirmation.confirmVideoReferencesBeforeGeneration(latestNode!.id, overridePrompt)) return;
+        } catch {
+          showToast(t('参考素材检查失败，请检查引用后重试'), 'error');
+          return;
+        }
+        const latest = useAppStore.getState();
+        if (latest.currentProjectId !== originalProjectId || latest.activeNodeId !== latestNode!.id
+          || latest.nodes.find((item) => item.id === latestNode!.id)?.data !== originalData) return;
+      }
       await executeGeneration(latestNode!.id, overridePrompt);
       return;
     }

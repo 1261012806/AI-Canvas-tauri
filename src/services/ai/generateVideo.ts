@@ -1,7 +1,7 @@
 /**
  * ai/generateVideo — 视频生成入口
  */
-import { isRemoteMediaUrl } from '../../utils/mediaUrl';
+import { isLocalMediaUrl, isRemoteMediaUrl } from '../../utils/mediaUrl';
 import { resolveComfyRefmodMentionInputs } from '../../utils/comfyRefmodMention';
 import { videoInputData, videoInputFingerprint } from '../videoBatchPlanning';
 import { useAppStore } from '../../store/useAppStore';
@@ -247,7 +247,7 @@ async function resolveVideoReferenceInput(
   nodeId: string | undefined,
   /** 调用方直接给定的参考媒体；排在最前，保证首/尾帧角色按调用方的顺序分配 */
   explicitReferences: readonly MediaReference[] = [],
-  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; sortKeyframes?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string; provider?: string } = {},
+  options: { promptFirst?: boolean; preserveDeclaredRoles?: boolean; sortKeyframes?: boolean; target?: 'remote' | 'local'; apimartModel?: string; legacyPrompt?: string; provider?: string; suppressWarning?: boolean } = {},
 ): Promise<VideoGenerationReferenceInput> {
   const promptInput = await resolvePromptWithMediaRefs(rawPrompt, { preserveBindings: true });
   const connected = collectConnectedReferenceMedia(nodeId);
@@ -293,7 +293,7 @@ async function resolveVideoReferenceInput(
   const isFrame = (reference: MediaReference) => reference.role === 'first_frame' || reference.role === 'last_frame';
   const noteReferences = imageLayout === 'frame-fields' ? references.filter((reference) => !isFrame(reference))
     : imageLayout === 'frames-first' ? [...references.filter(isFrame), ...references.filter((reference) => !isFrame(reference))] : references;
-  warnIfTooManyReferences({
+  if (!options.suppressWarning) warnIfTooManyReferences({
     image: imageUrls.length,
     video: videoUrls.length,
     audio: audioUrls.length,
@@ -310,6 +310,43 @@ async function resolveVideoReferenceInput(
     operation: resolveVideoGenerationOperation(imageUrls, videoUrls),
     references,
   };
+}
+
+/** Read-only preflight: resolve real inputs without uploading or submitting a task. */
+export async function hasVideoReferenceContent(params: AIVideoGenParams): Promise<boolean> {
+  const state = useAppStore.getState();
+  const options = { durationSeconds: params.seedanceDuration };
+  const expandedInputs = params.workflowInputs && Object.fromEntries(Object.entries(params.workflowInputs)
+    .map(([key, value]) => [key, expandShotlistRowMentions(value, state.nodes, options)]));
+  const input = resolveComfyRefmodMentionInputs({
+    prompt: expandShotlistRowMentions(params.prompt, state.nodes, options),
+    workflowInputs: expandedInputs,
+    manual: params.comfyRefmods,
+  });
+  // RefMod is a deliberate character reference even when no image is attached.
+  if (input.comfyRefmods.length) return true;
+  const referenceInput = await resolveVideoReferenceInput(input.prompt, params.nodeId, params.referenceMedia ?? [], {
+    provider: params.provider, target: 'local', preserveDeclaredRoles: true, suppressWarning: true,
+  });
+  if (referenceInput.references?.length) return true;
+
+  const workflow = state.workflows.find((item) => item.id === params.workflowId);
+  // ComfyUI explicit media slots are resolved separately from the main prompt.
+  // Cloud workflows consume references by declared media source, not arbitrary
+  // scalar inputs; their actual media is already included above.
+  if (!workflow || (workflow.adapterType && workflow.adapterType !== 'comfyui')) return false;
+  for (const io of workflow.ioNodes ?? []) {
+    if (!['image', 'video', 'audio'].includes(io.type)) continue;
+    const raw = input.workflowInputs?.[io.nodeId];
+    if (raw === undefined || !raw.trim()) continue;
+    const media = await resolveVideoReferenceInput(raw, undefined, [], {
+      target: 'local', preserveDeclaredRoles: true, suppressWarning: true, provider: params.provider,
+    });
+    if (media.references?.length) return true;
+    const url = (await resolveNodeReferencesAsync(raw)).trim();
+    if (isLocalMediaUrl(url) || isRemoteMediaUrl(url)) return true;
+  }
+  return false;
 }
 
 function assertVideoOperationSupported(
