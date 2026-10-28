@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Webview};
 
@@ -45,14 +46,14 @@ pub(crate) struct DownloadMetadata {
     pub(crate) content_type: Option<String>,
 }
 
-fn is_cancelled(task_id: &str) -> Result<bool, String> {
+pub(crate) fn is_cancelled(task_id: &str) -> Result<bool, String> {
     cancelled_transfers()
         .lock()
         .map(|items| items.contains(task_id))
         .map_err(|_| "读取文件传输取消状态失败".to_string())
 }
 
-fn clear_cancelled(task_id: &str) {
+pub(crate) fn clear_cancelled(task_id: &str) {
     if let Ok(mut items) = cancelled_transfers().lock() {
         items.remove(task_id);
     }
@@ -278,6 +279,134 @@ where
     })();
     clear_cancelled(task_id);
     result
+}
+
+/// 模型下载一次尝试的失败类别；本地 I/O、取消与校验失败不能通过换源重试。
+#[derive(Debug)]
+pub(crate) struct DownloadFailure {
+    pub(crate) message: String,
+    pub(crate) retryable: bool,
+}
+
+impl DownloadFailure {
+    fn terminal(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retryable: false }
+    }
+}
+
+fn model_download_status(status: reqwest::StatusCode) -> Result<(), DownloadFailure> {
+    if status == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(DownloadFailure::terminal("模型下载返回不完整的分段内容"));
+    }
+    if !status.is_success() {
+        return Err(DownloadFailure {
+            message: format!("模型下载返回 HTTP {}", status.as_u16()),
+            // 公开模型的来源/CDN 拒绝或镜像未同步可切源；最终仍须完整内容校验。
+            retryable: matches!(status.as_u16(), 403 | 404 | 410)
+                || crate::github_fallback::transient_status(status.as_u16()),
+        });
+    }
+    Ok(())
+}
+
+fn model_transfer_failure(
+    network_failed: bool,
+    cancelled: bool,
+    validation_failed: bool,
+) -> DownloadFailure {
+    if cancelled {
+        return DownloadFailure::terminal("文件传输已取消");
+    }
+    if network_failed {
+        return DownloadFailure {
+            message: "模型下载连接或读取中断，请检查网络连接".into(),
+            retryable: true,
+        };
+    }
+    DownloadFailure::terminal(if validation_failed {
+        "模型文件大小或 SHA-256 校验失败，文件未安装；请重试或检查下载源"
+    } else {
+        "模型文件保存失败，请检查磁盘空间和模型目录写入权限"
+    })
+}
+
+struct ModelResponseReader {
+    response: Response,
+    network_failed: bool,
+}
+
+impl Read for ModelResponseReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.response.read(buffer).inspect_err(|_| self.network_failed = true)
+    }
+}
+
+/// 固定模型下载入口使用；取消标记由外层整个选源/重试生命周期统一清理。
+pub(crate) fn download_model_to_file_attempt<V>(
+    app: &AppHandle,
+    task_id: &str,
+    url: &str,
+    destination: &Path,
+    max_bytes: Option<u64>,
+    validate_temp: V,
+) -> Result<FileTransferResult, DownloadFailure>
+where
+    V: FnOnce(&Path, &DownloadMetadata) -> Result<(), String>,
+{
+    let cancelled = || is_cancelled(task_id).map_err(|_| DownloadFailure::terminal("读取文件传输取消状态失败"));
+    if cancelled()? {
+        return Err(DownloadFailure::terminal("文件传输已取消"));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("AI-Canvas/model-download")
+        .connect_timeout(Duration::from_secs(10))
+        // blocking Response 每次 Read 单独计时；不限制整个大模型的下载用时。
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|_| DownloadFailure::terminal("创建模型下载客户端失败"))?;
+    let response = client.get(url).send().map_err(|error| {
+        if cancelled().unwrap_or(true) {
+            return DownloadFailure::terminal("文件传输已取消");
+        }
+        DownloadFailure {
+            message: "模型下载连接失败，请检查网络连接".into(),
+            retryable: error.is_timeout() || error.is_connect() || error.is_body(),
+        }
+    })?;
+    if cancelled()? {
+        return Err(DownloadFailure::terminal("文件传输已取消"));
+    }
+    model_download_status(response.status())?;
+    let metadata = DownloadMetadata {
+        content_length: response.content_length(),
+        content_type: response.headers().get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim).map(str::to_string),
+    };
+    if let (Some(size), Some(limit)) = (metadata.content_length, max_bytes) {
+        if size > limit {
+            return Err(DownloadFailure::terminal("模型文件超过允许的体积上限"));
+        }
+    }
+    let mut reader = ModelResponseReader { response, network_failed: false };
+    let mut validation_failed = false;
+    let _ = app.emit(PROGRESS_EVENT, FileTransferProgress {
+        task_id: task_id.to_owned(), transferred_bytes: 0, total_bytes: metadata.content_length,
+    });
+    let result = stream_to_file(
+        task_id, &mut reader, destination, metadata.content_length,
+        metadata.content_length.or(max_bytes), max_bytes,
+        || is_cancelled(task_id),
+        |transferred_bytes| { let _ = app.emit(PROGRESS_EVENT, FileTransferProgress {
+            task_id: task_id.to_owned(), transferred_bytes, total_bytes: metadata.content_length,
+        }); },
+        |path| validate_temp(path, &metadata).inspect_err(|_| validation_failed = true),
+    );
+    result.map(|total_bytes| FileTransferResult {
+        path: destination.to_string_lossy().into_owned(), total_bytes,
+        content_type: metadata.content_type,
+    }).map_err(|_| model_transfer_failure(reader.network_failed, cancelled().unwrap_or(true), validation_failed))
 }
 
 /// 复用流式落盘边界，允许固定下载入口保留各自的 HTTP 超时和进度协议。
@@ -908,6 +1037,43 @@ pub fn cancel_file_transfer(task_id: String) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn model_download_only_retries_transient_http_responses() {
+        assert!(model_download_status(reqwest::StatusCode::OK).is_ok());
+        for code in [403, 404, 408, 410, 429, 500, 502, 503, 504] {
+            let failure = model_download_status(reqwest::StatusCode::from_u16(code).unwrap()).unwrap_err();
+            assert!(failure.retryable, "HTTP {code} 应允许切源");
+        }
+        for code in [206, 301, 400, 401] {
+            let failure = model_download_status(reqwest::StatusCode::from_u16(code).unwrap()).unwrap_err();
+            assert!(!failure.retryable, "HTTP {code} 不应触发网络重试");
+        }
+    }
+
+    #[test]
+    fn model_download_cancellation_overrides_a_simultaneous_network_failure() {
+        let cancelled = model_transfer_failure(true, true, false);
+        assert!(!cancelled.retryable);
+        assert_eq!(cancelled.message, "文件传输已取消");
+        assert!(model_transfer_failure(true, false, false).retryable);
+        let invalid = model_transfer_failure(false, false, true);
+        assert!(!invalid.retryable);
+        assert_eq!(invalid.message, "模型文件大小或 SHA-256 校验失败，文件未安装；请重试或检查下载源");
+        assert!(!model_transfer_failure(false, false, false).retryable);
+    }
+
+    #[test]
+    fn model_download_cancel_marker_remains_until_the_outer_task_cleans_it() {
+        let task_id = "model-download-cancel-lifecycle";
+        cancel_file_transfer(task_id.into()).unwrap();
+        assert!(is_cancelled(task_id).unwrap());
+        let failure = model_transfer_failure(true, is_cancelled(task_id).unwrap(), false);
+        assert!(!failure.retryable);
+        assert!(is_cancelled(task_id).unwrap());
+        clear_cancelled(task_id);
+        assert!(!is_cancelled(task_id).unwrap());
+    }
 
     #[test]
     fn video_download_accepts_recognizable_containers_without_requiring_a_decoder() {

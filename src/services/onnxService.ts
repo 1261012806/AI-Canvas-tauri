@@ -4,6 +4,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import speechModels from '../constants/localSpeechModels.json';
 
 /** 图像超分结果 */
 export interface UpscaleResult {
@@ -72,17 +73,31 @@ const MODEL_REGISTRY: Record<string, string> = {
     'https://huggingface.co/AXERA-TECH/Real-ESRGAN/resolve/main/onnx/realesrgan-x4.onnx',
   'rmbg-1.4.onnx':
     'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx',
-  // SenseVoice Small 的 int8 量化导出（约 230MB）+ SentencePiece 词表
-  'sensevoice-small-int8.onnx':
-    'https://huggingface.co/OpenVoiceOS/sensevoice-small-onnx/resolve/main/model_int8.onnx',
-  'sensevoice-vocab.txt':
-    'https://huggingface.co/OpenVoiceOS/sensevoice-small-onnx/resolve/main/vocab.txt',
+  // 与原生校验器共用固定 revision、大小和 SHA-256；不跟随上游 main 漂移。
+  ...Object.fromEntries(speechModels.assets.map((asset) => [asset.name, asset.url])),
 };
 
 /** 语音转文本用的模型文件名 */
 export const ASR_MODEL = 'sensevoice-small-int8.onnx';
 /** 语音转文本用的词表文件名 */
 export const ASR_VOCAB = 'sensevoice-vocab.txt';
+
+/** 只承载宿主生成的安全下载原因，不把原始 URL、文件路径或异常正文带入插件 UI。 */
+export class LocalSpeechModelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LocalSpeechModelError';
+  }
+}
+
+/** 安装准备与后台复刻共用同一组权重、词表检查，原生端负责完整性校验。 */
+export async function inspectSpeechModels(): Promise<{ ready: boolean; missing: string[] }> {
+  const files = await Promise.all(speechModels.assets.map(async ({ name }) => ({
+    name, path: await checkModelExists(name),
+  })));
+  const missing = files.filter((file) => !file.path).map((file) => file.name);
+  return { ready: missing.length === 0, missing };
+}
 
 function createModelDownloadTaskId(): string {
   return globalThis.crypto?.randomUUID?.()
@@ -177,6 +192,11 @@ export async function downloadModel(
   } catch (error) {
     if (options?.signal?.aborted) {
       throw new DOMException('Model download aborted', 'AbortError');
+    }
+    if (speechModels.assets.some((asset) => asset.name === modelName)) {
+      const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+      throw new LocalSpeechModelError(message.startsWith('语音模型下载失败：') && message.length <= 400
+        ? message : '本地语音模型准备失败，请检查模型下载连接和本地存储权限');
     }
     throw error;
   } finally {

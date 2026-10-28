@@ -3,15 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   store: { currentProjectId: 'p' },
   source: { nodeId: 'video', filePath: 'private-source.mp4', sourceUrl: 'asset://source', fileName: 'video' },
-  checkModel: vi.fn(), download: vi.fn(), transcribe: vi.fn(), save: vi.fn(), input: vi.fn(),
+  inspectSpeech: vi.fn(), download: vi.fn(), transcribe: vi.fn(), save: vi.fn(), input: vi.fn(),
   dispose: vi.fn(), canDecode: vi.fn(), audioTrack: vi.fn(), buffers: vi.fn(),
 }));
 vi.mock('../../src/store/useAppStore', () => ({ useAppStore: { getState: () => mocks.store } }));
 vi.mock('../../src/store/store.utils', () => ({ generateId: () => 'fixed-id' }));
-vi.mock('../../src/services/onnxService', () => ({
-  ASR_MODEL: 'sensevoice-small-int8.onnx', ASR_VOCAB: 'sensevoice-vocab.txt',
-  checkModelExists: mocks.checkModel, downloadModel: mocks.download, speechToText: mocks.transcribe,
-}));
+vi.mock('../../src/services/onnxService', async (importOriginal) => {
+  const { LocalSpeechModelError } = await importOriginal<typeof import('../../src/services/onnxService')>();
+  return {
+    LocalSpeechModelError,
+    ASR_MODEL: 'sensevoice-small-int8.onnx', ASR_VOCAB: 'sensevoice-vocab.txt',
+    inspectSpeechModels: mocks.inspectSpeech, downloadModel: mocks.download, speechToText: mocks.transcribe,
+  };
+});
 vi.mock('../../src/services/fileService', () => ({ saveBinaryToProjectData: mocks.save }));
 vi.mock('../../src/services/videoEditorControlService', () => ({ bindVideoEditorMedia: () => ({ ...mocks.source }) }));
 vi.mock('../../src/services/videoEditorInspectionService', () => ({ controlledClipUrl: () => 'asset://source' }));
@@ -20,6 +24,7 @@ vi.mock('mediabunny', () => ({ AudioBufferSink: class { buffers = mocks.buffers;
 
 import { extractReplicaSegmentAudio, inspectReplicaSpeechModels, prepareReplicaSpeechModels,
   transcribeReplicaSegmentAudio } from '../../src/services/plugins/pluginVideoReplicaAudioService';
+import { LocalSpeechModelError } from '../../src/services/onnxService';
 
 function chunk(timestamp: number, channels: number[][], sampleRate = 16_000) {
   return { timestamp, buffer: { sampleRate, numberOfChannels: channels.length, length: channels[0].length,
@@ -36,7 +41,7 @@ beforeEach(() => {
   mocks.canDecode.mockResolvedValue(true); mocks.audioTrack.mockResolvedValue({ canDecode: mocks.canDecode });
   mocks.input.mockResolvedValue({ dispose: mocks.dispose, computeDuration: async () => 60, getPrimaryAudioTrack: mocks.audioTrack });
   mocks.save.mockResolvedValue({ filePath: 'private-output.wav', assetUrl: 'asset://audio' });
-  mocks.checkModel.mockResolvedValue('private-model-path'); mocks.download.mockResolvedValue({});
+  mocks.inspectSpeech.mockResolvedValue({ ready: true, missing: [] }); mocks.download.mockResolvedValue({});
   mocks.transcribe.mockResolvedValue({ text: '  原片对白  ', duration_seconds: 0.001 });
   decodeChunks([chunk(0, [Array(16).fill(0.5)])]);
 });
@@ -116,9 +121,10 @@ describe('视频复刻分段音频', () => {
 });
 
 describe('视频复刻本地对白识别', () => {
-  it('inspects both fixed files and downloads only through explicit preparation', async () => {
-    mocks.checkModel.mockResolvedValueOnce(null).mockResolvedValueOnce('vocab');
+  it('uses shared speech-model readiness and downloads only through explicit preparation', async () => {
+    mocks.inspectSpeech.mockResolvedValueOnce({ ready: false, missing: ['sensevoice-small-int8.onnx'] });
     expect(await inspectReplicaSpeechModels()).toEqual({ ready: false });
+    expect(mocks.inspectSpeech).toHaveBeenCalledOnce();
     expect(mocks.download).not.toHaveBeenCalled();
     const controller = new AbortController(); await prepareReplicaSpeechModels(controller.signal);
     expect(mocks.download.mock.calls.map((call) => call[0])).toEqual(['sensevoice-small-int8.onnx', 'sensevoice-vocab.txt']);
@@ -138,8 +144,26 @@ describe('视频复刻本地对白识别', () => {
     mocks.download.mockRejectedValueOnce(new Error('G:/secret/model.onnx token'));
     await expect(prepareReplicaSpeechModels()).rejects.toThrow('本地语音模型准备失败');
   });
+  it('preserves only typed safe speech-model failures from readiness and download', async () => {
+    const failure = new LocalSpeechModelError('语音模型下载未完成，请切换下载来源后重试');
+    mocks.inspectSpeech.mockRejectedValueOnce(failure);
+    await expect(inspectReplicaSpeechModels()).rejects.toBe(failure);
+    expect(mocks.download).not.toHaveBeenCalled();
+    mocks.download.mockRejectedValueOnce(failure);
+    await expect(prepareReplicaSpeechModels()).rejects.toBe(failure);
+    expect(mocks.download).toHaveBeenCalledOnce();
+  });
+  it('prioritizes cancellation over a safe download failure and stops before the next file', async () => {
+    const controller = new AbortController();
+    mocks.download.mockImplementationOnce(async () => {
+      controller.abort();
+      throw new LocalSpeechModelError('语音模型下载未完成，请重试');
+    });
+    await expect(prepareReplicaSpeechModels(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mocks.download).toHaveBeenCalledOnce();
+  });
   it('does not implicitly download a missing recognizer', async () => {
-    mocks.checkModel.mockResolvedValue(null);
+    mocks.inspectSpeech.mockResolvedValue({ ready: false, missing: ['sensevoice-small-int8.onnx', 'sensevoice-vocab.txt'] });
     await expect(transcribeReplicaSegmentAudio({ filePath: 'private-output.wav' }, { assertFresh: vi.fn() })).rejects.toThrow('尚未准备');
     expect(mocks.transcribe).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
   });

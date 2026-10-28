@@ -15,6 +15,7 @@ import {
 import type { PluginMarketplaceDownloadProgress, PluginMarketplaceItem } from '../../services/plugins/pluginMarketplace';
 import { parsePluginManifest } from '../../services/plugins/pluginManifest';
 import { getPythonPluginRuntimeStatus } from '../../services/plugins/pluginRuntime';
+import { pluginUsesSpeechModels, usePluginSpeechModels } from '../../hooks/usePluginSpeechModels';
 import { useAppStore } from '../../store/useAppStore';
 import { isExternalDropCaptured, setExternalDropCaptured } from '../../utils/dropCapture';
 import { formatSize } from '../../utils/assetFormat';
@@ -31,6 +32,7 @@ import AnimatedButton from '../shared/AnimatedButton';
 import ModalOverlay from '../shared/ModalOverlay';
 import PopupCloseButton from '../shared/PopupCloseButton';
 import DownloadProgress from '../shared/DownloadProgress';
+import ModelDownloadDialog from '../shared/ModelDownloadDialog';
 
 const CATEGORY_LABELS: Record<PluginCategory, string> = {
   content: '内容处理',
@@ -366,6 +368,7 @@ export default function PluginSettings() {
   // 目录授权只用于当前面板的开发重载，不写入插件记录或普通配置。
   const [localDirectories, setLocalDirectories] = useState<Record<string, string>>({});
   const plugins = useAppStore((state) => state.installedPlugins);
+  const speechModels = usePluginSpeechModels(plugins.some((plugin) => pluginUsesSpeechModels(plugin.manifest)));
   const installPluginBundle = useAppStore((state) => state.installPluginBundle);
   const setPluginEnabled = useAppStore((state) => state.setPluginEnabled);
   const deletePlugin = useAppStore((state) => state.deletePlugin);
@@ -465,7 +468,9 @@ export default function PluginSettings() {
   }, [marketplaceItems, marketplaceQuery]);
 
   const installGithubPlugin = async (repository: string, item?: PluginMarketplaceItem) => {
-    if (!repository.trim() || installingRepository) return;
+    if (!repository.trim() || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     setInstallingRepository(item ? pluginMarketplaceKey(item) : repository);
     setRepositoryProgress(null);
     let downloading = true;
@@ -481,6 +486,7 @@ export default function PluginSettings() {
       const action = plugins.some((installed) => installed.id === plugin.manifest.id) ? '更新' : '安装';
       const sourceDigest = await reviewPluginInstall(plugin.manifest, plugin.source, action, plugin.repository);
       if (!sourceDigest) return;
+      if (!(await speechModels.prepare(plugin.manifest))) return;
       await installPluginBundle(plugin.manifestText, plugin.source, {
         trustedPythonConfirmed: plugin.manifest.runtime === 'python',
         expectedSourceDigest: sourceDigest,
@@ -493,6 +499,8 @@ export default function PluginSettings() {
       showToast(pluginOperationErrorMessage(error, t('GitHub 插件安装失败')), 'error');
     } finally {
       downloading = false;
+      busyRef.current = false;
+      setBusy(false);
       setInstallingRepository('');
       setRepositoryProgress(null);
     }
@@ -543,6 +551,7 @@ export default function PluginSettings() {
       const resourcePayloads = await resolveResourcePayloads(files, prefix, manifest);
       const sourceDigest = await reviewPluginInstall(manifest, source, action, t('本地文件夹'));
       if (!sourceDigest) return;
+      if (!(await speechModels.prepare(manifest))) return;
       await installPluginBundle(manifestText, source, {
         trustedPythonConfirmed: manifest.runtime === 'python',
         expectedSourceDigest: sourceDigest,
@@ -571,6 +580,7 @@ export default function PluginSettings() {
       const action = plugins.some((installed) => installed.id === manifest.id) ? '更新' : '安装';
       const sourceDigest = await reviewPluginInstall(manifest, source, action, t('本地文件夹'));
       if (!sourceDigest) return;
+      if (!(await speechModels.prepare(manifest))) return;
       await installPluginBundle(manifestText, source, {
         trustedPythonConfirmed: manifest.runtime === 'python',
         expectedSourceDigest: sourceDigest,
@@ -649,6 +659,20 @@ export default function PluginSettings() {
     await setPluginEnabled(plugin.id, enabled, {
       trustedPythonConfirmed: enabled && plugin.manifest.runtime === 'python',
     });
+  };
+
+  const prepareInstalledSpeechModels = async (manifest: PluginManifest) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      if (await speechModels.prepare(manifest, false)) showToast(t('语音模型已就绪'));
+    } catch (error) {
+      showToast(pluginOperationErrorMessage(error, t('语音模型准备失败')), 'error');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
 
   const handleRegistryRepair = async () => {
@@ -882,7 +906,7 @@ export default function PluginSettings() {
           />
           <AnimatedButton
             type="button"
-            disabled={!repositoryInput.trim() || Boolean(installingRepository)}
+            disabled={!repositoryInput.trim() || busy}
             className="shrink-0 rounded-lg bg-indigo-500/15 px-3 text-xs font-medium text-indigo-400 hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void installGithubPlugin(repositoryInput)}
           >
@@ -942,7 +966,7 @@ export default function PluginSettings() {
             const updateAvailable = installed
               ? isUpdateAvailable(item.manifest.version, installed.manifest.version)
               : false;
-            const actionDisabled = Boolean(installed && !updateAvailable) || Boolean(installingRepository);
+            const actionDisabled = Boolean(installed && !updateAvailable) || busy;
             return (
               <article key={itemKey} className="rounded-lg border border-canvas-border bg-canvas-surface p-3">
                 <div className="flex items-start gap-3">
@@ -1055,6 +1079,20 @@ export default function PluginSettings() {
                   <p className="mt-1 text-[11px] leading-4 text-canvas-text-secondary">
                     {plugin.manifest.description || t('未提供说明')}
                   </p>
+                  {pluginUsesSpeechModels(plugin.manifest) && speechModels.ready !== true && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-canvas-text-muted">{t('对白转写使用本地语音模型')}</span>
+                      <AnimatedButton
+                        type="button"
+                        disabled={busy || speechModels.isPreparing}
+                        className="ui-btn ui-btn--sm"
+                        onClick={() => void prepareInstalledSpeechModels(plugin.manifest)}
+                      >
+                        <Icon icon="lucide:download" width={12} height={12} />
+                        {t('准备语音模型')}
+                      </AnimatedButton>
+                    </div>
+                  )}
                   <div className="mt-2 flex flex-wrap gap-1">
                     {nodeTypes.map((nodeType) => (
                       <span key={nodeType} className="rounded bg-canvas-surface px-1.5 py-0.5 text-[10px] text-canvas-text-muted">
@@ -1130,6 +1168,19 @@ export default function PluginSettings() {
           </div>
         )}
       </section>
+
+      {speechModels.isDownloading && (
+        <ModelDownloadDialog
+          type="asr"
+          showPrompt={false}
+          showDownloading
+          progress={speechModels.progress}
+          downloadLabel={speechModels.downloadLabel}
+          onConfirm={speechModels.cancel}
+          onCancel={speechModels.cancel}
+          zIndex={300}
+        />
+      )}
 
       <ModalOverlay
         isOpen={guideOpen}

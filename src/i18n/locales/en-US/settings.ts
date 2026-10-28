@@ -1514,6 +1514,16 @@ const settings = {
   "正在保存设置…": "Saving settings…",
   "设置已加载": "Settings loaded",
   "设置尚未加载完成": "Settings have not finished loading",
+  "请在 Tauri 桌面版中准备语音模型": "Prepare speech models in the Tauri desktop app",
+  "插件「{name}」的对白转写需要本地 SenseVoice 语音模型（约 230 MB）和词表。已存在的文件会复用；下载后可离线使用，不需要 API Key。": "Dialogue transcription in “{name}” needs the local SenseVoice model (about 230 MB) and vocabulary. Existing files are reused. Once downloaded, they work offline without an API key.",
+  "也可以仅安装插件，使用对白转写前再下载模型。": "You can also install just the plugin and download the models before transcribing dialogue.",
+  "下载并继续安装": "Download and continue installation",
+  "仅安装插件": "Install plugin only",
+  "语音模型下载后未通过完整性检查，请重新下载": "Speech models failed the integrity check after downloading. Download them again.",
+  "语音模型已就绪": "Speech models are ready",
+  "语音模型准备失败": "Failed to prepare speech models",
+  "对白转写使用本地语音模型": "Dialogue transcription uses local speech models",
+  "准备语音模型": "Prepare speech models",
 };
 
 export default settings;

@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { generateId } from '../../store/store.utils';
 import { pcmS16LeToWav } from '../ai/modelProtocolHttp';
 import { saveBinaryToProjectData } from '../fileService';
-import { ASR_MODEL, ASR_VOCAB, checkModelExists, downloadModel, speechToText } from '../onnxService';
+import { ASR_MODEL, ASR_VOCAB, LocalSpeechModelError, downloadModel, inspectSpeechModels, speechToText } from '../onnxService';
 import { bindVideoEditorMedia } from '../videoEditorControlService';
 import { controlledClipUrl } from '../videoEditorInspectionService';
 import { createVideoInput } from '../videoEditorMediaService';
@@ -17,8 +17,8 @@ function assertNotAborted(signal?: AbortSignal): void {
 }
 
 export async function inspectReplicaSpeechModels(): Promise<{ ready: boolean }> {
-  const files = await Promise.all([checkModelExists(ASR_MODEL), checkModelExists(ASR_VOCAB)]);
-  return { ready: files.every(Boolean) };
+  const { ready } = await inspectSpeechModels();
+  return { ready };
 }
 
 /** 仅在用户显式选择准备语音模型后调用；下载沿用固定注册表与可取消传输。 */
@@ -29,9 +29,10 @@ export async function prepareReplicaSpeechModels(signal?: AbortSignal): Promise<
       await downloadModel(model, { signal });
       assertNotAborted(signal);
     }
-  } catch {
+  } catch (error) {
     assertNotAborted(signal);
-    throw new Error('本地语音模型准备失败，请检查模型下载连接');
+    if (error instanceof LocalSpeechModelError) throw error;
+    throw new Error('本地语音模型准备失败，请检查模型下载连接', { cause: error });
   }
 }
 

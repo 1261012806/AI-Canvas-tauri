@@ -48,6 +48,8 @@ export interface ModelDownloadDialogProps {
   downloadLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** 嵌套在设置等模态窗口中时，下载遮罩需要高于父窗口。 */
+  zIndex?: number;
 }
 
 export default function ModelDownloadDialog({
@@ -58,6 +60,7 @@ export default function ModelDownloadDialog({
   downloadLabel,
   onConfirm,
   onCancel,
+  zIndex = 15,
 }: ModelDownloadDialogProps) {
   const t = useT();
   const info = MODEL_MAP[type];
@@ -78,7 +81,7 @@ export default function ModelDownloadDialog({
     <>
       {/* ── 下载确认弹窗 ── */}
       {showPrompt && (
-        <div data-tauri-drag-region className="fullscreen-overlay fixed inset-0 flex items-center justify-center bg-black/60" style={{ zIndex: 15 }} onClick={onCancel}>
+        <div data-tauri-drag-region className="fullscreen-overlay fixed inset-0 flex items-center justify-center bg-black/60" style={{ zIndex }} onClick={onCancel}>
           <div
             className="bg-canvas-card border border-canvas-border rounded-xl p-3 max-w-sm mx-4 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
@@ -122,7 +125,7 @@ export default function ModelDownloadDialog({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.25, ease: 'easeOut' }}
-          style={{ zIndex: 15 }}
+          style={{ zIndex }}
         >
           <div className="bg-canvas-card border border-canvas-border rounded-xl px-4 py-3 w-80 max-w-sm mx-4 shadow-2xl text-center">
             {/* Pacman 吃豆人 — 延迟入场，与右下角吉祥物收放衔接 */}

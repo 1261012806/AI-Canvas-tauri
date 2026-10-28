@@ -13,6 +13,13 @@ function findZone(root: unknown): ElementLike | undefined {
   return String(el.props.className).includes('ui-dropzone') ? el : findZone(el.props.children);
 }
 
+function findElement(root: unknown, predicate: (props: ElementLike['props']) => boolean): ElementLike | undefined {
+  if (Array.isArray(root)) return root.map((child) => findElement(child, predicate)).find(Boolean);
+  if (!root || typeof root !== 'object' || !('props' in root)) return undefined;
+  const element = root as ElementLike;
+  return predicate(element.props) ? element : findElement(element.props.children, predicate);
+}
+
 beforeEach(() => { vi.resetModules(); });
 afterEach(() => { vi.doUnmock('react'); vi.unstubAllGlobals(); });
 
@@ -44,6 +51,15 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
   vi.doMock('../../src/components/shared/ModalOverlay', () => ({ default: () => null }));
   const toast = vi.fn();
   const install = vi.fn().mockResolvedValue(undefined);
+  const prepareSpeech = vi.fn().mockResolvedValue(true);
+  const speechModels = {
+    ready: true, isPreparing: false, isDownloading: false, progress: null,
+    downloadLabel: undefined, cancel: vi.fn(), prepare: prepareSpeech,
+  };
+  vi.doMock('../../src/hooks/usePluginSpeechModels', () => ({
+    pluginUsesSpeechModels: (manifest: { requiredCapabilities?: string[] }) => manifest.requiredCapabilities?.includes('video.replicaPipeline') === true,
+    usePluginSpeechModels: () => speechModels,
+  }));
   const paste = vi.fn();
   const store = {
     installedPlugins: [], installPluginBundle: install, showToast: toast,
@@ -69,6 +85,15 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
   const readPackage = vi.fn().mockResolvedValue({
     manifestText, manifest: JSON.parse(manifestText), source: 'define_plugin({"tools": {}})', resourcePayloads: [], directory: 'G:/plugins/example/',
   });
+  const resolveGithub = vi.fn().mockResolvedValue({
+    manifestText, manifest: JSON.parse(manifestText), source: 'define_plugin({"tools": {}})',
+    resourcePayloads: [], repository: 'example/plugin',
+  });
+  vi.doMock('../../src/services/plugins/pluginMarketplace', async () => ({
+    ...await vi.importActual<typeof import('../../src/services/plugins/pluginMarketplace')>('../../src/services/plugins/pluginMarketplace'),
+    resolveGithubPlugin: resolveGithub,
+    loadPluginMarketplace: vi.fn().mockResolvedValue([]),
+  }));
   vi.doMock('../../src/services/fs/pluginPackageFiles', () => ({ readLocalPluginPackage: readPackage, selectNativePluginDirectory: vi.fn() }));
   const confirm = vi.fn().mockResolvedValue(true);
   vi.doMock('../../src/services/confirmDialog', () => ({ confirmAction: confirm }));
@@ -103,7 +128,7 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
   if (options.tauri !== false) await vi.waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
   return {
     zone, render, readPackage, install, confirm, toast, release, subscribe, globalListen, canvas, paste, manifestText,
-    store, renderFull,
+    store, renderFull, prepareSpeech, speechModels, resolveGithub,
     isExternalDropCaptured, dispose,
     finishRegistration: () => finishRegistration?.(release),
     send: async (payload: DragDropEvent) => { await callback?.({ payload }); },
@@ -111,6 +136,87 @@ async function setup(options: { tauri?: boolean; delayedRegistration?: boolean; 
 }
 
 const drop = (x = 300): DragDropEvent => ({ type: 'drop', paths: ['G:/plugins/example'], position: new PhysicalPosition(x, 300) });
+
+async function triggerInstall(harness: Awaited<ReturnType<typeof setup>>, entry: 'native' | 'browser' | 'github') {
+  if (entry === 'native') { await harness.send(drop()); return; }
+  if (entry === 'browser') {
+    await (harness.zone.props.onDrop as (event: unknown) => Promise<void>)({
+      preventDefault: vi.fn(), stopPropagation: vi.fn(),
+      dataTransfer: { items: [], files: [
+        { name: 'manifest.json', text: async () => harness.manifestText },
+        { name: 'main.py', text: async () => 'define_plugin({"tools": {}})' },
+      ] },
+    });
+    return;
+  }
+  const repositoryInput = () => findElement(harness.renderFull(), (props) => props['aria-label'] === 'GitHub 插件仓库地址')!;
+  (repositoryInput().props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'example/plugin' } });
+  (repositoryInput().props.onKeyDown as (event: { key: string }) => void)({ key: 'Enter' });
+}
+
+it.each(['native', 'browser', 'github'] as const)('waits for speech dependency preparation after review and before %s installation', async (entry) => {
+  const h = await setup({ tauri: entry !== 'browser' });
+  let finishPreparation!: (ready: boolean) => void;
+  h.prepareSpeech.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishPreparation = resolve; }));
+  try {
+    const pending = triggerInstall(h, entry);
+    await vi.waitFor(() => expect(h.prepareSpeech).toHaveBeenCalledOnce());
+    expect(h.confirm).toHaveBeenCalledOnce(); expect(h.install).not.toHaveBeenCalled();
+    expect(h.prepareSpeech).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'com.example.drag', name: '拖放插件', runtime: 'python',
+    }));
+    expect(h.confirm.mock.invocationCallOrder[0]).toBeLessThan(h.prepareSpeech.mock.invocationCallOrder[0]);
+    finishPreparation(true); await pending;
+    await vi.waitFor(() => expect(h.install).toHaveBeenCalledOnce());
+    expect(h.prepareSpeech.mock.invocationCallOrder[0]).toBeLessThan(h.install.mock.invocationCallOrder[0]);
+    if (entry === 'github') expect(h.resolveGithub).toHaveBeenCalledOnce();
+  } finally { h.dispose(); }
+});
+
+it.each(['cancelled', 'failed'] as const)('does not stage a plugin when speech dependency preparation is %s', async (outcome) => {
+  const h = await setup();
+  if (outcome === 'cancelled') h.prepareSpeech.mockResolvedValueOnce(false);
+  else h.prepareSpeech.mockRejectedValueOnce(new Error('语音模型下载失败：国内镜像连接超时'));
+  try {
+    await h.send(drop());
+    expect(h.prepareSpeech).toHaveBeenCalledOnce(); expect(h.install).not.toHaveBeenCalled();
+    if (outcome === 'failed') expect(h.toast).toHaveBeenCalledWith('语音模型下载失败：国内镜像连接超时', 'error');
+    else expect(h.toast).not.toHaveBeenCalled();
+  } finally { h.dispose(); }
+});
+
+it('keeps the speech download overlay above settings and wires cancellation to its active transfer', async () => {
+  const h = await setup();
+  h.speechModels.isDownloading = true;
+  try {
+    const overlay = findElement(h.renderFull(), (props) => props.type === 'asr' && props.showDownloading === true);
+    expect(overlay?.props).toMatchObject({ zIndex: 300, showPrompt: false });
+    (overlay!.props.onCancel as () => void)();
+    expect(h.speechModels.cancel).toHaveBeenCalledOnce();
+  } finally { h.dispose(); }
+});
+
+it.each(['ready', 'cancelled', 'failed'] as const)('prepares missing speech models from an installed card without reinstalling (%s)', async (outcome) => {
+  const h = await setup();
+  const manifest = { ...JSON.parse(h.manifestText), apiVersion: 2, requiredCapabilities: ['video.replicaPipeline'] };
+  h.store.installedPlugins = [{ id: manifest.id, enabled: true, manifest, source: '',
+    sourceDigest: 'a'.repeat(64), revisionDigest: 'b'.repeat(64), installedAt: 1, updatedAt: 1 }];
+  h.speechModels.ready = false;
+  if (outcome === 'cancelled') h.prepareSpeech.mockResolvedValueOnce(false);
+  if (outcome === 'failed') h.prepareSpeech.mockRejectedValueOnce(new Error('语音模型下载失败：国内镜像连接超时'));
+  try {
+    const prepareButton = findElement(h.renderFull(), (props) => Array.isArray(props.children)
+      && props.children.includes('准备语音模型'));
+    expect(prepareButton).toBeDefined();
+    (prepareButton!.props.onClick as () => void)();
+    await vi.waitFor(() => expect(h.prepareSpeech).toHaveBeenCalledExactlyOnceWith(manifest, false));
+    if (outcome === 'ready') await vi.waitFor(() => expect(h.toast).toHaveBeenCalledExactlyOnceWith('语音模型已就绪'));
+    if (outcome === 'failed') await vi.waitFor(() => expect(h.toast).toHaveBeenCalledExactlyOnceWith('语音模型下载失败：国内镜像连接超时', 'error'));
+    if (outcome === 'cancelled') expect(h.toast).not.toHaveBeenCalled();
+    if (outcome !== 'ready') expect(h.toast).not.toHaveBeenCalledWith('语音模型已就绪');
+    expect(h.install).not.toHaveBeenCalled(); expect(h.confirm).not.toHaveBeenCalled();
+  } finally { h.dispose(); }
+});
 
 it('accepts a Finder folder inside the plugin zone on a Retina Mac', async () => {
   const h = await setup();

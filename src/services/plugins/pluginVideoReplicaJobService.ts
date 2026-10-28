@@ -5,6 +5,7 @@ import type { PluginVideoReplicaJobSummary, PluginVideoReplicaStart, AvailableNo
 import type { VideoEditorTrackInput } from '../../types/videoEditorControl';
 import type { VideoModelCapability } from '../../types/aiTypes';
 import { useAppStore } from '../../store/useAppStore';
+import { LocalSpeechModelError } from '../onnxService';
 import { generateId } from '../../store/store.utils';
 import { getNodeBounds, videoNodeDimensionsForAspectRatio } from '../../utils/nodeBounds';
 import { registerCanvasDerivation, completeCanvasDerivation, isCanvasDerivationFresh } from '../canvasDerivationGuard';
@@ -379,6 +380,7 @@ export async function startPluginVideoReplicaJob(context: StartContext, request:
   } catch (error) {
     if (error instanceof ReplicaFailure) throw error;
     if (context.signal?.aborted) throw new ReplicaFailure('复刻启动已取消', { cause: error });
+    if (error instanceof LocalSpeechModelError) throw new ReplicaFailure(error.message, { cause: error });
     if (error instanceof ReplicaPlanningError) throw new ReplicaFailure(error.message, { cause: error });
     if (error instanceof VideoRequestResolutionError) throw new ReplicaFailure(`模型预检未通过：${videoPreflightMessages[error.code]}`, { cause: error });
     throw new ReplicaFailure(startupFailure, { cause: error });

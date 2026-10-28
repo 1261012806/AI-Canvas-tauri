@@ -1,0 +1,19 @@
+{
+  "revision": "b516ca0856c65dd31c8af81459352acac79ccf6c",
+  "assets": [
+    {
+      "name": "sensevoice-small-int8.onnx",
+      "file": "model_int8.onnx",
+      "url": "https://huggingface.co/OpenVoiceOS/sensevoice-small-onnx/resolve/b516ca0856c65dd31c8af81459352acac79ccf6c/model_int8.onnx",
+      "bytes": 240883377,
+      "sha256": "9c148566ff8e57b081f9df60055cc169cd71d65b9a759eb6a29f2c4d3db94f6a"
+    },
+    {
+      "name": "sensevoice-vocab.txt",
+      "file": "vocab.txt",
+      "url": "https://huggingface.co/OpenVoiceOS/sensevoice-small-onnx/resolve/b516ca0856c65dd31c8af81459352acac79ccf6c/vocab.txt",
+      "bytes": 315894,
+      "sha256": "55941f4d8b6cc97ff3381bf995f26b1710b242ac6f941ef211f744dad225c8d4"
+    }
+  ]
+}

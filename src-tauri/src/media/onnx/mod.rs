@@ -53,11 +53,13 @@ pub mod worker {
 }
 
 use config::OnnxGpuConfig;
+use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
@@ -124,6 +126,86 @@ const MANAGED_MODEL_FILES: [&str; 4] = [
     "sensevoice-vocab.txt",
 ];
 
+#[derive(Deserialize)]
+struct SpeechModelAsset {
+    name: String,
+    url: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+struct SpeechModelManifest {
+    assets: Vec<SpeechModelAsset>,
+}
+
+fn speech_model_asset(model_name: &str) -> Option<&'static SpeechModelAsset> {
+    static MANIFEST: OnceLock<SpeechModelManifest> = OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../../src/constants/localSpeechModels.json"))
+            .expect("invalid embedded speech model manifest")
+    }).assets.iter().find(|asset| asset.name == model_name)
+}
+
+fn model_storage_error(error: &std::io::Error, action: &str) -> String {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        format!("{action}失败：没有模型目录的读写权限，请检查安装目录或用户数据目录权限")
+    } else if matches!(error.raw_os_error(), Some(28 | 112)) {
+        format!("{action}失败：磁盘空间不足，请清理空间后重试")
+    } else {
+        format!("{action}失败：请检查磁盘空间、文件占用和模型目录权限")
+    }
+}
+
+fn validate_speech_model_url(asset: &SpeechModelAsset, url: &str) -> Result<(), String> {
+    if url != asset.url {
+        return Err("语音模型下载地址与应用内置固定版本不一致，请更新应用后重试".into());
+    }
+    Ok(())
+}
+
+/// 缓存和新下载都验证完整大小及 SHA-256；错误页、LFS 指针和截断文件不能视为已安装。
+/// None 表示文件缺失或内容不匹配；读取/取消错误保留为错误，不能当损坏文件直接删除。
+fn verified_speech_model_size(
+    path: &Path,
+    asset: &SpeechModelAsset,
+    content_type: Option<&str>,
+    task_id: Option<&str>,
+) -> Result<Option<u64>, String> {
+    if content_type.is_some_and(|value| {
+        matches!(value.split(';').next().unwrap_or_default().trim(),
+            "text/html" | "application/json" | "application/xml" | "text/xml")
+    }) {
+        return Ok(None);
+    }
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(model_storage_error(&error, "读取语音模型")),
+    };
+    if !metadata.file_type().is_file() || metadata.len() != asset.bytes {
+        return Ok(None);
+    }
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| model_storage_error(&error, "读取语音模型"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut bytes = 0_u64;
+    loop {
+        if task_id.map(crate::file_transfer::is_cancelled).transpose()?.unwrap_or(false) {
+            return Err("文件传输已取消".into());
+        }
+        let read = file.read(&mut buffer)
+            .map_err(|error| model_storage_error(&error, "读取语音模型"))?;
+        if read == 0 { break; }
+        bytes += read as u64;
+        if bytes > asset.bytes { return Ok(None); }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((bytes == asset.bytes && format!("{:x}", hasher.finalize()) == asset.sha256)
+        .then_some(bytes))
+}
+
 fn validate_model_name(model_name: &str) -> Result<(), String> {
     let mut components = Path::new(model_name).components();
     if !matches!(components.next(), Some(std::path::Component::Normal(_)))
@@ -172,11 +254,20 @@ fn validate_onnx_file(path: &Path, content_type: Option<&str>) -> Result<u64, St
 }
 
 #[tauri::command]
-pub fn check_model_exists(model_name: String) -> Result<bool, String> {
-    validate_model_name(&model_name)?;
-    let models = models_dir()?;
-    let model_path = models.join(&model_name);
-    Ok(model_path.is_file() && validate_onnx_file(&model_path, None).is_ok())
+pub async fn check_model_exists(model_name: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_model_name(&model_name)?;
+        let asset = speech_model_asset(&model_name);
+        let models = models_dir().map_err(|error| {
+            if asset.is_some() { "无法准备语音模型目录，请检查目录权限和磁盘空间".into() } else { error }
+        })?;
+        let model_path = models.join(&model_name);
+        if let Some(asset) = asset {
+            return verified_speech_model_size(&model_path, asset, None, None)
+                .map(|size| size.is_some());
+        }
+        Ok(model_path.is_file() && validate_onnx_file(&model_path, None).is_ok())
+    }).await.map_err(|_| "模型检查任务执行失败，请重试".to_string())?
 }
 
 #[tauri::command]
@@ -232,55 +323,98 @@ pub async fn download_onnx_model(
     url: String,
     task_id: String,
 ) -> Result<String, String> {
+    let speech = speech_model_asset(&model_name).is_some();
+    let result = download_onnx_model_inner(app, model_name, url, task_id.clone()).await;
+    crate::file_transfer::clear_cancelled(&task_id);
+    result.map_err(|error| {
+        if speech && error != "文件传输已取消" { format!("语音模型下载失败：{error}") } else { error }
+    })
+}
+
+async fn download_onnx_model_inner(
+    app: tauri::AppHandle,
+    model_name: String,
+    url: String,
+    task_id: String,
+) -> Result<String, String> {
     validate_model_name(&model_name)?;
-    let models = models_dir()?;
-    std::fs::create_dir_all(&models).map_err(|e| format!("创建模型目录失败: {e}"))?;
+    let asset = speech_model_asset(&model_name);
+    if let Some(asset) = asset { validate_speech_model_url(asset, &url)?; }
+    if crate::file_transfer::is_cancelled(&task_id)? { return Err("文件传输已取消".into()); }
+    let models = models_dir().map_err(|error| {
+        if asset.is_some() { "无法准备模型目录，请检查目录权限和磁盘空间".into() } else { error }
+    })?;
+    std::fs::create_dir_all(&models).map_err(|error| model_storage_error(&error, "创建模型目录"))?;
 
     let dest = models.join(&model_name);
-
-    if dest.is_file() {
-        match validate_onnx_file(&dest, None) {
-            Ok(size) => {
-                let j = json!({
-                    "path": dest.to_string_lossy(),
-                    "size_bytes": size,
-                    "cached": true,
-                });
-                return Ok(j.to_string());
-            }
-            Err(_) => {
-                std::fs::remove_file(&dest).map_err(|e| format!("清理无效模型缓存失败: {e}"))?
-            }
+    let cached_dest = dest.clone();
+    let cached_task = task_id.clone();
+    let cached_size = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(asset) = asset {
+            verified_speech_model_size(&cached_dest, asset, None, Some(&cached_task))
+        } else {
+            Ok(cached_dest.is_file().then(|| validate_onnx_file(&cached_dest, None).ok()).flatten())
         }
+    }).await.map_err(|_| "模型缓存检查任务执行失败，请重试".to_string())??;
+    if let Some(size) = cached_size {
+        return Ok(json!({ "path": dest.to_string_lossy(), "size_bytes": size, "cached": true }).to_string());
+    }
+    match std::fs::symlink_metadata(&dest) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Err("模型目标不是普通文件，请检查模型目录后重试".into());
+            }
+            std::fs::remove_file(&dest).map_err(|error| model_storage_error(&error, "清理无效模型缓存"))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(model_storage_error(&error, "读取模型缓存")),
     }
 
-    // 国内直连 HuggingFace 时好时坏，先选一个源；失败就翻到另一个源重试一次
+    // 只对网络/临时 HTTP 失败翻源一次；取消、权限、磁盘与内容校验失败不重新下载。
     let resolved = crate::model_mirror::resolve(&url, None).await;
     let first = download_to_models_dir(
         app.clone(),
         task_id.clone(),
         resolved.url.clone(),
         dest.clone(),
+        asset,
     )
     .await;
 
     let download = match first {
-        Ok(result) => result,
+        Ok(result) => {
+            crate::model_mirror::record_success(resolved.source);
+            result
+        }
         Err(error) => {
-            if error == "文件传输已取消" {
-                return Err(error);
+            if crate::file_transfer::is_cancelled(&task_id)? {
+                return Err("文件传输已取消".into());
+            }
+            if !error.retryable {
+                return Err(error.message);
             }
             let Some(flipped) = crate::model_mirror::alternate(resolved.source) else {
-                return Err(error);
+                return Err(error.message);
             };
             let retry = crate::model_mirror::resolve(&url, Some(flipped)).await;
             eprintln!(
-                "[onnxrt] {} 下载失败（{}），改用 {} 重试",
+                "[onnxrt] {} 下载连接失败，改用 {} 重试",
                 resolved.source.label(),
-                error,
                 retry.source.label()
             );
-            download_to_models_dir(app, task_id, retry.url, dest).await?
+            let result = match download_to_models_dir(app, task_id.clone(), retry.url, dest, asset).await {
+                Ok(result) => result,
+                Err(retry_error) => {
+                    if crate::file_transfer::is_cancelled(&task_id)? || retry_error.message == "文件传输已取消" {
+                        return Err("文件传输已取消".into());
+                    }
+                    return Err(model_source_failures(
+                        resolved.source, &error.message, retry.source, &retry_error.message,
+                    ));
+                }
+            };
+            crate::model_mirror::record_success(retry.source);
+            result
         }
     };
 
@@ -292,27 +426,60 @@ pub async fn download_onnx_model(
     Ok(j.to_string())
 }
 
-/// 下载到模型目录，过程中用 `validate_onnx_file` 逐块校验，防止下到 HTML 错误页。
+/// 两次尝试只合并传输层已脱敏的分类提示；限长给前端安全错误展示保留空间。
+fn model_source_failures(
+    first: crate::model_mirror::Source,
+    first_message: &str,
+    second: crate::model_mirror::Source,
+    second_message: &str,
+) -> String {
+    let label = |source| match source {
+        crate::model_mirror::Source::Official => "官方源",
+        crate::model_mirror::Source::Mirror => "国内镜像",
+        crate::model_mirror::Source::Passthrough => "原始源",
+    };
+    let first_message: String = first_message.chars().take(80).collect();
+    let second_message: String = second_message.chars().take(80).collect();
+    format!("{}失败：{}；{}失败：{}", label(first), first_message, label(second), second_message)
+}
+
+/// 沿用原子落盘；语音资源必须通过固定版本的完整 SHA-256 才可发布。
 async fn download_to_models_dir(
     app: tauri::AppHandle,
     task_id: String,
     url: String,
     dest: std::path::PathBuf,
-) -> Result<crate::file_transfer::FileTransferResult, String> {
+    asset: Option<&'static SpeechModelAsset>,
+) -> Result<crate::file_transfer::FileTransferResult, crate::file_transfer::DownloadFailure> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::file_transfer::download_to_file(
+        // 普通 ONNX 的 GitHub 地址保留既有公开下载兜底；语音固定资产只走下方校验入口。
+        if asset.is_none() && crate::github_fallback::mirror_url(&url).is_some() {
+            return crate::file_transfer::download_to_file(
+                &app, &task_id, &url, &dest, Some(MAX_ONNX_MODEL_BYTES),
+                |temp_path, metadata| validate_onnx_file(temp_path, metadata.content_type.as_deref()).map(|_| ()),
+            ).map_err(|message| crate::file_transfer::DownloadFailure { message, retryable: false });
+        }
+        crate::file_transfer::download_model_to_file_attempt(
             &app,
             &task_id,
             &url,
             &dest,
-            Some(MAX_ONNX_MODEL_BYTES),
+            Some(asset.map_or(MAX_ONNX_MODEL_BYTES, |asset| asset.bytes)),
             |temp_path, metadata| {
-                validate_onnx_file(temp_path, metadata.content_type.as_deref()).map(|_| ())
+                if let Some(asset) = asset {
+                    verified_speech_model_size(temp_path, asset, metadata.content_type.as_deref(), Some(&task_id))?
+                        .ok_or_else(|| "语音模型大小或 SHA-256 校验不符，文件未安装；请重试或检查下载源".to_string())
+                        .map(|_| ())
+                } else {
+                    validate_onnx_file(temp_path, metadata.content_type.as_deref()).map(|_| ())
+                }
             },
         )
     })
     .await
-    .map_err(|e| format!("模型下载任务执行失败: {e}"))?
+    .map_err(|_| crate::file_transfer::DownloadFailure {
+        message: "模型下载任务执行失败，请重试".into(), retryable: false,
+    })?
 }
 
 // ── Tauri 命令：GPU 状态查询 ──
@@ -1789,6 +1956,65 @@ mod direction_grid_tests {
             .expect_err("HTML 内容应被拒绝")
             .contains("HTML"));
         std::fs::remove_dir_all(directory).expect("应清理测试目录");
+    }
+
+    #[test]
+    fn speech_models_use_pinned_official_urls_and_complete_digests() {
+        let manifest: Value = serde_json::from_str(include_str!("../../../../src/constants/localSpeechModels.json")).unwrap();
+        let revision = manifest["revision"].as_str().unwrap();
+        assert_eq!(revision.len(), 40);
+        assert_eq!(manifest["assets"].as_array().unwrap().len(), 2);
+        for name in ["sensevoice-small-int8.onnx", "sensevoice-vocab.txt"] {
+            let asset = speech_model_asset(name).unwrap();
+            assert!(asset.url.starts_with("https://huggingface.co/OpenVoiceOS/sensevoice-small-onnx/resolve/"));
+            assert!(asset.url.contains(&format!("/resolve/{revision}/")));
+            assert!(!asset.url.contains("/main/"));
+            assert!(asset.bytes > 0);
+            assert_eq!(asset.sha256.len(), 64);
+            assert!(asset.sha256.bytes().all(|value| value.is_ascii_hexdigit()));
+            assert!(validate_speech_model_url(asset, &asset.url).is_ok());
+            assert!(validate_speech_model_url(asset, "https://example.test/model.onnx").is_err());
+        }
+    }
+
+    #[test]
+    fn two_failed_sources_keep_both_safe_reasons_within_display_limit() {
+        use crate::model_mirror::Source;
+        let message = model_source_failures(
+            Source::Mirror, "模型下载返回 HTTP 503",
+            Source::Official, "模型文件校验失败，请检查模型下载来源",
+        );
+        assert!(message.contains("国内镜像失败：模型下载返回 HTTP 503"));
+        assert!(message.contains("官方源失败：模型文件校验失败"));
+        let long = "网络异常🌐".repeat(500);
+        let message = model_source_failures(Source::Official, &long, Source::Mirror, &long);
+        assert!(format!("语音模型下载失败：{message}").encode_utf16().count() <= 400);
+    }
+
+    #[test]
+    fn speech_cache_requires_exact_bytes_and_sha256_before_reuse() {
+        let directory = test_directory("speech-integrity");
+        let path = directory.join("speech.onnx");
+        let asset = SpeechModelAsset {
+            name: "test.onnx".into(), url: "https://example.test/test.onnx".into(),
+            bytes: 4, sha256: format!("{:x}", Sha256::digest(b"good")),
+        };
+        assert_eq!(verified_speech_model_size(&path, &asset, None, None).unwrap(), None);
+        std::fs::write(&path, b"good").unwrap();
+        assert_eq!(verified_speech_model_size(&path, &asset, None, None).unwrap(), Some(4));
+        assert_eq!(verified_speech_model_size(&path, &asset, Some("text/html"), None).unwrap(), None);
+        std::fs::write(&path, b"bad!").unwrap();
+        assert_eq!(verified_speech_model_size(&path, &asset, None, None).unwrap(), None);
+        std::fs::write(&path, b"goo").unwrap();
+        assert_eq!(verified_speech_model_size(&path, &asset, None, None).unwrap(), None);
+        std::fs::write(&path, b"version https://git-lfs.github.com/spec/v1").unwrap();
+        assert_eq!(verified_speech_model_size(&path, &asset, None, None).unwrap(), None);
+        std::fs::write(&path, b"good").unwrap();
+        let task_id = "speech-integrity-cancel";
+        crate::file_transfer::cancel_file_transfer(task_id.into()).unwrap();
+        assert_eq!(verified_speech_model_size(&path, &asset, None, Some(task_id)).unwrap_err(), "文件传输已取消");
+        crate::file_transfer::clear_cancelled(task_id);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -238,6 +238,33 @@ it('requests explicit speech model preparation before any media submission', asy
   await start({ downloadSpeech: true }); expect(mocks.download).toHaveBeenCalledTimes(1); expect(mocks.generate).toHaveBeenCalledTimes(2);
 });
 
+it.each(['speech', 'download'] as const)('preserves the safe %s failure before creating a job or submitting media', async (source) => {
+  const { LocalSpeechModelError } = await import('../../src/services/onnxService');
+  const cause = new LocalSpeechModelError('语音模型下载未完成，请切换下载来源后重试');
+  if (source === 'download') mocks.speech.mockResolvedValue({ ready: false });
+  mocks[source].mockRejectedValueOnce(cause);
+  const failure = await start({ downloadSpeech: true }).catch((error: unknown) => error);
+  expect(failure).toMatchObject({ message: cause.message, cause });
+  expect(mocks.effect).not.toHaveBeenCalled(); expect(mocks.materials).not.toHaveBeenCalled();
+  expect(mocks.generate).not.toHaveBeenCalled(); expect(mocks.saved).toEqual([]);
+});
+
+it('reports cancellation instead of a model download error when startup was cancelled', async () => {
+  const { LocalSpeechModelError } = await import('../../src/services/onnxService');
+  const controller = new AbortController();
+  mocks.speech.mockResolvedValue({ ready: false });
+  mocks.download.mockImplementationOnce(async () => {
+    controller.abort();
+    throw new LocalSpeechModelError('语音模型下载未完成，请重试');
+  });
+  const service = await import('../../src/services/plugins/pluginVideoReplicaJobService');
+  await expect(service.startPluginVideoReplicaJob(Object.assign(context(), { signal: controller.signal }), {
+    ...request, downloadSpeech: true,
+  })).rejects.toThrow('复刻启动已取消');
+  expect(mocks.download).toHaveBeenCalledOnce(); expect(mocks.generate).not.toHaveBeenCalled();
+  expect(mocks.effect).not.toHaveBeenCalled(); expect(mocks.saved).toEqual([]);
+});
+
 it.each([
   ['HTTP 401 private credential https://private.invalid', '连接认证失败'],
   ['HTTP 429 rate limit', '请求被限流'],
