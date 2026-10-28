@@ -1,12 +1,79 @@
 import { beforeEach, it, expect, vi } from 'vitest';
+import type { ComfyH3MemorySettings } from '../../src/types/comfyLaunch';
+import { comfyH3MemoryFingerprint, DEFAULT_COMFY_H3_MEMORY_SETTINGS } from '../../src/types/comfyLaunch';
+const memoryMocks = vi.hoisted(() => ({
+  resolve: vi.fn(async (): Promise<ComfyH3MemorySettings | undefined> => undefined),
+  probe: vi.fn(async () => true),
+}));
+vi.mock('../../src/services/comfyH3Memory', async (original) => ({
+  ...await original<typeof import('../../src/services/comfyH3Memory')>(), resolveComfyH3MemorySettings: memoryMocks.resolve,
+}));
+vi.mock('../../src/services/comfyServers', async (original) => ({
+  ...await original<typeof import('../../src/services/comfyServers')>(), probeComfyServer: memoryMocks.probe,
+}));
 import { useAppStore } from '../../src/store/useAppStore';
 import { checkVideoServices, inspectVideoNode, videoInputFingerprint } from '../../src/services/videoBatchPlanning';
 
 beforeEach(() => {
+  memoryMocks.resolve.mockReset().mockResolvedValue(undefined);
+  memoryMocks.probe.mockReset().mockResolvedValue(true);
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({ currentProjectId: 'p', showToast: vi.fn(), nodes: [{ id: 'v', type: 'ai-video', position: { x: 0, y: 0 },
     data: { type: 'ai-video', label: 'SH001', model: 'general/test', provider: 'general', prompt: '@{img:参考图} 动作', seedanceDuration: 6, videoUrl: 'old.mp4' } },
     { id: 'img', type: 'source-image', position: { x: 0, y: 0 }, data: { type: 'source-image', label: '参考图', imageUrl: 'ref.png' } }] });
+});
+
+function configureH3Preflight() {
+  const state = useAppStore.getState();
+  useAppStore.setState({
+    config: { ...state.config, comfyUIUrl: 'http://127.0.0.1:8188' },
+    workflows: [{ id: 'h3', name: 'H3', category: 'ai-video', fileName: 'h3.json', createdAt: 1,
+      fileContent: JSON.stringify({ '1': { class_type: 'MiniMaxH3ReferenceToVideo', inputs: {} } }) }],
+    nodes: state.nodes.map((node) => node.id === 'v' ? { ...node, data: {
+      ...node.data, provider: 'comfyui', workflowId: 'h3', comfyH3MemoryPreset: 'inherit' as const,
+    } } : node),
+  });
+  return useAppStore.getState();
+}
+
+it('captures only the effective H3 policy fingerprint during service preflight', async () => {
+  const state = configureH3Preflight();
+  const settings = { ...DEFAULT_COMFY_H3_MEMORY_SETTINGS, preset: 'custom' as const, referenceImageMaxSize: 768 };
+  memoryMocks.resolve.mockResolvedValue(settings);
+  const [checked] = await checkVideoServices([inspectVideoNode(state.nodes[0], state)], state);
+  expect(checked.issues).toEqual([]);
+  expect(memoryMocks.resolve).toHaveBeenCalledWith('http://127.0.0.1:8188', 'inherit');
+  expect(checked.comfyH3SettingsFingerprint).toBe(comfyH3MemoryFingerprint(settings));
+  expect(JSON.stringify(checked)).not.toMatch(/attentionHeadChunks|referenceImageMaxSize|127\.0\.0\.1/);
+  memoryMocks.resolve.mockResolvedValue({ ...settings, referenceImageMaxSize: 1024 });
+  const [changed] = await checkVideoServices([checked], state);
+  expect(changed.comfyH3SettingsFingerprint).not.toBe(checked.comfyH3SettingsFingerprint);
+});
+
+it('marks an off H3 policy explicitly, while non-H3 work never reads native settings', async () => {
+  const state = configureH3Preflight();
+  const [off] = await checkVideoServices([inspectVideoNode(state.nodes[0], state)], state);
+  expect(off.comfyH3SettingsFingerprint).toBe(comfyH3MemoryFingerprint(undefined));
+  const nonH3 = { ...state, workflows: state.workflows.map((workflow) => ({ ...workflow, fileContent: '{}' })) };
+  memoryMocks.resolve.mockClear();
+  const [unchecked] = await checkVideoServices([off], nonH3);
+  expect(memoryMocks.resolve).not.toHaveBeenCalled();
+  expect(unchecked.comfyH3SettingsFingerprint).toBeUndefined();
+});
+
+it('invalidates old H3 proof if settings cannot be read or the selected service is unavailable', async () => {
+  const state = configureH3Preflight();
+  const item = { ...inspectVideoNode(state.nodes[0], state), comfyH3SettingsFingerprint: 'old' };
+  memoryMocks.resolve.mockRejectedValue(new Error('private native diagnostic'));
+  const [failed] = await checkVideoServices([item], state);
+  expect(failed.comfyH3SettingsFingerprint).toBeUndefined();
+  expect(failed.issues.join()).toContain('重新检查视频批次');
+  expect(JSON.stringify(failed)).not.toContain('private');
+  memoryMocks.resolve.mockClear();
+  memoryMocks.probe.mockResolvedValue(false);
+  const [unavailable] = await checkVideoServices([item], state);
+  expect(unavailable.comfyH3SettingsFingerprint).toBeUndefined();
+  expect(memoryMocks.resolve).not.toHaveBeenCalled();
 });
 it('批次检查将失效的显式服务器列为该节点问题，不回落默认或中断整批', async () => {
   const initial = useAppStore.getState();
@@ -62,6 +129,21 @@ it('RefMod 文件、服务器与强度变化都会使视频预检指纹失效', 
   for (const patch of [{ fileName: 'character/bob' }, { strength: 0.8 }, { endpointFingerprint: 'b'.repeat(64) }]) {
     expect(videoInputFingerprint({ ...bound, data: { ...data, comfyRefmods: [{ ...data.comfyRefmods[0], ...patch }] } }, state)).not.toBe(first);
   }
+});
+
+it('H3 预设覆盖变化使预检失效，应用回执不改变任务输入', () => {
+  const state = useAppStore.getState();
+  const node = state.nodes[0];
+  const original = videoInputFingerprint(node, state);
+  const selected = { ...node, data: { ...node.data, comfyH3MemoryPreset: 'safe12' as const } };
+  const selectedFingerprint = videoInputFingerprint(selected, state);
+  expect(selectedFingerprint).not.toBe(original);
+  expect(videoInputFingerprint({ ...selected, data: { ...selected.data, comfyH3MemoryPreset: 'off' } }, state)).not.toBe(selectedFingerprint);
+  expect(videoInputFingerprint({ ...selected, data: { ...selected.data, comfyH3MemoryApplied: {
+    preset: 'safe12', settings: { preset: 'safe12', attentionHeadChunks: 4, feedForwardChunks: 2,
+      feedForwardThreshold: 4096, textEncoderDevice: 'cpu', referenceImageMaxSize: 512,
+      vaeTiling: true, vaeTileSize: 256, vaeTemporalSize: 16 }, applied: ['attention'],
+  } } }, state)).toBe(selectedFingerprint);
 });
 
 function configureShotReference(content = '@{img:参考图} 角色推开门') {

@@ -300,6 +300,7 @@ async function executeOneNode(
         workflowId: d.workflowId,
         workflowInputs: d.workflowInputs,
         comfyRefmods: d.comfyRefmods,
+        comfyH3MemoryPreset: d.comfyH3MemoryPreset,
         nodeId: node.id,
       };
       const result = hasProtectedVideoInputs ? await generateVideo(videoOptions, undefined, async () => {

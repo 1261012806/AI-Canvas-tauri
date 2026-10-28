@@ -3,7 +3,7 @@ import type { AppState } from './useAppStore';
 import type { VideoBatch, VideoBatchItem, VideoPreflightItem } from '../types/videoBatch';
 import { readVideoBatches, writeVideoBatches } from '../services/videoBatchRepository';
 import { recoverVideoBatches, runVideoBatch } from '../services/videoBatchRunner';
-import { inspectVideoNode } from '../services/videoBatchPlanning';
+import { checkVideoServices, inspectVideoNode, isComfyH3VideoNode } from '../services/videoBatchPlanning';
 import { generateId } from './store.utils';
 import type { GenerationLease } from '../services/generationService';
 
@@ -64,13 +64,28 @@ export const createVideoBatchSlice: StateCreator<AppState, [], [], VideoBatchSli
         await get().loadVideoBatches(projectId);
         if (lease?.signal?.aborted) throw new Error('视频批次已取消，未提交');
         if (projectChanged || get().currentProjectId !== projectId) throw new Error('项目已切换');
+        const h3Items = items.filter((item) => {
+          const node = get().nodes.find((entry) => entry.id === item.nodeId);
+          return node && isComfyH3VideoNode(node, get());
+        });
+        if (h3Items.some((item) => !item.comfyH3SettingsFingerprint)) throw new Error('H3 显存设置尚未检查，请重新检查视频批次');
+        const h3Checked = h3Items.length ? await checkVideoServices(h3Items, get()) : [];
+        if (lease?.signal?.aborted) throw new Error('视频批次已取消，未提交');
+        if (projectChanged || get().currentProjectId !== projectId) throw new Error('项目已切换');
+        if (h3Checked.some((fresh, index) => fresh.issues.length || !fresh.comfyH3SettingsFingerprint
+          || fresh.comfyH3SettingsFingerprint !== h3Items[index].comfyH3SettingsFingerprint)) {
+          throw new Error('H3 显存设置或服务已变化，请重新检查视频批次');
+        }
+        const h3Fingerprints = new Map(h3Checked.map((item) => [item.nodeId, item.comfyH3SettingsFingerprint]));
         for (const item of items) {
           const node = get().nodes.find((n) => n.id === item.nodeId);
           const fresh = node && inspectVideoNode(node, get());
-          if (item.issues.length || !fresh || fresh.issues.length || fresh.fingerprint !== item.fingerprint) throw new Error('物料或参数已变化，请重新检查');
+          if (item.issues.length || !node || !fresh || fresh.issues.length || fresh.fingerprint !== item.fingerprint) throw new Error('物料或参数已变化，请重新检查');
+          if (isComfyH3VideoNode(node, get()) !== h3Fingerprints.has(item.nodeId)) throw new Error('H3 工作流已变化，请重新检查视频批次');
         }
         const batch: VideoBatch = { id: generateId(), projectId, createdAt: Date.now(), items: items.map((i) => ({
           nodeId: i.nodeId, label: i.label, fingerprint: i.fingerprint, duration: i.duration, status: 'waiting',
+          ...(h3Fingerprints.has(i.nodeId) ? { comfyH3SettingsFingerprint: h3Fingerprints.get(i.nodeId) } : {}),
         })) };
         set((s) => ({ videoBatches: { ...s.videoBatches, [projectId]: [...(s.videoBatches[projectId] || []), batch].slice(-30) } }));
         await persist(projectId);
@@ -85,6 +100,8 @@ export const createVideoBatchSlice: StateCreator<AppState, [], [], VideoBatchSli
           execute: async (nodeId) => {
             const { executeGeneration } = await import('../services/generationService');
             if (projectChanged || get().currentProjectId !== projectId) return { success: false, message: '项目已切换' };
+            const expected = batch.items.find((item) => item.nodeId === nodeId)?.comfyH3SettingsFingerprint;
+            if (expected !== undefined) return executeGeneration(nodeId, undefined, undefined, undefined, lease, { comfyH3ExpectedSettings: expected });
             return lease ? executeGeneration(nodeId, undefined, undefined, undefined, lease) : executeGeneration(nodeId);
           },
         });

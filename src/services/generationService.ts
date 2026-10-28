@@ -57,6 +57,8 @@ export async function executeGeneration(
   /** 直接传入节点数据（避免读 store 的时序问题），不传则从 store 读 */
   passData?: BaseNodeData,
   lease?: GenerationLease,
+  /** 批次预检捕获的 H3 策略摘要；适配器在本次执行解析策略后再次核对。 */
+  batchOptions?: { comfyH3ExpectedSettings?: string },
 ): Promise<GenerationResult> {
   let leaseValid = true;
   const assertLease = async () => {
@@ -387,6 +389,8 @@ export async function executeGeneration(
         seedanceDuration, generateAudio: genAudio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
         comfyRefmods: data.comfyRefmods,
+        comfyH3MemoryPreset: data.comfyH3MemoryPreset,
+        comfyH3ExpectedSettings: batchOptions?.comfyH3ExpectedSettings,
       };
       // 异步哈希/版本检查完成后再提交付费请求；撤销的租约不写失败历史。
       if (lease) {

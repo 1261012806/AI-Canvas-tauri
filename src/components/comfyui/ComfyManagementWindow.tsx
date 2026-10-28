@@ -223,8 +223,9 @@ export default function ComfyManagementWindow() {
   return <div className="fixed inset-0 flex flex-col bg-canvas-bg text-canvas-text">
     <header className="shrink-0 border-b border-canvas-border bg-canvas-surface p-3 space-y-3">
       <div className="ui-row ui-row--between"><div className="min-w-0"><h1 className="text-base font-semibold">ComfyUI {t('管理')}</h1><p className="ui-hint break-all">{snapshot?.installationName || t('本地安装管理')}</p></div>
-        <div className="ui-row"><button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!!busy || !snapshot || running} onClick={start}><Icon icon={runtime?.status === 'starting' ? 'lucide:loader-circle' : 'lucide:play'} width={14} className={runtime?.status === 'starting' ? 'animate-spin' : undefined} />{runtime?.status === 'starting' ? t('正在启动') : running ? t('运行中') : t('启动 ComfyUI')}</button>
-          <button type="button" className="ui-btn ui-btn--secondary ui-btn--sm" title={t('重新读取本地安装和插件信息；外部修改后请刷新')} disabled={!!busy} onClick={() => void run(t('刷新列表'), async () => { await refreshSnapshot(); return t('安装信息已刷新'); })}><Icon icon="lucide:refresh-cw" width={14} />{t('刷新列表')}</button>
+        <div className="ui-row">
+          <button type="button" className="ui-icon-btn ui-icon-btn--sm" aria-label={t('刷新列表')} title={t('重新读取本地安装和插件信息；外部修改后请刷新')} disabled={!!busy} onClick={() => void run(t('刷新列表'), async () => { await refreshSnapshot(); return t('安装信息已刷新'); })}><Icon icon="lucide:refresh-cw" width={16} aria-hidden="true" /></button>
+          <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!!busy || !snapshot || running} onClick={start}><Icon icon={runtime?.status === 'starting' ? 'lucide:loader-circle' : 'lucide:play'} width={14} className={runtime?.status === 'starting' ? 'animate-spin' : undefined} />{runtime?.status === 'starting' ? t('正在启动') : running ? t('运行中') : t('启动 ComfyUI')}</button>
           <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" disabled={!!busy || !snapshot?.gitAvailable} onClick={updateAll}><Icon icon="lucide:package-check" width={14} />{t('一键更新')}</button></div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-3">

@@ -33,6 +33,7 @@ const STRUCTURAL_NODE_DATA_KEYS = [
   'shotlistProductionSource',
   'characterLibraryLinks',
   'comfyRefmods',
+  'comfyH3MemoryPreset',
   'hiddenByCharacterLibrary',
   'groupCollapsed',
   'note',

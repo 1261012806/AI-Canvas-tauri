@@ -238,6 +238,8 @@ export interface BaseNodeData {
   workflowId?: string;        // 选择的工作流 ID
   workflowInputs?: Record<string, string>; // 本地 IO 或云工作流 nodeId/fieldName 赋值
   comfyRefmods?: ComfyRefmodSelection[]; // 本地 H3 参考包与已有加载槽位的绑定
+  comfyH3MemoryPreset?: import('./comfyLaunch').ComfyH3MemoryOverride; // 本节点覆盖 H3 低显存预设；缺省跟随常用设置
+  comfyH3MemoryApplied?: import('./comfyLaunch').ComfyH3MemoryApplication; // 上次真实提交的 H3 优化回执
   runninghubOutputs?: import('./runninghub').RunningHubOutput[];
   runninghubModelParameters?: Record<string, string>;
   runninghubStage?: string;

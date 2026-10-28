@@ -5,6 +5,8 @@ import type { VideoPreflightItem } from '../types/videoBatch';
 import { resolveVideoSubmissionControls } from './ai/videoRequestResolver';
 import { parseProjectModelRef } from './projectSettingsService';
 import { comfyBaseUrlFor, probeComfyServer } from './comfyServers';
+import { isComfyH3Workflow, resolveComfyH3MemorySettings } from './comfyH3Memory';
+import { comfyH3MemoryFingerprint } from '../types/comfyLaunch';
 import { expandShotlistRowMentions } from './shotlistPromptService';
 import { isShotRowBlank } from '../types/shotlist';
 import { parseDramaMentionId } from '../types/dramaAssets';
@@ -20,6 +22,13 @@ export function videoInputData(node: Node<BaseNodeData>, state: Workspace): Base
     model: node.data.model || fallback?.model,
     provider: node.data.model ? node.data.provider || parsed?.provider : fallback?.provider || node.data.provider,
     workflowId: node.data.workflowId || (!node.data.model ? fallback?.workflowId : undefined) };
+}
+
+export function isComfyH3VideoNode(node: Node<BaseNodeData>, state: Workspace): boolean {
+  const data = videoInputData(node, state);
+  const workflow = state.workflows.find((entry) => entry.id === data.workflowId);
+  return data.type === 'ai-video' && data.provider === 'comfyui' && !!workflow
+    && (!workflow.adapterType || workflow.adapterType === 'comfyui') && isComfyH3Workflow(workflow.fileContent);
 }
 
 function referencedInput(data: BaseNodeData, state: Workspace, nodeId: string) {
@@ -65,7 +74,7 @@ export function videoInputFingerprint(node: Node<BaseNodeData>, state: Workspace
     }) : [];
   const payload = JSON.stringify([d.prompt, input.text, input.error, d.model, d.provider, d.workflowId, d.workflowInputs,
     d.videoResolution, d.videoFrames, d.videoFps, d.seedanceDuration, d.seedanceRatio, d.seedanceResolution,
-    d.generateAudio, d.videoReferences, d.runninghubModelParameters, d.comfyRefmods, d.cameraSettings, refs, dramaRefs,
+    d.generateAudio, d.videoReferences, d.runninghubModelParameters, d.comfyRefmods, d.comfyH3MemoryPreset, d.cameraSettings, refs, dramaRefs,
     state.projects.find((p) => p.id === state.currentProjectId)?.settings]);
   let hash = 2166136261;
   for (let i = 0; i < payload.length; i++) hash = Math.imul(hash ^ payload.charCodeAt(i), 16777619);
@@ -105,14 +114,23 @@ export function inspectVideoNode(node: Node<BaseNodeData>, state: Workspace): Vi
 export async function checkVideoServices(items: VideoPreflightItem[], state: Workspace): Promise<VideoPreflightItem[]> {
   const probes = new Map<string, Promise<boolean>>();
   return Promise.all(items.map(async (item) => {
+    // 每次检查都重新建立策略凭据，失败或非 H3 节点不得沿用上次摘要。
+    const unchecked = { ...item, comfyH3SettingsFingerprint: undefined };
     const node = state.nodes.find((n) => n.id === item.nodeId);
-    if (!node || videoInputData(node, state).provider !== 'comfyui') return item;
+    if (!node || videoInputData(node, state).provider !== 'comfyui') return unchecked;
     let url: string;
     try { url = comfyBaseUrlFor(videoInputData(node, state).workflowId); }
     catch (error) {
-      return { ...item, issues: [...item.issues, error instanceof Error ? error.message : 'ComfyUI 服务器配置无效'] };
+      return { ...unchecked, issues: [...item.issues, error instanceof Error ? error.message : 'ComfyUI 服务器配置无效'] };
     }
     if (!probes.has(url)) probes.set(url, probeComfyServer(url));
-    return await probes.get(url) ? item : { ...item, issues: [...item.issues, 'ComfyUI 服务不可用'] };
+    if (!await probes.get(url)) return { ...unchecked, issues: [...item.issues, 'ComfyUI 服务不可用'] };
+    if (!isComfyH3VideoNode(node, state)) return unchecked;
+    try {
+      const settings = await resolveComfyH3MemorySettings(url, videoInputData(node, state).comfyH3MemoryPreset);
+      return { ...unchecked, comfyH3SettingsFingerprint: comfyH3MemoryFingerprint(settings) };
+    } catch {
+      return { ...unchecked, issues: [...item.issues, '无法读取 H3 显存设置，请检查配置后重新检查视频批次'] };
+    }
   }));
 }

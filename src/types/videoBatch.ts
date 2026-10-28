@@ -5,6 +5,8 @@ export interface VideoBatchItem {
   nodeId: string;
   label: string;
   fingerprint: string;
+  /** 已检查的有效 H3 策略摘要；不保存配置正文或原生运行时。 */
+  comfyH3SettingsFingerprint?: string;
   duration?: number;
   status: VideoBatchItemStatus;
   message?: string;
@@ -22,6 +24,7 @@ export interface VideoPreflightItem {
   nodeId: string;
   label: string;
   fingerprint: string;
+  comfyH3SettingsFingerprint?: string;
   duration?: number;
   issues: string[];
   existing: boolean;

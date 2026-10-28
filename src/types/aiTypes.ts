@@ -518,6 +518,9 @@ export interface VideoGenerationReferenceInput {
 }
 
 export interface AIVideoGenParams {
+  comfyH3MemoryPreset?: import('./comfyLaunch').ComfyH3MemoryOverride;
+  /** 批次预检捕获的有效 H3 策略摘要，提交前复核。 */
+  comfyH3ExpectedSettings?: string;
   /** 仅本地 ComfyUI 使用，绑定目标服务器的 RefMod 相对文件引用。 */
   comfyRefmods?: import('./comfyRefmod').ComfyRefmodSelection[];
   workflowApiTaskContext?: import('./workflowApi').CloudWorkflowTaskContext;

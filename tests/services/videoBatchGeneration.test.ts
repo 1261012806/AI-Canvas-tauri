@@ -28,6 +28,15 @@ it('uses each node duration and waits for output history before completing', asy
   finish(); expect((await task).success).toBe(true);
   expect(useAppStore.getState().nodes[0].data.videoBatchFingerprint).toBeTruthy();
 });
+it('forwards the captured H3 settings proof and node override without adding them to ordinary node output data', async () => {
+  useAppStore.getState().updateNodeDataTransient('v', { comfyH3MemoryPreset: 'safe12' });
+  const result = await executeGeneration('v', undefined, undefined, undefined, undefined, { comfyH3ExpectedSettings: 'checked-h3-proof' });
+  expect(result.success).toBe(true);
+  expect(mocks.generate).toHaveBeenCalledWith(expect.objectContaining({
+    comfyH3MemoryPreset: 'safe12', comfyH3ExpectedSettings: 'checked-h3-proof',
+  }));
+  expect(useAppStore.getState().nodes[0].data).not.toHaveProperty('comfyH3ExpectedSettings');
+});
 it('does not overwrite another project if it switches during persistence', async () => {
   mocks.persist.mockImplementation(async () => {
     useAppStore.setState({ currentProjectId: 'other', nodes: [{ id: 'v', position: { x: 0, y: 0 }, data: { type: 'ai-video', label: '他集', videoUrl: 'keep.mp4' } }] });

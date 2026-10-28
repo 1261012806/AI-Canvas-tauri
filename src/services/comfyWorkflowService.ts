@@ -30,7 +30,8 @@ import { createComfyProgressSession, type ComfyProgressSession } from './comfyPr
 import { maybeAutoReleaseComfyMemory } from './comfyMemory';
 import { applyComfyRefmodsToWorkflow, assertComfyRefmodSubmissionFresh, assertComfyRefmodSubmissionTargetFresh } from './comfyRefmodWorkflow';
 import type { ComfyRefmodSelection } from '../types/comfyRefmod';
-import { videoInputFingerprint } from './videoBatchPlanning';
+import { videoInputData, videoInputFingerprint } from './videoBatchPlanning';
+import { applyComfyH3Memory } from './comfyH3Memory';
 
 /** ComfyUI 已注册的节点类型；同一次会话里短暂缓存，装完插件重开也能很快看到变化 */
 let nodeClassCache: { baseUrl: string; classes: Set<string>; fetchedAt: number } | null = null;
@@ -1598,6 +1599,14 @@ export async function executeComfyUIVideoGenerate(
     // 画面比例决定注入工作流的 width/height；未设置时按 16:9
     seedanceRatio = '16:9',
   } = params;
+  const memoryReportOwner = useAppStore.getState();
+  const memoryReportNode = memoryReportOwner.nodes?.find((node) => node.id === params.nodeId);
+  const memoryReportLease = memoryReportNode && memoryReportNode.type === 'ai-video'
+    && memoryReportNode.data.role !== 'source' && memoryReportOwner.currentProjectId ? {
+      projectId: memoryReportOwner.currentProjectId,
+      revision: memoryReportOwner.getCurrentRevision(),
+      fingerprint: videoInputFingerprint(memoryReportNode, memoryReportOwner),
+    } : undefined;
   if (`${prompt}\n${JSON.stringify(workflowInputs ?? {})}`.includes('@drama{global/')) {
     const owner = useAppStore.getState();
     await owner.loadGlobalDramaAssets();
@@ -1675,6 +1684,10 @@ export async function executeComfyUIVideoGenerate(
       await resolveParamSpecs(baseUrl, workflowObj, VIDEO_PARAM_SPEC_KEYS),
     );
 
+    const h3MemoryApplication = await applyComfyH3Memory(
+      workflowObj, baseUrl, params.comfyH3MemoryPreset, signal, params.comfyH3ExpectedSettings,
+    );
+
     if (params.nodeId && projectId) {
       progressSession = createComfyProgressSession({ baseUrl, projectId, nodeId: params.nodeId, signal, workflow: workflowObj });
     }
@@ -1691,6 +1704,22 @@ export async function executeComfyUIVideoGenerate(
     } : undefined;
     const promptId = await promptComfyUIWorkflow(baseUrl, workflowObj, signal, progressSession, refmodBeforeSubmit, finalCheck);
     submittedTaskId = promptId;
+
+    // 回执只描述已真实提交的执行副本；不让过期提交覆盖另一个项目或新参数的说明。
+    if (params.nodeId && memoryReportLease && !signal?.aborted) {
+      const current = useAppStore.getState();
+      const node = current.nodes.find((item) => item.id === params.nodeId);
+      const workflow = current.workflows.find((item) => item.id === capturedWorkflow.id);
+      if (current.currentProjectId === memoryReportLease.projectId
+        && current.getCurrentRevision() === memoryReportLease.revision && node?.type === 'ai-video'
+        && node.data.role !== 'source' && videoInputData(node, current).workflowId === capturedWorkflow.id
+        && workflow?.fileContent === capturedWorkflow.fileContent
+        && videoInputFingerprint(node, current) === memoryReportLease.fingerprint) {
+        current.updateNodeDataTransient(params.nodeId, {
+          comfyH3MemoryApplied: h3MemoryApplication ? { ...h3MemoryApplication, workflowId: capturedWorkflow.id } : undefined,
+        });
+      }
+    }
 
     // 回填 promptId，标记为已提交
     if (params.nodeId) {

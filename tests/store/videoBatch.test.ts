@@ -1,14 +1,24 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { VideoBatch } from '../../src/types/videoBatch';
+import type { ComfyH3MemorySettings } from '../../src/types/comfyLaunch';
+import { comfyH3MemoryFingerprint, DEFAULT_COMFY_H3_MEMORY_SETTINGS } from '../../src/types/comfyLaunch';
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(async (): Promise<VideoBatch[]> => []), write: vi.fn(async () => {}),
   execute: vi.fn(async () => ({ success: true })),
+  resolveH3: vi.fn(async (): Promise<ComfyH3MemorySettings | undefined> => undefined),
+  probe: vi.fn(async () => true),
 }));
 vi.mock('../../src/services/videoBatchRepository', () => ({ readVideoBatches: mocks.read, writeVideoBatches: mocks.write }));
 vi.mock('../../src/services/generationService', () => ({ executeGeneration: mocks.execute }));
+vi.mock('../../src/services/comfyH3Memory', async (original) => ({
+  ...await original<typeof import('../../src/services/comfyH3Memory')>(), resolveComfyH3MemorySettings: mocks.resolveH3,
+}));
+vi.mock('../../src/services/comfyServers', async (original) => ({
+  ...await original<typeof import('../../src/services/comfyServers')>(), probeComfyServer: mocks.probe,
+}));
 import { useAppStore } from '../../src/store/useAppStore';
-import { inspectVideoNode } from '../../src/services/videoBatchPlanning';
+import { checkVideoServices, inspectVideoNode } from '../../src/services/videoBatchPlanning';
 
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState(), true);
@@ -17,8 +27,49 @@ beforeEach(() => {
     data: { type: 'ai-video', label: `SH${n}`, model: 'general/test', provider: 'general', prompt: '动作', seedanceDuration: n * 3 },
   })) });
   mocks.read.mockReset().mockResolvedValue([]); mocks.write.mockReset().mockResolvedValue(); mocks.execute.mockReset().mockResolvedValue({ success: true });
+  mocks.resolveH3.mockReset().mockResolvedValue(undefined); mocks.probe.mockReset().mockResolvedValue(true);
 });
 const inspect = () => useAppStore.getState().nodes.map((n) => inspectVideoNode(n, useAppStore.getState()));
+
+function configureH3Batch() {
+  const state = useAppStore.getState();
+  useAppStore.setState({
+    config: { ...state.config, comfyUIUrl: 'http://127.0.0.1:8188' },
+    workflows: [{ id: 'h3', name: 'H3', category: 'ai-video', fileName: 'h3.json', createdAt: 1,
+      fileContent: JSON.stringify({ '1': { class_type: 'MiniMaxH3ReferenceToVideo', inputs: {} } }) }],
+    nodes: state.nodes.map((node) => ({ ...node, data: { ...node.data, provider: 'comfyui', workflowId: 'h3', comfyH3MemoryPreset: 'inherit' as const } })),
+  });
+}
+
+it('requires H3 service preflight and rejects a changed inherited policy before persisting a batch', async () => {
+  configureH3Batch();
+  await expect(useAppStore.getState().startVideoBatch('project', inspect())).rejects.toThrow('尚未检查');
+  expect(mocks.execute).not.toHaveBeenCalled();
+  expect(useAppStore.getState().videoBatches.project ?? []).toEqual([]);
+  const state = useAppStore.getState();
+  const checked = await checkVideoServices(inspect(), state);
+  mocks.resolveH3.mockResolvedValue({ ...DEFAULT_COMFY_H3_MEMORY_SETTINGS, preset: 'safe12' });
+  await expect(state.startVideoBatch('project', checked)).rejects.toThrow('H3 显存设置或服务已变化');
+  expect(mocks.execute).not.toHaveBeenCalled();
+  expect(useAppStore.getState().videoBatches.project ?? []).toEqual([]);
+});
+
+it('persists only the checked H3 digest and forwards the same proof to every queued execution', async () => {
+  configureH3Batch();
+  const settings = { ...DEFAULT_COMFY_H3_MEMORY_SETTINGS, preset: 'custom' as const, referenceImageMaxSize: 768 };
+  mocks.resolveH3.mockResolvedValue(settings);
+  const checked = await checkVideoServices(inspect(), useAppStore.getState());
+  const expected = comfyH3MemoryFingerprint(settings);
+  mocks.execute.mockImplementationOnce(async () => {
+    mocks.resolveH3.mockResolvedValue({ ...settings, referenceImageMaxSize: 1024 });
+    return { success: true };
+  });
+  const result = await useAppStore.getState().startVideoBatch('project', checked);
+  expect(result.items.map((item) => item.comfyH3SettingsFingerprint)).toEqual([expected, expected]);
+  expect(mocks.execute).toHaveBeenNthCalledWith(1, 'v1', undefined, undefined, undefined, undefined, { comfyH3ExpectedSettings: expected });
+  expect(mocks.execute).toHaveBeenNthCalledWith(2, 'v2', undefined, undefined, undefined, undefined, { comfyH3ExpectedSettings: expected });
+  expect(JSON.stringify(result)).not.toMatch(/attentionHeadChunks|referenceImageMaxSize|127\.0\.0\.1/);
+});
 
 it.each(['success', 'error', 'unknown'] as const)('returns the final %s batch outcome once execution settles without resubmitting', async (status) => {
   if (status === 'error') mocks.execute.mockResolvedValueOnce({ success: false });

@@ -4,6 +4,7 @@
  * - 其他 provider → 通用视频参数（像素分辨率、帧率、时长）
  */
 import Select from '../../shared/Select';
+import ComfyH3MemorySelector from './ComfyH3MemorySelector';
 import ViewportImage from '../../shared/ViewportImage';
 import VideoCharacterPicker from './VideoCharacterPicker';
 import type { MentionPickerItem } from '../../shared/MentionPicker';
@@ -1239,6 +1240,7 @@ ${t('该模型：{limits}（连线带入的素材一并计数）。', { limits: 
                 </div>
               </>
             )}
+            <ComfyH3MemorySelector nodeId={nodeId} disabled={disabled} />
             {extraParameters}
             </fieldset>
           </div>
