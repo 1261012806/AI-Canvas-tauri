@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Icon } from '@iconify/react';
 import { useShallow } from 'zustand/react/shallow';
 import type { EpisodeCreativeInfo } from '../types';
@@ -20,9 +20,12 @@ import Select from './shared/Select';
 import { createEpisodeShotlist } from '../services/shotlistService';
 import SeriesSourceBrowser from './SeriesSourceBrowser';
 import type { DramaAssetKind } from '../types/dramaAssets';
-import { extractSeriesAssetsFromFullScript } from '../services/seriesAssetExtractionService';
+import { commitSeriesAssetCandidates, extractSeriesAssetsFromFullScript, type SeriesAssetExtractionResult } from '../services/seriesAssetExtractionService';
+import { normalizeEpisodeAssetRoster } from '../types/episodeAssets';
+import EpisodeAssetPanel from './series/EpisodeAssetPanel';
+import AssetExtractionPreviewDialog from './series/AssetExtractionPreviewDialog';
 
-type EditorTab = 'outline' | 'script' | 'creative';
+type EditorTab = 'outline' | 'script' | 'creative' | 'characters' | 'props';
 type PendingAction = { type: 'close' } | { type: 'switch'; episodeId: string };
 
 interface CreativeDraft {
@@ -247,6 +250,7 @@ export default function ScriptWorkbench({
     updateEpisodeCreative,
     openChatWithDraft,
     showToast,
+    dramaAssets,
   } = useAppStore(useShallow((state) => ({
     projects: state.projects,
     currentProjectId: state.currentProjectId,
@@ -255,6 +259,7 @@ export default function ScriptWorkbench({
     updateEpisodeCreative: state.updateEpisodeCreative,
     openChatWithDraft: state.openChatWithDraft,
     showToast: state.showToast,
+    dramaAssets: state.dramaAssets,
   })));
 
   const seriesId = currentProjectId ? seriesOwnerId(projects, currentProjectId) : null;
@@ -280,6 +285,13 @@ export default function ScriptWorkbench({
   const [targetDurationSec, setTargetDurationSec] = useState('90');
   const [extractingAssetKind, setExtractingAssetKind] = useState<DramaAssetKind | null>(null);
   const extractingAssetKindRef = useRef<DramaAssetKind | null>(null);
+  const [seriesAssetPreview, setSeriesAssetPreview] = useState<SeriesAssetExtractionResult | null>(null);
+  const extractionGeneration = useRef(0);
+  useEffect(() => () => { extractionGeneration.current += 1; }, [isOpen, currentProjectId]);
+  const episodeAssetRoster = useMemo(
+    () => normalizeEpisodeAssetRoster(currentEpisode?.episodeAssetRoster),
+    [currentEpisode?.episodeAssetRoster],
+  );
   const splitSourceAvailable = splitSource === 'script'
     ? Boolean(series?.series?.script?.trim())
     : Boolean(series?.series?.originalWork);
@@ -320,6 +332,7 @@ export default function ScriptWorkbench({
 
   const performPendingAction = (action: PendingAction) => {
     setPendingAction(null);
+    setSeriesAssetPreview(null);
     if (currentEpisode) {
       setDraftsByEpisode((current) => {
         const next = { ...current };
@@ -336,11 +349,15 @@ export default function ScriptWorkbench({
 
   const requestClose = () => {
     if (isDirty) setPendingAction({ type: 'close' });
-    else onClose();
+    else {
+      setSeriesAssetPreview(null);
+      onClose();
+    }
   };
 
   const requestEpisodeSwitch = (episodeId: string) => {
-    if (episodeId === currentEpisode?.id) return;
+    if (episodeId === currentProjectId) return;
+    setSeriesAssetPreview(null);
     if (isDirty) setPendingAction({ type: 'switch', episodeId });
     else void switchProject(episodeId);
   };
@@ -401,6 +418,7 @@ export default function ScriptWorkbench({
 
   const extractFullScriptAssets = async (kind: DramaAssetKind, label: string) => {
     if (!series || !currentProjectId || extractingAssetKindRef.current) return;
+    const generation = ++extractionGeneration.current;
     extractingAssetKindRef.current = kind;
     setExtractingAssetKind(kind);
     try {
@@ -409,8 +427,11 @@ export default function ScriptWorkbench({
         seriesId: series.id,
         projectId: currentProjectId,
       });
-      showToast(t('已提取并添加 {count} 项{name}资产', { count: result.count, name: label }));
+      if (generation !== extractionGeneration.current) return;
+      setSeriesAssetPreview(result);
+      showToast(t('已提取 {count} 项{name}，请预览后选择入库', { count: result.count, name: label }));
     } catch (error) {
+      if (generation !== extractionGeneration.current) return;
       showToast(error instanceof Error ? error.message : t('全剧资产提取失败'), 'error');
     } finally {
       extractingAssetKindRef.current = null;
@@ -640,11 +661,13 @@ export default function ScriptWorkbench({
           <section className="flex min-h-0 flex-col border-border-subtle xl:border-r">
             {currentEpisode ? (
               <>
-                <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border-subtle px-3">
+                <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-b border-border-subtle px-3 py-1">
                   {([
                     ['outline', '本集大纲', 'lucide:list-tree'],
                     ['script', '本集剧本', 'lucide:scroll-text'],
                     ['creative', '创作要点', 'lucide:lightbulb'],
+                    ['characters', '本集角色', 'lucide:users-round'],
+                    ['props', '本集道具', 'lucide:package'],
                   ] as const).map(([id, label, icon]) => (
                     <button
                       key={id}
@@ -658,11 +681,26 @@ export default function ScriptWorkbench({
                     >
                       <Icon icon={icon} className="h-3.5 w-3.5" />
                       {t(label)}
+                      {id === 'characters' || id === 'props' ? (
+                        <span className="ui-badge">{id === 'characters' ? episodeAssetRoster.characters.length : episodeAssetRoster.props.length}</span>
+                      ) : null}
                     </button>
                   ))}
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-auto">
+                  {activeTab === 'characters' || activeTab === 'props' ? (
+                    currentProjectId === currentEpisode.id ? (
+                      <EpisodeAssetPanel key={`${currentEpisode.id}-${activeTab}`} episodeId={currentEpisode.id}
+                        kind={activeTab === 'characters' ? 'character' : 'prop'}
+                        onBeforeExtract={async () => !isDirty || await saveDraft()} />
+                    ) : (
+                      <div className="p-3">
+                        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary"
+                          onClick={() => requestEpisodeSwitch(currentEpisode.id)}>{t('切换到本集管理资产')}</button>
+                      </div>
+                    )
+                  ) : null}
                   {activeTab === 'outline' ? (
                     <textarea
                       value={draft.outline}
@@ -834,7 +872,7 @@ export default function ScriptWorkbench({
               </div>
               <p className="mt-1.5 text-[10px] leading-4 text-canvas-text-muted">
                 {series?.series?.script?.trim()
-                  ? t('使用当前文本模型读取全剧剧本，成功后自动合并到共享资产库。')
+                  ? t('读取全剧剧本，提取结果先预览，仅将所选条目加入本剧资产库。')
                   : t('请先填写全剧剧本。')}
               </p>
               <div className="mt-2 grid grid-cols-3 gap-1.5">
@@ -897,6 +935,20 @@ export default function ScriptWorkbench({
       </div>
       {isOpen && renamingEpisodeId && (
         <EpisodeNameDialog episodeId={renamingEpisodeId} onClose={() => setRenamingEpisodeId(null)} />
+      )}
+      {isOpen && seriesAssetPreview && currentProjectId === seriesAssetPreview.projectId && (
+        <AssetExtractionPreviewDialog title={t('全剧资产提取预览')} items={seriesAssetPreview.assets}
+          existingItems={(() => {
+            return seriesAssetPreview.kind === 'character' ? dramaAssets.characters
+              : seriesAssetPreview.kind === 'scene' ? dramaAssets.scenes : dramaAssets.props;
+          })()}
+          confirmLabel={t('将所选条目加入本剧资产库')}
+          onClose={() => setSeriesAssetPreview(null)}
+          onConfirm={async (selectedIds) => {
+            const count = await commitSeriesAssetCandidates(seriesAssetPreview, selectedIds);
+            setSeriesAssetPreview(null);
+            showToast(t('已将 {count} 项资产加入本剧资产库', { count }));
+          }} />
       )}
       {sourceOpen && <SeriesSourceBrowser initialPart={splitSource} onClose={() => setSourceOpen(false)}
         beforeAssistant={async () => {

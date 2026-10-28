@@ -49,6 +49,7 @@ import { applyAssetRepairs, cleanupUnavailableAssets, type AssetRepairPreview } 
 import type { DramaAssetLibrary, DramaAssetWriteOptions } from '../types/dramaAssets';
 import { assertDramaAssetWriteCurrent } from '../types/dramaAssets';
 import { isWebviewRecovery } from '../services/webviewRecoveryService';
+import { normalizeEpisodeAssetRoster, type EpisodeAssetRoster } from '../types/episodeAssets';
 
 type ProjectLoadStatus = 'loading' | 'ready' | 'error';
 let activeProjectMetadataWrite: Promise<void> = Promise.resolve();
@@ -348,6 +349,7 @@ function createCurrentProjectSaveRecord(state: AppState): ProjectSaveData | null
     episodeOutline: project.episodeOutline,
     episodeScript: project.episodeScript,
     episodeCreative: project.episodeCreative,
+    episodeAssetRoster: project.episodeAssetRoster,
     series: project.series,
     nodes: state.nodes,
     edges: state.edges,
@@ -496,6 +498,8 @@ export interface ProjectSlice {
     episodeId: string,
     updates: { outline?: string; script?: string; creative?: EpisodeCreativeInfo },
   ) => Promise<boolean>;
+  /** 只更新当前准确分集的提取清单；expectedRevision 防止覆盖较新的编辑。 */
+  updateEpisodeAssetRoster: (episodeId: string, roster: EpisodeAssetRoster, expectedRevision?: number) => Promise<boolean>;
   /** 与相邻的一集交换集号；direction 为 -1 上移、1 下移。 */
   moveEpisode: (episodeId: string, direction: -1 | 1) => Promise<boolean>;
   exportProject: (id: string) => Promise<boolean>;
@@ -656,6 +660,7 @@ async function patchProjectRecord(
   get: ProjectSliceGet,
   projectId: string,
   patch: Partial<CanvasProject>,
+  rollbackRosterOnly = false,
 ): Promise<boolean> {
   const previous = get().projects.find((item) => item.id === projectId);
   if (!previous) return false;
@@ -679,7 +684,19 @@ async function patchProjectRecord(
   } catch (error) {
     console.warn('[项目元数据] 保存失败:', error);
     set((state) => ({
-      projects: state.projects.map((item) => (item.id === projectId ? previous : item)),
+      projects: state.projects.map((item) => {
+        if (item.id !== projectId) return item;
+        if (rollbackRosterOnly) {
+          // 旧保存失败只能撤回仍是本次值的清单，不能恢复整个旧项目覆盖后来的编辑。
+          return item.episodeAssetRoster === patch.episodeAssetRoster ? {
+            ...item, episodeAssetRoster: previous.episodeAssetRoster,
+            updatedAt: item.updatedAt === updatedAt ? previous.updatedAt : item.updatedAt,
+          } : item;
+        }
+        // 普通元数据保存失败也不能顺带撤销后来已接受的本集清单。
+        return item.episodeAssetRoster === previous.episodeAssetRoster
+          ? previous : { ...previous, episodeAssetRoster: item.episodeAssetRoster };
+      }),
     }));
     get().showToast('保存失败，改动已回滚', 'error');
     return false;
@@ -841,6 +858,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           episodeOutline: latestProject.episodeOutline,
           episodeScript: latestProject.episodeScript,
           episodeCreative: latestProject.episodeCreative,
+          episodeAssetRoster: latestProject.episodeAssetRoster,
           series: latestProject.series,
           nodes: nextNodes,
           edges: latest.edges,
@@ -1207,6 +1225,20 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     return patchProjectRecord(set, get, episodeId, patch);
   },
 
+  updateEpisodeAssetRoster: async (episodeId, roster, expectedRevision) => {
+    const state = get();
+    const episode = state.projects.find((project) => project.id === episodeId);
+    const owner = episode?.parentId ? state.projects.find((project) => project.id === episode.parentId) : undefined;
+    if (state.projectLoadStatus !== 'ready' || state.currentProjectId !== episodeId
+      || state.isCreatingProject || state.isReturningToStartPage || state.switchingProjectName !== null
+      || !episode?.parentId || !owner || owner.parentId) return false;
+    const current = normalizeEpisodeAssetRoster(episode.episodeAssetRoster);
+    if ((expectedRevision ?? roster.revision) !== current.revision) return false;
+    if (current.revision >= Number.MAX_SAFE_INTEGER) return false;
+    const next = { ...normalizeEpisodeAssetRoster(roster), revision: current.revision + 1 };
+    return patchProjectRecord(set, get, episodeId, { episodeAssetRoster: next }, true);
+  },
+
   moveEpisode: async (episodeId, direction) => {
     const state = get();
     const episode = state.projects.find((item) => item.id === episodeId);
@@ -1549,7 +1581,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
 
       set({
         projects: get().projects.map((item) => (
-          item.id === id ? { ...item, settings: data.settings } : item
+          item.id === id ? { ...item, settings: data.settings, episodeAssetRoster: data.episodeAssetRoster } : item
         )),
         currentProjectId: id,
         projectName: project.name,
@@ -1789,6 +1821,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           snapshot: p.snapshot, dataFolder: p.dataFolder, settings: p.settings,
           parentId: p.parentId, episodeNo: p.episodeNo, episodeOutline: p.episodeOutline,
           episodeScript: p.episodeScript, episodeCreative: p.episodeCreative,
+          episodeAssetRoster: p.episodeAssetRoster,
           series: p.series,
         })));
         fileService.registerProjectFolders(mapped);
@@ -1804,7 +1837,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           const ownerData = ownerId === targetId ? data : await fileService.loadProjectData(ownerId);
           set({
             projects: mapped.map((project) => (
-              project.id === targetId ? { ...project, settings: data.settings } : project
+              project.id === targetId ? { ...project, settings: data.settings, episodeAssetRoster: data.episodeAssetRoster } : project
             )),
             currentProjectId: targetId,
             projectName: data.name || '已加载项目',
@@ -1854,6 +1887,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
           snapshot: p.snapshot, dataFolder: p.dataFolder, settings: p.settings,
           parentId: p.parentId, episodeNo: p.episodeNo, episodeOutline: p.episodeOutline,
           episodeScript: p.episodeScript, episodeCreative: p.episodeCreative,
+          episodeAssetRoster: p.episodeAssetRoster,
           series: p.series,
         })));
         fileService.registerProjectFolders(mapped);
@@ -1887,7 +1921,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
             const ownerData = ownerId === targetId ? data : await fileService.loadProjectData(ownerId);
             set({
               projects: mapped.map((project) => (
-                project.id === targetId ? { ...project, settings: data.settings } : project
+                project.id === targetId ? { ...project, settings: data.settings, episodeAssetRoster: data.episodeAssetRoster } : project
               )),
               currentProjectId: targetId,
               projectName: data.name || '新项目',

@@ -31,6 +31,7 @@ import { toProjectSummaryRecord } from './indexedDb/projectSummary';
 import type { ProjectSaveData } from './storageService';
 import { normalizeProjectSettings } from './projectSettingsService';
 import { normalizeDramaAssetLibrary } from '../types/dramaAssets';
+import { normalizeEpisodeAssetRoster } from '../types/episodeAssets';
 import type { CanvasProject } from '../types';
 import { serializeProjectArchiveEntries, type ProjectArchiveJsonEntry } from './projectArchiveSerialization';
 
@@ -235,7 +236,13 @@ function readArchiveProject(value: unknown, label: string): ProjectSaveData {
     || (value.groups !== undefined && !Array.isArray(value.groups))) {
     throw new Error(`项目归档中的${label}画布数据不完整`);
   }
-  return value as unknown as ProjectSaveData;
+  return {
+    ...value,
+    ...(value.episodeAssetRoster !== undefined ? {
+      episodeAssetRoster: typeof value.parentId === 'string' && value.parentId
+        ? normalizeEpisodeAssetRoster(value.episodeAssetRoster) : undefined,
+    } : {}),
+  } as unknown as ProjectSaveData;
 }
 
 function readArchiveChat(value: unknown): ProjectArchiveChatPayload | null {

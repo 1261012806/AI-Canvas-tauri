@@ -18,6 +18,7 @@ import type { McpClientConnection } from './mcpClient';
 import type { AnimationFrameEdit, AnimationProcessing, AnimationSheet } from './animation';
 import type { AiAppReference } from './aiApp';
 import type { ComfyRefmodAsset, ComfyRefmodSelection } from './comfyRefmod';
+import type { EpisodeAssetRoster } from './episodeAssets';
 
 export type {
   CanvasDrawingTool,
@@ -410,6 +411,8 @@ export interface CanvasProject {
   episodeScript?: string;
   /** 本集结构化创作要点。 */
   episodeCreative?: EpisodeCreativeInfo;
+  /** 本集人物/道具提取清单；与整部剧共享的正式创作资产库分开保存。 */
+  episodeAssetRoster?: EpisodeAssetRoster;
   /** 剧集级原著与剧本；仅剧集项目有。 */
   series?: ProjectSeriesInfo;
 }

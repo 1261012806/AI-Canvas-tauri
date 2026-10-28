@@ -1,4 +1,5 @@
 import type { EpisodeCreativeInfo, ProjectSeriesInfo, ProjectSettings } from '../../types';
+import { normalizeEpisodeAssetRoster, type EpisodeAssetRoster } from '../../types/episodeAssets';
 
 /** 项目列表所需的轻量记录；禁止放入画布节点、连线、历史或角色库。 */
 export interface ProjectSummaryRecord {
@@ -14,6 +15,7 @@ export interface ProjectSummaryRecord {
   episodeOutline?: string;
   episodeScript?: string;
   episodeCreative?: EpisodeCreativeInfo;
+  episodeAssetRoster?: EpisodeAssetRoster;
   series?: ProjectSeriesInfo;
 }
 
@@ -65,6 +67,9 @@ export function toProjectSummaryRecord(record: unknown): ProjectSummaryRecord | 
   if (typeof source.episodeScript === 'string') summary.episodeScript = source.episodeScript;
   if (source.episodeCreative && typeof source.episodeCreative === 'object') {
     summary.episodeCreative = source.episodeCreative as EpisodeCreativeInfo;
+  }
+  if (summary.parentId && source.episodeAssetRoster !== undefined) {
+    summary.episodeAssetRoster = normalizeEpisodeAssetRoster(source.episodeAssetRoster);
   }
   if (source.series && typeof source.series === 'object') {
     summary.series = source.series as ProjectSeriesInfo;

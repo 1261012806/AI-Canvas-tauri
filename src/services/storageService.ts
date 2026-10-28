@@ -48,6 +48,7 @@ import { walkDirectoryFiles } from './fs/assetLibrary';
 import { identifyAsset, resolveIndexedAssetPath } from './fs/assetIndex';
 import type { DramaAssetLibrary, DramaProp, DramaScene, DramaAssetReferenceImage } from '../types/dramaAssets';
 import { normalizeDramaAssetLibrary, normalizeDramaVisualAsset, syncDramaVisualAssetPrimary } from '../types/dramaAssets';
+import { normalizeEpisodeAssetRoster, type EpisodeAssetRoster } from '../types/episodeAssets';
 import { deleteProviderSecretIfUnchanged, hasPlaintextSecret, readProviderSecretFingerprint, restoreConfigSecrets, stripConfigSecrets } from './providerSecretService';
 import { enqueueConfigPersistence } from './configPersistenceQueue';
 import { applyConfigPatch, ConfigConflictError, configValuesEqual, configWithoutSecrets, createConfigPatch, type ConfigChange } from './configPatch';
@@ -770,6 +771,9 @@ async function serializeProjectDramaAssets(
 }
 
 export async function serializeProjectRecord(data: ProjectSaveData): Promise<ProjectSaveData> {
+  if (data.episodeAssetRoster !== undefined) {
+    data = { ...data, episodeAssetRoster: data.parentId ? normalizeEpisodeAssetRoster(data.episodeAssetRoster) : undefined };
+  }
   const projectDir = await getProjectDataDir(data.id);
   if (!projectDir) {
     if (projectRecordContainsInlineMedia(data)) {
@@ -854,6 +858,7 @@ export interface ProjectSaveData {
   episodeOutline?: string;
   episodeScript?: string;
   episodeCreative?: import('../types').EpisodeCreativeInfo;
+  episodeAssetRoster?: EpisodeAssetRoster;
   /** 剧集级原著与剧本；仅剧集项目有 */
   series?: import('../types').ProjectSeriesInfo;
 }
@@ -921,7 +926,11 @@ export async function loadProjectData(id: string): Promise<ProjectSaveData | nul
     } catch {
       console.warn('[项目加载] 角色库本地文件恢复未完成，已使用原始角色数据', { projectId: id });
     }
-    return { ...persistedRecord, nodes, settings, dramaAssets };
+    return { ...persistedRecord, nodes, settings, dramaAssets,
+      ...(persistedRecord.episodeAssetRoster !== undefined ? {
+        episodeAssetRoster: persistedRecord.parentId ? normalizeEpisodeAssetRoster(persistedRecord.episodeAssetRoster) : undefined,
+      } : {}),
+    };
   } catch (error) {
     console.error('Load project data failed:', error);
     return null;

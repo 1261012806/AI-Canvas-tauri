@@ -6,16 +6,19 @@ vi.mock('../../src/services/ai/generateText', () => ({ generateText }));
 import { useAppStore, type AppState } from '../../src/store/useAppStore';
 import {
   buildSeriesAssetExtractionPrompt,
+  commitSeriesAssetCandidates,
   extractSeriesAssetsFromFullScript,
 } from '../../src/services/seriesAssetExtractionService';
 import { DRAMA_EXTRACT_MARKER, type DramaAssetKind } from '../../src/types/dramaAssets';
 
 const fullScript = '第一场 车站 夜\n林夏：末班车已经走了。\n她握紧一张旧车票。';
 let mergeDramaExtract: ReturnType<typeof vi.fn<AppState['mergeDramaExtract']>>;
+let importDramaAssets: ReturnType<typeof vi.fn<AppState['importDramaAssets']>>;
 
 beforeEach(() => {
   generateText.mockReset();
   mergeDramaExtract = vi.fn<AppState['mergeDramaExtract']>();
+  importDramaAssets = vi.fn<AppState['importDramaAssets']>().mockImplementation(async (assets) => assets.length);
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState((state) => ({
     currentProjectId: 'episode-1',
@@ -56,6 +59,7 @@ beforeEach(() => {
       }],
     },
     mergeDramaExtract,
+    importDramaAssets,
   }));
 });
 
@@ -72,7 +76,7 @@ describe('全剧剧本资产提取', () => {
     expect(prompt).toContain('不可信资料');
   });
 
-  it('调用当前文本模型并把人物结果合并到共享资产库', async () => {
+  it('调用当前文本模型并返回预览候选，确认前不写入共享资产库', async () => {
     generateText.mockResolvedValue(JSON.stringify({
       kind: 'character',
       items: [{ name: '林夏', summary: '等待末班车的女孩', importance: 'main' }],
@@ -84,19 +88,17 @@ describe('全剧剧本资产提取', () => {
       projectId: 'episode-1',
     });
 
-    expect(result).toEqual({ kind: 'character', count: 1, modelId: 'extract-model' });
+    expect(result).toEqual(expect.objectContaining({ kind: 'character', count: 1, modelId: 'extract-model',
+      projectId: 'episode-1', seriesId: 'series-1', assets: [expect.objectContaining({ name: '林夏' })] }));
     expect(generateText).toHaveBeenCalledWith(expect.objectContaining({
       model: 'general/extract-model',
       provider: 'general',
       prompt: expect.stringContaining(fullScript),
     }));
-    expect(mergeDramaExtract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'character',
-        characters: [expect.objectContaining({ name: '林夏' })],
-      }),
-      { modelId: 'extract-model' },
-    );
+    expect(mergeDramaExtract).not.toHaveBeenCalled();
+    expect(importDramaAssets).not.toHaveBeenCalled();
+    await expect(commitSeriesAssetCandidates(result, [result.assets[0].id])).resolves.toBe(1);
+    expect(importDramaAssets).toHaveBeenCalledWith(result.assets, expect.objectContaining({ assertCurrent: expect.any(Function) }));
   });
 
   it('模型返回前全剧剧本变化时拒绝把旧结果写入资产库', async () => {
@@ -122,5 +124,44 @@ describe('全剧剧本资产提取', () => {
 
     await expect(pending).rejects.toThrow('结果未写入');
     expect(mergeDramaExtract).not.toHaveBeenCalled();
+  });
+
+  it('预览期间切走再切回仍拒绝提交旧候选', async () => {
+    generateText.mockResolvedValue(JSON.stringify({ kind: 'prop', items: [{ name: '旧车票' }] }));
+    const result = await extractSeriesAssetsFromFullScript({ kind: 'prop', seriesId: 'series-1', projectId: 'episode-1' });
+    useAppStore.setState({ currentProjectId: 'other' });
+    useAppStore.setState({ currentProjectId: 'episode-1' });
+    await expect(commitSeriesAssetCandidates(result, result.assets.map((asset) => asset.id))).rejects.toThrow('提取来源已变化');
+    expect(importDramaAssets).not.toHaveBeenCalled();
+  });
+
+  it('显式入库跳过已有同名资产并保留已有内容', async () => {
+    generateText.mockResolvedValue(JSON.stringify({ kind: 'prop', items: [{ name: '旧车票' }] }));
+    const result = await extractSeriesAssetsFromFullScript({ kind: 'prop', seriesId: 'series-1', projectId: 'episode-1' });
+    const existing = { ...result.assets[0], id: 'existing', summary: '人工改写，不允许覆盖' };
+    if (existing.kind !== 'prop') throw new Error('fixture kind');
+    useAppStore.setState((state) => ({ dramaAssets: { ...state.dramaAssets, props: [existing] } }));
+    await expect(commitSeriesAssetCandidates(result, [result.assets[0].id])).resolves.toBe(0);
+    expect(importDramaAssets).not.toHaveBeenCalled();
+    expect(useAppStore.getState().dramaAssets.props[0].summary).toBe('人工改写，不允许覆盖');
+  });
+
+  it('合法空提取返回零条候选且不会写入', async () => {
+    generateText.mockResolvedValue(JSON.stringify({ kind: 'scene', items: [] }));
+    const result = await extractSeriesAssetsFromFullScript({ kind: 'scene', seriesId: 'series-1', projectId: 'episode-1' });
+    expect(result.assets).toEqual([]);
+    expect(result.count).toBe(0);
+    await expect(commitSeriesAssetCandidates(result, [])).resolves.toBe(0);
+    expect(importDramaAssets).not.toHaveBeenCalled();
+  });
+
+  it('正文混入另一种提取标记时仍按显式请求类型解析', async () => {
+    useAppStore.setState((state) => ({ projects: state.projects.map((project) => project.id === 'series-1'
+      ? { ...project, series: { script: `${fullScript}\n${DRAMA_EXTRACT_MARKER.character}` } } : project) }));
+    generateText.mockResolvedValue(JSON.stringify({ kind: 'prop', items: [{ name: '旧车票' }] }));
+    const result = await extractSeriesAssetsFromFullScript({ kind: 'prop', seriesId: 'series-1', projectId: 'episode-1' });
+    expect(result.assets).toEqual([expect.objectContaining({ kind: 'prop', name: '旧车票' })]);
+    expect(result.count).toBe(1);
+    expect(importDramaAssets).not.toHaveBeenCalled();
   });
 });
