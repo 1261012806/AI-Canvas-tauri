@@ -376,6 +376,10 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 
 面板保持打开不关：ComfyUI 那边存回来后列表会实时刷新，方便接着改默认节点。连接检查失败会返回错误，保留已有编辑窗口及未保存草稿。
 
+编辑窗口顶部采用固定菜单栏，保存、扩展与运行操作不再支持拖拽或恢复浮动位置，拖拽手柄隐藏。工作流标签保留原生结构，位于菜单栏下方；窗口变窄时菜单按组换行并同步占位，保留旧扩展下拉菜单和进度条的定位。窗口首行空白区仍可拖动桌面窗口。此布局调整未运行测试，待用户在重新编译的 Tauri 桌面端验收：多标签切换、新建与关闭、菜单及扩展下拉、保存、运行进度、窄窗口和明暗主题。
+
+侧边工具栏外宽为 47px，内部按钮为 35px；展开的工作流、模型与节点侧栏在工具栏旁独立显示，恢复主题背景并保留间隔、圆角与原生宽度调整，不与一级工具栏重叠。适配原生左右侧栏位置；专注模式或节点选择隐藏工具栏时同步移除留位，节点属性面板仍由原生布局管理。此调整未运行测试，待桌面验收侧栏展开、切换、关闭、宽度调整、搜索滚动、左右位置、专注与节点选择模式及明暗主题。
+
 设置页与工作流编辑入口的原生开窗请求共用串行锁。同源窗口恢复显示并复用；初始 `about:blank` 状态最多等待 5 秒，不据此关闭加载中的窗口。切换服务器时，发出关闭请求后最多等待 5 秒，确认旧 WebView 已注销才创建同名窗口；关闭被取消或状态超时会返回可重试错误，不强制销毁页面。回归入口为 Rust `comfyui::tests`，覆盖加载过渡、延迟注销与超时；真实 WebView2 的窗口显示仍需桌面环境验收。
 
 ### 11.1 助手动态工作流与服务器绑定
@@ -433,6 +437,7 @@ Qwen 验证入口为 `builtinWorkflows.test.ts`、`audioSpeechSettings.test.ts` 
 | [src/store/store.workflows.ts](../src/store/store.workflows.ts) | 工作流 CRUD 与持久化 |
 | [src-tauri/src/media/comfyui/mod.rs](../src-tauri/src/media/comfyui/mod.rs) | 启动本地 ComfyUI、编辑窗口、保存 payload 校验 |
 | [src-tauri/src/media/comfyui/bridge.js](../src-tauri/src/media/comfyui/bridge.js) | 标签身份绑定、编辑载入与保存握手 |
+| [src-tauri/src/media/comfyui/bridge.css](../src-tauri/src/media/comfyui/bridge.css) | 编辑窗口工具栏、标题栏与侧栏样式；由 Rust 编译内嵌，随桥接脚本注入 |
 | [tests/services/comfyBridgeSaveIdentity.test.ts](../tests/services/comfyBridgeSaveIdentity.test.ts) | 多标签保存和异步身份回归 |
 | [tests/services/comfyWorkflowEditor.test.ts](../tests/services/comfyWorkflowEditor.test.ts) | 打开回执、并发限制与缺节点检查超时 |
 | [tests/components/workflowEditorInteraction.test.tsx](../tests/components/workflowEditorInteraction.test.tsx) | 加载反馈、重复点击与失败重试交互 |

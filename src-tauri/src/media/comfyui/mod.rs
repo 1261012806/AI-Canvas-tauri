@@ -62,6 +62,8 @@ const FALLBACK_LAUNCHERS: [&str; 5] = [
     ".launcher/StableDiffusionWebUILauncher.exe",
 ];
 const COMFYUI_BRIDGE_SCRIPT: &str = include_str!("bridge.js");
+const COMFYUI_BRIDGE_STYLES: &str = include_str!("bridge.css");
+const COMFYUI_BRIDGE_ICON: &str = include_str!("../../../../public/favicon.svg");
 const MAX_WORKFLOW_JSON_LENGTH: usize = 16 * 1024 * 1024;
 const COMFYUI_ACTION_PATH: &str = "/__ai_canvas_comfy_action__";
 const COMFYUI_CONNECT_TIMEOUT: Duration = Duration::from_millis(700);
@@ -811,7 +813,13 @@ pub async fn open_comfyui_window(
         .await?;
     }
 
-    let mut initialization_script = COMFYUI_BRIDGE_SCRIPT.to_string();
+    let bridge_styles = serde_json::to_string(COMFYUI_BRIDGE_STYLES)
+        .expect("ComfyUI bridge styles can be serialized");
+    let bridge_icon = serde_json::to_string(COMFYUI_BRIDGE_ICON)
+        .expect("ComfyUI bridge icon can be serialized");
+    let mut initialization_script = format!(
+        "const aiCanvasComfyStyles = {bridge_styles};\nconst aiCanvasComfyIcon = {bridge_icon};\n{COMFYUI_BRIDGE_SCRIPT}"
+    );
     if let Some(script) = editor_script {
         initialization_script.push_str(&script);
     }

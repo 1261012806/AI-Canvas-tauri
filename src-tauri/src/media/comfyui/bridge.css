@@ -1,0 +1,787 @@
+:root {
+  --ai-canvas-titlebar-height: var(--workflow-tabs-height, 36px);
+  --ai-canvas-menu-height: var(--ai-canvas-titlebar-height);
+  --ai-canvas-workflow-tabs-height: 28px;
+  --ai-canvas-sidebar-width: 47px;
+  --ai-canvas-sidebar-button-size: 35px;
+  --ai-canvas-sidebar-edge: 12px;
+  --ai-canvas-sidebar-gap: 8px;
+  --ai-canvas-sidebar-top: max(15vh, calc(var(--ai-canvas-menu-height) + var(--ai-canvas-workflow-tabs-height) + 12px));
+  --ai-canvas-menu-inset-start: 48px;
+  --ai-canvas-menu-inset-end: 120px;
+  --ai-canvas-brand: #6366f1;
+  --ai-canvas-brand-hover: #818cf8;
+  --ai-canvas-floating-surface: color-mix(
+    in srgb,
+    var(--p-content-background, #14141c) 82%,
+    transparent
+  );
+}
+body {
+  overflow: hidden;
+}
+/* 为固定菜单整行留位，原生工作流标签及画布整体下移。 */
+.comfyui-body {
+  --ai-canvas-sidebar-panel-top: calc(var(--ai-canvas-sidebar-top) - var(--ai-canvas-menu-height) - var(--ai-canvas-workflow-tabs-height));
+  box-sizing: border-box;
+  padding-top: var(--ai-canvas-menu-height);
+}
+.ai-canvas-comfy-macos {
+  --ai-canvas-sidebar-edge: 84px;
+  --ai-canvas-menu-inset-start: 128px;
+  --ai-canvas-menu-inset-end: 8px;
+}
+/* 仅在第二排覆盖原生高度变量，首排菜单及窗口按钮保持原高度。 */
+[data-testid="topbar-workflow-tabs"] {
+  --workflow-tabs-height: var(--ai-canvas-workflow-tabs-height);
+  box-sizing: border-box;
+  height: var(--workflow-tabs-height);
+  min-height: var(--workflow-tabs-height);
+  max-height: var(--workflow-tabs-height);
+  flex-shrink: 0;
+}
+[data-testid="topbar-workflow-tabs"] .workflow-tab,
+[data-testid="topbar-workflow-tabs"] [data-slot="tabs-trigger"] {
+  min-height: 0;
+  height: 100%;
+  padding-block: 0;
+  line-height: 1;
+}
+[data-testid="topbar-workflow-tabs"] .workflow-label {
+  font-size: 12px;
+}
+[data-testid="topbar-workflow-tabs"] .new-blank-workflow-button,
+[data-testid="topbar-workflow-tabs"] button[aria-haspopup="menu"] {
+  box-sizing: border-box;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  padding: 0;
+}
+.pointer-events-auto {
+  background-color: transparent;
+  border-color: transparent;
+  z-index: 9999;
+}
+.actionbar-container {
+  --ai-canvas-action-size: 24px;
+  --ai-canvas-action-icon-size: 14px;
+  --ai-canvas-action-chevron-width: 7px;
+  --ai-canvas-action-chevron-height: 4px;
+  --ai-canvas-action-radius: 6px;
+  box-sizing: border-box;
+  gap: 3px;
+}
+.ai-canvas-fixed-menu {
+  position: fixed;
+  top: 0;
+  left: var(--ai-canvas-menu-inset-start);
+  right: var(--ai-canvas-menu-inset-end);
+  z-index: 2147483647;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--ai-canvas-titlebar-height);
+  margin: 0;
+  padding: 0;
+  border-width: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* 背景留在菜单所在的层级，避免原生窗口控件层盖住 ComfyUI 的按钮。 */
+.ai-canvas-fixed-menu::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: -1;
+  box-sizing: border-box;
+  height: var(--ai-canvas-menu-height);
+  border-bottom: 1px solid var(--p-content-border-color, ButtonBorder);
+  background: var(--comfy-menu-bg, var(--p-content-background, Canvas));
+  pointer-events: none;
+}
+.actionbar-container.ai-canvas-fixed-actionbar {
+  min-width: 0;
+  min-height: var(--ai-canvas-titlebar-height);
+  height: auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 6px;
+  overflow: visible;
+}
+.actionbar-container.ai-canvas-fixed-actionbar .actionbar {
+  position: static;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.actionbar-container.ai-canvas-fixed-actionbar .drag-handle,
+.actionbar-container.ai-canvas-fixed-actionbar > div > .border-dashed {
+  display: none;
+  pointer-events: none;
+}
+.actionbar-container [data-testid="action-bar-buttons"] {
+  align-items: center;
+  gap: 2px;
+}
+.actionbar-container > [data-testid="action-bar-buttons"],
+.actionbar-container > [data-testid="legacy-topbar-container"],
+.actionbar-container > .flex.h-full.items-center,
+.actionbar-container [data-testid="legacy-topbar-container"] > div,
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button-group,
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button-group,
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitors-container,
+.actionbar-container .actionbar,
+.actionbar-container .actionbar [data-pc-section="contentcontainer"],
+.actionbar-container .actionbar [data-pc-section="content"],
+.actionbar-container .actionbar [data-pc-section="content"] > div {
+  box-sizing: border-box;
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  align-items: center;
+}
+/* 窄窗口按按钮组换行，保留菜单弹层的可见溢出与原生进度条定位。 */
+.actionbar-container.ai-canvas-fixed-actionbar > *,
+.actionbar-container.ai-canvas-fixed-actionbar [data-testid="legacy-topbar-container"] > div,
+.actionbar-container.ai-canvas-fixed-actionbar [data-testid="legacy-topbar-container"] .comfyui-button-group,
+.actionbar-container.ai-canvas-fixed-actionbar [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button-group {
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.actionbar-container button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  vertical-align: middle;
+  border-radius: var(--ai-canvas-action-radius);
+  padding: 0 6px;
+  line-height: 1;
+}
+.actionbar-container button:not(.batch-count button) {
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+}
+.actionbar-container button > span,
+.actionbar-container button .p-button-label {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.actionbar-container button > i,
+.actionbar-container button > svg,
+.actionbar-container button .p-button-icon {
+  flex: 0 0 var(--ai-canvas-action-icon-size);
+  width: var(--ai-canvas-action-icon-size);
+  height: var(--ai-canvas-action-icon-size);
+  margin: 0;
+  line-height: 1;
+}
+.actionbar-container button[aria-label][data-testid="queue-button"],
+.actionbar-container button[aria-label]:not([data-testid]):not(.batch-count button) {
+  min-width: var(--ai-canvas-action-size);
+}
+.actionbar-container button:not(:has(span)):not(.batch-count button) {
+  width: var(--ai-canvas-action-size);
+  min-width: var(--ai-canvas-action-size);
+  max-width: var(--ai-canvas-action-size);
+  padding: 0;
+}
+.actionbar-container .queue-button-group {
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  align-items: center;
+  border-radius: var(--ai-canvas-action-radius);
+}
+.actionbar-container .batch-count > div {
+  width: 44px;
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  display: flex;
+  align-items: center;
+  border-radius: var(--ai-canvas-action-radius) 0 0 var(--ai-canvas-action-radius);
+}
+.actionbar-container .batch-count,
+.actionbar-container .batch-count > div > div:last-child {
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+}
+.actionbar-container .batch-count > div > div:last-child {
+  width: 16px;
+  min-width: 16px;
+}
+.actionbar-container .batch-count input {
+  height: 100%;
+  padding-inline: 4px 0;
+  padding-block: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+.actionbar-container .batch-count button {
+  width: 100%;
+  min-width: 0;
+  min-height: calc(var(--ai-canvas-action-size) / 2);
+  height: calc(var(--ai-canvas-action-size) / 2);
+  max-height: calc(var(--ai-canvas-action-size) / 2);
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+}
+.actionbar-container [data-testid="queue-button"] {
+  width: var(--ai-canvas-action-size);
+  min-width: var(--ai-canvas-action-size);
+  gap: 0;
+  padding: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  overflow: hidden;
+  font-size: 0;
+}
+.actionbar-container [data-testid="queue-mode-menu-trigger"] {
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+  border-radius: 0 var(--ai-canvas-action-radius) var(--ai-canvas-action-radius) 0;
+}
+.actionbar-container .batch-count button > svg,
+.actionbar-container [data-testid="queue-mode-menu-trigger"] > svg {
+  flex: 0 0 auto;
+  width: var(--ai-canvas-action-chevron-width);
+  min-width: var(--ai-canvas-action-chevron-width);
+  max-width: var(--ai-canvas-action-chevron-width);
+  height: var(--ai-canvas-action-chevron-height);
+  min-height: var(--ai-canvas-action-chevron-height);
+  max-height: var(--ai-canvas-action-chevron-height);
+}
+.actionbar-container [data-testid="queue-overlay-toggle"] {
+  padding-inline: 6px;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] {
+  font-size: 12px;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] > div,
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button-group,
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button-group {
+  align-items: center;
+  gap: 3px;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] > div {
+  margin-inline: 3px;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitor,
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-text,
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-content {
+  box-sizing: border-box;
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  align-items: center;
+  padding-block: 0;
+  line-height: 1;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitor {
+  display: flex;
+  overflow: hidden;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-text,
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-slider {
+  right: 0;
+  left: auto;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .crystools-label {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  height: 100%;
+  padding-right: 3px;
+  text-align: right;
+  line-height: 1;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button,
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  margin-block: 0;
+  padding-inline: 5px;
+  padding-block: 0;
+  line-height: 1;
+  overflow: hidden;
+  border-radius: var(--ai-canvas-action-radius);
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button,
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button:not(:has(span)),
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label="ComfyUI Manager"] {
+  width: var(--ai-canvas-action-size);
+  min-width: var(--ai-canvas-action-size);
+  max-width: var(--ai-canvas-action-size);
+  padding-inline: 0;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button {
+  border-width: 0;
+  box-shadow: none;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .rgthree-button-icon,
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button > i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--ai-canvas-action-icon-size);
+  width: var(--ai-canvas-action-icon-size);
+  height: var(--ai-canvas-action-icon-size);
+  margin: 0;
+  line-height: 1;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] i,
+.actionbar-container [data-testid="legacy-topbar-container"] svg {
+  display: block;
+  width: var(--ai-canvas-action-icon-size);
+  height: var(--ai-canvas-action-icon-size);
+  font-size: var(--ai-canvas-action-icon-size);
+}
+/* Manager 只留图标 */
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label="ComfyUI Manager"] span {
+  display: none;
+}
+/* Image Feed 与其他扩展入口一样使用纯图标 tiny 按钮 */
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label^="Show Image Feed"] {
+  width: var(--ai-canvas-action-size);
+  min-width: var(--ai-canvas-action-size);
+  max-width: var(--ai-canvas-action-size);
+  padding-inline: 0;
+}
+.actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label^="Show Image Feed"] span {
+  display: none;
+}
+/* K Monitor 只保留 K 标识，收敛为纯图标按钮 */
+.actionbar-container button.comfyui-button[aria-label$="Monitor"],
+.actionbar-container button.comfyui-button[title$="Monitor"] {
+  width: var(--ai-canvas-action-size) !important;
+  min-width: var(--ai-canvas-action-size) !important;
+  max-width: var(--ai-canvas-action-size) !important;
+  padding-inline: 0 !important;
+  font-size: 0 !important;
+}
+.actionbar-container button.comfyui-button[aria-label$="Monitor"] span,
+.actionbar-container button.comfyui-button[title$="Monitor"] span {
+  display: none !important;
+}
+.actionbar-container button.comfyui-button[aria-label$="Monitor"]::before,
+.actionbar-container button.comfyui-button[title$="Monitor"]::before {
+  content: "𝙆";
+  font-size: var(--ai-canvas-action-icon-size);
+  line-height: 1;
+}
+/* 动态扩展图标不依赖 ComfyUI 打包时生成的图标类。 */
+.actionbar-container .ai-canvas-save-as-icon {
+  --ai-canvas-icon-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%228%22%20y%3D%228%22%20width%3D%2213%22%20height%3D%2213%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M16%208V5a2%202%200%200%200-2-2H5a2%202%200%200%200-2%202v9a2%202%200%200%200%202%202h3M11%2014.5h7m-3.5-3.5v7%22%2F%3E%3C%2Fsvg%3E");
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: var(--ai-canvas-icon-mask) center / contain no-repeat;
+  mask: var(--ai-canvas-icon-mask) center / contain no-repeat;
+}
+.actionbar-container .ai-canvas-save-action {
+  min-height: var(--ai-canvas-action-size);
+  height: var(--ai-canvas-action-size);
+  max-height: var(--ai-canvas-action-size);
+  padding-inline: 8px;
+  line-height: 1;
+  border-radius: var(--ai-canvas-action-radius);
+  color: white;
+  background-color: var(--ai-canvas-brand);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+.actionbar-container .ai-canvas-save-action:hover {
+  color: white;
+  background-color: var(--ai-canvas-brand-hover);
+  box-shadow:
+    0 8px 20px rgb(99 102 241 / .38),
+    inset 0 1px 0 rgb(255 255 255 / .2);
+}
+.actionbar-container .ai-canvas-save-action:active {
+  transform: scale(.97);
+}
+.actionbar-container .ai-canvas-save-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ai-canvas-brand-hover) 72%, white);
+  outline-offset: 2px;
+}
+[data-testid="current-user-button"],
+[data-testid="login-button"] {
+  display: none !important;
+}
+#ai-canvas-comfy-window-chrome {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 2147483646;
+  box-sizing: border-box;
+  height: var(--ai-canvas-menu-height);
+  pointer-events: none;
+  user-select: none;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-drag-region {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--ai-canvas-titlebar-height);
+  pointer-events: none;
+  z-index: 0;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-window-icon {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: var(--ai-canvas-titlebar-height);
+  pointer-events: none;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-window-icon svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+.ai-canvas-comfy-macos #ai-canvas-comfy-window-chrome .ai-canvas-window-icon {
+  left: 84px;
+  width: 36px;
+}
+#ai-canvas-comfy-window-chrome button {
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-windows-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  height: var(--ai-canvas-titlebar-height);
+  pointer-events: auto;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-window-button {
+  width: 40px;
+  height: var(--ai-canvas-titlebar-height);
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: var(--p-text-muted-color, currentColor);
+  background: transparent;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-window-button:hover {
+  color: var(--p-text-color, currentColor);
+  background: var(--p-content-hover-background, ButtonFace);
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-close:hover {
+  color: white;
+  background: rgb(239 68 68 / .7);
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-mac-controls {
+  position: absolute;
+  top: calc(var(--ai-canvas-titlebar-height) / 2);
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--p-content-border-color, ButtonBorder);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--p-content-background, Canvas) 45%, transparent);
+  box-shadow: 0 8px 20px rgb(0 0 0 / .2);
+  backdrop-filter: blur(16px);
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-traffic-light {
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / .2);
+  border-radius: 999px;
+  color: rgb(0 0 0 / .6);
+  cursor: pointer;
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / .3);
+  transition: filter 120ms ease, transform 120ms ease;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-traffic-light:hover {
+  filter: brightness(1.08);
+  transform: scale(1.08);
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-traffic-light svg {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+#ai-canvas-comfy-window-chrome .ai-canvas-mac-controls:hover svg { opacity: 1; }
+#ai-canvas-comfy-window-chrome .ai-canvas-mac-close { background: #ff5f57; }
+#ai-canvas-comfy-window-chrome .ai-canvas-mac-minimize { background: #febc2e; }
+#ai-canvas-comfy-window-chrome .ai-canvas-mac-expand { background: #28c840; }
+/* ===== ComfyUI side-toolbar → 悬浮左侧，视觉同步本项目 sidebar-floating =====
+   真实 DOM：div.side-toolbar-container > nav.side-tool-bar-container
+   本项目 sidebar-floating 的核心视觉（src/styles/sidebar.css）：
+   - position:absolute; left:12px; top:20%（竖向偏上居中）
+   - 玻璃态：floating-surface-bg padding-box + glass-bevel-border border-box
+   - backdrop-filter: blur(24px); border:1px transparent; border-radius:14px
+   - box-shadow: glass-shadow-floating（多层投影 + 内高光）
+   - 工具栏 47px，子按钮 35×35、9px 圆角、hover 微缩放
+   ComfyUI 页面无法引用本项目的 CSS 变量，下面用 color-mix 复刻等价视觉。 */
+.side-toolbar-container {
+  --sidebar-width: var(--ai-canvas-sidebar-button-size);
+  --sidebar-item-height: var(--ai-canvas-sidebar-button-size);
+  box-sizing: border-box;
+  width: var(--ai-canvas-sidebar-width);
+  min-width: var(--ai-canvas-sidebar-width);
+  max-width: var(--ai-canvas-sidebar-width);
+  /* 在顶部菜单和标签下方悬浮，较高窗口仍从 15% 位置开始。 */
+  position: fixed !important;
+  top: var(--ai-canvas-sidebar-top) !important;
+  bottom: auto !important;
+  left: var(--ai-canvas-sidebar-edge);
+  right: auto;
+  transform: none;
+  z-index: 30;
+  /* 纵向排列、紧凑间距 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  /* 玻璃态背景：半透明表面色 padding-box + 渐变描边 border-box */
+  background:
+    linear-gradient(
+      var(--ai-canvas-floating-surface),
+      var(--ai-canvas-floating-surface)
+    ) padding-box,
+    linear-gradient(
+      160deg,
+      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0.09) 36%,
+      rgba(255, 255, 255, 0.04) 100%
+    ) border-box;
+  backdrop-filter: blur(24px) saturate(130%);
+  -webkit-backdrop-filter: blur(24px) saturate(130%);
+  border: 1px solid transparent;
+  border-radius: 14px;
+  /* 同步 glass-shadow-floating：多层投影 + 内高光内描边 */
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / .42),
+    0 12px 32px rgb(0 0 0 / .38),
+    inset 0 1px 0 rgb(255 255 255 / .10),
+    inset 0 0 0 1px rgb(255 255 255 / .025);
+}
+/* 按原生侧栏方向留位；面板继续由 Splitter 管理宽度和开关，不移动 Vue 节点。 */
+.side-toolbar-container:has(> .side-tool-bar-container:not([aria-hidden="true"])) + div:has(#first-side-panel.side-bar-panel) {
+  margin-left: calc(var(--ai-canvas-sidebar-edge) + var(--ai-canvas-sidebar-width) + var(--ai-canvas-sidebar-gap));
+}
+.side-toolbar-container:has(> .side-tool-bar-container:not([aria-hidden="true"])) + div:has(#last-side-panel.side-bar-panel) {
+  margin-right: calc(var(--ai-canvas-sidebar-edge) + var(--ai-canvas-sidebar-width) + var(--ai-canvas-sidebar-gap));
+}
+.comfyui-body .flex-row-reverse > .side-toolbar-container {
+  left: auto;
+  right: var(--ai-canvas-sidebar-edge);
+}
+.side-toolbar-container:empty,
+.side-toolbar-container:has(> .side-tool-bar-container[aria-hidden="true"]) {
+  visibility: hidden;
+  pointer-events: none;
+}
+:is(#first-side-panel, #last-side-panel).side-bar-panel {
+  box-sizing: border-box;
+  align-self: flex-start;
+  height: calc(100% - var(--ai-canvas-sidebar-panel-top) - 12px);
+  margin-top: var(--ai-canvas-sidebar-panel-top);
+  margin-bottom: 12px;
+  border: 1px solid var(--p-content-border-color, ButtonBorder);
+  border-radius: 14px;
+  background: var(--comfy-menu-bg, var(--p-content-background, Canvas));
+  box-shadow: var(--interface-floating-panel-shadow, none);
+}
+#first-side-panel.side-bar-panel + [role="separator"],
+[role="separator"]:has(+ #last-side-panel.side-bar-panel) {
+  margin-top: var(--ai-canvas-sidebar-panel-top);
+  margin-bottom: 12px;
+}
+/* 内部 nav 去掉原生贴边背景/边框/阴影，避免双层叠加；并修正悬浮态下的布局塌缩 */
+.side-toolbar-container .side-tool-bar-container {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  min-width: 0;
+  height: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px;
+  padding: 0;
+  margin-inline: 0;
+}
+/* nav 内层包裹 div 同步为竖向 flex，去掉 h-full 撑满 */
+.side-toolbar-container .side-tool-bar-container > div {
+  width: 100%;
+  min-width: 0;
+  height: auto !important;
+  gap: 2px;
+}
+/* 按钮组间距紧凑、背景透明，避免原生背景干扰悬浮玻璃态 */
+.side-toolbar-container .sidebar-item-group {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border-width: 0;
+  box-shadow: none;
+  gap: 2px;
+  background: transparent !important;
+}
+/* 底部按钮组在悬浮态下不再用 mt-auto 钉底，跟随顶部组顺序排列 */
+.side-toolbar-container .sidebar-item-group.mt-auto {
+  margin-top: 0 !important;
+}
+/* 去掉原生右侧分隔线（border-r）*/
+.side-toolbar-container .side-tool-bar-container.border-r {
+  border-right: none !important;
+}
+/* 悬浮态下隐藏原生的贴边阴影/背景，避免双层叠加 */
+.side-toolbar-container::before,
+.side-toolbar-container::after {
+  content: none;
+}
+/* 47px 外宽扣除边框与内边距后，按钮使用 35×35。 */
+.side-toolbar-container .side-bar-button {
+  box-sizing: border-box;
+  width: var(--ai-canvas-sidebar-button-size) !important;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--ai-canvas-sidebar-button-size) !important;
+  min-height: var(--ai-canvas-sidebar-button-size) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: none !important;
+  background: transparent !important;
+  color: rgba(136, 136, 160, 0.7) !important;
+  border-radius: 9px !important;
+  cursor: pointer;
+  padding: 0 !important;
+  gap: 0 !important;
+  font-size: 0;
+  transition: color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+.side-toolbar-container .side-bar-button:hover {
+  color: var(--p-text-color, #e8e8ed) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  transform: scale(1.04);
+}
+/* 按钮内部 content 容器去掉 gap 和多余布局，居中即可 */
+.side-toolbar-container .side-bar-button-content {
+  gap: 0;
+  flex: none;
+}
+.side-toolbar-container .side-bar-button-label {
+  display: none !important;
+}
+/* 图标容器去掉相对定位残留 */
+.side-toolbar-container .sidebar-icon-wrapper {
+  position: static;
+}
+/* 图标尺寸对齐本项目：18px（sidebar-floating 按钮内约 18-20px）*/
+.side-toolbar-container .side-bar-button-icon,
+.side-toolbar-container .comfyui-logo {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}
+/* 同时兼容新旧 ComfyUI 菜单按钮入口。 */
+.side-toolbar-container .comfy-menu-button-wrapper,
+.side-toolbar-container [data-testid="comfy-menu-button"] {
+  box-sizing: border-box;
+  width: var(--ai-canvas-sidebar-button-size) !important;
+  height: var(--ai-canvas-sidebar-button-size) !important;
+  min-width: var(--ai-canvas-sidebar-button-size) !important;
+  min-height: var(--ai-canvas-sidebar-button-size) !important;
+  max-width: var(--ai-canvas-sidebar-button-size) !important;
+  max-height: var(--ai-canvas-sidebar-button-size) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, transform 120ms ease;
+}
+.side-toolbar-container .comfy-menu-button-wrapper > div,
+.side-toolbar-container [data-testid="comfy-menu-button"] > div {
+  width: 18px !important;
+  height: 18px !important;
+}
+.side-toolbar-container .comfy-menu-button-wrapper:hover,
+.side-toolbar-container [data-testid="comfy-menu-button"]:hover {
+  background: rgba(255, 255, 255, 0.06);
+  transform: scale(1.04);
+}
+/* 隐藏 comfy-menu-button-wrapper 内叠加的向下箭头图标（lucide--chevron-down）*/
+.side-toolbar-container .comfy-menu-button-wrapper [class*="lucide--chevron-down"],
+.side-toolbar-container [data-testid="comfy-menu-button"] [class*="lucide--chevron-down"] {
+  display: none !important;
+}
+/* 帮助中心按钮上方加分割线，同步本项目 sidebar-sep-v3（22×1、8% 白、2px 上下边距）*/
+.side-toolbar-container .comfy-help-center-btn {
+  position: relative;
+  margin-top: 6px;
+}
+.side-toolbar-container .comfy-help-center-btn::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+/* ===== comfyui-body-top 移到页面最底部 =====
+   ComfyUI 默认把 .comfyui-body-top 放在视口顶部，这里改用固定定位钉到底部，
+   并用 order 兜底（父级若为 flex 则排到末尾）。 */
+.comfyui-body-top {
+  position: fixed !important;
+  top: auto !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  z-index: 20;
+}
+/* 父级若是 flex 布局，同时用 order 排到末尾 */
+.comfyui-body-top {
+  order: 9999;
+}

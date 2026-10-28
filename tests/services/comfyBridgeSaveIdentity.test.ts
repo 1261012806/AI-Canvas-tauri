@@ -3,6 +3,8 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
 const source = readFileSync(new URL('../../src-tauri/src/media/comfyui/bridge.js', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../../src-tauri/src/media/comfyui/bridge.css', import.meta.url), 'utf8');
+const icon = readFileSync(new URL('../../public/favicon.svg', import.meta.url), 'utf8');
 
 interface GraphNode { id: number; type: string; content: string; pos: number[]; size: number[] }
 interface Tab { filename: string; content: string; activeState?: { nodes: GraphNode[] } }
@@ -60,6 +62,8 @@ function createBridge(pageUrl = 'http://127.0.0.1:8188', configuredUrl = pageUrl
   window.top = isTopFrame ? window : {};
   runInNewContext(source, {
     aiCanvasComfyOrigin: new URL(configuredUrl).origin,
+    aiCanvasComfyStyles: styles,
+    aiCanvasComfyIcon: icon,
     window, navigator: { userAgent: 'Windows' },
     document: { readyState: 'loading', addEventListener: vi.fn() },
     URL, console, setTimeout, clearTimeout, crypto: { randomUUID: () => `id-${++nextId}` },

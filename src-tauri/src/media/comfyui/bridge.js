@@ -5,11 +5,7 @@
   if (window.__AI_CANVAS_COMFY__) return;
 
   const WINDOW_DRAG_HEIGHT = 32;
-  const WINDOWS_CONTROLS_WIDTH = 120;
-  const ACTIONBAR_EDGE_GAP = 8;
-  const ACTIONBAR_DOCK_THRESHOLD = WINDOW_DRAG_HEIGHT;
   const COMFY_MENU_DOCKED_KEY = 'Comfy.MenuPosition.Docked';
-  const ACTIONBAR_POSITION_KEY = 'ai-canvas.comfy.actionbar-position';
   const isMacOS = /Macintosh|Mac OS X/.test(navigator.userAgent);
   // 绑定真实标签对象，不能用文件名或最后一次打开的上下文推断保存目标。
   const workflowContexts = new WeakMap();
@@ -18,8 +14,6 @@
   let loadingWorkflow = false;
   let pendingSavePayload = null;
   let pendingSaveTimeout = null;
-  let actionbarElement = null;
-  let actionbarCleanup = null;
   let nativeDockingPreferenceRestored = false;
 
   const nativeDockingPreference = (() => {
@@ -242,7 +236,7 @@
         class: 'ai-canvas-save-action',
         onClick: () => void saveToAICanvas(),
       }, {
-        icon: 'icon-[lucide--copy-plus]',
+        icon: 'ai-canvas-save-as-icon',
         label: '另存到 AI Canvas',
         tooltip: '将当前工作流保存为 AI Canvas 中的新工作流',
         onClick: () => void saveToAICanvas(true),
@@ -264,204 +258,45 @@
     }
   };
 
-  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const installFixedMenuBar = () => {
+    let actionbarElement = null;
+    let menuElement = null;
+    const root = document.documentElement;
 
-  const readActionbarPosition = () => {
-    try {
-      const value = JSON.parse(window.localStorage.getItem(ACTIONBAR_POSITION_KEY) || 'null');
-      if (Number.isFinite(value?.x) && Number.isFinite(value?.y)) {
-        return { x: value.x, y: value.y, docked: value.docked === true };
+    // 菜单按组换行时同步占位；不裁切旧扩展原地挂载的下拉菜单。
+    const measureMenu = () => {
+      const height = menuElement?.isConnected
+        ? Math.ceil(menuElement.getBoundingClientRect().height)
+        : 0;
+      if (height > 0) {
+        root.style.setProperty('--ai-canvas-menu-height', `${height}px`);
+      } else {
+        root.style.removeProperty('--ai-canvas-menu-height');
       }
-    } catch {
-      // Ignore invalid or unavailable persisted positions.
-    }
-    return null;
-  };
-
-  const saveActionbarPosition = (position) => {
-    try {
-      window.localStorage.setItem(ACTIONBAR_POSITION_KEY, JSON.stringify(position));
-    } catch {
-      // Position persistence is optional; dragging still works without it.
-    }
-  };
-
-  const setTitlebarDragRegionInset = (container, docked) => {
-    const dragRegion = document.querySelector(
-      '#ai-canvas-comfy-window-chrome .ai-canvas-drag-region',
-    );
-    if (!(dragRegion instanceof HTMLElement)) return;
-    if (!docked) {
-      dragRegion.style.right = '0px';
-      return;
-    }
-    const actionbarWidth = Math.ceil(container.getBoundingClientRect().width);
-    const controlsWidth = isMacOS ? ACTIONBAR_EDGE_GAP : WINDOWS_CONTROLS_WIDTH;
-    dragRegion.style.right = `${actionbarWidth + controlsWidth}px`;
-  };
-
-  const setActionbarDocked = (container, docked) => {
-    container.classList.toggle('ai-canvas-actionbar-docked', docked);
-    setTitlebarDragRegionInset(container, docked);
-    if (!docked) return;
-    container.style.left = 'auto';
-    container.style.top = '0px';
-    container.style.right = isMacOS ? `${ACTIONBAR_EDGE_GAP}px` : `${WINDOWS_CONTROLS_WIDTH}px`;
-    container.style.bottom = 'auto';
-  };
-
-  const setActionbarPosition = (container, x, y, allowTopDock = false) => {
-    const rect = container.getBoundingClientRect();
-    const horizontalLimit = Math.max(0, window.innerWidth - rect.width);
-    const verticalLimit = Math.max(0, window.innerHeight - rect.height);
-    const minX = Math.min(ACTIONBAR_EDGE_GAP, horizontalLimit);
-    const minY = Math.min(allowTopDock ? 0 : ACTIONBAR_EDGE_GAP, verticalLimit);
-    const maxX = Math.max(minX, horizontalLimit - ACTIONBAR_EDGE_GAP);
-    const maxY = Math.max(minY, verticalLimit - ACTIONBAR_EDGE_GAP);
-    const nextPosition = {
-      x: clamp(x, minX, maxX),
-      y: clamp(y, minY, maxY),
     };
-    container.style.left = `${nextPosition.x}px`;
-    container.style.top = `${nextPosition.y}px`;
-    container.style.right = 'auto';
-    container.style.bottom = 'auto';
-    return nextPosition;
-  };
-
-  const attachActionbarDragging = (container) => {
-    const dragHandle = container.querySelector('.actionbar .drag-handle');
-    if (!(dragHandle instanceof HTMLElement)) return false;
-
-    actionbarCleanup?.();
-    const initialRect = container.getBoundingClientRect();
-    const savedPosition = readActionbarPosition();
-    actionbarElement = container;
-    container.classList.add('ai-canvas-floating-actionbar');
-    if (savedPosition?.docked) {
-      setActionbarDocked(container, true);
-    } else {
-      setActionbarPosition(
-        container,
-        savedPosition?.x ?? initialRect.left,
-        savedPosition?.y ?? initialRect.top,
-      );
-    }
-    restoreNativeDockingPreference();
-
-    let stopActiveDrag = null;
-    const isDragHandleEvent = (event) => (
-      event.target instanceof Node && dragHandle.contains(event.target)
-    );
-
-    const blockNativeMouseDrag = (event) => {
-      if (event.button !== 0 || !isDragHandleEvent(event)) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    };
-
-    const startDragging = (event) => {
-      if (
-        event.button !== 0
-        || event.isPrimary === false
-        || !isDragHandleEvent(event)
-      ) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-
-      const dockedRect = container.getBoundingClientRect();
-      setActionbarDocked(container, false);
-      setActionbarPosition(container, dockedRect.left, dockedRect.top, true);
-      const rect = container.getBoundingClientRect();
-      const origin = { x: rect.left, y: rect.top };
-      const pointer = { x: event.clientX, y: event.clientY };
-      container.classList.add('ai-canvas-actionbar-dragging');
-      dragHandle.setPointerCapture?.(event.pointerId);
-
-      const stopDragging = () => {
-        window.removeEventListener('pointermove', moveActionbar, true);
-        window.removeEventListener('pointerup', stopDragging, true);
-        window.removeEventListener('pointercancel', stopDragging, true);
-        container.classList.remove('ai-canvas-actionbar-dragging');
-        const currentRect = container.getBoundingClientRect();
-        const shouldDock = currentRect.top <= ACTIONBAR_DOCK_THRESHOLD;
-        if (shouldDock) {
-          setActionbarDocked(container, true);
-          saveActionbarPosition({
-            x: currentRect.left,
-            y: currentRect.top,
-            docked: true,
-          });
-        } else {
-          const position = setActionbarPosition(
-            container,
-            currentRect.left,
-            currentRect.top,
-          );
-          saveActionbarPosition({ ...position, docked: false });
-        }
-        stopActiveDrag = null;
-      };
-
-      const moveActionbar = (moveEvent) => {
-        if (moveEvent.pointerId !== event.pointerId) return;
-        moveEvent.preventDefault();
-        setActionbarPosition(
-          container,
-          origin.x + moveEvent.clientX - pointer.x,
-          origin.y + moveEvent.clientY - pointer.y,
-          true,
-        );
-      };
-
-      stopActiveDrag?.();
-      stopActiveDrag = stopDragging;
-      window.addEventListener('pointermove', moveActionbar, true);
-      window.addEventListener('pointerup', stopDragging, true);
-      window.addEventListener('pointercancel', stopDragging, true);
-    };
-
-    const keepActionbarInBounds = () => {
-      if (container.classList.contains('ai-canvas-actionbar-docked')) {
-        setActionbarDocked(container, true);
-        return;
+    const resizeObserver = new ResizeObserver(measureMenu);
+    const syncMenu = () => {
+      const candidate = document.querySelector('.actionbar-container');
+      const container = candidate instanceof HTMLElement ? candidate : null;
+      if (container === actionbarElement) return;
+      if (menuElement) {
+        resizeObserver.unobserve(menuElement);
+        menuElement.classList.remove('ai-canvas-fixed-menu');
       }
-      const rect = container.getBoundingClientRect();
-      const position = setActionbarPosition(container, rect.left, rect.top);
-      saveActionbarPosition({ ...position, docked: false });
+      actionbarElement?.classList.remove('ai-canvas-fixed-actionbar');
+      actionbarElement = container;
+      // 原生进度条以 card 为定位目标；固定整个 card，保留 Vue 的挂载关系。
+      menuElement = container?.closest('[data-testid="action-bar-card"]') || container;
+      if (menuElement) {
+        menuElement.classList.add('ai-canvas-fixed-menu');
+        container.classList.add('ai-canvas-fixed-actionbar');
+        resizeObserver.observe(menuElement);
+        restoreNativeDockingPreference();
+      }
+      measureMenu();
     };
-
-    container.addEventListener('pointerdown', startDragging, true);
-    container.addEventListener('mousedown', blockNativeMouseDrag, true);
-    window.addEventListener('resize', keepActionbarInBounds);
-    const resizeObserver = new ResizeObserver(keepActionbarInBounds);
-    resizeObserver.observe(container);
-
-    actionbarCleanup = () => {
-      stopActiveDrag?.();
-      resizeObserver.disconnect();
-      setTitlebarDragRegionInset(container, false);
-      window.removeEventListener('resize', keepActionbarInBounds);
-      container.removeEventListener('pointerdown', startDragging, true);
-      container.removeEventListener('mousedown', blockNativeMouseDrag, true);
-      container.classList.remove(
-        'ai-canvas-floating-actionbar',
-        'ai-canvas-actionbar-dragging',
-        'ai-canvas-actionbar-docked',
-      );
-      actionbarElement = null;
-    };
-    return true;
-  };
-
-  const installActionbarDragging = () => {
-    const syncActionbar = () => {
-      const container = document.querySelector('.actionbar-container');
-      if (!(container instanceof HTMLElement) || container === actionbarElement) return;
-      attachActionbarDragging(container);
-    };
-    syncActionbar();
-    const observer = new MutationObserver(syncActionbar);
+    syncMenu();
+    const observer = new MutationObserver(syncMenu);
     observer.observe(document.body, { childList: true, subtree: true });
   };
 
@@ -470,670 +305,7 @@
 
     const style = document.createElement('style');
     style.id = 'ai-canvas-comfy-window-chrome-style';
-    style.textContent = `
-      :root {
-        --ai-canvas-brand: #6366f1;
-        --ai-canvas-brand-hover: #818cf8;
-        --ai-canvas-floating-surface: color-mix(
-          in srgb,
-          var(--p-content-background, #14141c) 82%,
-          transparent
-        );
-        --ai-canvas-floating-border: color-mix(
-          in srgb,
-          var(--p-content-border-color, #2a2a3a) 76%,
-          white 12%
-        );
-      }
-      body {
-        overflow: hidden;
-      }
-      .pointer-events-auto {
-        background-color: transparent;
-        border-color: transparent;
-        z-index: 9999;
-      }
-      .actionbar-container {
-        --ai-canvas-action-size: 24px;
-        --ai-canvas-action-icon-size: 14px;
-        --ai-canvas-action-chevron-width: 7px;
-        --ai-canvas-action-chevron-height: 4px;
-        --ai-canvas-action-radius: 6px;
-        box-sizing: border-box;
-        gap: 3px;
-        padding: 6px;
-        border-color: transparent;
-        border-radius: 11px;
-        background:
-          linear-gradient(
-            var(--ai-canvas-floating-surface),
-            var(--ai-canvas-floating-surface)
-          ) padding-box,
-          linear-gradient(
-            145deg,
-            var(--ai-canvas-floating-border),
-            color-mix(in srgb, var(--ai-canvas-brand) 20%, transparent),
-            var(--ai-canvas-floating-border)
-          ) border-box;
-        box-shadow:
-          0 12px 30px rgb(0 0 0 / .3),
-          inset 0 1px 0 rgb(255 255 255 / .08);
-        backdrop-filter: blur(18px) saturate(130%);
-        -webkit-backdrop-filter: blur(18px) saturate(130%);
-      }
-      .actionbar-container.ai-canvas-floating-actionbar {
-        position: fixed;
-        z-index: 2147483647;
-        margin: 0;
-        touch-action: none;
-      }
-      .actionbar-container.ai-canvas-actionbar-docked {
-        height: 32px;
-        padding: 4px 6px;
-        border-width: 0;
-        border-radius: 0;
-        background: transparent;
-        box-shadow: none;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
-      }
-      .actionbar-container.ai-canvas-actionbar-docked .actionbar {
-        border-color: transparent;
-        background: transparent;
-        box-shadow: none;
-      }
-      .actionbar-container.ai-canvas-actionbar-dragging {
-        cursor: grabbing;
-      }
-      .actionbar-container.ai-canvas-floating-actionbar .actionbar {
-        position: static;
-      }
-      .actionbar-container.ai-canvas-floating-actionbar .drag-handle {
-        cursor: grab;
-        touch-action: none;
-      }
-      .actionbar-container.ai-canvas-actionbar-dragging .drag-handle {
-        cursor: grabbing;
-      }
-      .actionbar-container.ai-canvas-floating-actionbar > div > .border-dashed {
-        display: none;
-      }
-      .actionbar-container [data-testid="action-bar-buttons"] {
-        align-items: center;
-        gap: 2px;
-      }
-      .actionbar-container > [data-testid="action-bar-buttons"],
-      .actionbar-container > [data-testid="legacy-topbar-container"],
-      .actionbar-container > .flex.h-full.items-center,
-      .actionbar-container [data-testid="legacy-topbar-container"] > div,
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button-group,
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button-group,
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitors-container,
-      .actionbar-container .actionbar,
-      .actionbar-container .actionbar [data-pc-section="contentcontainer"],
-      .actionbar-container .actionbar [data-pc-section="content"],
-      .actionbar-container .actionbar [data-pc-section="content"] > div {
-        box-sizing: border-box;
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        align-items: center;
-      }
-      .actionbar-container .drag-handle {
-        height: var(--ai-canvas-action-size);
-        align-self: center;
-      }
-      .actionbar-container button {
-        box-sizing: border-box;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 4px;
-        vertical-align: middle;
-        border-radius: var(--ai-canvas-action-radius);
-        padding: 0 6px;
-        line-height: 1;
-      }
-      .actionbar-container button:not(.batch-count button) {
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-      }
-      .actionbar-container button > span,
-      .actionbar-container button .p-button-label {
-        display: inline-flex;
-        align-items: center;
-        line-height: 1;
-      }
-      .actionbar-container button > i,
-      .actionbar-container button > svg,
-      .actionbar-container button .p-button-icon {
-        flex: 0 0 var(--ai-canvas-action-icon-size);
-        width: var(--ai-canvas-action-icon-size);
-        height: var(--ai-canvas-action-icon-size);
-        margin: 0;
-        line-height: 1;
-      }
-      .actionbar-container button[aria-label][data-testid="queue-button"],
-      .actionbar-container button[aria-label]:not([data-testid]):not(.batch-count button) {
-        min-width: var(--ai-canvas-action-size);
-      }
-      .actionbar-container button:not(:has(span)):not(.batch-count button) {
-        width: var(--ai-canvas-action-size);
-        min-width: var(--ai-canvas-action-size);
-        max-width: var(--ai-canvas-action-size);
-        padding: 0;
-      }
-      .actionbar-container .queue-button-group {
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        align-items: center;
-        border-radius: var(--ai-canvas-action-radius);
-      }
-      .actionbar-container .batch-count > div {
-        width: 44px;
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        display: flex;
-        align-items: center;
-        border-radius: var(--ai-canvas-action-radius) 0 0 var(--ai-canvas-action-radius);
-      }
-      .actionbar-container .batch-count,
-      .actionbar-container .batch-count > div > div:last-child {
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-      }
-      .actionbar-container .batch-count > div > div:last-child {
-        width: 16px;
-        min-width: 16px;
-      }
-      .actionbar-container .batch-count input {
-        height: 100%;
-        padding-inline: 4px 0;
-        padding-block: 0;
-        font-size: 12px;
-        line-height: 1;
-      }
-      .actionbar-container .batch-count button {
-        width: 100%;
-        min-width: 0;
-        min-height: calc(var(--ai-canvas-action-size) / 2);
-        height: calc(var(--ai-canvas-action-size) / 2);
-        max-height: calc(var(--ai-canvas-action-size) / 2);
-        gap: 0;
-        padding: 0;
-        border-radius: 0;
-      }
-      .actionbar-container [data-testid="queue-button"] {
-        width: var(--ai-canvas-action-size);
-        min-width: var(--ai-canvas-action-size);
-        gap: 0;
-        padding: 0;
-        overflow: hidden;
-        font-size: 0;
-      }
-      .actionbar-container [data-testid="queue-mode-menu-trigger"] {
-        width: 20px;
-        min-width: 20px;
-        padding: 0;
-        border-radius: 0 var(--ai-canvas-action-radius) var(--ai-canvas-action-radius) 0;
-      }
-      .actionbar-container .batch-count button > svg,
-      .actionbar-container [data-testid="queue-mode-menu-trigger"] > svg {
-        flex: 0 0 auto;
-        width: var(--ai-canvas-action-chevron-width);
-        min-width: var(--ai-canvas-action-chevron-width);
-        max-width: var(--ai-canvas-action-chevron-width);
-        height: var(--ai-canvas-action-chevron-height);
-        min-height: var(--ai-canvas-action-chevron-height);
-        max-height: var(--ai-canvas-action-chevron-height);
-      }
-      .actionbar-container [data-testid="queue-overlay-toggle"] {
-        padding-inline: 6px;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] {
-        font-size: 12px;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] > div,
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button-group,
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button-group {
-        align-items: center;
-        gap: 3px;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] > div {
-        margin-inline: 3px;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitor,
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-text,
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-content {
-        box-sizing: border-box;
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        align-items: center;
-        padding-block: 0;
-        line-height: 1;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-monitor {
-        display: flex;
-        overflow: hidden;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-text,
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-content {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-slider {
-        right: 0;
-        left: auto;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .crystools-label {
-        box-sizing: border-box;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        width: 100%;
-        height: 100%;
-        padding-right: 3px;
-        text-align: right;
-        line-height: 1;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button,
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button {
-        box-sizing: border-box;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        margin-block: 0;
-        padding-inline: 5px;
-        padding-block: 0;
-        line-height: 1;
-        overflow: hidden;
-        border-radius: var(--ai-canvas-action-radius);
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button,
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button:not(:has(span)),
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label="ComfyUI Manager"] {
-        width: var(--ai-canvas-action-size);
-        min-width: var(--ai-canvas-action-size);
-        max-width: var(--ai-canvas-action-size);
-        padding-inline: 0;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-comfybar-top-button {
-        border-width: 0;
-        box-shadow: none;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .rgthree-button-icon,
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button > i {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex: 0 0 var(--ai-canvas-action-icon-size);
-        width: var(--ai-canvas-action-icon-size);
-        height: var(--ai-canvas-action-icon-size);
-        margin: 0;
-        line-height: 1;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] i,
-      .actionbar-container [data-testid="legacy-topbar-container"] svg {
-        display: block;
-        width: var(--ai-canvas-action-icon-size);
-        height: var(--ai-canvas-action-icon-size);
-        font-size: var(--ai-canvas-action-icon-size);
-      }
-      /* Manager 只留图标 */
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label="ComfyUI Manager"] span {
-        display: none;
-      }
-      /* Image Feed 与其他扩展入口一样使用纯图标 tiny 按钮 */
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label^="Show Image Feed"] {
-        width: var(--ai-canvas-action-size);
-        min-width: var(--ai-canvas-action-size);
-        max-width: var(--ai-canvas-action-size);
-        padding-inline: 0;
-      }
-      .actionbar-container [data-testid="legacy-topbar-container"] .comfyui-button[aria-label^="Show Image Feed"] span {
-        display: none;
-      }
-      /* K Monitor 只保留 K 标识，收敛为纯图标按钮 */
-      .actionbar-container button.comfyui-button[aria-label$="Monitor"],
-      .actionbar-container button.comfyui-button[title$="Monitor"] {
-        width: var(--ai-canvas-action-size) !important;
-        min-width: var(--ai-canvas-action-size) !important;
-        max-width: var(--ai-canvas-action-size) !important;
-        padding-inline: 0 !important;
-        font-size: 0 !important;
-      }
-      .actionbar-container button.comfyui-button[aria-label$="Monitor"] span,
-      .actionbar-container button.comfyui-button[title$="Monitor"] span {
-        display: none !important;
-      }
-      .actionbar-container button.comfyui-button[aria-label$="Monitor"]::before,
-      .actionbar-container button.comfyui-button[title$="Monitor"]::before {
-        content: "𝙆";
-        font-size: var(--ai-canvas-action-icon-size);
-        line-height: 1;
-      }
-      .actionbar-container .ai-canvas-save-action {
-        min-height: var(--ai-canvas-action-size);
-        height: var(--ai-canvas-action-size);
-        max-height: var(--ai-canvas-action-size);
-        padding-inline: 8px;
-        line-height: 1;
-        border-radius: var(--ai-canvas-action-radius);
-        color: white;
-        background-color: var(--ai-canvas-brand);
-        transition:
-          background-color 140ms ease,
-          box-shadow 140ms ease,
-          transform 140ms ease;
-      }
-      .actionbar-container .ai-canvas-save-action:hover {
-        color: white;
-        background-color: var(--ai-canvas-brand-hover);
-        box-shadow:
-          0 8px 20px rgb(99 102 241 / .38),
-          inset 0 1px 0 rgb(255 255 255 / .2);
-      }
-      .actionbar-container .ai-canvas-save-action:active {
-        transform: scale(.97);
-      }
-      .actionbar-container .ai-canvas-save-action:focus-visible {
-        outline: 2px solid color-mix(in srgb, var(--ai-canvas-brand-hover) 72%, white);
-        outline-offset: 2px;
-      }
-      [data-testid="current-user-button"],
-      [data-testid="login-button"] {
-        display: none !important;
-      }
-      #ai-canvas-comfy-window-chrome {
-        position: fixed;
-        inset: 0 0 auto 0;
-        z-index: 2147483646;
-        height: 36px;
-        pointer-events: none;
-        user-select: none;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-drag-region {
-        position: fixed;
-        inset: 0 0 auto 0;
-        height: ${WINDOW_DRAG_HEIGHT}px;
-        pointer-events: none;
-        z-index: 0;
-      }
-      #ai-canvas-comfy-window-chrome button {
-        font: inherit;
-        -webkit-tap-highlight-color: transparent;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-windows-controls {
-        position: absolute;
-        top: 0;
-        right: 0;
-        display: flex;
-        height: 36px;
-        pointer-events: auto;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-window-button {
-        width: 40px;
-        height: 36px;
-        display: grid;
-        place-items: center;
-        border: 0;
-        color: var(--p-text-muted-color, currentColor);
-        background: transparent;
-        cursor: pointer;
-        transition: color 120ms ease, background-color 120ms ease;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-window-button:hover {
-        color: var(--p-text-color, currentColor);
-        background: var(--p-content-hover-background, ButtonFace);
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-close:hover {
-        color: white;
-        background: rgb(239 68 68 / .7);
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-mac-controls {
-        position: absolute;
-        top: 12px;
-        left: 12px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 8px;
-        border: 1px solid var(--p-content-border-color, ButtonBorder);
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--p-content-background, Canvas) 45%, transparent);
-        box-shadow: 0 8px 20px rgb(0 0 0 / .2);
-        backdrop-filter: blur(16px);
-        pointer-events: auto;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-traffic-light {
-        width: 12px;
-        height: 12px;
-        display: grid;
-        place-items: center;
-        padding: 0;
-        border: 1px solid rgb(0 0 0 / .2);
-        border-radius: 999px;
-        color: rgb(0 0 0 / .6);
-        cursor: pointer;
-        box-shadow: inset 0 1px 1px rgb(255 255 255 / .3);
-        transition: filter 120ms ease, transform 120ms ease;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-traffic-light:hover {
-        filter: brightness(1.08);
-        transform: scale(1.08);
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-traffic-light svg {
-        opacity: 0;
-        transition: opacity 120ms ease;
-      }
-      #ai-canvas-comfy-window-chrome .ai-canvas-mac-controls:hover svg { opacity: 1; }
-      #ai-canvas-comfy-window-chrome .ai-canvas-mac-close { background: #ff5f57; }
-      #ai-canvas-comfy-window-chrome .ai-canvas-mac-minimize { background: #febc2e; }
-      #ai-canvas-comfy-window-chrome .ai-canvas-mac-expand { background: #28c840; }
-      .ai-canvas-comfy-macos .p-scrollpanel.p-component.no-drag.overflow-hidden {
-        min-width: 0;
-        margin-left: 84px;
-      }
-      /* ===== ComfyUI side-toolbar → 悬浮左侧，视觉同步本项目 sidebar-floating =====
-         真实 DOM：div.side-toolbar-container > nav.side-tool-bar-container
-         本项目 sidebar-floating 的核心视觉（src/styles/sidebar.css）：
-         - position:absolute; left:12px; top:20%（竖向偏上居中）
-         - 玻璃态：floating-surface-bg padding-box + glass-bevel-border border-box
-         - backdrop-filter: blur(24px); border:1px transparent; border-radius:14px
-         - box-shadow: glass-shadow-floating（多层投影 + 内高光）
-         - 子按钮 36×36、9px 圆角、hover 微缩放
-         ComfyUI 页面无法引用本项目的 CSS 变量，下面用 color-mix 复刻等价视觉。 */
-      .side-toolbar-container {
-        /* 同步 sidebar-floating 的悬浮位置：左侧 12px、顶部 20% 起始（不居中偏移） */
-        position: fixed !important;
-        top:15% !important;
-        bottom: auto !important;
-        left: 12px !important;
-        right: auto !important;
-        transform: none;
-        z-index: 30;
-        /* 纵向排列、紧凑间距 */
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        padding: 5px;
-        /* 玻璃态背景：半透明表面色 padding-box + 渐变描边 border-box */
-        background:
-          linear-gradient(
-            var(--ai-canvas-floating-surface),
-            var(--ai-canvas-floating-surface)
-          ) padding-box,
-          linear-gradient(
-            160deg,
-            rgba(255, 255, 255, 0.18) 0%,
-            rgba(255, 255, 255, 0.09) 36%,
-            rgba(255, 255, 255, 0.04) 100%
-          ) border-box;
-        backdrop-filter: blur(24px) saturate(130%);
-        -webkit-backdrop-filter: blur(24px) saturate(130%);
-        border: 1px solid transparent;
-        border-radius: 14px;
-        /* 同步 glass-shadow-floating：多层投影 + 内高光内描边 */
-        box-shadow:
-          0 1px 2px rgb(0 0 0 / .42),
-          0 12px 32px rgb(0 0 0 / .38),
-          inset 0 1px 0 rgb(255 255 255 / .10),
-          inset 0 0 0 1px rgb(255 255 255 / .025);
-      }
-      /* macOS 顶部有交通灯控件，左移一点避免重叠 */
-      .ai-canvas-comfy-macos .side-toolbar-container {
-        left: 84px !important;
-      }
-      /* 内部 nav 去掉原生贴边背景/边框/阴影，避免双层叠加；并修正悬浮态下的布局塌缩 */
-      .side-toolbar-container .side-tool-bar-container {
-        border: none !important;
-        background: transparent !important;
-        box-shadow: none !important;
-        width: auto !important;
-        height: auto !important;
-        display: flex !important;
-        flex-direction: column !important;
-        gap: 2px;
-        padding: 0;
-      }
-      /* nav 内层包裹 div 同步为竖向 flex，去掉 h-full 撑满 */
-      .side-toolbar-container .side-tool-bar-container > div {
-        height: auto !important;
-        gap: 2px;
-      }
-      /* 按钮组间距紧凑、背景透明，避免原生背景干扰悬浮玻璃态 */
-      .side-toolbar-container .sidebar-item-group {
-        gap: 2px;
-        background: transparent !important;
-      }
-      /* 底部按钮组在悬浮态下不再用 mt-auto 钉底，跟随顶部组顺序排列 */
-      .side-toolbar-container .sidebar-item-group.mt-auto {
-        margin-top: 0 !important;
-      }
-      /* 去掉原生右侧分隔线（border-r）*/
-      .side-toolbar-container .side-tool-bar-container.border-r {
-        border-right: none !important;
-      }
-      /* 悬浮态下隐藏原生的贴边阴影/背景，避免双层叠加 */
-      .side-toolbar-container::before,
-      .side-toolbar-container::after {
-        content: none;
-      }
-      /* 同步 sidebar-floating 的按钮规格：36×36、9px 圆角、hover 微缩放 */
-      .side-toolbar-container .side-bar-button {
-        width: 36px !important;
-        height: 36px !important;
-        min-height: 36px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        border: none !important;
-        background: transparent !important;
-        color: rgba(136, 136, 160, 0.7) !important;
-        border-radius: 9px !important;
-        cursor: pointer;
-        padding: 0 !important;
-        gap: 0 !important;
-        font-size: 0;
-        transition: color 120ms ease, background 120ms ease, transform 120ms ease;
-      }
-      .side-toolbar-container .side-bar-button:hover {
-        color: var(--p-text-color, #e8e8ed) !important;
-        background: rgba(255, 255, 255, 0.06) !important;
-        transform: scale(1.04);
-      }
-      /* 按钮内部 content 容器去掉 gap 和多余布局，居中即可 */
-      .side-toolbar-container .side-bar-button-content {
-        gap: 0;
-        flex: none;
-      }
-      .side-toolbar-container .side-bar-button-label {
-        display: none !important;
-      }
-      /* 图标容器去掉相对定位残留 */
-      .side-toolbar-container .sidebar-icon-wrapper {
-        position: static;
-      }
-      /* 图标尺寸对齐本项目：18px（sidebar-floating 按钮内约 18-20px）*/
-      .side-toolbar-container .side-bar-button-icon,
-      .side-toolbar-container .comfyui-logo {
-        font-size: 18px;
-        width: 18px;
-        height: 18px;
-      }
-      /* 顶部 ComfyUI 菜单按钮也同步规格：严格 36×36
-         原生样式会把 width/height 写成 var(--comfy-menu-bg)，需要 !important 强制覆盖 */
-      .side-toolbar-container .comfy-menu-button-wrapper {
-        box-sizing: border-box;
-        width: 36px !important;
-        height: 36px !important;
-        min-width: 36px !important;
-        min-height: 36px !important;
-        max-width: 36px !important;
-        max-height: 36px !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        border-radius: 9px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: background 120ms ease, transform 120ms ease;
-      }
-      .side-toolbar-container .comfy-menu-button-wrapper > div {
-        width: 18px !important;
-        height: 18px !important;
-      }
-      .side-toolbar-container .comfy-menu-button-wrapper:hover {
-        background: rgba(255, 255, 255, 0.06);
-        transform: scale(1.04);
-      }
-      /* 隐藏 comfy-menu-button-wrapper 内叠加的向下箭头图标（lucide--chevron-down）*/
-      .side-toolbar-container .comfy-menu-button-wrapper [class*="lucide--chevron-down"] {
-        display: none !important;
-      }
-      /* 帮助中心按钮上方加分割线，同步本项目 sidebar-sep-v3（22×1、8% 白、2px 上下边距）*/
-      .side-toolbar-container .comfy-help-center-btn {
-        position: relative;
-        margin-top: 6px;
-      }
-      .side-toolbar-container .comfy-help-center-btn::before {
-        content: "";
-        position: absolute;
-        top: -4px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 22px;
-        height: 1px;
-        background: rgba(255, 255, 255, 0.08);
-        pointer-events: none;
-      }
-      /* ===== comfyui-body-top 移到页面最底部 =====
-         ComfyUI 默认把 .comfyui-body-top 放在视口顶部，这里改用固定定位钉到底部，
-         并用 order 兜底（父级若为 flex 则排到末尾）。 */
-      .comfyui-body-top {
-        position: fixed !important;
-        top: auto !important;
-        bottom: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        width: 100% !important;
-        z-index: 20;
-      }
-      /* 父级若是 flex 布局，同时用 order 排到末尾 */
-      .comfyui-body-top {
-        order: 9999;
-      }
-    `;
+    style.textContent = aiCanvasComfyStyles;
     document.head.appendChild(style);
     document.documentElement.classList.toggle('ai-canvas-comfy-macos', isMacOS);
 
@@ -1167,6 +339,11 @@
             <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
           </button>
         </div>`;
+    const icon = document.createElement('span');
+    icon.className = 'ai-canvas-window-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = aiCanvasComfyIcon;
+    chrome.appendChild(icon);
     document.body.appendChild(chrome);
 
     const isInteractiveTarget = (el) => {
@@ -1526,11 +703,11 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       installWindowControls();
-      installActionbarDragging();
+      installFixedMenuBar();
     }, { once: true });
   } else {
     installWindowControls();
-    installActionbarDragging();
+    installFixedMenuBar();
   }
   void installSaveAction().catch((error) => {
     showToast(getComfyApp(), 'error', 'AI Canvas 按钮加载失败', String(error?.message || error));
