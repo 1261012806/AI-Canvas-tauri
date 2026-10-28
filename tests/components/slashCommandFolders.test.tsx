@@ -91,15 +91,17 @@ describe('快捷指令文件夹菜单', () => {
     expect(elements(tree).some((element) => element.props['aria-haspopup'] === 'menu' && element.props.role === 'menuitem')).toBe(false);
   });
 
-  it('一级是快捷指令入口，二级显示指令和用户创建的分类，说明留在悬浮提示', () => {
+  it('二级显示分类、指令和执行取值标记，详细说明留在悬浮提示', () => {
     const root = render(props);
     const entry = elements(root).find((element) => element.props['data-item-id'] === '__user_presets__');
     expect(text(entry)).toBe('快捷指令1›');
     expect(elements(root).some((element) => element.props.role === 'menuitem')).toBe(false);
     const tree = openCommands(props);
     const child = elements(tree).find((element) => element.props.role === 'menuitem');
-    expect(text(child)).toBe('三视图直接触发');
-    expect(child?.props.title).toBe(preset.description);
+    expect(text(child)).toContain('三视图直接触发');
+    expect(text(child)).toContain('本节点');
+    expect(text(child)).toContain('取值：提示词框');
+    expect(child?.props.title).toContain(preset.description);
     expect(text(tree)).not.toContain(preset.description);
     expect(elements(tree).find((element) => element.props.role === 'menu')?.props['aria-label']).toBe('快捷指令');
   });

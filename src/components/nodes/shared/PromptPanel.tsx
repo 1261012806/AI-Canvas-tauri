@@ -356,6 +356,8 @@ interface PromptPanelProps {
   onPolish?: () => void;
   polishOpen?: boolean;
   nodeType: NodeType;
+  /** 菜单筛选类型与实际节点类型不同（如导演台）时，用于说明真实执行行为。 */
+  sourceNodeType?: NodeType;
   nodeId?: string;
   prompt?: string;
   placeholder?: string;
@@ -440,6 +442,7 @@ export default function PromptPanel({
   onPolish,
   polishOpen = false,
   nodeType,
+  sourceNodeType = nodeType,
   nodeId,
   prompt = '',
   placeholder,
@@ -1303,6 +1306,7 @@ export default function PromptPanel({
     {slashOpen && (
       <SlashCommandMenu
         nodeType={nodeType}
+        sourceNodeType={sourceNodeType}
         currentPrompt={prompt}
         anchorEl={slashAnchor}
         userPresets={userPresets}

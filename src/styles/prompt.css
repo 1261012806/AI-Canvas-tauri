@@ -316,6 +316,7 @@
   position: fixed;
   z-index: 10002;
   width: 260px;
+  max-width: calc(100vw - 16px);
   max-height: 440px;
   overflow-y: auto;
   background:
@@ -403,7 +404,7 @@
 
 .slash-command-desc {
   font-size: 10px;
-  color: #666680;
+  color: var(--theme-text-secondary);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -432,8 +433,9 @@
 .slash-command-submenu {
   position: fixed;
   z-index: 10003;
-  width: 280px;
-  max-height: 440px;
+  width: 336px;
+  max-width: calc(100vw - 16px);
+  max-height: min(440px, calc(100dvh - 16px));
   overflow-y: auto;
   background:
     linear-gradient(var(--glass-bg), var(--glass-bg)) padding-box,
@@ -446,6 +448,12 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.slash-command-meta .ui-badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* ============================================
    资产引用：芯片 + 选择弹窗

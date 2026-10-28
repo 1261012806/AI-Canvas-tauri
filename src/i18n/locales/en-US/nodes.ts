@@ -1356,6 +1356,26 @@ const nodes = {
   "返回添加参考": "Go back and add references",
   "画布或生成输入已变化，请重新生成": "The canvas or generation inputs changed. Start generation again.",
   "参考素材检查失败，请检查引用后重试": "Reference media validation failed. Check your references and try again.",
+  // ── 快捷指令执行位置与取值来源 ──
+  "新建{type}节点": "New {type} node",
+  "新建节点": "New node",
+  "节点提示词＋源节点引用": "Node prompt + source reference",
+  "读取原节点提示词填入模板，附上原节点引用后新建节点并立即生成；引用会提供原节点的正文或媒体。": "Fills the template with the source node's prompt, attaches a source reference, then creates a node and generates immediately. The reference supplies the source text or media.",
+  "本节点提示词": "This node's prompt",
+  "提示词框": "Prompt field",
+  "把提示词框内容填入模板后，追加到本节点提示词，等待手动生成。": "Fills the template with the prompt-field content and appends it to this node's prompt. Generate manually when ready.",
+  "把提示词框内容填入模板，在本节点立即生成；本次模板不会写回提示词框。": "Fills the template with the prompt-field content and generates in this node immediately; the filled template is not saved back to the prompt field.",
+  "提示词框／节点正文": "Prompt field / node text",
+  "优先读取提示词框内容；提取正文为空且没有 @ 节点引用时，读取本节点正文。两者都为空时提示补充正文；已有 @ 引用时按引用读取。": "Uses the prompt field first. If the extraction body is empty and has no @ node reference, uses this node's text. If both are empty, asks for text; existing @ references are resolved as specified.",
+  "＋新建宫格节点": " + new grid node",
+  "生成成功后还会另建角色8向宫格节点。": "Also creates an 8-direction character grid node after generation succeeds.",
+  "节点": "Node",
+  "新建节点 · {types}": "New nodes · {types}",
+  "原节点提示词＋步骤参考": "Source prompt + step references",
+  "填写运行参数后新建各步骤节点；模板输入取原节点提示词，各步按设置引用原节点或上一步结果，第一步始终引用原节点。": "After parameters are entered, creates a node for each step. Templates use the source node's prompt. Each step references the source or previous result as configured; the first step always references the source.",
+  "取值：{source}": "Input: {source}",
+  "六格线稿分镜": "Six-panel line-art storyboard",
+  "黑白铅笔线稿、彩色调度箭头与镜号批注 · 16:9": "Black-and-white pencil lines, colored blocking arrows and shot notes · 16:9",
 };
 
 export default nodes;

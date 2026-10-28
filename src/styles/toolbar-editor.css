@@ -452,7 +452,7 @@ body.toolbar-edit-dragging {
 /* ── 右侧快捷指令面板 ── */
 
 .toolbar-edit-commands {
-  width: 148px;
+  width: 240px;
   flex-shrink: 0;
   background: var(--theme-card, #1a1a26);
   border: 1px solid var(--theme-border, #2a2a3a);
@@ -485,7 +485,7 @@ body.toolbar-edit-dragging {
 
 .toolbar-edit-command-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 5px;
   padding: 4px 6px;
   border-radius: 5px;
@@ -508,6 +508,12 @@ body.toolbar-edit-dragging {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.toolbar-edit-command-meta .ui-badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ── 拖拽插入指示器 ── */

@@ -21,12 +21,15 @@ import type { SlashCommandItem } from './slashCommands';
 import { calcFixedPosition, calcSubmenuPosition } from '../../../utils/popupPosition';
 import { isAdvancedPreset } from '../../../services/presetSequenceService';
 import { groupPresetsByFolder, UNGROUPED_PRESET_FOLDER_ID } from '../../../utils/presetFolders';
+import { getBuiltinShortcutPresentation, getUserPresetPresentation } from './shortcutPresentation';
+import type { ShortcutPresentation } from './shortcutPresentation';
 
 const SKILL_PARENT_ID = '__skills__';
 const USER_PRESETS_PARENT_ID = '__user_presets__';
 
 interface SlashCommandMenuProps {
   nodeType: NodeType;
+  sourceNodeType?: NodeType;
   currentPrompt: string;
   anchorEl: HTMLElement | null;
   userPresets: UserPreset[];
@@ -43,6 +46,7 @@ interface SlashCommandMenuProps {
 
 export default function SlashCommandMenu({
   nodeType,
+  sourceNodeType = nodeType,
   currentPrompt,
   anchorEl,
   userPresets,
@@ -100,6 +104,17 @@ export default function SlashCommandMenu({
     return <span className={className}>{icon}</span>;
   };
 
+  const renderPresentation = (presentation: ShortcutPresentation) => (
+    <span className="slash-command-meta mt-1 flex flex-wrap gap-1">
+      <span className="ui-badge ui-badge--outline max-w-full whitespace-normal break-words text-left">
+        {presentation.executionLabel}
+      </span>
+      <span className="ui-badge ui-badge--outline max-w-full whitespace-normal break-words text-left">
+        {t('取值：{source}', { source: presentation.inputLabel })}
+      </span>
+    </span>
+  );
+
   const itemCount = commands.length
     + (presetGroups.length > 0 ? 1 : 0)
     + 1 /* skill submenu */
@@ -113,7 +128,8 @@ export default function SlashCommandMenu({
     const anchorRect = anchorEl.getBoundingClientRect();
 
     // 估算主菜单尺寸
-    const estH = Math.min(16 + itemCount * 48 + 8 /* divider */, 400);
+    const commandHeight = commands.reduce((height, item) => height + (item.children ? 48 : 80), 0);
+    const estH = Math.min(16 + (itemCount - commands.length) * 48 + commandHeight + 8 /* divider */, 440);
     const estW = 268;
 
     // 期望位置：锚点上方，水平居中于锚点
@@ -121,7 +137,7 @@ export default function SlashCommandMenu({
     const desiredY = anchorRect.top - estH - 8;
 
     return calcFixedPosition(desiredX, desiredY, estW, estH);
-  }, [anchorEl, itemCount]);
+  }, [anchorEl, itemCount, commands]);
 
   const activeParent = commands.find(c => c.id === activeParentId);
   const skillMenuActive = activeParentId === SKILL_PARENT_ID;
@@ -129,7 +145,7 @@ export default function SlashCommandMenu({
   const updateSubmenuPositionByCount = useCallback((itemCountForSubmenu: number, anchor?: HTMLElement, rowHeight = 48) => {
     if (!menuRef.current) return;
     const parentRect = (anchor ?? menuRef.current).getBoundingClientRect();
-    const subW = 280;
+    const subW = 336;
     const subH = Math.min(itemCountForSubmenu * rowHeight + 16, 440);
 
     setSubmenuPos(calcSubmenuPosition(parentRect, subW, subH));
@@ -137,7 +153,7 @@ export default function SlashCommandMenu({
 
   const updateSubmenuPosition = useCallback((item: SlashCommandItem) => {
     if (!item.children) return;
-    updateSubmenuPositionByCount(item.children.length);
+    updateSubmenuPositionByCount(item.children.length, undefined, 80);
   }, [updateSubmenuPositionByCount]);
 
   const handleItemSelect = useCallback((item: SlashCommandItem) => {
@@ -190,7 +206,7 @@ export default function SlashCommandMenu({
     setActiveParentId(USER_PRESETS_PARENT_ID);
     const rows = presetGroups.reduce((count, group) => count + Math.max(group.presets.length, 1)
       + (group.id === UNGROUPED_PRESET_FOLDER_ID ? 0 : 1), 1);
-    updateSubmenuPositionByCount(rows, anchor, 36);
+    updateSubmenuPositionByCount(rows, anchor, 64);
   };
 
   return createPortal(
@@ -205,32 +221,51 @@ export default function SlashCommandMenu({
         {commands.length > 0 && (
           <>
             <div className="slash-command-header">{t('内置快捷指令')}</div>
-            {commands.map((item) => (
-              <div
-                key={item.id}
-                className={`slash-command-item${item.children ? ' has-submenu' : ' has-trigger'}${(item.children && activeParentId === item.id) ? ' active' : ''}`}
-                data-item-id={item.id}
-                onMouseEnter={() => handleItemHover(item)}
-                onClick={() => {
-                  if (item.children) {
+            {commands.map((item) => {
+              const presentation = item.children ? undefined : getBuiltinShortcutPresentation(item, 'prompt', sourceNodeType, t);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`ui-menu__item slash-command-item w-full text-left${item.children ? ' has-submenu' : ' has-trigger'}${(item.children && activeParentId === item.id) ? ' active' : ''}`}
+                  data-item-id={item.id}
+                  title={[t(item.description), presentation?.detail].filter(Boolean).join('\n')}
+                  aria-haspopup={item.children ? 'menu' : undefined}
+                  aria-expanded={item.children ? activeParentId === item.id : undefined}
+                  onMouseEnter={() => handleItemHover(item)}
+                  onFocus={() => handleItemHover(item)}
+                  onClick={() => {
+                    if (item.children) {
+                      updateSubmenuPosition(item);
+                      setActiveParentId(activeParentId === item.id ? null : item.id);
+                    } else {
+                      handleItemSelect(item);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowRight' || !item.children) return;
+                    event.preventDefault();
+                    event.stopPropagation();
                     updateSubmenuPosition(item);
-                    setActiveParentId(activeParentId === item.id ? null : item.id);
-                  } else {
-                    handleItemSelect(item);
-                  }
-                }}
-              >
-                {renderIcon(item.icon)}
-                <div className="slash-command-text">
-                  <span className="slash-command-title">
-                    {t(item.title)}
-                    {item.children && <span className="slash-command-arrow">›</span>}
-                  </span>
-                  <span className="slash-command-desc">{t(item.description)}</span>
-                </div>
-                {!item.children && <span className="slash-command-badge">{t('直接触发')}</span>}
-              </div>
-            ))}
+                    setActiveParentId(item.id);
+                    requestAnimationFrame(() => submenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus());
+                  }}
+                >
+                  {renderIcon(item.icon)}
+                  <div className="slash-command-text">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="slash-command-title min-w-0 flex-1">
+                        <span className="truncate">{t(item.title)}</span>
+                        {item.children && <span className="slash-command-arrow" aria-hidden="true">›</span>}
+                      </span>
+                      {presentation && <span className="ui-badge ui-badge--success shrink-0">{presentation.modeLabel}</span>}
+                    </span>
+                    <span className="slash-command-desc">{t(item.description)}</span>
+                    {presentation && renderPresentation(presentation)}
+                  </div>
+                </button>
+              );
+            })}
           </>
         )}
 
@@ -305,27 +340,47 @@ export default function SlashCommandMenu({
         <div
           ref={submenuRef}
           className="slash-command-submenu"
+          role="menu"
+          aria-label={t(activeParent.title)}
           style={{
             left: submenuPos.left,
             top: submenuPos.top,
           }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft') return;
+            event.preventDefault();
+            event.stopPropagation();
+            const parent = menuRef.current?.querySelector<HTMLButtonElement>(`[data-item-id="${activeParent.id}"]`);
+            parent?.focus();
+            setActiveParentId(null);
+          }}
         >
-          {activeParent.children?.map((child) => (
-            <div
-              key={child.id}
-              className={`slash-command-item has-trigger${hoveredItemId === child.id ? ' active' : ''}`}
-              data-subitem-id={child.id}
-              onClick={() => handleItemSelect(child)}
-              onMouseEnter={() => setHoveredItemId(child.id)}
-            >
-              {renderIcon(child.icon)}
-              <div className="slash-command-text">
-                <span className="slash-command-title">{t(child.title)}</span>
-                <span className="slash-command-desc">{t(child.description)}</span>
-              </div>
-              <span className="slash-command-badge">{t('直接触发')}</span>
-            </div>
-          ))}
+          {activeParent.children?.map((child) => {
+            const presentation = getBuiltinShortcutPresentation(child, 'prompt', sourceNodeType, t);
+            return (
+              <button
+                key={child.id}
+                type="button"
+                role="menuitem"
+                className={`ui-menu__item slash-command-item has-trigger w-full text-left${hoveredItemId === child.id ? ' active' : ''}`}
+                data-subitem-id={child.id}
+                title={[t(child.description), presentation.detail].join('\n')}
+                onClick={() => handleItemSelect(child)}
+                onMouseEnter={() => setHoveredItemId(child.id)}
+                onFocus={() => setHoveredItemId(child.id)}
+              >
+                {renderIcon(child.icon)}
+                <div className="slash-command-text">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="slash-command-title min-w-0 flex-1"><span className="truncate">{t(child.title)}</span></span>
+                    <span className="ui-badge ui-badge--success shrink-0">{presentation.modeLabel}</span>
+                  </span>
+                  <span className="slash-command-desc">{t(child.description)}</span>
+                  {renderPresentation(presentation)}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -350,22 +405,28 @@ export default function SlashCommandMenu({
             <div key={group.id} role="group" aria-label={group.id === UNGROUPED_PRESET_FOLDER_ID ? undefined : group.name}>
               {index > 0 && <div className="ui-menu__sep" />}
               {group.id !== UNGROUPED_PRESET_FOLDER_ID && <div className="ui-menu__label truncate" title={group.name}>{group.name}</div>}
-              {group.presets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  role="menuitem"
-                  className="ui-menu__item slash-command-user-preset"
-                  title={preset.description?.trim() || preset.name}
-                  onClick={() => handlePresetSelect(preset)}
-                >
-                  {renderIcon(preset.icon || 'mdi:star-outline')}
-                  <span className="min-w-0 flex-1 truncate">{preset.name}</span>
-                  <span className="ui-badge ui-badge--success shrink-0">
-                    {t(isAdvancedPreset(preset) ? '顺序执行' : preset.triggerMode === 'direct' ? '直接触发' : '加入提示词')}
-                  </span>
-                </button>
-              ))}
+              {group.presets.map((preset) => {
+                const presentation = getUserPresetPresentation(preset, 'prompt', sourceNodeType, t);
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="menuitem"
+                    className="ui-menu__item slash-command-user-preset"
+                    title={[preset.description?.trim() || preset.name, presentation.detail].join('\n')}
+                    onClick={() => handlePresetSelect(preset)}
+                  >
+                    {renderIcon(preset.icon || 'mdi:star-outline')}
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate">{preset.name}</span>
+                        <span className="ui-badge ui-badge--success shrink-0">{presentation.modeLabel}</span>
+                      </span>
+                      {renderPresentation(presentation)}
+                    </span>
+                  </button>
+                );
+              })}
               {group.presets.length === 0 && (
                 <div className="p-2 text-xs text-canvas-text-muted" role="status">{t('暂无快捷指令')}</div>
               )}

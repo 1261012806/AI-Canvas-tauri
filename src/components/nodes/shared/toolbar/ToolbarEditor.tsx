@@ -11,6 +11,9 @@ import type { ToolbarButtonDef, NodeType } from '../../../../types';
 import { PRESET_NODE_TYPES } from '../../../../types';
 import type { UseToolbarEditReturn } from '../../../../hooks/useToolbarEdit';
 import { getSlashCommands } from '../slashCommands';
+import type { SlashCommandItem } from '../slashCommands';
+import { getBuiltinShortcutPresentation, getUserPresetPresentation } from '../shortcutPresentation';
+import type { ShortcutPresentation } from '../shortcutPresentation';
 import { useAppStore } from '../../../../store/useAppStore';
 import { getCanvasLockedZoom, normalizeCanvasZoom } from '../../../../utils/canvasViewportPreferences';
 
@@ -70,6 +73,16 @@ function MiniIcon({ icon }: { icon: string }) {
     return <Icon icon={icon} width={14} height={14} />;
   }
   return <span style={{ fontSize: 12 }}>{icon}</span>;
+}
+
+function ShortcutBadges({ presentation }: { presentation: ShortcutPresentation }) {
+  const t = useT();
+  return (
+    <span className="toolbar-edit-command-meta mt-1 flex flex-wrap gap-1">
+      <span className="ui-badge ui-badge--outline">{presentation.executionLabel}</span>
+      <span className="ui-badge ui-badge--outline">{t('取值：{source}', { source: presentation.inputLabel })}</span>
+    </span>
+  );
 }
 
 // ── 按钮库条目 ──
@@ -362,11 +375,16 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
   const presetNodeType = PRESET_NODE_TYPES.find((type) => type === nodeType);
   const allSlashCommands = useMemo(() => {
     const cmds = getSlashCommands(nodeType as NodeType);
-    const flat: { id: string; title: string; icon: string; description: string }[] = [];
+    const flat: (SlashCommandItem & { presentation: ShortcutPresentation })[] = [];
     const walk = (items: typeof cmds) => {
       for (const item of items) {
         if (item.promptTemplate) {
-          flat.push({ id: item.id, title: t(item.title), icon: item.icon, description: t(item.description) });
+          flat.push({
+            ...item,
+            title: t(item.title),
+            description: t(item.description),
+            presentation: getBuiltinShortcutPresentation(item, 'toolbar', nodeType as NodeType, t),
+          });
         }
         if (item.children) walk(item.children);
       }
@@ -769,25 +787,32 @@ function ToolbarEditorInner({ edit, presetItems = [], userPresetItems = [], node
                   type="button"
                   className="toolbar-edit-command-item nodrag"
                   onClick={() => addToZone(cmd.id)}
-                  data-tooltip={cmd.description}
+                  data-tooltip={`${cmd.description}\n${cmd.presentation.modeLabel} · ${cmd.presentation.detail}`}
                 >
                   <span className="toolbar-edit-bank-icon"><MiniIcon icon={cmd.icon} /></span>
-                  <span className="toolbar-edit-command-label">{cmd.title}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="toolbar-edit-command-label block">{cmd.title}</span>
+                    <ShortcutBadges presentation={cmd.presentation} />
+                  </span>
                 </button>
               );
             })}
             {matchingUserPresets.map((p) => {
               if (edit.activeButtonKeys.has(p.id)) return null;
+              const presentation = getUserPresetPresentation(p, 'toolbar', nodeType as NodeType, t);
               return (
                 <button
                   key={`up-${p.id}`}
                   type="button"
                   className="toolbar-edit-command-item nodrag"
                   onClick={() => addToZone(p.id)}
-                  data-tooltip={p.description || p.name}
+                  data-tooltip={`${p.description || p.name}\n${presentation.modeLabel} · ${presentation.detail}`}
                 >
                   <span className="toolbar-edit-bank-icon"><MiniIcon icon={p.icon || 'mdi:star'} /></span>
-                  <span className="toolbar-edit-command-label">{p.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="toolbar-edit-command-label block">{p.name}</span>
+                    <ShortcutBadges presentation={presentation} />
+                  </span>
                 </button>
               );
             })}
