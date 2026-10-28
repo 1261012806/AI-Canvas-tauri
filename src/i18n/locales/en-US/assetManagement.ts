@@ -272,7 +272,12 @@ const assetManagement: Record<string, string> = {
   "暂停同步": "Pause sync",
   "最近同步：{time}": "Last synced: {time}",
   "待上传 {uploads} 项，待下载 {downloads} 项，冲突或受阻 {conflicts} 项。": "{uploads} to upload, {downloads} to download, {conflicts} conflicting or blocked.",
-  "已传输 {done} / {total} MB": "Transferred {done} / {total} MB",
+  "{stage}：{done} / {total} MB": "{stage}: {done} / {total} MB",
+  "本地准备": "Local preparation",
+  "实际上传": "Uploading",
+  "实际下载": "Downloading",
+  "提交资产版本": "Publishing asset revision",
+  "已保存进度：已完成 {done} / {total} 项": "Saved progress: {done} / {total} items completed",
   "已完成 {done} / {total} 项": "Completed {done} / {total} items",
   "本次同步条目": "Items in this sync",
   "显示更多": "Show more",
@@ -400,6 +405,7 @@ const assetManagement: Record<string, string> = {
   "该共享项目状态不兼容，请选择删除共享项目后重新创建": "This shared project has an incompatible state. Delete the shared project and create it again.",
   "已确认删除 {done} / {total} 个对象": "Deletion confirmed for {done} / {total} objects",
   "操作未完成，已确认删除 {done} / {total} 个对象；实际结果请重新预览核对。": "The operation did not finish; deletion is confirmed for {done} / {total} objects. Preview again to check the actual result.",
+  "关闭弹窗后继续后台同步，重新打开可查看进度或暂停。": "Sync continues in the background after you close this dialog. Reopen it to view progress or pause.",
 };
 
 export default assetManagement;

@@ -13,7 +13,7 @@ import type {
   BindSharedProjectInput, ProbeSharedProjectInput, SaveSharedStorageConnectionInput,
   SharedAssetStorageSnapshot, SharedProjectOperationResult, SharedAssetSyncStatus, SharedSyncProgress,
   SharedProjectBinding, SharedProjectResetMode, SharedProjectResetPreview, SharedProjectResetResult,
-  SharedProjectResetStatus,
+  SharedProjectResetStatus, SharedSyncBindingIdentity, SharedAssetConflict,
 } from '../types/assetSync';
 import type { SharedAssetSyncSession } from '../services/fs/sharedAssetSync';
 import { notifyProjectDiskChanged } from '../services/fs/core';
@@ -158,24 +158,65 @@ export const createAssetSyncSlice: StateCreator<AppState, [], [], AssetSyncSlice
     sharedProjectResetStatus: {},
     loadSharedProjectSyncState: async (ownerId) => {
       requireOwner(ownerId);
+      const statusAtLoad = get().sharedAssetSyncStatus[ownerId];
       const { projectAssetSyncService } = await import('../services/fs/sharedAssetSync');
       requireOwner(ownerId);
       const local = await projectAssetSyncService.readState(ownerId);
       requireOwner(ownerId);
-      if (syncRuns.has(ownerId)) return;
+      if (syncRuns.has(ownerId) || get().sharedAssetSyncStatus[ownerId] !== statusAtLoad) return;
       const binding = get().sharedAssetStorage?.bindings.find((entry) => entry.ownerId === ownerId);
       if (!binding) {
         updateSync(ownerId, { stage: 'idle', error: undefined, errorStage: undefined, lastSyncedAt: undefined, items: [], completed: 0, total: 0 });
         return;
       }
-      const entries = local.outbox.filter((entry) => entry.connectionId === binding.connectionId
+      const matchesBinding = (entry: SharedSyncBindingIdentity) => entry.ownerId === binding.ownerId && entry.connectionId === binding.connectionId
         && entry.connectionRevision === binding.connectionRevision && entry.libraryId === binding.libraryId
-        && entry.sharedProjectId === binding.sharedProjectId && (entry.generation ?? 'legacy') === 'legacy');
-      const complete = entries.filter((entry) => entry.phase === 'completed' && entry.errorCode !== 'ack_pending');
-      const pending = entries.filter((entry) => entry.errorCode === 'ack_pending' || !['completed', 'conflict'].includes(entry.phase));
-      updateSync(ownerId, { stage: pending.length ? 'paused' : 'idle', error: undefined, errorStage: undefined,
+        && entry.sharedProjectId === binding.sharedProjectId && (entry.generation ?? 'legacy') === (binding.generation ?? 'legacy');
+      const entries = local.outbox.filter(matchesBinding);
+      const mappings = new Map(local.mappings.filter(matchesBinding).map((entry) => [entry.id, entry]));
+      const completedByAsset = new Map<string, typeof entries[number]>();
+      const pendingByAsset = new Map<string, typeof entries[number]>();
+      for (const entry of entries) {
+        if (entry.errorCode === 'ack_pending' || !['completed', 'conflict'].includes(entry.phase)) {
+          const previous = pendingByAsset.get(entry.sharedAssetId);
+          if (!previous || previous.updatedAt < entry.updatedAt) pendingByAsset.set(entry.sharedAssetId, entry);
+          continue;
+        }
+        const mapping = mappings.get(entry.mappingId);
+        if (entry.phase !== 'completed' || !mapping || mapping.sharedAssetId !== entry.sharedAssetId
+          || mapping.kind !== entry.kind || mapping.acceptedRevisionId !== entry.revisionId) continue;
+        const previous = completedByAsset.get(entry.sharedAssetId);
+        if (!previous || previous.updatedAt < entry.updatedAt) completedByAsset.set(entry.sharedAssetId, entry);
+      }
+      // New pending versions supersede old completions; discarded preparation candidates do not.
+      for (const sharedAssetId of pendingByAsset.keys()) completedByAsset.delete(sharedAssetId);
+      const mappingsByAsset = new Map([...mappings.values()].map((entry) => [entry.sharedAssetId, entry]));
+      const conflictsByAsset = new Map<string, SharedAssetSyncStatus['items'][number]>();
+      const addConflict = (entry: Pick<SharedAssetConflict, 'id' | 'sharedAssetId' | 'kind' | 'baseRevisionId'>, operation?: typeof entries[number]) => {
+        const mapping = mappingsByAsset.get(entry.sharedAssetId);
+        if (!mapping || mapping.kind !== entry.kind || mapping.acceptedRevisionId !== entry.baseRevisionId
+          || pendingByAsset.has(entry.sharedAssetId)) return;
+        const payload = (operation?.revision ?? operation?.draft)?.payload;
+        conflictsByAsset.set(entry.sharedAssetId, { id: entry.id, kind: entry.kind, direction: 'conflict',
+          name: payload?.kind === 'file' ? payload.name : payload?.data.name ?? entry.sharedAssetId,
+          message: '共享候选版本存在冲突，请恢复核对' });
+        completedByAsset.delete(entry.sharedAssetId);
+      };
+      for (const entry of entries) if (entry.phase === 'conflict') addConflict(entry, entry);
+      for (const entry of local.conflicts.filter(matchesBinding)) {
+        addConflict(entry, entries.find((operation) => operation.operationId === entry.operationId));
+      }
+      const complete = [...completedByAsset.values()];
+      const pending = [...pendingByAsset.values()];
+      updateSync(ownerId, { stage: pending.length || conflictsByAsset.size ? 'paused' : complete.length ? 'completed' : 'idle',
+        error: conflictsByAsset.size ? '部分资产需要处理，请查看冲突或未纳入项' : undefined, errorStage: undefined,
         lastSyncedAt: complete.length ? Math.max(...complete.map((entry) => entry.updatedAt)) : undefined,
-        items: [], completed: 0, total: pending.length });
+        items: [...pending.map((entry) => {
+          const payload = (entry.revision ?? entry.draft)?.payload;
+          return { id: entry.operationId, kind: entry.kind, direction: entry.direction,
+            name: payload?.kind === 'file' ? payload.name : payload?.data.name ?? entry.sharedAssetId,
+            message: '恢复上次固定版本的未完成操作' };
+        }), ...conflictsByAsset.values()], completed: complete.length, total: complete.length + pending.length });
     },
     previewSharedProjectSync: async (ownerId) => {
       requireOwner(ownerId);
@@ -218,7 +259,7 @@ export const createAssetSyncSlice: StateCreator<AppState, [], [], AssetSyncSlice
         try { assertCurrent(); } catch { void cancelSync(ownerId); }
       });
       runtime.stop = () => { unsubscribe(); unlisten?.(); };
-      updateSync(ownerId, { stage: 'scanning', items: [], error: undefined, errorStage: undefined, completed: 0, total: 0, progress: undefined });
+      updateSync(ownerId, { stage: 'scanning', items: [], error: undefined, errorStage: undefined, progress: undefined });
       try {
         const { listen } = await import('@tauri-apps/api/event');
         unlisten = await listen<SharedSyncProgress>('project-asset-sync-progress', ({ payload }) => {
@@ -260,7 +301,8 @@ export const createAssetSyncSlice: StateCreator<AppState, [], [], AssetSyncSlice
       const runtime = syncRuns.get(ownerId);
       if (!runtime?.session || runtime.running || runtime.controller.signal.aborted) throw new Error('请先重新预览项目资产同步');
       runtime.running = true;
-      updateSync(ownerId, { stage: 'syncing', completed: 0, error: undefined, errorStage: undefined });
+      updateSync(ownerId, { stage: 'syncing', completed: runtime.session.completed, total: runtime.session.total,
+        error: undefined, errorStage: undefined });
       try {
         const { projectAssetSyncService } = await import('../services/fs/sharedAssetSync');
         await projectAssetSyncService.apply(runtime.session, {

@@ -125,7 +125,7 @@ export default function SharedProjectBindingDialog({ localOwnerId, ownerName, au
     };
   }, [cancelTask, localOwnerId, scopeKey]);
 
-  const finishClose = () => { cancelTask(); void useAppStore.getState().cancelSharedProjectSync(localOwnerId); onClose(); };
+  const finishClose = () => { cancelTask(); onClose(); };
   const close = () => {
     if (resetAction.current || resetCancelRequested.current || resetRunning) return;
     if (resetStage === 'preview') { void cancelReset(true); return; }

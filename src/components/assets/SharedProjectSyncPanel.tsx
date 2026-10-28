@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpFromLine, RefreshCw, Pause, AlertTriangle } from 'lucide-react';
 import { useT } from '../../i18n';
 import { useAppStore } from '../../store/useAppStore';
-import type { SharedAssetSyncPreviewItem, SharedAssetSyncStatus, SharedSyncErrorStage } from '../../types/assetSync';
+import type { SharedAssetSyncPreviewItem, SharedAssetSyncStatus, SharedSyncErrorStage, SharedSyncProgress } from '../../types/assetSync';
 
 const STAGES: Record<SharedAssetSyncStatus['stage'], string> = {
   idle: '尚未同步', scanning: '正在扫描并核对资产…', preview: '同步预览', syncing: '正在同步项目资产…',
@@ -12,6 +12,10 @@ const DIRECTIONS: Record<SharedAssetSyncPreviewItem['direction'], string> = {
   upload: '待上传', download: '待下载', conflict: '存在冲突', unchanged: '无变化', blocked: '暂不能同步',
 };
 const KINDS = { file: '项目文件', character: '人物', scene: '场景', prop: '道具' } as const;
+const PROGRESS_STEPS: Record<SharedSyncProgress['phase'], string> = {
+  preparing: '本地准备', uploading: '实际上传', downloading: '实际下载',
+  publishing: '提交资产版本', cleanup: '清理未完成上传',
+};
 const ERROR_STAGES: Record<SharedSyncErrorStage, string> = {
   blobCheck: '检查云端素材', stagingVerify: '校验本地副本', multipartCreate: '准备分片上传',
   partUpload: '上传分片', multipartComplete: '完成分片上传', blobVerify: '校验云端素材',
@@ -36,13 +40,19 @@ export default memo(function SharedProjectSyncPanel({ ownerId, enabled, autoPrev
   useEffect(() => {
     let current = true;
     if (enabled) void (async () => {
-      await useAppStore.getState().loadSharedProjectSyncState(ownerId).catch(() => undefined);
+      const existing = useAppStore.getState().sharedAssetSyncStatus[ownerId];
+      // Store owns the session; reopening a view must not reset its progress or result.
+      if (!existing || existing.stage === 'idle') {
+        await useAppStore.getState().loadSharedProjectSyncState(ownerId).catch(() => undefined);
+      }
       if (current && autoPreview && !previewRequested.current) {
         previewRequested.current = true;
+        const latest = useAppStore.getState().sharedAssetSyncStatus[ownerId]?.stage;
+        if (latest === 'scanning' || latest === 'syncing' || latest === 'preview') return;
         await useAppStore.getState().previewSharedProjectSync(ownerId).catch(() => undefined);
       }
     })();
-    return () => { current = false; void useAppStore.getState().cancelSharedProjectSync(ownerId); };
+    return () => { current = false; };
   }, [ownerId, enabled, autoPreview]);
 
   const run = async (apply: boolean) => {
@@ -68,16 +78,22 @@ export default memo(function SharedProjectSyncPanel({ ownerId, enabled, autoPrev
         {busy && <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm ml-auto"
           onClick={() => void useAppStore.getState().cancelSharedProjectSync(ownerId)}><Pause size={14} aria-hidden="true" />{t('暂停同步')}</button>}
       </div>
+      {busy && <p className="ui-hint">{t('关闭弹窗后继续后台同步，重新打开可查看进度或暂停。')}</p>}
       {status?.lastSyncedAt && <p className="ui-hint">{t('最近同步：{time}', { time: new Date(status.lastSyncedAt).toLocaleString() })}</p>}
       {stage === 'preview' && <p className="ui-alert ui-alert--info">
         {t('待上传 {uploads} 项，待下载 {downloads} 项，冲突或受阻 {conflicts} 项。', { uploads, downloads, conflicts })}
       </p>}
       {busy && status?.progress && <p className="ui-hint tabular-nums">
-        {t('已传输 {done} / {total} MB', {
+        {t('{stage}：{done} / {total} MB', {
+          stage: t(PROGRESS_STEPS[status.progress.phase]),
           done: (status.progress.transferredBytes / 1024 / 1024).toFixed(1), total: (status.progress.totalBytes / 1024 / 1024).toFixed(1),
         })}
       </p>}
-      {stage === 'syncing' && <p className="ui-hint">{t('已完成 {done} / {total} 项', { done: status?.completed ?? 0, total: status?.total ?? 0 })}</p>}
+      {!!status?.total && <p className="ui-hint tabular-nums">{t(
+        stage === 'scanning' || stage === 'paused' || stage === 'failed'
+          ? '已保存进度：已完成 {done} / {total} 项' : '已完成 {done} / {total} 项',
+        { done: status.completed, total: status.total },
+      )}</p>}
       {!!items.length && <ul className="ui-list max-h-64 overflow-y-auto" aria-label={t('本次同步条目')}>
         {items.slice(0, limit).map((item) => <li key={item.id} className="ui-list__item min-w-0 p-2">
           <div className="flex min-w-0 items-center gap-2 text-xs">

@@ -65,7 +65,10 @@ export interface SharedAssetSyncSession {
   mappings: SharedAssetMapping[];
   operations: SessionOperation[];
   items: SharedAssetSyncPreviewItem[];
+  /** 已核对无需更新的条目，加上本轮已执行完成的操作。 */
   completed: number;
+  /** 已核对无需更新的条目与实际待办总数，不含冲突或受阻项。 */
+  total: number;
   executing: boolean;
   invalidated?: boolean;
   /** 持久层最后一次已接受的映射，用于准备阶段 CAS。 */
@@ -420,8 +423,9 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
   const stored = await loadSharedAssetSyncState(ownerId);
   const session: SharedAssetSyncSession = { context, expectedLibrary: context.library, rootDirectory, mappings:
     structuredClone(stored.mappings.filter((mapping) => sameBinding(mapping, context.binding))), operations: [], items: [],
-    completed: 0, executing: false, savedMappings: new Map(stored.mappings.map((mapping) => [mapping.id, structuredClone(mapping)])) };
-  context.onStatus({ ownerId, stage: 'scanning', items: [], completed: 0, total: 0 });
+    completed: 0, total: 0, executing: false, savedMappings: new Map(stored.mappings.map((mapping) => [mapping.id, structuredClone(mapping)])) };
+  // Keep restored counts visible until local and remote snapshots have been checked.
+  context.onStatus({ ownerId, stage: 'scanning', items: [] });
   const remote = await remoteAssets(session); const remoteById = new Map(remote.map((asset) => [asset.head.sharedAssetId, asset]));
   for (const asset of remote) {
     const payload = asset.revision.payload;
@@ -759,8 +763,10 @@ export async function buildSharedAssetSyncPreview(context: SharedAssetSyncContex
     return payload?.kind === 'prop' && payload.data.kind === 'prop' && payload.data.propType === 'weapon' ? 0 : 1;
   };
   session.operations.sort((left, right) => weaponPriority(left) - weaponPriority(right));
+  session.completed = session.items.filter((item) => item.direction === 'unchanged').length;
+  session.total = session.completed + session.operations.length;
   context.onStatus({ stage: session.operations.length ? 'preview' : unresolved ? 'paused' : 'completed',
-    items: [...session.items], completed: 0, total: session.operations.length,
+    items: [...session.items], completed: session.completed, total: session.total,
     ...(!session.operations.length && !unresolved ? { lastSyncedAt: Date.now() } : {}) });
   return session;
 }
@@ -939,7 +945,7 @@ export async function executeSharedAssetSync(session: SharedAssetSyncSession, ex
   if (session.executing) throw new Error('项目资产正在同步，请稍后重试');
   if (session.invalidated) throw new Error('共享操作已由其他实例应用，请重新打开项目后预览');
   guard(session.context); session.executing = true;
-  session.context.onStatus({ stage: 'syncing', total: session.operations.length, completed: session.completed });
+  session.context.onStatus({ stage: 'syncing', total: session.total, completed: session.completed });
   try {
     for (const item of session.operations) {
       guard(session.context);
@@ -972,7 +978,7 @@ export async function executeSharedAssetSync(session: SharedAssetSyncSession, ex
             throw new Error('共享资产出现并发修改或提交结果不确定，候选版本已保留');
           }
         }
-        session.completed++; session.context.onStatus({ completed: session.completed });
+        session.completed++; session.context.onStatus({ completed: session.completed, total: session.total });
       } catch (error) {
         if (!['unknown_commit', 'locked_conflict'].includes(item.operation.errorCode ?? '') && !['applied', 'completed', 'conflict'].includes(item.operation.phase)) {
           await patchSharedAssetSyncOperation(item.operation.operationId, { phase: 'paused', errorCode: 'sync_interrupted' }).catch(() => undefined);
@@ -982,7 +988,7 @@ export async function executeSharedAssetSync(session: SharedAssetSyncSession, ex
     }
     const unresolved = session.items.some((item) => item.direction === 'conflict' || item.direction === 'blocked');
     const restored = session.operations.some((item) => item.resumed);
-    session.context.onStatus({ stage: unresolved || restored ? 'paused' : 'completed', completed: session.completed,
+    session.context.onStatus({ stage: unresolved || restored ? 'paused' : 'completed', completed: session.completed, total: session.total,
       ...(unresolved ? { error: '部分资产需要处理，请查看冲突或未纳入项' }
         : restored ? { error: '上次操作已恢复，请重新预览最新本地和云端变更' } : { lastSyncedAt: Date.now() }) });
   } catch (error) {

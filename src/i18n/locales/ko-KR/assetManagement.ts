@@ -272,7 +272,12 @@ const assetManagement: Record<string, string> = {
   "暂停同步": "동기화 일시 중지",
   "最近同步：{time}": "마지막 동기화: {time}",
   "待上传 {uploads} 项，待下载 {downloads} 项，冲突或受阻 {conflicts} 项。": "업로드 대기 {uploads}개, 다운로드 대기 {downloads}개, 충돌 또는 차단 {conflicts}개.",
-  "已传输 {done} / {total} MB": "전송됨 {done} / {total} MB",
+  "{stage}：{done} / {total} MB": "{stage}: {done} / {total} MB",
+  "本地准备": "로컬 준비",
+  "实际上传": "업로드 중",
+  "实际下载": "다운로드 중",
+  "提交资产版本": "에셋 버전 게시 중",
+  "已保存进度：已完成 {done} / {total} 项": "저장된 진행 상황: {done} / {total}개 완료",
   "已完成 {done} / {total} 项": "완료 {done} / {total}개",
   "本次同步条目": "이번 동기화 항목",
   "显示更多": "더 보기",
@@ -400,6 +405,7 @@ const assetManagement: Record<string, string> = {
   "该共享项目状态不兼容，请选择删除共享项目后重新创建": "공유 프로젝트 상태가 호환되지 않습니다. 공유 프로젝트를 삭제한 후 다시 만드세요.",
   "已确认删除 {done} / {total} 个对象": "{done} / {total}개 객체의 삭제 확인됨",
   "操作未完成，已确认删除 {done} / {total} 个对象；实际结果请重新预览核对。": "작업이 완료되지 않았으며 {done} / {total}개 객체의 삭제가 확인되었습니다. 실제 결과를 다시 미리 확인하세요.",
+  "关闭弹窗后继续后台同步，重新打开可查看进度或暂停。": "이 창을 닫아도 백그라운드 동기화는 계속됩니다. 다시 열어 진행 상황을 확인하거나 일시 중지할 수 있습니다.",
 };
 
 export default assetManagement;

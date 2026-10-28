@@ -272,7 +272,12 @@ const assetManagement: Record<string, string> = {
   "暂停同步": "同期を一時停止",
   "最近同步：{time}": "最終同期：{time}",
   "待上传 {uploads} 项，待下载 {downloads} 项，冲突或受阻 {conflicts} 项。": "アップロード待ち {uploads} 件、ダウンロード待ち {downloads} 件、競合または同期不可 {conflicts} 件。",
-  "已传输 {done} / {total} MB": "転送済み {done} / {total} MB",
+  "{stage}：{done} / {total} MB": "{stage}：{done} / {total} MB",
+  "本地准备": "ローカルで準備中",
+  "实际上传": "アップロード中",
+  "实际下载": "ダウンロード中",
+  "提交资产版本": "素材バージョンを公開中",
+  "已保存进度：已完成 {done} / {total} 项": "保存済みの進捗：{done} / {total} 件完了",
   "已完成 {done} / {total} 项": "完了 {done} / {total} 件",
   "本次同步条目": "今回の同期項目",
   "显示更多": "さらに表示",
@@ -400,6 +405,7 @@ const assetManagement: Record<string, string> = {
   "该共享项目状态不兼容，请选择删除共享项目后重新创建": "共有プロジェクトの状態に互換性がありません。共有プロジェクトを削除してから再作成してください。",
   "已确认删除 {done} / {total} 个对象": "{done} / {total} 個のオブジェクトの削除を確認",
   "操作未完成，已确认删除 {done} / {total} 个对象；实际结果请重新预览核对。": "操作が完了せず、{done} / {total} 個のオブジェクトの削除を確認しました。実際の結果は再度プレビューして確認してください。",
+  "关闭弹窗后继续后台同步，重新打开可查看进度或暂停。": "このダイアログを閉じてもバックグラウンドで同期を続けます。再度開くと進捗の確認や一時停止ができます。",
 };
 
 export default assetManagement;

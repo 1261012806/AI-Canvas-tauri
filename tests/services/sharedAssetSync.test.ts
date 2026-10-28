@@ -168,6 +168,7 @@ describe('手动项目资产同步协调', () => {
     const value = context(); value.library.characters[0].imageUrl = 'https://private.example.com/image.png';
     const session = await buildSharedAssetSyncPreview(value);
     expect(session.items).toMatchObject([{ direction: 'blocked' }]); expect(session.operations).toHaveLength(0);
+    expect(session).toMatchObject({ completed: 0, total: 0 });
     expect(mocks.prepare).not.toHaveBeenCalled(); expect(mocks.publish).not.toHaveBeenCalled();
     expect(value.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'paused' }));
   });
@@ -222,9 +223,70 @@ describe('手动项目资产同步协调', () => {
     await executeSharedAssetSync(await buildSharedAssetSyncPreview(context()), commitExecution());
     const next = context(); const session = await buildSharedAssetSyncPreview(next);
     expect(session.items).toMatchObject([{ direction: 'unchanged' }]); expect(session.operations).toHaveLength(0);
+    expect(session).toMatchObject({ completed: 1, total: 1 });
     expect(mocks.publish).toHaveBeenCalledTimes(1);
     expect(mocks.acknowledge).toHaveBeenCalledWith(expect.objectContaining({ applied: false }));
-    expect(next.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'completed' }));
+    expect(next.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'completed', completed: 1, total: 1 }));
+  });
+
+  it('重启后保留四张已核对图片的4/5进度，只发布原未完成版本并累计到5/5', async () => {
+    const files = Array.from({ length: 5 }, (_, offset) => {
+      const name = `image-${offset + 1}.png`;
+      const index: AssetIndexRecord = { assetId: `file-${offset + 1}`, path: `/project/owner/${name}`,
+        rootPath: '/project/owner', relativePath: name, projectId: 'owner', source: 'project',
+        fingerprint: '10:10', size: 10, mtimeMs: 10, status: 'online', updatedAt: 1 };
+      mocks.indexes.set(index.assetId, index);
+      return { assetId: index.assetId, path: index.path, name, relativePath: name,
+        size: 10, category: 'image' as const, source: 'project' as const };
+    });
+    mocks.scan.mockResolvedValue({ files, folders: [], complete: true, truncated: false, failedDirectories: 0, failedFiles: 0 });
+    const emptyLibrary = (): DramaAssetLibrary => ({ version: 2, characters: [], scenes: [], props: [] });
+    const initial = await buildSharedAssetSyncPreview(context(emptyLibrary()));
+    expect(initial.operations).toHaveLength(5);
+    const unfinished = initial.operations[4].operation;
+    const recover = mocks.recover.getMockImplementation()!;
+    mocks.recover.mockImplementation(async (request: { operationId: string; sharedAssetId: string; revisionId: string }) => {
+      if (request.operationId === unfinished.operationId) throw new Error('模拟应用退出前中断');
+      return recover(request);
+    });
+    await expect(executeSharedAssetSync(initial, commitExecution())).rejects.toThrow('模拟应用退出前中断');
+    expect(initial).toMatchObject({ completed: 4, total: 5 });
+    expect(mocks.cloud).toHaveLength(4);
+    expect(mocks.repo.outbox.filter((entry) => entry.phase === 'completed' && !entry.errorCode)).toHaveLength(4);
+    expect(mocks.repo.outbox.find((entry) => entry.operationId === unfinished.operationId)).toMatchObject({
+      revisionId: unfinished.revisionId, phase: 'paused',
+    });
+
+    // Recreate the JS session from persisted records; the native prepared journal remains available.
+    mocks.repo = structuredClone(mocks.repo);
+    mocks.recover.mockImplementation(recover);
+    mocks.recover.mockClear(); mocks.prepare.mockClear(); mocks.publish.mockClear();
+    const next = context(emptyLibrary());
+    const resumed = await buildSharedAssetSyncPreview(next);
+    const scanning = vi.mocked(next.onStatus).mock.calls[0][0];
+    expect(scanning).toMatchObject({ stage: 'scanning' });
+    expect(scanning).not.toHaveProperty('completed');
+    expect(scanning).not.toHaveProperty('total');
+    expect(resumed).toMatchObject({ completed: 4, total: 5 });
+    expect(resumed.items.filter((entry) => entry.direction === 'unchanged')).toHaveLength(4);
+    expect(resumed.operations).toHaveLength(1);
+    expect(resumed.operations[0].operation).toMatchObject({ operationId: unfinished.operationId, revisionId: unfinished.revisionId });
+    expect(resumed.mappings.map((mapping) => mapping.sharedAssetId)).toEqual(initial.mappings.map((mapping) => mapping.sharedAssetId));
+    expect(mocks.prepare).toHaveBeenCalledTimes(4); // Unchanged files are still prepared and content-verified.
+    expect(mocks.prepare.mock.calls.every(([input]) => (input as SharedSyncPrepareInput).draft.operationId !== unfinished.operationId)).toBe(true);
+    expect(next.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'preview', completed: 4, total: 5 }));
+    expect(mocks.publish).not.toHaveBeenCalled();
+
+    await executeSharedAssetSync(resumed, commitExecution());
+    expect(mocks.publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operationId: unfinished.operationId, revisionId: unfinished.revisionId }));
+    expect(mocks.cloud).toHaveLength(5);
+    expect(next.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'paused', completed: 5, total: 5 }));
+    const verified = context(emptyLibrary());
+    const final = await buildSharedAssetSyncPreview(verified);
+    expect(final.operations).toHaveLength(0);
+    expect(final).toMatchObject({ completed: 5, total: 5 });
+    expect(verified.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'completed', completed: 5, total: 5 }));
+    expect(mocks.publish).toHaveBeenCalledOnce();
   });
 
   it('本地和远端同时修改保留候选并报告冲突，不自动覆盖', async () => {
@@ -235,6 +297,7 @@ describe('手动项目资产同步协调', () => {
     mocks.cloud = [remote]; const next = context(); next.library.characters[0].summary = '本地修改';
     const session = await buildSharedAssetSyncPreview(next);
     expect(session.items).toMatchObject([{ direction: 'conflict' }]); expect(session.operations).toHaveLength(0);
+    expect(session).toMatchObject({ completed: 0, total: 0 });
     expect(mocks.repo.conflicts).toMatchObject([{ reason: 'bothChanged' }]);
     expect(mocks.publish).toHaveBeenCalledTimes(1);
   });

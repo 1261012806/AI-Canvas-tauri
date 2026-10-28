@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import type { AppState } from '../../src/store/useAppStore';
-import type { SharedProjectBinding } from '../../src/types/assetSync';
+import type { SharedAssetConflict, SharedAssetMapping, SharedAssetOutboxEntry, SharedAssetSyncLocalState, SharedProjectBinding } from '../../src/types/assetSync';
 import type { SharedAssetSyncContext, SharedAssetSyncSession } from '../../src/services/fs/sharedAssetSync';
 
 const mocks = vi.hoisted(() => ({
@@ -34,10 +34,29 @@ const binding: SharedProjectBinding = {
   libraryId: 'library', sharedProjectId: 'shared-project', projectPrefix: 'team/libraries/library/projects/shared-project',
   capabilities: { checks: [], multiplayerWritable: true, cleanupPending: false, checkedAt: 1 }, updatedAt: 1,
 };
-function session(context: SharedAssetSyncContext): SharedAssetSyncSession {
-  context.onStatus({ stage: 'preview', items: [{ id: 'asset', name: '角色', kind: 'character', direction: 'upload' }], total: 1 });
+function session(context: SharedAssetSyncContext, completed = 0, total = 1): SharedAssetSyncSession {
+  context.onStatus({ stage: 'preview', items: [{ id: 'asset', name: '角色', kind: 'character', direction: 'upload' }], completed, total });
   return { context, expectedLibrary: context.library, rootDirectory: 'runtime-only', mappings: [],
-    operations: [{ operation: {} }], items: [], completed: 0, executing: false, savedMappings: new Map() } as unknown as SharedAssetSyncSession;
+    operations: [{ operation: {} }], items: [], completed, total, executing: false, savedMappings: new Map() } as unknown as SharedAssetSyncSession;
+}
+const syncIdentity = { ownerId: binding.ownerId, connectionId: binding.connectionId, connectionRevision: binding.connectionRevision,
+  libraryId: binding.libraryId, sharedProjectId: binding.sharedProjectId, generation: 'legacy' };
+function savedMapping(assetId: string, acceptedRevisionId = `${assetId}-v1`, patch: Partial<SharedAssetMapping> = {}): SharedAssetMapping {
+  return { ...syncIdentity, id: `${assetId}-mapping`, sharedAssetId: assetId, kind: 'file', localEntityId: `${assetId}-local`,
+    members: [], media: [], acceptedRevisionId, acceptedETag: `${acceptedRevisionId}-etag`, baselineDigest: 'a'.repeat(64), updatedAt: 1, ...patch };
+}
+function savedOperation(assetId: string, revisionId = `${assetId}-v1`, patch: Partial<SharedAssetOutboxEntry> = {}): SharedAssetOutboxEntry {
+  const operationId = `${assetId}-${revisionId}-operation`;
+  return { ...syncIdentity, id: operationId, operationId, mappingId: `${assetId}-mapping`, sharedAssetId: assetId, kind: 'file',
+    direction: 'upload', revisionId, phase: 'completed', createdAt: 1, updatedAt: 10,
+    revision: { format: 'ai-canvas-shared-asset', version: 1, libraryId: binding.libraryId, sharedProjectId: binding.sharedProjectId,
+      sharedAssetId: assetId, revisionId, operationId, createdAt: 1,
+      payload: { kind: 'file', name: `${assetId}.png`, displayRelativePath: `${assetId}.png`, mediaId: 'image', tags: [] },
+      media: [{ id: 'image', kind: 'image', extension: 'png', sha256: 'b'.repeat(64), bytes: 10 }] }, ...patch };
+}
+function savedConflict(assetId: string, baseRevisionId: string): SharedAssetConflict {
+  return { ...syncIdentity, id: `${assetId}-conflict`, sharedAssetId: assetId, kind: 'file',
+    baseRevisionId, remoteRevisionId: `${assetId}-remote`, reason: 'bothChanged', createdAt: 20 };
 }
 function arrange() {
   return createStore<AppState>()((...args) => ({
@@ -62,6 +81,207 @@ beforeEach(() => {
 });
 
 describe('手动项目资产同步协调边界', () => {
+  it('应用预览后在执行器等待期间立即保留四比五，执行完成再显示五比五', async () => {
+    const store = arrange();
+    let finish!: () => void;
+    mocks.preview.mockImplementationOnce(async (context: SharedAssetSyncContext) => session(context, 4, 5));
+    mocks.execute.mockImplementationOnce(async (value: SharedAssetSyncSession) => {
+      expect(value).toMatchObject({ completed: 4, total: 5 });
+      await new Promise<void>((resolve) => { finish = resolve; });
+      value.completed = 5;
+      value.context.onStatus({ stage: 'completed', completed: 5, total: value.total });
+    });
+    await store.getState().previewSharedProjectSync('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'preview', completed: 4, total: 5 });
+    const applying = store.getState().syncSharedProjectNow('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'syncing', completed: 4, total: 5 });
+    await vi.waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'syncing', completed: 4, total: 5 });
+    finish(); await applying;
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'completed', completed: 5, total: 5 });
+  });
+
+  it('当前已接受版本之后的冲突覆盖旧完成展示，冲突不计入可执行总数', async () => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'accepted-v1')], outbox: [
+      savedOperation('image', 'accepted-v1'),
+      savedOperation('image', 'candidate-v2', { phase: 'conflict', baseRevisionId: 'accepted-v1', errorCode: 'conflict', updatedAt: 20 }),
+    ], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 0, total: 0 });
+    expect(store.getState().sharedAssetSyncStatus.series.items).toEqual([
+      expect.objectContaining({ kind: 'file', direction: 'conflict' }),
+    ]);
+  });
+
+  it('仅有当前基线的冲突表记录而无outbox时仍显示待处理冲突', async () => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'accepted-v1')], outbox: [],
+      conflicts: [savedConflict('image', 'accepted-v1')] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 0, total: 0 });
+    expect(store.getState().sharedAssetSyncStatus.series.items).toEqual([
+      expect.objectContaining({ kind: 'file', direction: 'conflict' }),
+    ]);
+  });
+
+  it('已经接受新版本时旧基线的冲突待办与冲突表都不阻碍完成展示', async () => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'accepted-v3')], outbox: [
+      savedOperation('image', 'accepted-v1'),
+      savedOperation('image', 'candidate-v2', { phase: 'conflict', baseRevisionId: 'accepted-v1', errorCode: 'conflict', updatedAt: 20 }),
+      savedOperation('image', 'accepted-v3', { updatedAt: 30 }),
+    ], conflicts: [savedConflict('image', 'accepted-v1')] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({
+      stage: 'completed', completed: 1, total: 1, lastSyncedAt: 30, items: [],
+    });
+  });
+
+  it('同一资产的原待恢复操作优先于旧冲突表记录，不被过时冲突阻止恢复', async () => {
+    const store = arrange();
+    const pending = savedOperation('image', 'candidate-v2', { phase: 'paused', baseRevisionId: 'accepted-v1', updatedAt: 15 });
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'accepted-v1')],
+      outbox: [savedOperation('image', 'accepted-v1'), pending], conflicts: [savedConflict('image', 'accepted-v1')] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 0, total: 1 });
+    expect(store.getState().sharedAssetSyncStatus.series.items).toEqual([
+      expect.objectContaining({ id: pending.operationId, name: 'image.png', kind: 'file', direction: 'upload' }),
+    ]);
+  });
+
+  it('重启恢复已完成四项和待上传一项，显示四比五并只列出待恢复操作', async () => {
+    const store = arrange();
+    const assets = ['image-1', 'image-2', 'image-3', 'image-4', 'image-5'];
+    mocks.load.mockResolvedValue({ mappings: assets.map((id) => savedMapping(id)),
+      outbox: assets.map((id, index) => savedOperation(id, undefined, { phase: index === 4 ? 'paused' : 'completed', updatedAt: (index + 1) * 10 })),
+      conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 4, total: 5, lastSyncedAt: 40 });
+    expect(store.getState().sharedAssetSyncStatus.series.items).toEqual([
+      expect.objectContaining({ name: 'image-5.png', kind: 'file', direction: 'upload', message: expect.stringContaining('恢复上次固定') }),
+    ]);
+    expect(mocks.preview).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it('同一资产历史版本只计一次，新预览丢弃的候选不遮蔽已接受版本', async () => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'accepted-v2')], outbox: [
+      savedOperation('image', 'old-v1', { updatedAt: 10 }),
+      savedOperation('image', 'accepted-v2', { updatedAt: 20 }),
+      savedOperation('image', 'discarded-preview-v3', { updatedAt: 500 }),
+    ], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'completed', completed: 1, total: 1, lastSyncedAt: 20, items: [] });
+  });
+
+  it.each(['applied', 'completed'] as const)('本地已应用但尚未确认回执的%s条目仍覆盖旧完成记录', async (phase) => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image', 'new-v2')], outbox: [
+      savedOperation('image', 'old-v1'),
+      savedOperation('image', 'new-v2', { phase, errorCode: 'ack_pending', updatedAt: 50 }),
+    ], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 0, total: 1 });
+    expect(store.getState().sharedAssetSyncStatus.series.lastSyncedAt).toBeUndefined();
+    expect(store.getState().sharedAssetSyncStatus.series.items).toHaveLength(1);
+  });
+
+  it('同一资产多笔待办只计一项，不能与旧完成记录重复累计', async () => {
+    const store = arrange();
+    const latest = savedOperation('image', 'latest-v3', { phase: 'planned', updatedAt: 30 });
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image')], outbox: [
+      savedOperation('image'), savedOperation('image', 'pending-v2', { phase: 'paused', updatedAt: 20 }),
+      { ...latest, revision: undefined, draft: { ...latest.revision!,
+        media: latest.revision!.media.map(({ id, kind, extension }) => ({ id, kind, extension })) } },
+    ], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'paused', completed: 0, total: 1 });
+    expect(store.getState().sharedAssetSyncStatus.series.items).toHaveLength(1);
+    expect(store.getState().sharedAssetSyncStatus.series.items[0].name).toBe('image.png');
+  });
+
+  it.each([
+    ['ownerId', 'other-owner'], ['connectionId', 'other-connection'], ['connectionRevision', 'other-revision'],
+    ['libraryId', 'other-library'], ['sharedProjectId', 'other-project'], ['generation', 'other-generation'],
+  ] as const)('恢复计数排除%s不同的历史映射和待办', async (key, value) => {
+    const store = arrange();
+    const outsideScope: Partial<SharedAssetMapping & SharedAssetOutboxEntry> = { [key]: value };
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image'), savedMapping('outside', undefined, outsideScope)], outbox: [
+      savedOperation('image'), savedOperation('image', 'other-pending', { ...outsideScope, phase: 'paused' }),
+      savedOperation('outside', undefined, outsideScope),
+    ], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'completed', completed: 1, total: 1, items: [] });
+  });
+
+  it('当前绑定切换代次后只读取同代次记录，旧legacy待办不覆盖新代次完成数', async () => {
+    const store = arrange();
+    store.setState({ sharedAssetStorage: { ...store.getState().sharedAssetStorage!, bindings: [{ ...binding, generation: 'current-generation' }] } });
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('old-image'), savedMapping('image', undefined, { generation: 'current-generation' })],
+      outbox: [savedOperation('old-image', undefined, { phase: 'paused' }),
+        savedOperation('image', undefined, { generation: 'current-generation', updatedAt: 30 })], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'completed', completed: 1, total: 1, lastSyncedAt: 30, items: [] });
+  });
+
+  it.each([
+    { mappingId: 'different-mapping' }, { sharedAssetId: 'different-asset' }, { kind: 'prop' as const }, { revisionId: 'different-revision' },
+  ])('没有严格匹配已接受映射的完成证据时不计入完成数：%o', async (patch) => {
+    const store = arrange();
+    mocks.load.mockResolvedValue({ mappings: [savedMapping('image')], outbox: [savedOperation('image', undefined, patch)], conflicts: [] });
+    await store.getState().loadSharedProjectSyncState('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'idle', completed: 0, total: 0, items: [] });
+    expect(store.getState().sharedAssetSyncStatus.series.lastSyncedAt).toBeUndefined();
+  });
+
+  it('扫描保留已恢复四比五基线，迟到的磁盘读取不能覆盖活动运行实例', async () => {
+    const store = arrange();
+    store.setState({ sharedAssetSyncStatus: { series: { ownerId: 'series', stage: 'paused', items: [], completed: 4, total: 5 } } });
+    let finishLoad!: (value: SharedAssetSyncLocalState) => void;
+    let finishPreview!: (value: SharedAssetSyncSession) => void;
+    let captured!: SharedAssetSyncContext;
+    mocks.load.mockImplementationOnce(() => new Promise<SharedAssetSyncLocalState>((resolve) => { finishLoad = resolve; }));
+    const loading = store.getState().loadSharedProjectSyncState('series');
+    await vi.waitFor(() => expect(mocks.load).toHaveBeenCalledTimes(1));
+    mocks.preview.mockImplementationOnce((context: SharedAssetSyncContext) => {
+      captured = context;
+      return new Promise<SharedAssetSyncSession>((resolve) => { finishPreview = resolve; });
+    });
+    const scanning = store.getState().previewSharedProjectSync('series');
+    await vi.waitFor(() => expect(mocks.preview).toHaveBeenCalledTimes(1));
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'scanning', completed: 4, total: 5 });
+    finishLoad({ mappings: [], outbox: [], conflicts: [] }); await loading;
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'scanning', completed: 4, total: 5 });
+    finishPreview(session(captured)); await scanning;
+    expect(store.getState().sharedAssetSyncStatus.series.stage).toBe('preview');
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
+
+  it('读盘期间新同步已完成并释放运行实例后，迟到的旧快照仍不能覆盖完成结果', async () => {
+    const store = arrange();
+    let finishLoad!: (value: SharedAssetSyncLocalState) => void;
+    mocks.load.mockImplementationOnce(() => new Promise<SharedAssetSyncLocalState>((resolve) => { finishLoad = resolve; }));
+    const loading = store.getState().loadSharedProjectSyncState('series');
+    await vi.waitFor(() => expect(mocks.load).toHaveBeenCalledTimes(1));
+    mocks.execute.mockImplementationOnce(async (value: SharedAssetSyncSession) => {
+      value.completed = 1;
+      value.context.onStatus({ stage: 'completed', completed: 1, total: 1, lastSyncedAt: 70 });
+    });
+    await store.getState().previewSharedProjectSync('series');
+    await store.getState().syncSharedProjectNow('series');
+    const completed = store.getState().sharedAssetSyncStatus.series;
+    expect(completed).toMatchObject({ stage: 'completed', completed: 1, total: 1, lastSyncedAt: 70 });
+    await store.getState().cancelSharedProjectSync('series');
+    expect(store.getState().sharedAssetSyncStatus.series).toBe(completed);
+    finishLoad({ mappings: [], outbox: [], conflicts: [] }); await loading;
+    expect(store.getState().sharedAssetSyncStatus.series).toBe(completed);
+    expect(store.getState().sharedAssetSyncStatus.series).toMatchObject({ stage: 'completed', completed: 1, total: 1 });
+    expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
+
   it('清理仅在用户确认预览后执行，保留本机项目和绑定', async () => {
     const store = arrange();
     const originalLibrary = store.getState().dramaAssets;
