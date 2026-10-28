@@ -56,6 +56,32 @@ let activeProjectMetadataWrite: Promise<void> = Promise.resolve();
 const EMPTY_SERIES_CANVAS: readonly never[] = [];
 const projectInitializations: WeakMap<() => AppState, Promise<void>> = import.meta.hot?.data.projectInitializations ?? new WeakMap();
 if (import.meta.hot) import.meta.hot.data.projectInitializations = projectInitializations;
+const pendingProjectSaves: Map<string, Set<Promise<string | undefined>>> = import.meta.hot?.data.pendingProjectSaves ?? new Map();
+if (import.meta.hot) import.meta.hot.data.pendingProjectSaves = pendingProjectSaves;
+
+function trackProjectSave(projectId: string | null, save: (projectId: string | null) => Promise<string | undefined>): Promise<string | undefined> {
+  const operation = save(projectId);
+  if (!projectId) return operation;
+  const pending = pendingProjectSaves.get(projectId) ?? new Set<Promise<string | undefined>>();
+  pending.add(operation);
+  pendingProjectSaves.set(projectId, pending);
+  const cleanup = () => {
+    pending.delete(operation);
+    if (pending.size === 0 && pendingProjectSaves.get(projectId) === pending) pendingProjectSaves.delete(projectId);
+  };
+  void operation.then(cleanup, cleanup);
+  return operation;
+}
+
+/** 等待已发出的完整保存，包括入队前等待和失败分类；这里不发起新保存。 */
+export async function waitForPendingProjectSaves(projectId: string): Promise<boolean> {
+  while (true) {
+    const pending = [...(pendingProjectSaves.get(projectId) ?? [])];
+    if (pending.length === 0) return true;
+    const results = await Promise.allSettled(pending);
+    if (results.some((result) => result.status === 'rejected' || result.value !== projectId)) return false;
+  }
+}
 
 function getProjectGroups(data: { groups?: unknown } | null | undefined): NodeGroup[] {
   return Array.isArray(data?.groups) ? (data.groups as NodeGroup[]) : [];
@@ -163,7 +189,8 @@ interface ProjectSaveQueue {
   idleWaiters: Array<() => void>;
 }
 
-const projectSaveQueues = new Map<string, ProjectSaveQueue>();
+const projectSaveQueues: Map<string, ProjectSaveQueue> = import.meta.hot?.data.projectSaveQueues ?? new Map();
+if (import.meta.hot) import.meta.hot.data.projectSaveQueues = projectSaveQueues;
 interface ProjectAssetSyncBarrier {
   done: Promise<void>;
   library: AppState['dramaAssets'];
@@ -1663,10 +1690,11 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     }
   },
 
-  saveCurrentProject: async () => {
+  saveCurrentProject: () => trackProjectSave(get().currentProjectId, async (projectId) => {
     const syncPending = waitForProjectAssetSync(get);
     if (syncPending) await syncPending;
     const state = get();
+    if (state.currentProjectId !== projectId) return undefined;
     if (state.currentProjectId && state.projectLoadStatus !== 'ready') {
       // 加载中只是还没就绪，不算故障；加载失败才记进退出拦截状态
       if (state.projectLoadStatus === 'error') {
@@ -1698,13 +1726,14 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       get().showToast(t('保存失败：{reason}', { reason: failure.reason }), 'error');
       return undefined;
     }
-  },
+  }),
 
   /** 静默保存（不弹 toast），用于自动保存 */
-  saveCurrentProjectSilent: async () => {
+  saveCurrentProjectSilent: () => trackProjectSave(get().currentProjectId, async (projectId) => {
     const syncPending = waitForProjectAssetSync(get);
     if (syncPending) await syncPending;
     const state = get();
+    if (state.currentProjectId !== projectId) return undefined;
     if (state.currentProjectId && state.projectLoadStatus !== 'ready') {
       if (state.projectLoadStatus === 'error') {
         noteSaveFailure(set, get, {
@@ -1731,7 +1760,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
       await noteSaveError(set, get, error, true);
       return undefined;
     }
-  },
+  }),
 
   commitSharedAssetSyncDownload: async (input) => {
     if (input.commit.ownerId !== input.ownerId || projectAssetSyncBarriers.has(input.ownerId)) {
@@ -1892,7 +1921,8 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
         })));
         fileService.registerProjectFolders(mapped);
         mapped.sort((a, b) => b.updatedAt - a.updatedAt);
-        if (get().config.startupView === 'project-library' || isWebviewRecovery()) {
+        const recoveringWebview = await isWebviewRecovery();
+        if (get().config.startupView === 'project-library' || recoveringWebview) {
           // 启动页只读摘要；选定项目后才通过既有切换流程加载画布及项目域数据。
           set({
             projects: mapped,

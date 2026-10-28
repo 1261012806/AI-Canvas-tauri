@@ -3,16 +3,13 @@ import type { BaseNodeData } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { generateId } from '../store/store.utils';
 import { getNodeBounds } from '../utils/nodeBounds';
-import { isRemoteMediaUrl, isTauriAssetUrl, localMediaUrlToPath } from '../utils/mediaUrl';
 import { compressImageLosslessly } from './ai/referenceImageUpload';
-import { corsSafeFetch } from './ai/httpTransport';
+import { ImageSourceReadError, readImageSourceBlob } from './fs/imageSourceBlob';
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from './canvasDerivationGuard';
-import { buildNodeFileName, estimateMediaDataUrlBytesAsync, getAssetUrlFromPath,
+import { buildNodeFileName,
   isTauriEnv, moveToTrash, saveBinaryToProjectData } from './fileService';
-import { decodeDataUrlBytesAsync, MEDIA_DATA_URL_BYTE_LIMITS } from './mediaDataUrl';
 import { parseRasterImageDimensions } from './rasterImageDimensions';
 
-const MAX_BYTES = MEDIA_DATA_URL_BYTE_LIMITS.image;
 const BYTE_LIMIT_ERROR = '图片超过无损压缩上限（32 MiB、2400 万像素或单边 16384 像素）';
 const SOURCE_FIELDS = ['filePath', 'imageUrl', 'sourceUrl', 'thumbnailUrl', 'mediaVersion'] as const;
 const runtime: { active: Set<string>; tail: Promise<unknown> } = import.meta.hot?.data.imageCompression
@@ -27,97 +24,20 @@ function abortError(): DOMException {
   return new DOMException('操作已取消', 'AbortError');
 }
 
-async function readResponse(response: Response, signal: AbortSignal, maxBytes: number): Promise<Blob> {
-  if (!response.ok || !response.body) throw new Error('读取原图失败，请重试');
-  if (Number(response.headers.get('content-length')) > maxBytes) {
-    await response.body.cancel();
-    throw new RangeError(BYTE_LIMIT_ERROR);
-  }
-  const reader = response.body.getReader();
-  const parts: BlobPart[] = [];
-  let total = 0;
-  const cancel = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener('abort', cancel, { once: true });
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) throw new RangeError(BYTE_LIMIT_ERROR);
-      parts.push(Uint8Array.from(value));
-    }
-    signal.throwIfAborted();
-    return new Blob(parts, { type: response.headers.get('content-type') ?? '' });
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal.removeEventListener('abort', cancel);
-    reader.releaseLock();
-  }
-}
-
-async function readAsset(source: string, signal: AbortSignal): Promise<Blob> {
-  const parts: Blob[] = [];
-  let offset = 0;
-  let total: number | undefined;
-  do {
-    signal.throwIfAborted();
-    // Tauri 的单段读取有原生上限；按实际返回的区间继续，绝不回退整文件 GET。
-    const response = await fetch(source, { signal, headers: { Range: `bytes=${offset}-${offset + 1024 * 1024 - 1}` } });
-    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
-    const [start, end, size] = range ? range.slice(1).map(Number) : [];
-    if (response.status !== 206 || !range || ![start, end, size].every(Number.isSafeInteger)
-      || start !== offset || end < start || end >= size || end - start + 1 > 1024 * 1024
-      || (total !== undefined && size !== total) || size > MAX_BYTES) {
-      await response.body?.cancel();
-      if (size > MAX_BYTES) throw new RangeError(BYTE_LIMIT_ERROR);
-      throw new Error('读取原图失败，请重试');
-    }
-    total = size;
-    const part = await readResponse(response, signal, end - start + 1);
-    if (part.size !== end - start + 1) throw new Error('读取原图失败，请重试');
-    parts.push(part);
-    offset = end + 1;
-  } while (offset < total!);
-  return new Blob(parts, { type: parts[0]?.type });
-}
-
 async function readOriginal(data: BaseNodeData, signal: AbortSignal): Promise<Blob> {
   // 原文件优先；读取失败时不能拿缩略图冒充原图继续压缩。
-  if (!data.filePath && !data.imageUrl && !data.sourceUrl && !data.thumbnailUrl) {
-    throw new Error('当前图片不可用，无法无损压缩');
-  }
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal.addEventListener('abort', abort, { once: true });
-  if (signal.aborted) abort();
-  const timer = setTimeout(abort, 30_000);
+  const source = data.filePath || data.imageUrl || data.sourceUrl || data.thumbnailUrl;
+  if (!source) throw new Error('当前图片不可用，无法无损压缩');
   try {
-    const source = data.filePath ? await getAssetUrlFromPath(data.filePath)
-      : (data.imageUrl || data.sourceUrl || data.thumbnailUrl)!;
-    if (/^data:/i.test(source)) {
-      const expectedBytes = await estimateMediaDataUrlBytesAsync(source, controller.signal);
-      if (expectedBytes > MAX_BYTES) throw new RangeError(BYTE_LIMIT_ERROR);
-      const bytes = await decodeDataUrlBytesAsync(source, { expectedBytes, maxBytes: MAX_BYTES, signal: controller.signal });
-      return new Blob([Uint8Array.from(bytes)]);
-    }
-    const localPath = localMediaUrlToPath(source);
-    const url = localPath ? await getAssetUrlFromPath(localPath) : source;
-    if (isTauriAssetUrl(url)) return await readAsset(url, controller.signal);
-    if (!isRemoteMediaUrl(url) && !/^blob:/i.test(url)) throw new Error('读取原图失败，请重试');
-    const response = await (isRemoteMediaUrl(url) ? corsSafeFetch : fetch)(url, { signal: controller.signal });
-    return await readResponse(response, controller.signal, MAX_BYTES);
+    return await readImageSourceBlob(source, signal);
   } catch (error) {
     if (signal.aborted) throw abortError();
-    if (error instanceof RangeError && error.message === BYTE_LIMIT_ERROR) throw error;
-    // 读取异常可能带本地路径，不把原始错误或 cause 交给界面。
+    if (error instanceof ImageSourceReadError && error.code === 'too_large') {
+      // eslint-disable-next-line preserve-caught-error
+      throw new RangeError(BYTE_LIMIT_ERROR);
+    }
     // eslint-disable-next-line preserve-caught-error
     throw new Error('读取原图失败，请重试');
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener('abort', abort);
   }
 }
 

@@ -9,9 +9,10 @@
  *  - 底部控制条：缩小 / 百分比（点击复位）/ 放大
  * 复位：scale 回到 1 时自动归位；src 变化时重置。
  */
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useImageViewportGesture } from '../../hooks/useImageViewportGesture';
-import { useComfyImageSource } from '../../hooks/useComfyImageSource';
+import { acquireFullscreenImageSource, FullscreenImageSourceError, FULLSCREEN_IMAGE_ERRORS } from '../../services/fullscreenImageSource';
+import type { ComfyMediaSourceLease } from '../../services/comfyMediaSource';
 import { useT } from '../../i18n';
 
 const MIN_SCALE = 1;
@@ -27,7 +28,27 @@ interface ZoomableImageProps {
 
 export default function ZoomableImage({ src, alt = '', className = '', onError, onClose }: ZoomableImageProps) {
   const t = useT();
-  const displaySrc = useComfyImageSource(src, onError);
+  const [retry, setRetry] = useState(0);
+  const [prepared, setPrepared] = useState<{
+    source: string; retry: number; request: AbortController;
+    lease?: ComfyMediaSourceLease; error?: keyof typeof FULLSCREEN_IMAGE_ERRORS;
+  }>();
+  useEffect(() => {
+    const request = new AbortController();
+    let lease: ComfyMediaSourceLease | undefined;
+    void acquireFullscreenImageSource(src, request.signal).then((result) => {
+      if (request.signal.aborted) { result.release(); return; }
+      lease = result;
+      setPrepared({ source: src, retry, request, lease });
+    }, (error: unknown) => {
+      if (request.signal.aborted) return;
+      setPrepared({ source: src, retry, request,
+        error: error instanceof FullscreenImageSourceError ? error.code : 'unavailable' });
+    });
+    return () => { request.abort(); lease?.release(); };
+  }, [src, retry]);
+  const current = prepared?.source === src && prepared.retry === retry ? prepared : undefined;
+  const displaySrc = current && !current.error && !current.request.signal.aborted ? current.lease?.src : undefined;
   const {
     containerRef,
     containerEl,
@@ -91,17 +112,31 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
       onClick={handleClick}
     >
       <div className="zoomable-image-stage">
-        <img
+        {current?.error ? (
+          <div role="alert" className="flex max-w-lg flex-col items-center gap-3 p-3 text-center text-sm text-canvas-text-secondary" onDoubleClick={(event) => event.stopPropagation()}>
+            <p>{t(FULLSCREEN_IMAGE_ERRORS[current.error])}</p>
+            <div className="flex gap-2">
+              <button type="button" className="ui-btn ui-btn--sm" onClick={() => setRetry((value) => value + 1)}>{t('重新加载')}</button>
+              {onClose && <button type="button" className="ui-btn ui-btn--sm" onClick={onClose}>{t('关闭')}</button>}
+            </div>
+          </div>
+        ) : !displaySrc ? (
+          <div role="status" className="p-3 text-sm text-canvas-text-secondary">{t('正在加载...')}</div>
+        ) : <img
           src={displaySrc}
           alt={alt}
           className={className}
           draggable={false}
-          onError={onError}
+          onError={() => {
+            current?.request.abort();
+            if (current) setPrepared({ ...current, lease: undefined, error: 'unavailable' });
+            onError?.();
+          }}
           style={{
             transform: scale === MIN_SCALE && tx === 0 && ty === 0
               ? 'none' : `translate(${tx}px, ${ty}px) scale(${scale})`,
           }}
-        />
+        />}
       </div>
 
       <div className="zoom-controls" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>

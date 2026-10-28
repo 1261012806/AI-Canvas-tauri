@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../store/useAppStore';
 import { getLastActiveProjectId } from './indexedDbService';
 import { confirmAction } from './confirmDialog';
@@ -5,17 +6,25 @@ import { t } from '../i18n';
 
 const RECOVERY_PARAM = '__canvas_webview_recovery';
 let pendingRecovery: Promise<void> | undefined;
-let recoveryDetected: boolean | undefined;
+let recoveryDetected: Promise<boolean> | undefined;
 
-export function isWebviewRecovery(): boolean {
-  recoveryDetected ??= typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-    && typeof window.location?.href === 'string'
-    && new URL(window.location.href).searchParams.get(RECOVERY_PARAM) === '1';
+export function isWebviewRecovery(): Promise<boolean> {
+  recoveryDetected ??= (async () => {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)
+      || typeof window.location?.href !== 'string') return false;
+    const urlRecovery = new URL(window.location.href).searchParams.get(RECOVERY_PARAM) === '1';
+    let nativeRecovery = false;
+    try {
+      // URL 已有标记也要消费原生状态，避免下次普通重载再次提示。
+      nativeRecovery = await invoke<boolean>('consume_webview_recovery') === true;
+    } catch { /* 旧安装包可能没有这条命令，仍沿用 URL 标记；不暴露原生错误正文。 */ }
+    return urlRecovery || nativeRecovery;
+  })();
   return recoveryDetected;
 }
 
 async function recover(): Promise<void> {
-  if (!isWebviewRecovery()) return;
+  if (!await isWebviewRecovery()) return;
   const url = new URL(window.location.href);
   url.searchParams.delete(RECOVERY_PARAM);
   try { window.history.replaceState(window.history.state, '', url); }

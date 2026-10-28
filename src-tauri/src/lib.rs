@@ -1899,6 +1899,7 @@ pub fn run() {
             toggle_devtools,
             set_main_window_native_corners,
             native_rendering::sync_native_performance_mode,
+            native_rendering::consume_webview_recovery,
             sync_authorized_directories,
             comfyui::launch_comfyui,
             comfyui::progress::stream_comfyui_progress,

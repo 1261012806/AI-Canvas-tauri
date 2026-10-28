@@ -154,6 +154,12 @@ beforeEach(() => {
 afterEach(() => { scope.effects.forEach((effect) => effect.cleanup?.()); vi.unstubAllGlobals(); });
 
 describe('asset image fullscreen preview', () => {
+  it('does not decode a decorative original behind the fullscreen image', () => {
+    render();
+    expect(elements(tree).some((element) => element.props.className === 'asset-image-preview-backdrop')).toBe(false);
+    expect(find((element) => element.type === 'zoomable-image').props.src).toBe(files[0].assetUrl);
+  });
+
   it('persists both generated fields through the real IndexedDB transaction without a manual save', async () => {
     const { db, assetId } = await transactionalSaveFixture();
     render(); await settle(); click(button('反推提示词和标签')); render(); click(button('开始反推'));

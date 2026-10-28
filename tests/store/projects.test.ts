@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BaseNodeData } from '../../src/types';
 import type { ProjectDataDirRenameResult } from '../../src/services/fs/core';
+import type { SharedAssetSyncCommitInput } from '../../src/services/indexedDb/sharedAssetSyncRepository';
 
 const fileMocks = vi.hoisted(() => ({
   deleteProjectData: vi.fn(async () => undefined),
@@ -30,6 +31,8 @@ const metadataMocks = vi.hoisted(() => ({
   setLastActiveProjectId: vi.fn(async () => undefined),
   updateProjectSnapshot: vi.fn(async (_id: string, _snapshot: string | undefined) => true),
 }));
+const recoveryMock = vi.hoisted(() => vi.fn(async () => false));
+const assetSyncMocks = vi.hoisted(() => ({ applySharedAssetSyncCommit: vi.fn() }));
 
 vi.mock('../../src/services/fileService', () => ({
   ...fileMocks,
@@ -44,6 +47,11 @@ vi.mock('../../src/services/pollManager', () => ({
 }));
 
 vi.mock('../../src/services/projectSnapshotService', () => snapshotMocks);
+vi.mock('../../src/services/webviewRecoveryService', () => ({ isWebviewRecovery: recoveryMock }));
+vi.mock('../../src/services/indexedDb/sharedAssetSyncRepository', async () => ({
+  ...await vi.importActual<typeof import('../../src/services/indexedDb/sharedAssetSyncRepository')>('../../src/services/indexedDb/sharedAssetSyncRepository'),
+  ...assetSyncMocks,
+}));
 vi.mock('../../src/services/indexedDbService', async () => {
   const actual = await vi.importActual<typeof import('../../src/services/indexedDbService')>(
     '../../src/services/indexedDbService',
@@ -52,7 +60,7 @@ vi.mock('../../src/services/indexedDbService', async () => {
 });
 
 import { useAppStore } from '../../src/store/useAppStore';
-import { createProjectSlice } from '../../src/store/store.projects';
+import { createProjectSlice, waitForPendingProjectSaves } from '../../src/store/store.projects';
 import { createOrRefreshHotStore } from '../../src/store/store.hotReload';
 import type { AppState } from '../../src/store/useAppStore';
 
@@ -83,6 +91,8 @@ beforeEach(() => {
   metadataMocks.getLastActiveProjectId.mockResolvedValue(null);
   metadataMocks.setLastActiveProjectId.mockClear();
   metadataMocks.updateProjectSnapshot.mockClear();
+  recoveryMock.mockReset().mockResolvedValue(false);
+  assetSyncMocks.applySharedAssetSyncCommit.mockReset();
 });
 
 function stubInitializationActions(store = useAppStore) {
@@ -111,6 +121,34 @@ function refreshProjectInitializer() {
 
 describe('project bootstrap lifetime', () => {
   const storedProject = { id: 'boot-project', name: 'Stored', createdAt: 1, updatedAt: 1 };
+
+  it('waits for native recovery detection before reopening the last project', async () => {
+    stubInitializationActions();
+    useAppStore.setState((state) => ({ config: { ...state.config, startupView: 'last-project' } }));
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    let finishDetection!: (recovering: boolean) => void;
+    recoveryMock.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishDetection = resolve; }));
+    const initializing = useAppStore.getState().initFromDb();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recoveryMock).toHaveBeenCalledOnce();
+    expect(fileMocks.loadProjectData).not.toHaveBeenCalled();
+    expect(useAppStore.getState().projectLoadStatus).toBe('loading');
+    finishDetection(true);
+    await initializing;
+    expect(useAppStore.getState()).toMatchObject({ currentProjectId: null, projectLoadStatus: 'ready', nodes: [], projects: [storedProject] });
+    expect(fileMocks.loadProjectData).not.toHaveBeenCalled();
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+  });
+
+  it('consumes native recovery detection even when the startup preference is the project list', async () => {
+    stubInitializationActions();
+    fileMocks.loadProjectsList.mockResolvedValue([storedProject]);
+    recoveryMock.mockResolvedValueOnce(true);
+    await useAppStore.getState().initFromDb();
+    expect(recoveryMock).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().currentProjectId).toBeNull();
+    expect(fileMocks.loadProjectData).not.toHaveBeenCalled();
+  });
 
   it('shares an in-flight bootstrap across an action refresh using the same store API', async () => {
     stubInitializationActions();
@@ -218,6 +256,118 @@ describe('project bootstrap lifetime', () => {
     await useAppStore.getState().initFromDb();
     expect(fileMocks.loadProjectsList).toHaveBeenCalledTimes(2);
     expect(useAppStore.getState().projectInitialized).toBe(true);
+  });
+});
+
+describe('pending project save commit barrier', () => {
+  function openSaveProject(id = 'save-project') {
+    useAppStore.setState({ currentProjectId: id, projectName: '保存项目',
+      projects: [{ id, name: '保存项目', createdAt: 1, updatedAt: 1 }],
+      nodes: [{ id: 'text', type: 'ai-text', position: { x: 0, y: 0 }, data: { type: 'ai-text', label: '正文', output: '原正文' } }] });
+  }
+
+  it('does not start a save or a snapshot when there is no pending IO', async () => {
+    openSaveProject();
+    expect(await waitForPendingProjectSaves('save-project')).toBe(true);
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+    expect(snapshotMocks.captureCurrentCanvasSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(['saveCurrentProject', 'saveCurrentProjectSilent'] as const)('waits for the complete %s operation', async (action) => {
+    openSaveProject();
+    let finish!: (id: string) => void;
+    fileMocks.saveProject.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const saving = useAppStore.getState()[action]();
+    let settled = false;
+    const barrier = waitForPendingProjectSaves('save-project').then((saved) => { settled = true; return saved; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    finish('save-project');
+    expect(await saving).toBe('save-project');
+    expect(await barrier).toBe(true);
+  });
+
+  it('also waits for a newer save added while the original commit is pending', async () => {
+    openSaveProject();
+    const releases: Array<(id: string) => void> = [];
+    fileMocks.saveProject.mockImplementation(() => new Promise<string>((resolve) => { releases.push(resolve); }));
+    const first = useAppStore.getState().saveCurrentProjectSilent();
+    let settled = false;
+    const barrier = waitForPendingProjectSaves('save-project').then((saved) => { settled = true; return saved; });
+    useAppStore.getState().updateNodeDataTransient('text', { output: '后来新增的正文' });
+    const second = useAppStore.getState().saveCurrentProjectSilent();
+    releases[0]('save-project');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    expect(releases).toHaveLength(2);
+    releases[1]('save-project');
+    expect(await Promise.all([first, second, barrier])).toEqual(['save-project', 'save-project', true]);
+  });
+
+  it.each(['saveCurrentProject', 'saveCurrentProjectSilent'] as const)('does not let %s save a different project after waiting for asset sync', async (action) => {
+    openSaveProject('project-a');
+    let markApplyStarted!: () => void;
+    let finishApply!: () => void;
+    const applyStarted = new Promise<void>((resolve) => { markApplyStarted = resolve; });
+    const applyPending = new Promise<void>((resolve) => { finishApply = resolve; });
+    assetSyncMocks.applySharedAssetSyncCommit.mockImplementationOnce(async (input: SharedAssetSyncCommitInput) => {
+      markApplyStarted();
+      await applyPending;
+      input.assertCurrent?.();
+      return { alreadyApplied: false };
+    });
+    const downloading = useAppStore.getState().commitSharedAssetSyncDownload({
+      ownerId: 'project-a', originProjectId: 'project-a', expectedLibrary: useAppStore.getState().dramaAssets,
+      commit: { ownerId: 'project-a', operationId: 'operation', mappings: [], operation: {
+        ownerId: 'project-a', connectionId: 'connection', connectionRevision: 'c1', libraryId: 'library', sharedProjectId: 'shared',
+        id: 'pending', operationId: 'operation', sharedAssetId: 'asset', kind: 'file', direction: 'download',
+        mappingId: 'mapping', revisionId: 'r2', phase: 'applying', createdAt: 1, updatedAt: 1,
+      } },
+    });
+    const interrupted = expect(downloading).rejects.toThrow();
+    await applyStarted;
+    const saving = useAppStore.getState()[action]();
+    const originalBarrier = waitForPendingProjectSaves('project-a');
+    openSaveProject('project-b');
+    expect(await waitForPendingProjectSaves('project-b')).toBe(true);
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+    finishApply();
+    await interrupted;
+    expect(await saving).toBeUndefined();
+    expect(await originalBarrier).toBe(false);
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+    expect(useAppStore.getState().currentProjectId).toBe('project-b');
+  });
+
+  it.each(['saveCurrentProject', 'saveCurrentProjectSilent'] as const)('reports failed %s only after error classification has finished', async (action) => {
+    openSaveProject();
+    let finishEstimate!: (estimate: { usage: number; quota: number }) => void;
+    vi.stubGlobal('navigator', { storage: { estimate: vi.fn(() => new Promise((resolve) => { finishEstimate = resolve; })) } });
+    fileMocks.saveProject.mockRejectedValueOnce(new DOMException('quota exhausted', 'QuotaExceededError'));
+    const saving = useAppStore.getState()[action]();
+    let settled = false;
+    const barrier = waitForPendingProjectSaves('save-project').then((saved) => { settled = true; return saved; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(useAppStore.getState().autoSaveFailure).toBeNull();
+      finishEstimate({ usage: 1, quota: 1 });
+      expect(await saving).toBeUndefined();
+      expect(await barrier).toBe(false);
+      expect(useAppStore.getState().autoSaveFailure?.kind).toBe('quota');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('reports an unexpected rejection and leaves another project independent', async () => {
+    openSaveProject();
+    Object.defineProperty(useAppStore.getState().projects[0], 'createdAt', { get: () => { throw new Error('invalid project record'); } });
+    const saving = useAppStore.getState().saveCurrentProjectSilent();
+    const rejected = expect(saving).rejects.toThrow('invalid project record');
+    const barrier = waitForPendingProjectSaves('save-project');
+    expect(await waitForPendingProjectSaves('another-project')).toBe(true);
+    expect(await barrier).toBe(false);
+    await rejected;
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
   });
 });
 

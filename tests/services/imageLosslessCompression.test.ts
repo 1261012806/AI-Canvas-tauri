@@ -12,6 +12,7 @@ vi.mock('../../src/store/useAppStore', () => ({ useAppStore: {
 } }));
 vi.mock('../../src/services/ai/referenceImageUpload', () => ({ compressImageLosslessly: mock.compress }));
 vi.mock('../../src/services/ai/httpTransport', () => ({ corsSafeFetch: mock.remote }));
+vi.mock('../../src/services/fs/core', () => ({ getAssetUrlFromPath: mock.assetUrl }));
 vi.mock('../../src/services/fileService', async () => ({
   isTauriEnv: mock.desktop, getAssetUrlFromPath: mock.assetUrl,
   saveBinaryToProjectData: mock.save, moveToTrash: mock.trash,

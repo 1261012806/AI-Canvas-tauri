@@ -110,6 +110,12 @@ pub fn recover_web_content(webview: &Webview) {
         let _ = webview.reload();
         return;
     }
+    // 先留在宿主内存里；即使带标记的导航失败，普通重载后也能识别这次恢复。
+    webview
+        .app_handle()
+        .state::<NativeRenderingState>()
+        .recovery_pending
+        .store(true, Ordering::Release);
     record_lifecycle(
         webview.app_handle(),
         LifecycleEvent::MainWebContentTerminated,
@@ -133,7 +139,29 @@ pub fn recover_web_content(webview: &Webview) {
 #[derive(Default)]
 pub struct NativeRenderingState {
     active: AtomicBool,
+    recovery_pending: AtomicBool,
     write_lock: Mutex<()>,
+}
+
+impl NativeRenderingState {
+    fn consume_recovery_for_main(&self, label: &str) -> Result<bool, String> {
+        if label != "main" {
+            return Err("仅主窗口可读取页面恢复状态".into());
+        }
+        Ok(self.recovery_pending.swap(false, Ordering::AcqRel))
+    }
+}
+
+/// 只消费宿主内存中的一次性标记，不读取项目或持久化异常页面的内容。
+#[tauri::command]
+pub fn consume_webview_recovery(
+    app: tauri::AppHandle,
+    webview: Webview,
+) -> Result<bool, String> {
+    crate::path_policy::ensure_trusted_caller(&webview)
+        .map_err(|_| "当前窗口无权读取页面恢复状态".to_string())?;
+    app.state::<NativeRenderingState>()
+        .consume_recovery_for_main(webview.label())
 }
 
 #[derive(Serialize)]
@@ -295,6 +323,21 @@ pub fn sync_native_performance_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn webview_recovery_is_main_only_one_shot_and_resets_with_host_state() {
+        let state = NativeRenderingState::default();
+        assert!(!state.consume_recovery_for_main("main").unwrap());
+        state.recovery_pending.store(true, Ordering::Release);
+        assert!(state.consume_recovery_for_main("chat-assistant").is_err());
+        assert!(state.consume_recovery_for_main("main").unwrap());
+        assert!(!state.consume_recovery_for_main("main").unwrap());
+        state.recovery_pending.store(true, Ordering::Release);
+        assert!(state.consume_recovery_for_main("main").unwrap());
+        assert!(!NativeRenderingState::default()
+            .consume_recovery_for_main("main")
+            .unwrap());
+    }
+
     #[test]
     fn lifecycle_log_creates_early_and_bounds_complete_records() {
         let directory = std::env::temp_dir().join(format!(

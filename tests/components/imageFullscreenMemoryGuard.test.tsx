@@ -79,6 +79,9 @@ describe('image fullscreen memory guard', () => {
     expect(zoomableImageSource).not.toContain('originRect');
     expect(zoomableImageSource).not.toContain('useLayoutEffect');
     expect(zoomableImageSource).not.toContain('.animate(');
+    expect(zoomableImageSource).toContain('acquireFullscreenImageSource');
+    expect(zoomableImageSource).not.toContain('useComfyImageSource');
+    expect(html).not.toContain('src="asset://preview.png"');
   });
 
   it('shows an intentional static placeholder without decoding another image', () => {

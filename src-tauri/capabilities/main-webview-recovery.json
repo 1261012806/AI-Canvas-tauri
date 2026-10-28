@@ -1,0 +1,6 @@
+{
+  "identifier": "main-webview-recovery",
+  "description": "Allow only the main window to consume its pending WebContent recovery status",
+  "windows": ["main"],
+  "permissions": ["allow-main-webview-recovery"]
+}

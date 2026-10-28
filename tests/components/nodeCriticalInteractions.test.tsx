@@ -9,6 +9,7 @@ import type { AppConfig } from '../../src/types';
 const confirmVideoReferencesBeforeGeneration = vi.fn<
   (nodeId: string, overridePrompt?: string) => Promise<boolean>
 >();
+const flushPendingAutoSave = vi.fn<(projectId: string) => Promise<boolean>>();
 
 interface ElementLike {
   type: unknown;
@@ -406,9 +407,128 @@ beforeEach(() => {
   // These component tests cover delegation; the real reference guard has its own suite.
   confirmVideoReferencesBeforeGeneration.mockReset().mockResolvedValue(true);
   vi.doMock('../../src/services/videoReferenceConfirmation', () => ({ confirmVideoReferencesBeforeGeneration }));
+  flushPendingAutoSave.mockReset().mockResolvedValue(true);
+  vi.doMock('../../src/hooks/useAutoSave', () => ({ flushPendingAutoSave }));
   // The hook driver renders element trees directly, including the dialog's body portal.
   vi.doMock('react-dom', () => ({ createPortal: (children: unknown) => children }));
   vi.stubGlobal('document', { body: {}, documentElement: { getAttribute: () => null } });
+});
+
+async function setupImageFullscreen() {
+  const effects: Array<() => void | (() => void)> = [];
+  const setters: Array<ReturnType<typeof vi.fn>> = [];
+  await installReactHookDriver(undefined, effects, undefined, setters);
+  let revision = 1;
+  const store = createStore([{
+    id: 'image-source', type: 'ai-image', position: { x: 20, y: 30 },
+    data: { type: 'ai-image', label: '原图', imageUrl: 'asset://localhost/image.png', filePath: '/project/image.png', mediaVersion: 1 },
+  }], () => revision);
+  installStoreMock(store);
+  installCommonNodeMocks();
+  vi.doMock('@xyflow/react', () => ({ Handle: () => null, Position: { Left: 'left', Right: 'right' } }));
+  vi.doMock('../../src/components/nodes/shared/image/ImageNodeToolbar', () => ({ default: () => null }));
+  vi.doMock('../../src/hooks/useCanvasNodeLod', () => ({ useCanvasNodeLodPreviewRevision: () => undefined, useCanvasNodeLodProtection: () => {} }));
+  vi.doMock('../../src/components/nodes/shared/image/useImageNodeOnnxActions', () => ({ useImageNodeOnnxActions: () => ({}) }));
+  vi.doMock('../../src/components/nodes/shared/image/imageUtils', () => ({ computeImageNodeDimensions: vi.fn() }));
+  vi.doMock('../../src/services/fileService', () => ({ buildNodeFileName: vi.fn(), saveDataUrlToProjectData: vi.fn() }));
+  vi.doMock('../../src/services/clipboardService', () => ({ copyImage: vi.fn() }));
+  vi.doMock('../../src/services/apimartService', () => ({ generateOutpaintImage: vi.fn() }));
+  vi.doMock('../../src/services/generationService', () => ({ executeGeneration: vi.fn() }));
+  vi.doMock('../../src/store/store.utils', () => ({ blobToDataUrl: vi.fn() }));
+  vi.doMock('../../src/components/nodes/shared/toolbar/presetAction', () => ({ createPresetNode: vi.fn() }));
+  const ImageNode = (await import('../../src/components/nodes/ImageNode')).default as unknown as (
+    props: { id: string; data: Record<string, unknown>; selected: boolean },
+  ) => unknown;
+  const renderNode = (id: string) => {
+    const offset = setters.length;
+    const tree = ImageNode({ id, data: store.nodes.find((node) => node.id === id)!.data, selected: true });
+    const toolbar = findElement(tree, (element) => typeof element.props.onFullscreen === 'function');
+    return { setters: setters.slice(offset), open: toolbar.props.onFullscreen as () => Promise<void> };
+  };
+  const first = renderNode('image-source');
+  return { store, setters: first.setters, effects, open: first.open, renderNode,
+    changeRevision: () => { revision++; } };
+}
+
+describe('image fullscreen save barrier', () => {
+  afterEach(() => {
+    for (const path of [
+      '@xyflow/react', '../../src/components/nodes/shared/image/ImageNodeToolbar',
+      '../../src/hooks/useCanvasNodeLod', '../../src/components/nodes/shared/image/useImageNodeOnnxActions',
+      '../../src/components/nodes/shared/image/imageUtils', '../../src/services/fileService',
+      '../../src/services/clipboardService', '../../src/services/apimartService',
+      '../../src/services/generationService', '../../src/store/store.utils',
+      '../../src/components/nodes/shared/toolbar/presetAction',
+    ]) vi.doUnmock(path);
+  });
+
+  it('waits for the actual save before opening, coalesces repeated clicks and preserves the original', async () => {
+    const setup = await setupImageFullscreen();
+    const original = structuredClone(setup.store.nodes[0]);
+    const saved = deferred<boolean>();
+    flushPendingAutoSave.mockReturnValueOnce(saved.promise);
+    const first = setup.open();
+    await setup.open();
+    expect(flushPendingAutoSave).toHaveBeenCalledExactlyOnceWith('project-a');
+    expect(setup.setters[3]).not.toHaveBeenCalledWith(true);
+    saved.resolve(true);
+    await first;
+    expect(setup.setters[2]).toHaveBeenCalledWith('project-a');
+    expect(setup.setters[3]).toHaveBeenCalledWith(true);
+    expect(setup.store.nodes[0]).toEqual(original);
+    expect(setup.store.updateNodeData).not.toHaveBeenCalled();
+    expect(setup.store.commitToHistory).not.toHaveBeenCalled();
+  });
+
+  it('opens only the latest image when two nodes share the same pending save', async () => {
+    const setup = await setupImageFullscreen();
+    setup.store.nodes = [...setup.store.nodes, { ...setup.store.nodes[0], id: 'image-second',
+      data: { ...setup.store.nodes[0].data, imageUrl: 'blob:second' } }];
+    const second = setup.renderNode('image-second');
+    const saved = deferred<boolean>();
+    flushPendingAutoSave.mockReturnValue(saved.promise);
+    const firstOpening = setup.open();
+    setup.store.selectedNodeIds = ['image-second'];
+    const secondOpening = second.open();
+    saved.resolve(true);
+    await Promise.all([firstOpening, secondOpening]);
+    expect(setup.setters[3]).not.toHaveBeenCalledWith(true);
+    expect(second.setters[3]).toHaveBeenCalledWith(true);
+    expect(setup.store.showToast).not.toHaveBeenCalled();
+  });
+
+  it.each(['false', 'reject'] as const)('keeps the canvas and reports a fixed error when saving returns %s', async (failure) => {
+    const setup = await setupImageFullscreen();
+    if (failure === 'false') flushPendingAutoSave.mockResolvedValue(false);
+    else flushPendingAutoSave.mockRejectedValue(new Error('/private/secret/project save failed'));
+    await setup.open();
+    expect(setup.setters[3]).not.toHaveBeenCalledWith(true);
+    expect(setup.store.showToast).toHaveBeenCalledExactlyOnceWith('保存失败，编辑内容已保留', 'error');
+    expect(setup.store.nodes).toHaveLength(1);
+    flushPendingAutoSave.mockResolvedValue(true);
+    await setup.open();
+    expect(setup.setters[3]).toHaveBeenCalledWith(true);
+  });
+
+  it.each(['project', 'revision', 'node', 'imageUrl', 'filePath', 'mediaVersion', 'unmount'] as const)(
+    'rejects late fullscreen opening after %s changes while saving', async (change) => {
+      const setup = await setupImageFullscreen();
+      const saved = deferred<boolean>();
+      flushPendingAutoSave.mockReturnValue(saved.promise);
+      const pending = setup.open();
+      if (change === 'project') setup.store.currentProjectId = 'project-b';
+      if (change === 'revision') setup.changeRevision();
+      if (change === 'node') setup.store.nodes = [];
+      if (change === 'imageUrl') setup.store.nodes[0].data = { ...setup.store.nodes[0].data, imageUrl: 'blob:replacement' };
+      if (change === 'filePath') setup.store.nodes[0].data = { ...setup.store.nodes[0].data, filePath: '/project/new.png' };
+      if (change === 'mediaVersion') setup.store.nodes[0].data = { ...setup.store.nodes[0].data, mediaVersion: 2 };
+      if (change === 'unmount') setup.effects.forEach((effect) => { const dispose = effect(); if (dispose) dispose(); });
+      saved.resolve(true);
+      await pending;
+      expect(setup.setters[3]).not.toHaveBeenCalledWith(true);
+      expect(setup.store.showToast).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function visibleShotRatio(store: TestStore, column: string) {

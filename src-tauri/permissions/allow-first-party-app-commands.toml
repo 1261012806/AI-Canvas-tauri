@@ -130,3 +130,8 @@ commands.allow = [
   "cancel_plugin_host_effect",
   "get_python_plugin_runtime_status",
 ]
+
+[[permission]]
+identifier = "allow-main-webview-recovery"
+description = "Allows the main window to consume its one-shot WebContent recovery status."
+commands.allow = ["consume_webview_recovery"]

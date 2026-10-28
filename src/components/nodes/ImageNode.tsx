@@ -30,6 +30,7 @@ import { blobToDataUrl } from '../../store/store.utils';
 import { generateOutpaintImage } from '../../services/apimartService';
 import { executeGeneration } from '../../services/generationService';
 import { useCompletionFlash } from '../../hooks/useCompletionFlash';
+import { flushPendingAutoSave } from '../../hooks/useAutoSave';
 import { useCanvasNodeLodPreviewRevision, useCanvasNodeLodProtection } from '../../hooks/useCanvasNodeLod';
 import { createPresetNode } from './shared/toolbar/presetAction';
 import type { CameraStudioResult } from './shared/image/cameraStudio';
@@ -56,6 +57,8 @@ const ExpandEditor = lazy(() => import('./shared/image/ExpandEditor'));
 const CropEditor = lazy(() => import('./shared/image/CropEditor'));
 const ImageComposerEditor = lazy(() => import('./shared/image/composer/ImageComposerEditor'));
 const CameraStudioPanel = lazy(() => import('./shared/image/CameraStudioPanel'));
+const fullscreenRequests: { pending?: CanvasDerivationGuard } = import.meta.hot?.data.imageFullscreenRequests ?? {};
+if (import.meta.hot) import.meta.hot.data.imageFullscreenRequests = fullscreenRequests;
 
 const loadImageEditorRuntime = () => import('@tenney95/xiaoluo-image-editor');
 
@@ -777,10 +780,54 @@ function AIImageNode({ id, data, selected }: { id: string; data: BaseNodeData; s
   /* ════════════════════════════════════════════
      Fullscreen State
      ════════════════════════════════════════════ */
-  const handleOpenFullscreen = useCallback(() => {
-    setFullscreenProjectId(useAppStore.getState().currentProjectId);
-    setIsFullscreen(true);
+  const fullscreenOpeningRef = useRef<CanvasDerivationGuard | null>(null);
+  useEffect(() => () => {
+    if (fullscreenOpeningRef.current) cancelCanvasDerivation(fullscreenOpeningRef.current);
+    if (fullscreenRequests.pending === fullscreenOpeningRef.current) fullscreenRequests.pending = undefined;
   }, []);
+  const handleOpenFullscreen = useCallback(async () => {
+    if (fullscreenOpeningRef.current || isFullscreen) return;
+    const initial = useAppStore.getState();
+    const source = initial.nodes.find((node) => node.id === id);
+    if (!initial.currentProjectId || !source || !(source.data.imageUrl || source.data.thumbnailUrl)) return;
+    const guard = registerCanvasDerivation(initial, id);
+    if (!guard) return;
+    // 不同节点可能共用同一次保存等待；只允许最后一次开图请求继续。
+    if (fullscreenRequests.pending) cancelCanvasDerivation(fullscreenRequests.pending);
+    fullscreenRequests.pending = guard;
+    fullscreenOpeningRef.current = guard;
+    const mediaFields = ['imageUrl', 'thumbnailUrl', 'filePath', 'mediaVersion'] as const;
+    const media = mediaFields.map((field) => source.data[field]);
+    const isCurrent = () => {
+      const state = useAppStore.getState();
+      const live = state.nodes.find((node) => node.id === id);
+      return !!live && fullscreenRequests.pending === guard && state.projectLoadStatus === 'ready'
+        && isCanvasDerivationFresh(guard, state)
+        && live.data.type === source.data.type
+        && mediaFields.every((field, index) => live.data[field] === media[index]);
+    };
+    const progressTimer = setTimeout(() => {
+      if (isCurrent()) useAppStore.getState().showToast(t('正在保存项目…'), 'info');
+    }, 300);
+    try {
+      // 先等已有改动提交，再给原图分配解码资源；干净画布不会因此额外截图或保存。
+      const saved = await flushPendingAutoSave(guard.projectId);
+      if (!isCurrent()) return;
+      if (!saved) {
+        useAppStore.getState().showToast(t('保存失败，编辑内容已保留'), 'error');
+        return;
+      }
+      setFullscreenProjectId(guard.projectId);
+      setIsFullscreen(true);
+    } catch {
+      if (isCurrent()) useAppStore.getState().showToast(t('保存失败，编辑内容已保留'), 'error');
+    } finally {
+      clearTimeout(progressTimer);
+      completeCanvasDerivation(guard);
+      if (fullscreenRequests.pending === guard) fullscreenRequests.pending = undefined;
+      if (fullscreenOpeningRef.current === guard) fullscreenOpeningRef.current = null;
+    }
+  }, [id, isFullscreen, t]);
   const handleCloseFullscreen = useCallback(() => setIsFullscreen(false), []);
 
   /** 重绘 — 打开 PromptPanel 对话框 */
