@@ -364,7 +364,7 @@ export function registerProjectAgentTools(): Array<() => void> {
     registerAgentTool<ProjectCreateInput>({
       id: 'project_create',
       title: '创建项目',
-      description: '使用既有项目事务创建并切换到新项目；创建前会保存当前项目。',
+      description: '从启动页或画布使用既有项目事务创建并切换到新项目；已打开项目时先保存当前项目。失败或取消后应读取 project_list 核对，不自动重试。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -372,20 +372,41 @@ export function registerProjectAgentTools(): Array<() => void> {
       },
       effect: 'canvas_write',
       isAvailable: isMcpControlContext,
-      authorize: authorizeCurrentProject,
+      authorize: (context) => authorizeProjectNavigation(context, 'project_create'),
       summarizeInput: (input) => `创建项目“${input.name?.trim() || '自动命名'}”`,
-      execute: async (_context, input) => {
+      execute: async (context, input) => {
+        if (context.signal.aborted) return failure('项目创建请求已取消', 'PROJECT_CREATE_CANCELLED');
+        const store = useAppStore.getState();
+        if (store.projectLoadStatus === 'loading' || store.isCreatingProject || store.isReturningToStartPage
+          || store.switchingProjectName !== null) {
+          return failure('项目正在加载、创建或切换，请等待完成后再操作', 'PROJECT_NAVIGATION_BUSY');
+        }
+        const unavailable = projectListUnavailable();
+        if (unavailable) return unavailable;
         const name = input.name?.trim();
         if (input.name !== undefined && !name) {
           return failure('项目名称不能为空', 'PROJECT_NAME_REQUIRED');
         }
-        const id = await useAppStore.getState().createProject(name);
+        let id: string | undefined;
+        try {
+          id = await store.createProject(name, { signal: context.signal });
+        } catch {
+          if (context.signal.aborted) return failure('项目创建请求已取消，请重新读取项目列表核对', 'PROJECT_CREATE_CANCELLED');
+          return failure('项目创建失败，请检查存储状态并重新读取项目列表', 'PROJECT_CREATE_FAILED');
+        }
+        if (context.signal.aborted) return failure('项目创建请求已取消，请重新读取项目列表核对', 'PROJECT_CREATE_CANCELLED');
         if (!id) return failure('项目创建失败', 'PROJECT_CREATE_FAILED');
-        const project = useAppStore.getState().projects.find((candidate) => candidate.id === id);
-        return success(`已创建项目“${project?.name ?? id}”`, {
+        const current = useAppStore.getState();
+        const project = current.projects.find((candidate) => candidate.id === id);
+        if (!project || current.currentProjectId !== id || current.projectLoadStatus !== 'ready'
+          || current.isCreatingProject || current.isReturningToStartPage || current.switchingProjectName !== null) {
+          return failure('项目创建或打开未完成，请重新读取项目列表核对', 'PROJECT_CREATE_FAILED');
+        }
+        current.setProjectLibraryOpen(false);
+        return success(`已创建项目“${project.name}”`, {
           id,
-          name: project?.name,
-          currentProjectId: useAppStore.getState().currentProjectId,
+          name: project.name,
+          currentProjectId: current.currentProjectId,
         });
       },
     }),

@@ -6,9 +6,9 @@ export const MCP_SETTINGS_TOOL_NAMES = [
   'provider_config_preview', 'provider_config_apply',
 ] as const;
 
-/** 仅这些项目导航操作可以在启动页执行，项目写入工具仍须有效项目。 */
+/** 仅这些项目创建与导航操作可以在启动页执行，其余项目写入仍须有效项目。 */
 export const MCP_PROJECT_NAVIGATION_TOOL_NAMES = [
-  'project_list', 'project_get', 'project_open', 'project_switch',
+  'project_list', 'project_get', 'project_create', 'project_open', 'project_switch',
 ] as const;
 export const MCP_GLOBAL_TOOL_NAMES = [
   ...MCP_SETTINGS_TOOL_NAMES, ...MCP_PROJECT_NAVIGATION_TOOL_NAMES,

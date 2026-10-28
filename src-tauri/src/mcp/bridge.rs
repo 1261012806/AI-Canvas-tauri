@@ -215,6 +215,18 @@ fn write_shared_response(
     write_response(&mut stream, response)
 }
 
+/// 轮询超时只暂停收帧；已消费字节保留到换行，避免丢失半帧或拆开 UTF-8。
+fn read_request_frame<R: BufRead>(
+    reader: &mut R,
+    frame: &mut Vec<u8>,
+) -> std::io::Result<Vec<u8>> {
+    reader
+        .by_ref()
+        .take(MAX_FRAME_BYTES + 1 - frame.len() as u64)
+        .read_until(b'\n', frame)?;
+    Ok(std::mem::take(frame))
+}
+
 fn handle_connection(
     app: AppHandle,
     stream: TcpStream,
@@ -226,22 +238,24 @@ fn handle_connection(
 ) {
     let _connection_guard = ClientConnectionGuard(connections);
     let connection_seq = CONNECTION_SEQUENCE.fetch_add(1, Ordering::AcqRel);
+    // Windows accept 会继承监听 socket 的非阻塞模式；连接线程使用读超时轮询。
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let Ok(read_stream) = stream.try_clone() else {
         return;
     };
     let writer = Arc::new(Mutex::new(stream));
-    let _ = read_stream.set_read_timeout(Some(READ_POLL_TIMEOUT));
+    if read_stream.set_read_timeout(Some(READ_POLL_TIMEOUT)).is_err() {
+        return;
+    }
     let mut reader = BufReader::new(read_stream);
+    let mut partial_frame = Vec::new();
 
     while active.load(Ordering::Acquire) {
-        let mut line = String::new();
-        let read_result = reader
-            .by_ref()
-            .take(MAX_FRAME_BYTES + 1)
-            .read_line(&mut line);
-        let bytes_read = match read_result {
-            Ok(0) => break,
-            Ok(bytes_read) => bytes_read as u64,
+        let frame = match read_request_frame(&mut reader, &mut partial_frame) {
+            Ok(frame) if frame.is_empty() => break,
+            Ok(frame) => frame,
             Err(error)
                 if matches!(
                     error.kind(),
@@ -252,7 +266,7 @@ fn handle_connection(
             }
             Err(_) => break,
         };
-        if bytes_read > MAX_FRAME_BYTES || !line.ends_with('\n') {
+        if frame.len() as u64 > MAX_FRAME_BYTES || !frame.ends_with(b"\n") {
             let _ = write_shared_response(
                 &writer,
                 &response_error(
@@ -263,6 +277,9 @@ fn handle_connection(
             );
             break;
         }
+        let Ok(line) = String::from_utf8(frame) else {
+            break;
+        };
 
         let raw_id = serde_json::from_str::<Value>(&line)
             .ok()
@@ -926,6 +943,171 @@ mod tests {
     use super::*;
 
     const TOKEN: &str = "abababababababababababababababababababababababababababababababab";
+
+    struct FragmentedReader {
+        chunks: std::collections::VecDeque<std::io::Result<std::io::Cursor<Vec<u8>>>>,
+    }
+
+    impl Read for FragmentedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                match self.chunks.front_mut() {
+                    Some(Ok(chunk)) => match chunk.read(buffer)? {
+                        0 => {
+                            self.chunks.pop_front();
+                        }
+                        count => return Ok(count),
+                    },
+                    Some(Err(_)) => {
+                        return Err(self.chunks.pop_front().unwrap().unwrap_err());
+                    }
+                    None => return Ok(0),
+                }
+            }
+        }
+    }
+
+    fn fragmented_reader(chunks: Vec<std::io::Result<Vec<u8>>>) -> BufReader<FragmentedReader> {
+        BufReader::new(FragmentedReader {
+            chunks: chunks
+                .into_iter()
+                .map(|chunk| chunk.map(std::io::Cursor::new))
+                .collect(),
+        })
+    }
+
+    fn encoded_request(id: &str, params: Value) -> Vec<u8> {
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "version": 1,
+                "id": id,
+                "token": TOKEN,
+                "method": "tools/call",
+                "params": params,
+            })
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn upload_frame_preserves_bytes_across_would_block_and_timeout() {
+        let data = format!("{}==", "A".repeat(349_526));
+        let encoded = encoded_request(
+            "upload",
+            serde_json::json!({
+                "name": "file_media_upload",
+                "arguments": { "action": "append", "data": data },
+            }),
+        );
+        let split = 200_000;
+        let mut reader = fragmented_reader(vec![
+            Ok(encoded[..8_191].to_vec()),
+            Err(std::io::ErrorKind::WouldBlock.into()),
+            Ok(encoded[8_191..split].to_vec()),
+            Err(std::io::ErrorKind::TimedOut.into()),
+            Ok(encoded[split..].to_vec()),
+        ]);
+        let mut partial = Vec::new();
+
+        for (kind, length) in [
+            (std::io::ErrorKind::WouldBlock, 8_191),
+            (std::io::ErrorKind::TimedOut, split),
+        ] {
+            assert_eq!(
+                read_request_frame(&mut reader, &mut partial)
+                    .unwrap_err()
+                    .kind(),
+                kind
+            );
+            assert_eq!(partial, encoded[..length]);
+        }
+        let received = read_request_frame(&mut reader, &mut partial).unwrap();
+        assert_eq!(received, encoded);
+        assert!(partial.is_empty());
+        let line = String::from_utf8(received).unwrap();
+        let request = parse_request(line.trim_end(), TOKEN).unwrap();
+        assert_eq!(
+            request.params["arguments"]["data"].as_str(),
+            Some(data.as_str())
+        );
+    }
+
+    #[test]
+    fn request_frame_decodes_utf8_only_after_the_complete_line_arrives() {
+        let encoded = encoded_request("utf8", serde_json::json!({ "name": "图片🙂" }));
+        let split = encoded
+            .windows(3)
+            .position(|bytes| bytes == "图".as_bytes())
+            .unwrap()
+            + 1;
+        let mut reader = fragmented_reader(vec![
+            Ok(encoded[..split].to_vec()),
+            Err(std::io::ErrorKind::TimedOut.into()),
+            Ok(encoded[split..].to_vec()),
+        ]);
+        let mut partial = Vec::new();
+        assert_eq!(
+            read_request_frame(&mut reader, &mut partial)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(std::str::from_utf8(&partial).is_err());
+        let received = read_request_frame(&mut reader, &mut partial).unwrap();
+        let line = String::from_utf8(received).unwrap();
+        assert_eq!(
+            parse_request(line.trim_end(), TOKEN).unwrap().params["name"],
+            "图片🙂"
+        );
+    }
+
+    #[test]
+    fn request_frame_keeps_coalesced_requests_separate() {
+        let first = encoded_request("first", serde_json::json!({}));
+        let second = encoded_request("second", serde_json::json!({}));
+        let mut reader = BufReader::new(std::io::Cursor::new(
+            [first.clone(), second.clone()].concat(),
+        ));
+        let mut partial = Vec::new();
+        assert_eq!(read_request_frame(&mut reader, &mut partial).unwrap(), first);
+        assert_eq!(read_request_frame(&mut reader, &mut partial).unwrap(), second);
+        assert!(read_request_frame(&mut reader, &mut partial)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn request_frame_limit_counts_retained_bytes_and_the_newline() {
+        let request = encoded_request("limit", serde_json::json!({}));
+        let mut encoded = vec![b' '; MAX_FRAME_BYTES as usize - request.len()];
+        encoded.extend_from_slice(&request);
+        let mut reader = BufReader::new(std::io::Cursor::new(encoded.clone()));
+        let mut partial = Vec::new();
+        let received = read_request_frame(&mut reader, &mut partial).unwrap();
+        assert_eq!(received, encoded);
+        assert_eq!(received.len() as u64, MAX_FRAME_BYTES);
+        assert!(received.ends_with(b"\n"));
+
+        let mut oversized = vec![b' '; MAX_FRAME_BYTES as usize];
+        oversized.push(b'\n');
+        let mut reader = fragmented_reader(vec![
+            Ok(oversized[..4_096].to_vec()),
+            Err(std::io::ErrorKind::TimedOut.into()),
+            Ok(oversized[4_096..].to_vec()),
+        ]);
+        assert_eq!(
+            read_request_frame(&mut reader, &mut partial)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert_eq!(partial.len(), 4_096);
+        let received = read_request_frame(&mut reader, &mut partial).unwrap();
+        assert_eq!(received.len() as u64, MAX_FRAME_BYTES + 1);
+        assert!(received.ends_with(b"\n"));
+        assert!(partial.is_empty());
+    }
 
     #[test]
     fn validates_256_bit_hex_tokens() {

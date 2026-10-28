@@ -216,8 +216,8 @@ async function callMcpTool(
   if (!current) {
     return {
       isError: true,
-      summary: '该工具需要打开项目；请先用 project_list 读取列表，再用 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。',
-      content: [{ type: 'text', text: '该工具需要打开项目；请先用 project_list 读取列表，再用 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。' }],
+      summary: '该工具需要打开项目；请用 project_create 创建项目，或用 project_list 读取列表后通过 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。',
+      content: [{ type: 'text', text: '该工具需要打开项目；请用 project_create 创建项目，或用 project_list 读取列表后通过 project_open 或 project_switch 打开项目。启动页也可管理厂商和模型设置。' }],
     };
   }
   const input = request.params.arguments && typeof request.params.arguments === 'object'

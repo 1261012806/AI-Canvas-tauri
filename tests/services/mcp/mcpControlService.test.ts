@@ -205,16 +205,48 @@ describe('MCP on-demand discovery', () => {
     expect(useAppStore.getState().agentTasks[0].projectId).toBe(MCP_SETTINGS_SCOPE_ID);
   });
 
-  it('discovers provider settings and project navigation without a project, including full exposure', async () => {
+  it('discovers provider settings and project creation and navigation without a project, including full exposure', async () => {
     useAppStore.setState({ currentProjectId: null, configHydrated: true });
     const listed = await listMcpTools('full');
     expect(listed.some((tool) => tool.name === 'provider_config_preview')).toBe(true);
-    expect(listed.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_get', 'project_open', 'project_switch']));
-    expect(listed.every((tool) => tool.name.startsWith('provider_') || ['project_list', 'project_get', 'project_open', 'project_switch'].includes(tool.name))).toBe(true);
+    expect(listed.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_get', 'project_create', 'project_open', 'project_switch']));
+    expect(listed.every((tool) => tool.name.startsWith('provider_') || ['project_list', 'project_get', 'project_create', 'project_open', 'project_switch'].includes(tool.name))).toBe(true);
     expect(await mcpCall('tools_describe', { names: ['canvas_query'] })).toMatchObject({ isError: true });
     expect(await mcpCall('tools_describe', { names: ['project_delete'] })).toMatchObject({ isError: true });
     const navigation = catalogResult(await mcpCall('tools_search', { category: 'project', detail: 'schema' }, 'startup-project-search'));
-    expect(navigation.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_open', 'project_switch']));
+    expect(navigation.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(['project_list', 'project_create', 'project_open', 'project_switch']));
+  });
+
+  it.each([
+    { entrypoint: 'direct', currentProjectId: null },
+    { entrypoint: 'tools_call', currentProjectId: null },
+    { entrypoint: 'tools_call', currentProjectId: 'project-mcp' },
+  ])('creates through global audit with $entrypoint and current project $currentProjectId', async ({ entrypoint, currentProjectId }) => {
+    const createProject = vi.fn(async (name?: string) => {
+      const project = { id: 'startup-created', name: name ?? '自动项目', createdAt: 1, updatedAt: 1,
+        dataFolder: 'private-project-folder', snapshot: 'data:image/png;base64,private' };
+      useAppStore.setState((state) => ({ projects: [...state.projects, project], currentProjectId: project.id }));
+      return project.id;
+    });
+    useAppStore.setState({ currentProjectId, projectLoadStatus: 'ready', createProject, projectLibraryOpen: true });
+    const result = entrypoint === 'direct'
+      ? await mcpCall('project_create', { name: '  启动页项目  ' }, 'startup-create')
+      : await mcpCall('tools_call', { name: 'project_create', arguments: { name: '  启动页项目  ' } }, 'startup-create');
+    expect(result.isError).toBe(false);
+    expect(createProject).toHaveBeenCalledOnce();
+    expect(createProject).toHaveBeenCalledWith('启动页项目', { signal: expect.any(AbortSignal) });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+      id: 'startup-created', name: '启动页项目', currentProjectId: 'startup-created',
+    });
+    expect(useAppStore.getState().projectLibraryOpen).toBe(false);
+    const task = useAppStore.getState().agentTasks[0];
+    expect(task).toMatchObject({ projectId: MCP_SETTINGS_SCOPE_ID, conversationId: MCP_SETTINGS_CONVERSATION_ID,
+      mode: 'autonomous', status: 'completed' });
+    expect(task.steps[0]?.toolCall?.canvasCheckpoint).toBeUndefined();
+    expect(JSON.stringify([result, useAppStore.getState().agentTasks, useAppStore.getState().messages]))
+      .not.toMatch(/private-project-folder|base64/);
+    expect(await mcpCall('canvas_query', {}, 'after-create-query')).toMatchObject({ isError: false });
+    expect(useAppStore.getState().agentTasks.at(-1)?.projectId).toBe('startup-created');
   });
 
   it('lists, opens and switches projects from startup through global audit tasks', async () => {

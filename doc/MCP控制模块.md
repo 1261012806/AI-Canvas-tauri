@@ -49,6 +49,12 @@
 - 连线规则保留在按需模式三个入口的描述，以及搜索、类别导航和参数读取结果的 `hint`；入口先说明用途与调用示例，返回先列工具再给发现提示与业务规则。完整模式的新建节点和镜头制作工具也先展示自身用途，再附上相同规则。客户端取得初始工具列表仍能看到方向、端口、紧凑间距与省略坐标建议、自动连线去重和操作前后核对要求。导演制作关系是“分镜表 → 导演台”和“镜头说明 → 导演台”；视频与配音按镜头来源关联成果，制作节点不反接回所属分镜表输入，也不把整表作为各视频的普通输入。画面格仍可显式绑定真实素材。入口描述由 MCP 目录层补充，业务 schema 仍直接取自 Registry，权限与摘要截断边界不变；客户端需刷新工具列表或重新连接才能取得更新。
 - `canvas_connect_nodes` 推荐使用 `sourceIds: [输出节点 ID, ...]` 与一个 `targetId`，每次 1–50 项；旧 `sourceId` 仍兼容，两种来源参数只能提供一种。先校验整批，拒绝缺失节点、自连、素材接收端，以及视频、配音、导演台等制作节点反接所属分镜表；多源连接复用 Store 批量 Action，拒绝隐藏、折叠分组中的节点和非普通节点。输出列表去重、已有连线跳过；只为实际写入提交一次历史并增加一次 revision。结果返回 `connections` 的实际端口、已有状态和布局提醒，以及 `createdCount`、`skippedCount`（含重复来源和已有线）；单源保留旧的 `sourceId` 与 `layout` 字段。布局提醒继续允许有意回绕，不自动搬动节点。
 
+## 本机半帧接收
+
+已修复 stdio 回环桥在 `WouldBlock` / 读取超时后丢弃已接收半帧的问题：累计字节跨轮询保留，完整换行后才进行 UTF-8 与 JSON 解析，累计上限仍为 1 MiB。Windows 接受连接后显式恢复阻塞模式，沿用 500 ms 读取超时，避免继承监听 socket 的非阻塞模式后在分包间隙丢帧。
+
+已补充大 Base64 帧、UTF-8 字符内分片、超时恢复、连续多帧和累计大小边界的原生回归用例；本次未运行测试，待用户验收。原生修改需重新构建并重启 Tauri 才生效。桌面验收：开启本机 MCP，在同一项目用 `file_media_upload` 依次 begin、按返回的 256 KiB 块 append、finish，再通过 `file_import_media_to_canvas` 导入，逐块核对 nextOffset；回归只读查询、取消、失效令牌、超出 1 MiB 拒绝及四客户端上限。用户可在 `src-tauri/` 执行 `cargo test mcp_bridge::tests --lib`，再按开发入口重建、重启桌面端；当前运行中的旧进程不会自动获得修复。
+
 ## 按需工具发现
 
 角色、场景和道具先查询库再复用，工具发现入口的业务规则明确库引用优先、先绑图后使用。`drama_reference_image_add` 同时覆盖项目场景/道具，资产查询返回 `imageReady`，画布详情返回同图的 `preferredMention`；MCP 创建/更新提示词会将唯一同图节点引用转换为精确库引用以减少新连线。新建项目参考图可向 `canvas_create_nodes` 传 `dramaAssetId`，生成成功后自动回填。匹配边界、全局前缀与待验收项见[角色与短剧资产](./角色与短剧资产模块.md)。客户端需刷新工具目录或重新连接以获取新合同；不更改 transport、Policy 或既有连线。
@@ -153,23 +159,27 @@ begin 返回安全文件名、MIME、总字节数、块上限与失效时间；�
 
 默认媒体输入是优先槽而非启用上传的必要条件，所有 ComfyUI 工作流的普通 @ 图片、视频、音频都会按同类引用顺序自动匹配剩余上传槽。规则见 [ComfyUI工作流集成说明](./ComfyUI工作流集成说明.md#6-默认节点-defaultnodes)。
 
-## 启动页项目列表与打开、切换
+## 启动页项目创建、列表与打开、切换
 
-项目导航通过同一个 Registry、Policy 与审计任务执行。启动页和已打开画布都可发现、调用以下工具；项目创建、删除、设置写入以及画布、文件、媒体工具仍要求已打开项目。
+项目创建与导航通过同一个 Registry、Policy 与审计任务执行。启动页和已打开画布都可发现、调用以下工具；项目删除、设置写入以及画布、文件、媒体工具仍要求已打开项目。
 
 | 工具 | 参数与结果 |
 |---|---|
 | `project_list` | 可选 `limit`（默认 50，上限 100）、`offset`（默认 0）；返回项目/剧集/分集摘要、`currentProjectId`、`currentRootProjectId`、分页计数及 `nextOffset`。摘要含 ID、名称、类型、剧集归属、时间、`current`、`opened` 和 `openTargetId`，不返回路径、快照或正文 |
 | `project_get` | `projectId`；沿用既有安全元数据和项目设置读取 |
+| `project_create` | 可选 `name`；省略时沿用项目自动命名，传入空白名称则拒绝。复用 Store 创建事务，已打开项目时先保存，再持久化新项目并打开；返回 `id`、`name` 和实际 `currentProjectId`，不返回目录、路径或快照 |
 | `project_open` / `project_switch` | `projectId`；共用 Store 的保存与加载流程，返回 `requestedProjectId`、`previousProjectId`、实际 `currentProjectId`、`alreadyOpen` 与打开的项目摘要 |
 
 同名项目必须用列表返回的 ID 区分。剧集从启动页默认打开第一集；再次打开当前剧集保留正在编辑的分集，重复打开当前画布不重载。成功后关闭项目库弹窗，切走前保存失败、目标加载失败、请求取消或被其他切换接管均不报告成功。MCP 导航在项目创建、返回启动页、加载和其他切换期间返回忙碌提示，不自动重试写操作。取消信号只保存在运行时，目标读取结束后复核信号与切换序号，防止迟到结果覆盖当前画布。
 
-导航任务归应用级「MCP 全局控制」审计会话，继续使用旧 `mcp-global-settings` 标识以兼容历史；旧会话标题可以保留。仅明确的设置、导航及目录白名单可独立于项目执行，导航不生成画布撤销 checkpoint，也不向其他项目工具授予权限。切换后新画布请求仍绑定实际当前项目；原 stdio/HTTP 鉴权、Policy 与取消协议保持原有边界。完整列表模式客户端需刷新目录或重新连接，按需模式的三个入口保持稳定。
+创建同样拒绝初始化、返回启动页或其他创建/切换期间的并发请求，项目列表读取失败且为空时也不创建。成功返回前复核新项目存在、已打开并完成加载；失败保留原画布和项目库。取消信号沿用创建事务的序号守卫：新项目尚未保存时停止后续创建；保存已经开始时不回滚落盘，完成后仅保留项目列表记录，不切换当前画布。失败、取消或超时后应先用 `project_list` 核对，不能自动重试创建，以免重复项目。
 
-按需调用示例：先用 `tools_search({"category":"project","detail":"schema"})` 读取参数，再依次调用：
+创建与导航任务归应用级「MCP 全局控制」审计会话，继续使用旧 `mcp-global-settings` 标识以兼容历史；旧会话标题可以保留。仅明确的设置、创建、导航及目录白名单可独立于项目执行，创建与导航不生成画布撤销 checkpoint，也不向其他项目工具授予权限。创建或切换后的新画布请求仍绑定实际当前项目；原 stdio/HTTP 鉴权、Policy 与取消协议保持原有边界。完整列表模式客户端需刷新目录或重新连接，按需模式的三个入口保持稳定。
+
+按需调用示例：先用 `tools_search({"category":"project","detail":"schema"})` 读取参数；启动页可直接创建，已有项目可按列表 ID 打开或切换：
 
 ```json
+{"name":"project_create","arguments":{"name":"新项目"}}
 {"name":"project_list","arguments":{}}
 {"name":"project_open","arguments":{"projectId":"列表返回的项目 ID"}}
 {"name":"project_switch","arguments":{"projectId":"另一个项目 ID"}}
@@ -177,15 +187,15 @@ begin 返回安全文件名、MIME、总字节数、块上限与失效时间；�
 
 以上均为 `tools_call` 的参数对象，也兼容直接调用原工具名。列表分页通过瞬时 MCP 内容返回完整 JSON，不把项目列表正文复制进消息或任务摘要。
 
-状态：已实现并补充回归用例，本次未运行测试，待用户验收。Tauri 桌面验收：
+状态：2026-10-28 已实现启动页 MCP 创建并补充发现、全局审计、已有项目兼容、取消与失败回归用例，本次未运行测试，待用户验收。Tauri 桌面验收：
 
-1. 准备两个有不同画布内容的项目（可同名）及一个含两集的剧集，在启动页开启 MCP；分别以按需/完整模式发现项目工具。读取列表及分页，检查 ID、归属、打开状态，不应出现目录或快照。
-2. 用 `project_open` 打开第一个项目，再用 `project_switch` 切换第二个；检查画布、会话、Agent 任务、角色库与项目记忆。修改画布后切走再返回，确认修改已保存；用 `canvas_query` 核对实际项目内容。
-3. 打开剧集应进入第一集；手动切到第二集后再次打开剧集，应留在第二集。重复打开当前项目应返回 `alreadyOpen: true`，不丢失当前编辑。
-4. 传入不存在的 ID、错误参数及越界分页值应失败；列表尚在初始化时应明确提示加载中。加载失败或受控保存失败时保留旧画布，不能返回成功；导航忙碌时第二次 MCP 切换不应抢占。取消加载中的原请求后，迟到数据不应切换项目，遮罩应收起。
-5. 回归启动页厂商模型选择、全局配置预览/保存、主窗口与独立助手、普通项目会话、stdio/HTTP 请求取消。未打开项目时直接调用画布/项目删除仍应拒绝；打开后新请求绑定新项目。
+1. 启动 Tauri 桌面端并停留在启动页，等待项目列表加载完成后开启 MCP；刷新客户端目录或重新连接。分别在按需/完整模式确认 `project_create` 可发现，按需模式调用上述 `tools_search` 后用 `tools_call({"name":"project_create","arguments":{"name":"启动页创建验收"}})` 创建。应直接进入同名空白画布，返回的新项目 ID 等于 `currentProjectId`，不要求先打开已有项目；省略 `name` 应自动命名。
+2. 返回启动页，用 `project_list` 确认新项目已保存且可重新打开；检查分页、ID、归属、打开状态与脱敏结果。修改画布后在已打开项目中再调用 `project_create`，回到旧项目确认修改已保存。检查创建任务归全局 MCP 审计、新的 `canvas_query` 请求归新项目，并且不产生跨项目撤销 checkpoint。
+3. 用 `project_open` 和 `project_switch` 打开、切换已有项目，检查画布、会话、Agent 任务、角色库与项目记忆。打开剧集应进入第一集；手动切到第二集后再次打开剧集，应留在第二集。重复打开当前项目应返回 `alreadyOpen: true`，不丢失当前编辑。
+4. 空白名称、未声明参数、不存在的 ID 及越界分页值应失败。初始化或创建/切换忙碌时第二次创建或导航不抢占；受控保存失败时保留旧画布且不返回成功。取消创建/加载中的原请求后，迟到数据不应切换项目，遮罩应收起；创建若已开始落盘，先读列表核对可能保留的新项目，不自动重试。
+5. 回归启动页厂商模型选择、全局配置预览/保存、主窗口与独立助手、普通项目会话、stdio/HTTP 请求取消。未打开项目时直接调用画布/项目删除仍应拒绝；创建或打开后新请求绑定实际项目。结果与审计消息不应出现项目目录、快照或取消信号。
 
-自动回归入口：`tests/services/chat/projectTools.test.ts`、`tests/services/chat/agentRoundExecutor.test.ts`、`tests/services/mcp/mcpControlService.test.ts`、`tests/store/projects.test.ts`。用户可在仓库根目录运行 `npm run test -- --exclude ".planning/**" tests/services/chat/projectTools.test.ts tests/services/chat/agentRoundExecutor.test.ts tests/services/mcp/mcpControlService.test.ts tests/store/projects.test.ts`；静态类型检查入口为 `npm run typecheck` 与 `npm run test:typecheck`。回滚撤销导航白名单、工具和 Store 切换补丁，无数据库迁移。
+自动回归入口：`tests/services/chat/projectTools.test.ts`、`tests/services/chat/agentRoundExecutor.test.ts`、`tests/services/mcp/mcpControlService.test.ts`、`tests/store/projects.test.ts`。用户可在仓库根目录运行 `npm run test -- --exclude ".planning/**" tests/services/chat/projectTools.test.ts tests/services/chat/agentRoundExecutor.test.ts tests/services/mcp/mcpControlService.test.ts tests/store/projects.test.ts`；静态类型检查入口为 `npm run typecheck` 与 `npm run test:typecheck`。本次创建修复可撤销 `project_create` 全局白名单、授权、入口保护及 Store 可选取消信号；保留既有项目导航，无数据库迁移。
 
 ## 不依赖项目的模型设置
 

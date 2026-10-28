@@ -484,7 +484,7 @@ export interface ProjectSlice {
   captureCurrentProjectSnapshot: (
     options?: CaptureProjectSnapshotOptions,
   ) => Promise<string | undefined>;
-  createProject: (name?: string) => Promise<string | undefined>;
+  createProject: (name?: string, options?: { signal?: AbortSignal }) => Promise<string | undefined>;
   /** 在当前项目所属剧集下批量新增分集（不切画布）；当前项目还不是剧集时先转成剧集。 */
   addEpisodes: (entries: Array<{ name?: string; outline?: string }>) => Promise<string[]>;
   /** 新增一集并切过去。 */
@@ -1036,12 +1036,12 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
     return projectId;
   },
 
-  createProject: async (name) => {
-    if (get().isCreatingProject || get().isReturningToStartPage) return undefined;
+  createProject: async (name, options) => {
+    if (options?.signal?.aborted || get().isCreatingProject || get().isReturningToStartPage) return undefined;
     set({ isCreatingProject: true });
     try {
       const createSequence = ++projectSwitchSequence;
-      const isLatestCreate = () => createSequence === projectSwitchSequence;
+      const isLatestCreate = () => !options?.signal?.aborted && createSequence === projectSwitchSequence;
       await waitForLoadingPaint();
       if (!isLatestCreate()) return undefined;
       const previousProjectId = get().currentProjectId;
@@ -1106,7 +1106,7 @@ export const createProjectSlice: StateCreator<AppState, [], [], ProjectSlice> = 
             : [...state.projects, project],
         }));
         fileService.ensureProjectDataDir(id).catch((e) => console.warn('[创建项目] 数据目录初始化失败:', e));
-        return id;
+        return options?.signal?.aborted ? undefined : id;
       }
 
       set((state) => ({

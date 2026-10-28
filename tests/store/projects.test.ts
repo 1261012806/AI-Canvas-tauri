@@ -222,6 +222,34 @@ describe('project bootstrap lifetime', () => {
 });
 
 describe('project creation', () => {
+  it('does not persist a project when its creation signal was already cancelled', async () => {
+    const controller = new AbortController(); controller.abort();
+    await expect(useAppStore.getState().createProject('Cancelled', { signal: controller.signal })).resolves.toBeUndefined();
+    expect(fileMocks.saveProject).not.toHaveBeenCalled();
+    expect(useAppStore.getState().isCreatingProject).toBe(false);
+  });
+
+  it('keeps a project persisted during cancellation discoverable without switching the startup page', async () => {
+    let finishSave: ((id: string) => void) | undefined;
+    let markSaveStarted: (() => void) | undefined;
+    const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
+    fileMocks.saveProject.mockImplementation(() => {
+      markSaveStarted?.();
+      return new Promise<string>((resolve) => { finishSave = resolve; });
+    });
+    useAppStore.setState({ currentProjectId: null, projects: [] });
+    const controller = new AbortController();
+    const creating = useAppStore.getState().createProject('Cancelled', { signal: controller.signal });
+    await saveStarted;
+    controller.abort();
+    const id = fileMocks.saveProject.mock.calls[0]![0].id;
+    finishSave?.(id);
+    await expect(creating).resolves.toBeUndefined();
+    expect(useAppStore.getState()).toMatchObject({ currentProjectId: null, isCreatingProject: false,
+      projects: [{ id, name: 'Cancelled' }] });
+    expect(metadataMocks.setLastActiveProjectId).not.toHaveBeenCalled();
+  });
+
   it('saves the current project and persists the new project before switching', async () => {
     let resolveNewProjectSave: ((projectId: string) => void) | undefined;
     let markNewProjectSaveStarted: (() => void) | undefined;

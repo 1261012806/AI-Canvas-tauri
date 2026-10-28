@@ -124,17 +124,17 @@ describe('project tools registration', () => {
     })).toMatchObject({ valid: false });
   });
 
-  it('allows only closed global navigation tools without an active project', () => {
+  it('allows only closed global project creation and navigation tools without an active project', () => {
     useAppStore.setState({ currentProjectId: null });
     const global = { ...context(), projectId: MCP_SETTINGS_SCOPE_ID,
       conversationId: MCP_SETTINGS_CONVERSATION_ID, toolAllowlist: [...MCP_GLOBAL_TOOL_NAMES] };
-    for (const id of ['project_list', 'project_get', 'project_open', 'project_switch']) {
+    for (const id of ['project_list', 'project_get', 'project_create', 'project_open', 'project_switch']) {
       expect(getAgentTool(id)!.authorize!(global, { projectId: 'project-1' }).allowed).toBe(true);
       expect(getAgentTool(id)!.authorize!({ ...global, conversationId: 'mcp-control-forged' }, {}).allowed).toBe(false);
       expect(getAgentTool(id)!.authorize!({ ...global, toolAllowlist: [...global.toolAllowlist, 'project_delete'] }, {}).allowed).toBe(false);
     }
     expect(getAvailableAgentTools(global).map((tool) => tool.id)).toEqual([
-      'project_list', 'project_get', 'project_open', 'project_switch',
+      'project_list', 'project_get', 'project_create', 'project_open', 'project_switch',
     ]);
     expect(getAgentTool('project_delete')!.authorize!(global, {}).allowed).toBe(false);
   });
@@ -193,7 +193,7 @@ describe('project write tools', () => {
   it('creates, renames and switches projects through existing Store actions', async () => {
     const createProject = vi.fn(async (name?: string) => {
       const project = { id: 'project-2', name: name ?? '新项目', createdAt: 5, updatedAt: 5 };
-      useAppStore.setState((state) => ({ projects: [...state.projects, project] }));
+      useAppStore.setState((state) => ({ projects: [...state.projects, project], currentProjectId: project.id }));
       return project.id;
     });
     const renameProject = vi.fn(async (id: string, name: string) => {
@@ -216,15 +216,56 @@ describe('project write tools', () => {
       name: '重命名项目',
     });
     const switched = await getAgentTool('project_switch')!.execute(context(), {
-      projectId: 'project-2',
+      projectId: 'episode-1',
     });
 
     expect(created.status).toBe('success');
+    expect(createProject).toHaveBeenCalledWith('第二项目', { signal: expect.any(AbortSignal) });
     expect(renameProject).toHaveBeenCalledWith('project-2', '重命名项目');
     expect(renamed.status).toBe('success');
-    expect(switchProject).toHaveBeenCalledWith('project-2', { captureSnapshot: false, signal: expect.any(AbortSignal) });
+    expect(switchProject).toHaveBeenCalledWith('episode-1', { captureSnapshot: false, signal: expect.any(AbortSignal) });
     expect(switched.status).toBe('success');
-    expect(useAppStore.getState().currentProjectId).toBe('project-2');
+    expect(useAppStore.getState().currentProjectId).toBe('episode-1');
+  });
+
+  it('rejects busy or cancelled project creation before calling the Store', async () => {
+    const createProject = vi.fn(async () => undefined);
+    useAppStore.setState({ currentProjectId: null, createProject });
+    const create = getAgentTool('project_create')!;
+    for (const busy of [
+      { projectLoadStatus: 'loading' as const },
+      { isCreatingProject: true },
+      { isReturningToStartPage: true },
+      { switchingProjectName: 'Other project' },
+    ]) {
+      useAppStore.setState({ projectLoadStatus: 'ready', isCreatingProject: false,
+        isReturningToStartPage: false, switchingProjectName: null, ...busy });
+      expect(await create.execute(context(), {})).toMatchObject({ errorCode: 'PROJECT_NAVIGATION_BUSY', retryable: false });
+    }
+    useAppStore.setState({ switchingProjectName: null, projectLoadStatus: 'error', projects: [] });
+    expect(await create.execute(context(), {})).toMatchObject({ errorCode: 'PROJECT_LIST_UNAVAILABLE' });
+    const controller = new AbortController(); controller.abort();
+    expect(await create.execute({ ...context(), signal: controller.signal }, {}))
+      .toMatchObject({ errorCode: 'PROJECT_CREATE_CANCELLED' });
+    expect(createProject).not.toHaveBeenCalled();
+  });
+
+  it('reports cancelled, failed or superseded project creation without hiding the project library', async () => {
+    const controller = new AbortController();
+    const createProject = vi.fn(async () => undefined as string | undefined);
+    useAppStore.setState({ currentProjectId: null, createProject, projectLibraryOpen: true });
+    const create = getAgentTool('project_create')!;
+    expect(await create.execute(context(), {})).toMatchObject({ errorCode: 'PROJECT_CREATE_FAILED' });
+    createProject.mockRejectedValueOnce(new Error('C:\\private\\storage-error'));
+    const failed = await create.execute(context(), {});
+    expect(failed).toMatchObject({ errorCode: 'PROJECT_CREATE_FAILED' });
+    expect(failed.modelContent).not.toContain('private');
+    createProject.mockResolvedValueOnce('project-1');
+    expect(await create.execute(context(), {})).toMatchObject({ errorCode: 'PROJECT_CREATE_FAILED' });
+    createProject.mockImplementationOnce(async () => { controller.abort(); return 'project-1'; });
+    expect(await create.execute({ ...context(), signal: controller.signal }, {}))
+      .toMatchObject({ errorCode: 'PROJECT_CREATE_CANCELLED' });
+    expect(useAppStore.getState().projectLibraryOpen).toBe(true);
   });
 
   it.each(['project_open', 'project_switch'])('opens a series first episode from startup with %s', async (id) => {
