@@ -328,6 +328,21 @@ const canvas = {
   '分组名称已存在': 'The group name already exists',
   '分组文件归档未完成，原文件已保留，请重试': 'Group file archiving did not finish; the original files are kept. Please try again',
 
+  // 图片全屏对比
+  '更换对比图片': 'Change comparison image',
+  '对比图片': 'Compare images',
+  '对照图片': 'Comparison image',
+  '对比方式': 'Comparison mode',
+  '滑动对比': 'Slider',
+  '左右对比': 'Side by side',
+  '退出对比': 'Exit comparison',
+  '图片来源': 'Image source',
+  '其他节点': 'Other nodes',
+  '没有其他图片节点': 'No other image nodes',
+  '暂无生成历史': 'No generation history',
+  '当前图片': 'Current image',
+  '对比分割线': 'Comparison divider',
+
   "已连接 {count} 个节点": "Connected {count} nodes",
   "未新增连接": "No new connections",
   "连接 {count} 个选中节点": "Connect {count} selected nodes",

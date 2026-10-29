@@ -1195,6 +1195,20 @@
   z-index: 10;
 }
 
+/* 对比工具栏包含主题控件，使用同一主题背景和前景避免浅色文字落在暗底上。 */
+.zoom-controls.image-comparison-toolbar {
+  background: var(--theme-surface);
+  border-color: var(--theme-border);
+}
+.zoom-controls.image-comparison-toolbar .zoom-btn,
+.zoom-controls.image-comparison-toolbar .zoom-percent {
+  color: var(--theme-text);
+}
+.zoom-controls.image-comparison-toolbar .zoom-btn:hover:not(:disabled),
+.zoom-controls.image-comparison-toolbar .zoom-percent:hover {
+  background: var(--theme-hover);
+}
+
 /* ============ Fullscreen panorama viewer ============ */
 
 .fullscreen-body--pano {

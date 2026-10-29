@@ -9,7 +9,7 @@
  *  - 底部控制条：缩小 / 百分比（点击复位）/ 放大
  * 复位：scale 回到 1 时自动归位；src 变化时重置。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useImageViewportGesture } from '../../hooks/useImageViewportGesture';
 import { acquireFullscreenImageSource, FullscreenImageSourceError, FULLSCREEN_IMAGE_ERRORS } from '../../services/fullscreenImageSource';
 import type { ComfyMediaSourceLease } from '../../services/comfyMediaSource';
@@ -24,9 +24,10 @@ interface ZoomableImageProps {
   className?: string;
   onError?: () => void;
   onClose?: () => void;
+  controlsPrefix?: ReactNode;
 }
 
-export default function ZoomableImage({ src, alt = '', className = '', onError, onClose }: ZoomableImageProps) {
+export default function ZoomableImage({ src, alt = '', className = '', onError, onClose, controlsPrefix }: ZoomableImageProps) {
   const t = useT();
   const [retry, setRetry] = useState(0);
   const [prepared, setPrepared] = useState<{
@@ -139,7 +140,8 @@ export default function ZoomableImage({ src, alt = '', className = '', onError, 
         />}
       </div>
 
-      <div className="zoom-controls" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+      <div className={`zoom-controls${controlsPrefix ? ' image-comparison-toolbar w-max max-w-[calc(100vw-1rem)] flex-wrap justify-center' : ''}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+        {controlsPrefix}
         <button type="button" className="zoom-btn" onClick={() => stepZoom(-1)} aria-label={t('缩小')} disabled={scale <= MIN_SCALE}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
             <line x1="5" y1="12" x2="19" y2="12" />
