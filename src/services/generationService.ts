@@ -173,10 +173,11 @@ async function runSequentialImageBatch(
     if (owner) {
       settleUnstartedImages(owner);
       const current = useAppStore.getState();
-      if (owner.currentNodeId && current.currentProjectId === owner.projectId
-        && current.nodes.find((node) => node.id === owner.currentNodeId)?.data.status === 'loading') {
+      const currentNodeId = owner.currentNodeId;
+      if (currentNodeId && current.currentProjectId === owner.projectId
+        && current.nodes.find((node) => node.id === currentNodeId)?.data.status === 'loading') {
         // 尚未取得可恢复身份的同步请求也必须退出转圈；不伪造远端取消成功。
-        current.updateNodeDataTransient(owner.currentNodeId, { status: 'idle' });
+        current.updateNodeDataTransient(currentNodeId, { status: 'idle' });
       }
       for (const targetId of owner.nodeIds) if (imageBatchOwners.get(targetId) === owner) imageBatchOwners.delete(targetId);
       notifyImageBatches();

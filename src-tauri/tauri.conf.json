@@ -6,7 +6,7 @@
         "frontendDist": "../dist"
     },
     "productName": "AI Canvas",
-  "version": "0.10.19",
+  "version": "0.10.20",
     "identifier": "com.aicanvas.app",
     "plugins": {
         "shell": {
