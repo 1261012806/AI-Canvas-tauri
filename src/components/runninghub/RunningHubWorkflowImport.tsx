@@ -54,7 +54,9 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
     setBusy(true); setMessage('');
     try {
       if (!name.trim()) throw new Error(t('请填写工作流名称'));
-      const next = { ...manifest, connectionId, parameters: manifest.parameters.map((field) => ({ ...field, defaultValue: runningHubFieldValue({ ...field, required: false }, defaultInputs[runningHubParameterKey(field)]) })) };
+      const next = { ...manifest, connectionId, parameters: manifest.parameters.map((field) => field.source === 'value'
+        ? { ...field, defaultValue: runningHubFieldValue({ ...field, required: false }, defaultInputs[runningHubParameterKey(field)]) }
+        : field) };
       validateRunningHubManifest(next);
       const changes = { name: name.trim(), category, adapterType: 'runninghub' as const, runninghub: next, fileName: `RunningHub ${kind === 'app' ? 'AI 应用' : '工作流'} · ${next.remoteId}`, fileContent: '', ioNodes: [], updatedAt: Date.now() };
       if (editing) await useAppStore.getState().updateWorkflow(editing.id, changes);
@@ -106,11 +108,22 @@ export default function RunningHubWorkflowImport({ kind, editing, onSaved }: {
                 <option value="value">{t("固定值 / 每次可调整")}</option>
                 {field.type === 'string' && <><option value="prompt">{t("本次提示词")}</option><option value="image">{t("图片参考")}</option><option value="video">{t("视频参考")}</option><option value="audio">{t("音频参考")}</option></>}
               </Select></label>
-              {['image', 'video', 'audio'].includes(field.source) && <div className="flex flex-wrap gap-2">
-                <label className="min-w-0 flex-1 text-xs">{t("参考序号")}<input type="number" min={1} max={32} className="ui-input w-full" value={(field.referenceIndex ?? 0) + 1} onChange={(event) => setField(index, { referenceIndex: Number(event.target.value) - 1 })} /></label>
-                <label className="min-w-0 flex-1 text-xs">{t("上传后传入")}<Select fixedMenu className="min-w-0 w-full" value={field.mediaFormat ?? 'filename'} onChange={(selectedOptionValue) => setField(index, { mediaFormat: selectedOptionValue as 'filename' | 'url' })}><option value="filename">{t("文件名（LoadImage 等）")}</option><option value="url">{t("URL（URL 输入节点）")}</option></Select></label>
-              </div>}
-              <RunningHubParameterFields parameters={[{ ...field, source: 'value', label: t('默认值 · {type}', { type: field.type }) }]} values={defaultInputs} onChange={setDefaultInputs} />
+              {['image', 'video', 'audio'].includes(field.source) && <>
+                <div className="flex flex-wrap gap-2">
+                  <label className="min-w-0 flex-1 text-xs">{t("参考序号")}<input type="number" min={1} max={32} className="ui-input w-full" value={(field.referenceIndex ?? 0) + 1} onChange={(event) => setField(index, { referenceIndex: Number(event.target.value) - 1 })} /></label>
+                  <label className="min-w-0 flex-1 text-xs">{t("上传后传入")}<Select fixedMenu className="min-w-0 w-full" value={field.mediaFormat ?? 'filename'} onChange={(selectedOptionValue) => setField(index, { mediaFormat: selectedOptionValue as 'filename' | 'url' })}><option value="filename">{t("文件名（LoadImage 等）")}</option><option value="url">{t("URL（URL 输入节点）")}</option></Select></label>
+                </div>
+                <p className="ui-hint">{t('LoadImage 等文件读取节点使用文件名；URL 输入节点使用 URL，请按工作流节点要求选择。')}</p>
+              </>}
+              {field.source === 'value'
+                ? <RunningHubParameterFields parameters={[{ ...field, label: t('默认值 · {type}', { type: field.type }) }]} values={defaultInputs} onChange={setDefaultInputs} />
+                : <p className="ui-hint">{field.source === 'prompt'
+                  ? t('使用本轮节点输入的提示词，不使用导入示例。')
+                  : t('使用本轮第 {index} 个{type}参考素材，经 RunningHub 官方上传后传入{format}，不使用导入示例素材。', {
+                    index: (field.referenceIndex ?? 0) + 1,
+                    type: t(field.source === 'image' ? '图片' : field.source === 'video' ? '视频' : '音频'),
+                    format: field.mediaFormat === 'url' ? 'URL' : t('文件名'),
+                  })}</p>}
               <div className="flex flex-wrap items-center justify-between gap-2"><label className="flex gap-2 text-xs"><input type="checkbox" checked={field.required ?? false} onChange={(event) => setField(index, { required: event.target.checked })} />{t("必填")}</label><button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" onClick={() => setManifest({ ...manifest, parameters: manifest.parameters.filter((_, i) => i !== index) })}>{t("不覆盖此参数")}</button></div>
             </div>
           </details>)}

@@ -3,7 +3,7 @@
  *
  * 供 Toolbar 快捷指令直接调用，也供 AINodeDialog 复用。
  */
-import type { BaseNodeData, ImagePostProcess } from '../types';
+import type { AppConfig, BaseNodeData, ImagePostProcess } from '../types';
 import { MAX_IMAGE_BATCH_COUNT, type MediaTaskReceipt } from '../types/aiTypes';
 import { generateText, generateImage, generateImagesBatch, generateVideo, generateAudio, buildPanoramaPrompt } from './aiService';
 import { persistAudioGenerationResult } from './ai/generateAudio';
@@ -29,7 +29,7 @@ import { completeWorkflowApiNodeTask } from './workflowApi/workflowApiAdapter';
 import { completeRunningHubNodeTask } from './ai/providers/runninghubWorkflow';
 import { registerCanvasDerivation, isCanvasDerivationFresh, completeCanvasDerivation } from './canvasDerivationGuard';
 import { videoInputFingerprint } from './videoBatchPlanning';
-import { beginComfyNodeDelivery, completeComfyNodeTask, completeMediaNodeTask, pauseComfyNodeDelivery, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, isMediaTaskPausedError } from './pollManager';
+import { beginComfyNodeDelivery, cancelNodePolling, completeComfyNodeTask, completeMediaNodeTask, pauseComfyNodeDelivery, pauseMediaNodeTask, pauseMediaTask, prepareMediaNodeGeneration, registerMediaNodeOperation, isMediaTaskPausedError } from './pollManager';
 import { resolveGenerationNodeData } from '../utils/nodeGeneration';
 import { expandShotlistRowMentions } from './shotlistPromptService';
 import { buildGenerationCameraPrompt } from '../components/nodes/shared/image/cameraStudio';
@@ -49,6 +49,140 @@ export interface GenerationLease {
 
 /** 仅保留本进程内的提交身份，避免旧任务清理或覆盖同节点的新请求。 */
 const videoSubmissionOwners = new Map<string, symbol>();
+
+interface SequentialImageBatch {
+  projectId: string | null;
+  nodeIds: string[];
+  remainingNodeIds: Set<string>;
+  controller: AbortController;
+  currentNodeId?: string;
+}
+
+const imageBatchOwners = new Map<string, SequentialImageBatch>();
+const imageBatchLeases = new WeakMap<GenerationLease, SequentialImageBatch>();
+const imageBatchListeners = new Set<() => void>();
+const notifyImageBatches = () => imageBatchListeners.forEach((listener) => listener());
+
+export function subscribeImageBatches(listener: () => void): () => void {
+  imageBatchListeners.add(listener);
+  return () => { imageBatchListeners.delete(listener); };
+}
+
+export function usesSequentialImageBatch(
+  provider: string | undefined, model: string | undefined, config: AppConfig, workflowId?: string,
+): boolean {
+  if (provider !== 'general' || workflowId) return false;
+  const capability = resolveImageParameterCapability(model, provider, config);
+  return capability?.supportsBatch === false || capability?.maxBatchCount === 1;
+}
+
+function currentImageBatch(nodeId: string): SequentialImageBatch | undefined {
+  const owner = imageBatchOwners.get(nodeId);
+  return owner?.projectId === useAppStore.getState().currentProjectId ? owner : undefined;
+}
+
+export function isImageBatchGenerating(nodeId: string): boolean {
+  return Boolean(currentImageBatch(nodeId));
+}
+
+function settleUnstartedImages(owner: SequentialImageBatch): void {
+  const state = useAppStore.getState();
+  if (state.currentProjectId !== owner.projectId) return;
+  for (const nodeId of owner.remainingNodeIds) {
+    if (state.nodes.find((node) => node.id === nodeId)?.data.status === 'loading') {
+      state.updateNodeDataTransient(nodeId, { status: 'idle', error: undefined });
+    }
+  }
+}
+
+function imageBatchInputSignature(data: BaseNodeData): string {
+  return JSON.stringify([
+    data.type, data.prompt, data.provider, data.model, data.workflowId, data.workflowInputs,
+    data.imageSize, data.imageQuality, data.imageBackground, data.aspectRatio,
+    data.cameraSettings, data.runninghubModelParameters, data.batchCount,
+  ]);
+}
+
+/** 只停止本地串行提交和当前请求；已提交的身份保留，后续节点不再提交。 */
+export function cancelImageBatchGeneration(nodeId: string): boolean {
+  const owner = currentImageBatch(nodeId);
+  if (!owner) return false;
+  if (!owner.controller.signal.aborted) {
+    owner.controller.abort();
+    if (owner.currentNodeId) {
+      pauseMediaNodeTask(owner.currentNodeId);
+      cancelNodePolling(owner.currentNodeId, true);
+    }
+    settleUnstartedImages(owner);
+    notifyImageBatches();
+  }
+  return true;
+}
+
+async function runSequentialImageBatch(
+  nodeId: string, count: number, data: BaseNodeData, rawPrompt: string, parentLease?: GenerationLease,
+): Promise<GenerationResult> {
+  const state = useAppStore.getState();
+  const projectId = state.currentProjectId;
+  let owner: SequentialImageBatch | undefined;
+  let completed = 0;
+  try {
+    // 与单次生成共用旧任务保护；创建新批次前不能覆盖原节点的恢复身份。
+    prepareMediaNodeGeneration(nodeId);
+    const nodeIds = prepareImageBatchNodes({ nodeId, count, projectId }).nodeIds;
+    owner = { projectId, nodeIds, remainingNodeIds: new Set(nodeIds), controller: new AbortController() };
+    const activeOwner = owner;
+    const baselineRevision = useAppStore.getState().getCurrentRevision();
+    const inputSignatures = new Map(useAppStore.getState().nodes.filter((node) => nodeIds.includes(node.id))
+      .map((node) => [node.id, imageBatchInputSignature(node.data)]));
+    for (const targetId of nodeIds) imageBatchOwners.set(targetId, activeOwner);
+    notifyImageBatches();
+    state.showToast(`正在逐张生成 ${count} 张图片`);
+    const signal = parentLease?.signal ? AbortSignal.any([parentLease.signal, activeOwner.controller.signal]) : activeOwner.controller.signal;
+    for (const targetId of nodeIds) {
+      const lease: GenerationLease = { signal, assertFresh: async () => {
+        await parentLease?.assertFresh();
+        const current = useAppStore.getState();
+        const source = current.nodes.find((node) => node.id === nodeId);
+        const target = current.nodes.find((node) => node.id === targetId);
+        if (signal.aborted || current.currentProjectId !== projectId || current.getCurrentRevision() !== baselineRevision
+          || !source || !target || imageBatchInputSignature(source.data) !== inputSignatures.get(nodeId)
+          || imageBatchInputSignature(target.data) !== inputSignatures.get(targetId)) throw new Error('任务已取消');
+      } };
+      await lease.assertFresh();
+      const target = useAppStore.getState().nodes.find((node) => node.id === targetId);
+      if (!target) throw new Error('生成输入已变化，批次已停止');
+      activeOwner.currentNodeId = targetId;
+      activeOwner.remainingNodeIds.delete(targetId);
+      imageBatchLeases.set(lease, activeOwner);
+      let result: GenerationResult;
+      try {
+        result = await executeGeneration(targetId, rawPrompt, undefined, { ...data, label: target.data.label, batchCount: 1 }, lease);
+      } finally { imageBatchLeases.delete(lease); }
+      if (!result.success) return result;
+      activeOwner.currentNodeId = undefined;
+      completed += 1;
+    }
+    state.showToast(`批量生成完成：共 ${completed} 张`);
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '批量生成已停止';
+    if (!owner?.controller.signal.aborted && !parentLease?.signal?.aborted) state.showToast(message, 'error');
+    return { success: false, message };
+  } finally {
+    if (owner) {
+      settleUnstartedImages(owner);
+      const current = useAppStore.getState();
+      if (owner.currentNodeId && current.currentProjectId === owner.projectId
+        && current.nodes.find((node) => node.id === owner.currentNodeId)?.data.status === 'loading') {
+        // 尚未取得可恢复身份的同步请求也必须退出转圈；不伪造远端取消成功。
+        current.updateNodeDataTransient(owner.currentNodeId, { status: 'idle' });
+      }
+      for (const targetId of owner.nodeIds) if (imageBatchOwners.get(targetId) === owner) imageBatchOwners.delete(targetId);
+      notifyImageBatches();
+    }
+  }
+}
 
 export async function executeGeneration(
   nodeId: string,
@@ -76,6 +210,10 @@ export async function executeGeneration(
     try { await assertLease(); } catch { return { success: false, message: '任务已取消' }; }
   }
   const beforeLoad = useAppStore.getState();
+  const existingImageBatch = currentImageBatch(nodeId);
+  if (existingImageBatch && (!lease || imageBatchLeases.get(lease) !== existingImageBatch)) {
+    return { success: false, message: '该节点所在图片批次仍在生成，请先停止或等待完成' };
+  }
   const sourceNode = beforeLoad.nodes.find((node) => node.id === nodeId);
   const inputBeforeLoad = passData ?? sourceNode?.data;
   if (`${overridePrompt ?? inputBeforeLoad?.prompt ?? ''}\n${JSON.stringify(inputBeforeLoad?.workflowInputs ?? {})}`.includes('@drama{global/')) {
@@ -164,6 +302,19 @@ export async function executeGeneration(
   if (!nodeModel || !nodeProvider) {
     store.showToast('请先在底部模型选择器中选择一个模型', 'error');
     return { success: false, message: '未选择模型' };
+  }
+  const sequentialCount = Math.min(MAX_IMAGE_BATCH_COUNT, Math.max(1, Math.floor(Number(data.batchCount) || 1)));
+  if (nodeType === 'ai-image' && sequentialCount > 1 && usesSequentialImageBatch(nodeProvider, nodeModel, store.config, workflowId)) {
+    if (postProcess) {
+      const message = '批量生成暂不支持图片后处理，请将数量设为 1';
+      store.showToast(message, 'error');
+      return { success: false, message };
+    }
+    return runSequentialImageBatch(nodeId, sequentialCount, { ...data, provider: nodeProvider, model: nodeModel, workflowId }, rawPrompt, lease);
+  }
+  if (nodeType === 'ai-image') {
+    const cameraPrompt = buildGenerationCameraPrompt(data.cameraSettings);
+    if (cameraPrompt) effectivePrompt += `\n\nCamera settings: ${cameraPrompt}.`;
   }
   if (nodeType === 'ai-video') {
     const cameraPrompt = buildGenerationCameraPrompt(data.cameraSettings);
@@ -268,23 +419,28 @@ export async function executeGeneration(
         return mediaDelivered ? { success: true } : { success: false, message: taskReceipt
           ? '部分图片仍待保存或取回，原任务已保留' : '部分图片未能保存或生成，请核对已返回结果' };
       }
-      const result = await generateImage({
+      const imageOptions = {
         prompt: effectivePrompt, model: nodeModel, provider: nodeProvider,
         imageSize, imageQuality, imageBackground: data.imageBackground === '' ? '' : imageBackground, aspectRatio, nodeId,
         workflowId, workflowInputs: data.workflowInputs, runninghubModelParameters: data.runninghubModelParameters,
-      });
+      };
+      if (lease) await assertLease();
+      const result = lease ? await generateImage(imageOptions, lease.signal) : await generateImage(imageOptions);
       taskReceipt = result.taskReceipt;
       comfyTaskId = result.comfyTaskId;
       if (comfyTaskId) beginComfyNodeDelivery(nodeId, comfyTaskId);
+      if (lease) await assertLease();
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
 
       if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
         ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-image', data.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url });
+      if (lease) await assertLease();
       if (guardedSubmission && !isStillCurrentSubmission()) return { success: false, message: '画布已变化，任务已保留' };
       const mediaUrl = persisted.mediaUrl;
-      store.updateNodeData(nodeId, {
+      const applyImageData = lease && imageBatchLeases.has(lease) ? store.updateNodeDataTransient : store.updateNodeData;
+      applyImageData(nodeId, {
         imageUrl: mediaUrl, sourceUrl: persisted.sourceUrl, filePath: persisted.filePath,
         thumbnailUrl: mediaUrl, output: persisted.sourceUrl, status: 'success',
         imageWidth: result.width, imageHeight: result.height,

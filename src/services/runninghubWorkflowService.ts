@@ -17,7 +17,11 @@ export function resolveRunningHubParameters(parameters: readonly RunningHubParam
     if (field.source !== 'value' || field.sourceExplicit || field.type !== 'string' || field.options?.length) return false;
     if (/negative|(?:^|[\s_-])neg(?:[\s_-]|prompt)|uncond|system|style|optimiz|enhanc|负面|负向|反向|系统|风格|优化|增强|扩写/i.test(`${field.fieldName} ${field.label}`)) return false;
     return primaryNames.has(normalize(field.fieldName))
-      || field.label.split(/[·|]/).some((part) => primaryNames.has(normalize(part)));
+      || field.label.split(/[·|]/).some((part) => {
+        // 展示名称可附带“（可选，默认不用填）”；辅助提示词仍按上方完整标签排除。
+        const name = part.trim().replace(/\s*(?:\([^()]*\)|（[^（）]*）)\s*$/u, '');
+        return primaryNames.has(normalize(name));
+      });
   });
   if (candidates.length !== 1) return [...parameters];
   return parameters.map((field) => field === candidates[0] ? { ...field, source: 'prompt' } : field);
@@ -119,7 +123,8 @@ export function importRunningHubDefinition(
         }
       }
       if (scalarOptions?.length && scalarOptions.every((option) => typeof option === field.type)) options = scalarOptions;
-      if (options?.length) field.options = options;
+      // 媒体 fieldData 中的文件候选来自服务端目录，不限制本轮上传的文件名。
+      if (field.source === 'value' && options?.length) field.options = options;
       fields.push(field);
     }
   } else if (options.kind === 'app' && typeof record.curl === 'string') {
@@ -204,7 +209,7 @@ export function runningHubFieldValue(field: RunningHubParameter, input?: string)
   }
   if (field.required && value === '') throw new Error(`请填写${field.label}`);
   if (typeof value === 'number' && ((field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max))) throw new Error(`${field.label} 超出允许范围`);
-  if (field.options?.length && !field.options.includes(value)) throw new Error(`${field.label} 不在允许的选项中`);
+  if (field.source === 'value' && field.options?.length && !field.options.includes(value)) throw new Error(`${field.label} 不在允许的选项中`);
   return value;
 }
 

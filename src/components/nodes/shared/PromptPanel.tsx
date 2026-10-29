@@ -687,10 +687,13 @@ export default function PromptPanel({
   }, []);
 
   const hasGenerationInput = !!prompt.trim() || selectedProvider === 'runninghub' || selectedProvider === 'runninghubwf' || selectedProvider === 'workflow-api';
-  const imageBatchMaximum = imageCapability?.supportsBatch === false
+  // 单次只能一张的通用模型由画布创建多个节点逐张执行，不限制用户选择的总张数。
+  const sequentialImageBatch = selectedProvider === 'general' && !selectedWorkflowId
+    && (imageCapability?.supportsBatch === false || imageCapability?.maxBatchCount === 1);
+  const imageBatchMaximum = sequentialImageBatch ? MAX_IMAGE_BATCH_COUNT : imageCapability?.supportsBatch === false
     ? 1 : Math.min(MAX_IMAGE_BATCH_COUNT, imageCapability?.maxBatchCount ?? MAX_IMAGE_BATCH_COUNT);
   const imageBatchCounts = IMAGE_BATCH_COUNTS.filter((count) => count <= imageBatchMaximum);
-  const batchSupported = (selectedProvider !== 'general' || imageCapability?.supportsBatch === true)
+  const batchSupported = (selectedProvider !== 'general' || imageCapability?.supportsBatch === true || sequentialImageBatch)
     && imageBatchMaximum > 1 && nodeType === 'ai-image'
     && Boolean(onChangeBatchCount)
     && selectedProvider !== 'dreamina'

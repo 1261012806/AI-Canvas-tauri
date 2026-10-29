@@ -74,6 +74,34 @@ describe('RunningHub 导入与参数合同', () => {
     expect(() => validateRunningHubManifest({ version: 1, ...options, parameters: [{ ...field, sourceExplicit: true }] })).not.toThrow();
     expect(() => validateRunningHubManifest({ version: 1, ...options, parameters: [{ ...field, sourceExplicit: 'true' }] } as unknown as RunningHubWorkflowManifest)).toThrow();
   });
+  it.each([
+    '提示词（可选, 描述你的画面, 默认不用填）',
+    '提示词 (可选，描述你的画面，默认不用填)',
+    'Positive prompt (optional)',
+    '正面提示词（可选） · text',
+  ])('主提示词标签附说明时共用本轮正文：%s', (label) => {
+    const result = importRunningHubDefinition(JSON.stringify({ nodeInfoList: [
+      { nodeId: '1', fieldName: 'text_a', fieldType: 'STRING', fieldValue: '旧主提示词', description: label },
+      { nodeId: '2', fieldName: 'text_b', fieldType: 'STRING', fieldValue: '旧反向提示词', description: '反向提示词（可选）' },
+    ] }), options);
+    expect(result.parameters.map((field) => field.source)).toEqual(['prompt', 'value']);
+    const legacy = result.parameters.map((field) => ({ ...field, source: 'value' as const }));
+    expect(resolveRunningHubParameters(legacy).map((field) => field.source)).toEqual(['prompt', 'value']);
+    expect(legacy[0].source).toBe('value');
+    expect(result.parameters[1].defaultValue).toBe('旧反向提示词');
+  });
+  it('附说明的标签仍保留辅助提示词、显式固定值、枚举与多候选边界', () => {
+    const field = { nodeId: '1', fieldName: 'text', label: '提示词（可选）', type: 'string' as const, defaultValue: '固定', source: 'value' as const };
+    for (const label of [
+      '提示词（负面）', '提示词（系统）', '反向提示词（可选）', '负面提示词 (optional)',
+      '风格提示词（可选）', '提示词优化（可选）', '描述中包含提示词（可选）',
+      '提示词（可选）后还有其他内容', '提示词（未闭合',
+    ]) expect(resolveRunningHubParameters([{ ...field, label }])[0].source).toBe('value');
+    expect(resolveRunningHubParameters([{ ...field, sourceExplicit: true }])[0].source).toBe('value');
+    expect(resolveRunningHubParameters([{ ...field, options: ['固定'] }])[0].source).toBe('value');
+    expect(resolveRunningHubParameters([field, { ...field, nodeId: '2' }]).map((item) => item.source)).toEqual(['value', 'value']);
+    expect(resolveRunningHubParameters([field, { ...field, nodeId: '2', source: 'prompt' }]).map((item) => item.source)).toEqual(['value', 'prompt']);
+  });
   it('静态解析 curl 请求体，保留 nodeInfoList 数值与布尔类型', () => {
     const input = `curl https://www.runninghub.cn/task/openapi/ai-app/run -H 'Authorization: Bearer secret' --data '{"apiKey":"secret","webappId":1904152026220003329,"nodeInfoList":[{"nodeId":"6","fieldName":"count","fieldType":"INT","fieldValue":"0"},{"nodeId":"7","fieldName":"enabled","fieldType":"BOOLEAN","fieldValue":false}]}'`;
     const result = importRunningHubDefinition(input, { ...options, kind: 'app', remoteId: '' });
@@ -191,6 +219,30 @@ describe('RunningHub 导入与参数合同', () => {
   it('识别确定的媒体节点且保留各类型顺序与上传格式', () => {
     const result = importRunningHubDefinition(JSON.stringify({ a: { class_type: 'LoadImage', inputs: { image: 'a.png' } }, b: { class_type: 'LoadImageFromUrl', inputs: { image: 'https://cdn.test/b.png' } }, c: { class_type: 'LoadAudio', inputs: { audio: 'a.wav' } } }), options);
     expect(result.parameters).toMatchObject([{ source: 'image', referenceIndex: 0, mediaFormat: 'filename' }, { source: 'image', referenceIndex: 1, mediaFormat: 'url' }, { source: 'audio', referenceIndex: 0 }]);
+  });
+  it.each(['IMAGE', 'VIDEO', 'AUDIO'] as const)('%s 文件候选不作为枚举，空值和已失效的示例文件仍可导入', (fieldType) => {
+    const source = fieldType.toLowerCase();
+    const result = importRunningHubDefinition(JSON.stringify({ nodeInfoList: [
+      { nodeId: '1', fieldName: source, fieldType, fieldValue: '', fieldData: JSON.stringify([['server-file', 'other-file'], { image_upload: true }]) },
+      { nodeId: '2', fieldName: source, fieldType, fieldValue: 'expired-example', fieldData: ['server-file', 'other-file'] },
+      { nodeId: '3', fieldName: source, fieldType, fieldValue: '', fieldData: [{ name: '已有文件', index: 'server-file' }] },
+    ] }), { ...options, kind: 'app' });
+    expect(result.parameters.map((field) => field.defaultValue)).toEqual(['', 'expired-example', '']);
+    expect(result.parameters.map((field) => field.referenceIndex)).toEqual([0, 1, 2]);
+    for (const field of result.parameters) {
+      expect(field).toMatchObject({ type: 'string', source, mediaFormat: 'filename' });
+      expect(field.options).toBeUndefined();
+      expect(() => runningHubFieldValue(field)).not.toThrow();
+    }
+  });
+  it.each(['image', 'video', 'audio', 'prompt'] as const)('旧 %s 映射不受历史枚举限制，手动固定值仍按原枚举校验', (source) => {
+    const field = { nodeId: '1', fieldName: 'input', label: '输入', type: 'string' as const, defaultValue: '', source, options: ['server-example'] };
+    expect(runningHubFieldValue(field)).toBe('');
+    expect(runningHubFieldValue(field, 'current-input')).toBe('current-input');
+    expect(field.options).toEqual(['server-example']);
+    expect(() => runningHubFieldValue({ ...field, source: 'value' }, 'current-input')).toThrow('选项');
+    expect(runningHubFieldValue({ ...field, source: 'value' }, 'server-example')).toBe('server-example');
+    expect(() => runningHubFieldValue({ ...field, required: true })).toThrow('请填写');
   });
   it('拒绝 UI graph、超长定义、额外密钥、重复参数和本地路径', () => {
     expect(() => importRunningHubDefinition('{"nodes":[]}', options)).toThrow('API');

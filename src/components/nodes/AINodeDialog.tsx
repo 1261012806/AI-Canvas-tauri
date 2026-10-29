@@ -67,6 +67,7 @@ import { animationProcessing, animationResultPatch } from '../../services/animat
 import { useT } from '../../i18n';
 import { mergeAppendedNodeMentions } from '../../utils/promptConnectionMentions';
 import { resolveGenerationNodeData } from '../../utils/nodeGeneration';
+import { cancelImageBatchGeneration, isImageBatchGenerating, subscribeImageBatches, usesSequentialImageBatch } from '../../services/generationService';
 import { postProcessDramaExtractOutput, prepareDramaExtractPrompt } from '../../services/dramaAssetExtract';
 
 const DIALOG_VIEWPORT_MARGIN = 16;
@@ -372,6 +373,9 @@ function AINodeDialog() {
 
   // 调用选中模型生成（文本 or 图片）
   // overridePrompt: / 指令菜单直接触发时传入的整合后模板，不走 store → 对话框不闪烁
+  const imageBatchGenerating = useSyncExternalStore(subscribeImageBatches,
+    () => !!activeNodeId && isImageBatchGenerating(activeNodeId), () => false);
+
   const onSubmit = useCallback(async (overridePrompt?: string, postProcess?: ImagePostProcess) => {
     finishContinuousEdit();
     // 实时从 store 读取全部数据 — 避免闭包 data 为 undefined
@@ -412,6 +416,21 @@ function AINodeDialog() {
       }
       await executeGeneration(latestNode!.id, overridePrompt);
       return;
+    }
+    if (latestData.type === 'ai-image') {
+      if (isImageBatchGenerating(latestNode!.id)) return;
+      if (Number(latestData.batchCount) > 1 && usesSequentialImageBatch(
+        latestData.provider, latestData.model, store.config, latestData.workflowId,
+      )) {
+        const originalProjectId = store.currentProjectId;
+        const originalData = latestNode!.data;
+        const { executeGeneration } = await import('../../services/generationService');
+        const live = useAppStore.getState();
+        if (live.currentProjectId !== originalProjectId || live.activeNodeId !== latestNode!.id
+          || live.nodes.find((item) => item.id === latestNode!.id)?.data !== originalData) return;
+        await executeGeneration(latestNode!.id, overridePrompt, postProcess);
+        return;
+      }
     }
     const rawPrompt = overridePrompt ?? (latestData.prompt as string) ?? '';
     const cloudWorkflow = isCloudWorkflow(store.workflows.find((item) => item.id === latestData.workflowId));
@@ -824,7 +843,9 @@ function AINodeDialog() {
 
   const onCancelGeneration = useCallback(async () => {
     if (!activeNodeId || cancellingNodeIdsRef.current.has(activeNodeId)) return;
+    if (useAppStore.getState().currentProjectId !== currentProjectId) return;
     const nodeId = activeNodeId;
+    if (cancelImageBatchGeneration(nodeId) || imageBatchGenerating) return;
     if (useAppStore.getState().nodes.find((item) => item.id === nodeId)?.data.directorRuntimeKind === 'ai-threejs') {
       const { cancelDirectorPrevisGeneration } = await import('../../services/directorPrevisService');
       cancelDirectorPrevisGeneration(nodeId);
@@ -854,7 +875,7 @@ function AINodeDialog() {
     } finally {
       cancellingNodeIdsRef.current.delete(nodeId);
     }
-  }, [activeNodeId, currentProjectId, showToast, t, updateNodeDataTransient]);
+  }, [activeNodeId, currentProjectId, imageBatchGenerating, showToast, t, updateNodeDataTransient]);
 
   /**
    * 「直接输出」只对产物就是文字的节点成立：媒体节点没有模型就没有素材，
@@ -1299,9 +1320,9 @@ function AINodeDialog() {
             onAnimationActionChange={onAnimationActionChange}
             animationFrames={data.animationFrames ?? 8}
             onAnimationFramesChange={onAnimationFramesChange}
-            canGenerate={(nodeType !== 'ai-director' || isPrevis) && data.status !== 'loading' && !recoverableComfyTask && !cloudTask && !workflowApiTask}
-            isGenerating={data.status === 'loading'}
-            onCancelGeneration={isPrevis || ['comfyui', 'runninghubwf', 'runninghub', 'workflow-api'].includes(data.provider ?? '') ? () => { void onCancelGeneration(); } : undefined}
+            canGenerate={(nodeType !== 'ai-director' || isPrevis) && data.status !== 'loading' && !imageBatchGenerating && !recoverableComfyTask && !cloudTask && !workflowApiTask}
+            isGenerating={data.status === 'loading' || imageBatchGenerating}
+            onCancelGeneration={imageBatchGenerating || isPrevis || ['comfyui', 'runninghubwf', 'runninghub', 'workflow-api'].includes(data.provider ?? '') ? () => { void onCancelGeneration(); } : undefined}
             onChange={onPromptChange}
             onContinuousEditEnd={finishContinuousEdit}
             onSubmit={onSubmit}

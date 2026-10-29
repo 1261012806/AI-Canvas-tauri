@@ -182,14 +182,17 @@ describe('RunningHub 云任务生命周期', () => {
       expect(JSON.parse(init.body as string).apiKey).toBe('original-cn-fixture');
     }
   });
-  it('上传复用同一素材，按字段分别传文件名和 URL，不走第三方图床', async () => {
+  it.each(['image', 'video', 'audio'] as const)('%s 旧文件候选不限制本轮上传，按字段传文件名和 URL 并复用上传', async (kind) => {
+    const extension = { image: 'png', video: 'mp4', audio: 'wav' }[kind];
+    const filename = `rh/reference.${extension}`;
     const mediaManifest: RunningHubWorkflowManifest = { ...manifest, parameters: [
-      { nodeId: '1', fieldName: 'image', type: 'string', defaultValue: '', source: 'image', label: '图片', mediaFormat: 'filename', required: true },
-      { nodeId: '2', fieldName: 'image', type: 'string', defaultValue: '', source: 'image', label: '图片URL', mediaFormat: 'url', required: true },
+      { nodeId: '1', fieldName: kind, type: 'string', defaultValue: 'expired-example', source: kind, label: '素材', mediaFormat: 'filename', required: true, options: ['server-example'] },
+      { nodeId: '2', fieldName: kind, type: 'string', defaultValue: '', source: kind, label: '素材URL', mediaFormat: 'url', required: true, options: ['server-example'] },
     ] };
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('png', { headers: { 'Content-Type': 'image/png' } })));
-    const fields = await buildRunningHubInputs(connection, mediaManifest, '', {}, { image: ['blob:reference'] });
-    expect(fields.map((field) => field.fieldValue)).toEqual(['rh/reference.png', 'https://cdn.test/upload.png']);
+    mocks.fetch.mockResolvedValueOnce(json({ code: 200, data: { filename, download_url: 'https://cdn.test/upload' } }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('media', { headers: { 'Content-Type': `${kind}/${extension}` } })));
+    const fields = await buildRunningHubInputs(connection, mediaManifest, '', {}, { [kind]: ['blob:reference'] });
+    expect(fields.map((field) => field.fieldValue)).toEqual([filename, 'https://cdn.test/upload']);
     expect(mocks.fetch.mock.calls.filter(([url]) => String(url).endsWith('/upload/binary'))).toHaveLength(1);
     expect(mocks.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer test-secret');
     expect(mocks.fetch.mock.calls[0][1].body).toBeInstanceOf(FormData);
@@ -201,11 +204,13 @@ describe('RunningHub 云任务生命周期', () => {
   });
   it('旧主提示词始终使用本轮节点正文，忽略旧参数覆盖，保留手工固定字段', async () => {
     const legacy: RunningHubWorkflowManifest = { ...manifest, parameters: [
-      { nodeId: '1', fieldName: 'prompt', type: 'string', defaultValue: '导入示例', source: 'value', label: '提示词' },
+      { nodeId: '1', fieldName: 'text', type: 'string', defaultValue: '导入示例', source: 'value', label: '提示词（可选, 描述你的画面, 默认不用填）' },
       { nodeId: '2', fieldName: 'negative_prompt', type: 'string', defaultValue: '负面', source: 'value', label: '负面提示词' },
     ] };
-    const fields = await buildRunningHubInputs(connection, legacy, '本轮节点正文', { '1::prompt': '过期节点覆盖' });
-    expect(fields.map((field) => field.fieldValue)).toEqual(['本轮节点正文', '负面']);
+    const fields = await buildRunningHubInputs(connection, legacy, '本轮节点正文', { '1::text': '过期节点覆盖', '2::negative_prompt': '本轮反向词' });
+    expect(fields.map((field) => field.fieldValue)).toEqual(['本轮节点正文', '本轮反向词']);
+    const empty = await buildRunningHubInputs(connection, legacy, '');
+    expect(empty.map((field) => field.fieldValue)).toEqual(['', '负面']);
     const fixed = { ...legacy, parameters: [{ ...legacy.parameters[0], sourceExplicit: true }] };
     expect((await buildRunningHubInputs(connection, fixed, '节点正文'))[0].fieldValue).toBe('导入示例');
     expect(mocks.fetch).not.toHaveBeenCalled();
