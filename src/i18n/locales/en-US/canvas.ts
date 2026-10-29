@@ -326,7 +326,8 @@ const canvas = {
   '请先选中节点或分组': 'Select a node or group first',
   '选中节点未属于任何分组': 'The selected node does not belong to any group',
   '分组名称已存在': 'The group name already exists',
-  '分组文件归档未完成，原文件已保留，请重试': 'Group file archiving did not finish; the original files are kept. Please try again',
+
+  '节点文件保存或分组归档未完成，正文和原文件已保留，请重试': 'Node file saving or group archiving did not finish. The text and original files have been preserved; please try again',
 
   // 图片全屏对比
   '更换对比图片': 'Change comparison image',
