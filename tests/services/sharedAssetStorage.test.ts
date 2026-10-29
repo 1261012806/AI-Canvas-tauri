@@ -21,13 +21,31 @@ const snapshot = (): SharedAssetStorageSnapshot => ({
 beforeEach(() => { native.invoke.mockReset(); native.isTauriEnv.mockReturnValue(true); });
 
 describe('项目 S3 连接边界', () => {
-  it('只接受无认证信息、查询、片段及额外路径的 HTTPS Endpoint', () => {
+  it('HTTP 与 HTTPS Endpoint 均拒绝认证信息、查询、片段及额外路径', () => {
     expect(normalizeSharedStorageConnection({ ...connection, endpoint: ' https://storage.example.com/ ' }).endpoint).toBe(connection.endpoint);
     expect(normalizeSharedStorageConnection({ ...connection, name: '汉'.repeat(70) }).name).toHaveLength(70);
     for (const endpoint of [
-      'http://localhost:9000', 'file:///tmp/data', 'https://user:password@storage.example.com',
-      'https://storage.example.com/api', 'https://storage.example.com?token=hidden', 'https://storage.example.com#secret',
+      'file:///tmp/data', 'ftp://storage.example.com', 'https://user:password@storage.example.com',
+      'http://user:password@localhost:9000', 'http://localhost:9000/api', 'http://localhost:9000?token=hidden',
+      'http://localhost:9000#secret', 'https://storage.example.com/api',
+      'https://storage.example.com?token=hidden', 'https://storage.example.com#secret',
     ]) expect(() => normalizeSharedStorageConnection({ ...connection, endpoint })).toThrow();
+  });
+
+  it.each([
+    [' http://localhost:9000/ ', 'http://localhost:9000'],
+    ['http://192.168.1.20:9000/', 'http://192.168.1.20:9000'],
+    ['http://storage.example.com:9000/', 'http://storage.example.com:9000'],
+  ])('HTTP 地址归一化后可通过保存 IPC 和公开快照读取：%s', async (endpoint, normalizedEndpoint) => {
+    const value = snapshot();
+    value.connections[0].endpoint = normalizedEndpoint;
+    native.invoke.mockResolvedValue(value);
+    const result = await saveSharedStorageConnection({ connection: { ...connection, endpoint }, expectedRevision: 'revision-1' });
+    expect(native.invoke).toHaveBeenLastCalledWith('project_asset_storage_save_connection', {
+      input: { connection: { ...connection, endpoint: normalizedEndpoint }, expectedRevision: 'revision-1', credentials: undefined },
+    });
+    expect(result).toEqual(value);
+    await expect(loadSharedStorageSnapshot()).resolves.toEqual(value);
   });
 
   it('共享身份独立于名称，前缀不能越界或接受编码后的路径分隔符', () => {

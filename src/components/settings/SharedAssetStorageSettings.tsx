@@ -83,9 +83,9 @@ export default function SharedAssetStorageSettings() {
     if (locked.current || !desktop) return;
     setError(''); setNotice('');
     let endpoint: URL;
-    try { endpoint = new URL(draft.endpoint.trim()); } catch { setError(t('请输入有效的 HTTPS S3 Endpoint')); return; }
-    if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
-      setError(t('S3 Endpoint 必须为不含路径、凭据、查询参数或片段的 HTTPS 服务地址')); return;
+    try { endpoint = new URL(draft.endpoint.trim()); } catch { setError(t('请输入有效的 HTTP 或 HTTPS S3 Endpoint')); return; }
+    if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
+      setError(t('S3 Endpoint 必须为不含路径、凭据、查询参数或片段的 HTTP 或 HTTPS 服务地址')); return;
     }
     if (!draft.pathStyle && (/^\d+\.\d+\.\d+\.\d+$/.test(endpoint.hostname) || endpoint.hostname.startsWith('['))) {
       setError(t('IP Endpoint 仅支持 Path-style。')); return;
@@ -222,6 +222,7 @@ export default function SharedAssetStorageSettings() {
             </label>
           </div>
           <p className="ui-hint">{t('填写 S3 服务根地址，不包含 Bucket 名称、路径或查询参数。虚拟主机模式会自动添加 Bucket 子域名。')}</p>
+          <p className="ui-hint">{t('支持 HTTP 和 HTTPS。HTTP 不加密传输，请用于可信网络。')}</p>
           {targetChanged && <p className="ui-alert ui-alert--warning">{t('更换 Endpoint、Region、Bucket、根前缀或寻址方式会清除旧凭据，请为新目标重新填写 AK/SK。')}</p>}
           <div className="flex flex-wrap items-center gap-2 border-t border-canvas-border pt-3">
             <span className={`ui-badge ${saved?.credentialsSaved && !targetChanged ? 'ui-badge--success' : 'ui-badge--outline'}`}>{t(saved?.credentialsSaved && !targetChanged ? '凭据已保存' : '尚未保存凭据')}</span>

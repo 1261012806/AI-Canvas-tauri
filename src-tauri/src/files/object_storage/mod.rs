@@ -295,7 +295,7 @@ fn normalize_connection(mut value: ConnectionInput) -> Result<ConnectionInput, S
     if value.name.chars().count() > 160 { return Err(StorageError::new("invalid_input")); }
     validate_text(&value.name, 640)?;
     let url = url::Url::parse(&value.endpoint).map_err(|_| StorageError::new("invalid_input"))?;
-    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some()
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some()
         || url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
         return Err(StorageError::new("invalid_input"));
     }
@@ -614,6 +614,21 @@ mod tests {
         let cleared = merge_credentials(Some(updated), CredentialUpdate { clear_session_token: true, ..Default::default() }).unwrap().unwrap();
         assert!(cleared.session_token.is_none());
         assert!(merge_credentials(None, CredentialUpdate { access_key_id: Some("key".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn connection_endpoints_accept_http_and_https_without_relaxing_url_boundaries() {
+        let connection = ConnectionInput { id: "c".into(), name: "S3".into(), endpoint: "https://example.com".into(),
+            region: "us-east-1".into(), bucket: "example".into(), root_prefix: "team".into(), path_style: true };
+        for endpoint in ["http://localhost:9000/", "http://192.168.1.20:9000/", "http://storage.example.com:9000/", "https://example.com/"] {
+            let normalized = normalize_connection(ConnectionInput { endpoint: endpoint.into(), ..connection.clone() }).unwrap();
+            assert_eq!(normalized.endpoint, endpoint.trim_end_matches('/'));
+        }
+        let http = normalize_connection(ConnectionInput { endpoint: "http://example.com".into(), ..connection.clone() }).unwrap();
+        assert_ne!(config_hash(&connection), config_hash(&http));
+        for endpoint in ["ftp://example.com", "file:///tmp", "http://user:pass@example.com", "http://example.com/api", "http://example.com?token=hidden", "http://example.com#fragment"] {
+            assert!(normalize_connection(ConnectionInput { endpoint: endpoint.into(), ..connection.clone() }).is_err());
+        }
     }
 
     #[test]

@@ -148,24 +148,30 @@ fn build_client(connection: &ConnectionInput, credentials: Credentials, content:
     if credentials.access_key_id.trim().is_empty() || credentials.secret_access_key.is_empty() {
         return Err(StorageError::new("credentials_missing"));
     }
+    let endpoint = request_endpoint(connection)?;
+    let allow_http = match url::Url::parse(&endpoint).map_err(|_| StorageError::new("invalid_input"))?.scheme() {
+        "http" => true, "https" => false, _ => return Err(StorageError::new("invalid_input")),
+    };
     let mut http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .https_only(true)
+        .https_only(!allow_http)
         .danger_accept_invalid_certs(false)
         .no_proxy()
-        .connect_timeout(Duration::from_secs(5))
-        // A media part may need longer before the server starts its response;
-        // the upload operation still has its own overall timeout and cancellation.
-        .read_timeout(Duration::from_secs(if content { 120 } else { 30 }));
+        .connect_timeout(Duration::from_secs(5));
+    // Media PUTs use transfer::upload's 300-second deadline and cancellation. A
+    // client read timeout also covers waiting for response headers, so it must
+    // not cut that upload budget short. Media GETs retain request()'s 30-second
+    // response deadline and each consumer's 30-second stream-idle deadline.
+    if !content { http = http.read_timeout(Duration::from_secs(30)); }
     if let Some(timeout) = timeout { http = http.timeout(timeout); }
     let http = http.build()
         .map_err(|_| StorageError::new("unavailable"))?;
     let mut builder = AmazonS3Builder::new()
-        .with_endpoint(request_endpoint(connection)?)
+        .with_endpoint(endpoint)
         .with_region(connection.region.clone())
         .with_bucket_name(connection.bucket.clone())
         .with_virtual_hosted_style_request(!connection.path_style)
-        .with_allow_http(false)
+        .with_allow_http(allow_http)
         .with_access_key_id(credentials.access_key_id)
         .with_secret_access_key(credentials.secret_access_key)
         .with_conditional_put(S3ConditionalPut::ETagMatch)
@@ -700,5 +706,11 @@ mod tests {
         assert!(request_endpoint(&connection).is_err());
         connection.path_style = true;
         assert_eq!(request_endpoint(&connection).unwrap(), "https://127.0.0.1:9443");
+        connection.endpoint = "http://127.0.0.1:9000".into();
+        assert_eq!(request_endpoint(&connection).unwrap(), "http://127.0.0.1:9000");
+        connection.path_style = false;
+        assert!(request_endpoint(&connection).is_err());
+        connection.endpoint = "http://s3.example.com:9000".into();
+        assert_eq!(request_endpoint(&connection).unwrap(), "http://example.s3.example.com:9000");
     }
 }

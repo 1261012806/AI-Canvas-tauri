@@ -88,7 +88,7 @@ export function normalizeSharedStorageConnection(input: SharedStorageConnectionI
   const name = input.name.trim();
   const region = input.region.trim();
   const bucket = input.bucket.trim();
-  if (endpoint.protocol !== 'https:' || !endpoint.hostname || endpoint.username || endpoint.password
+  if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname || endpoint.username || endpoint.password
     || endpoint.pathname !== '/' || endpoint.search || endpoint.hash || input.endpoint.length > 2048
     || input.id.length > 100 || !name || Array.from(name).length > 160 || hasControlCharacters(name)
     || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(region)
