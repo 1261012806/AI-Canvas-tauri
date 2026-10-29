@@ -350,7 +350,7 @@ export default function VideoParamSelector({
 
   const addReference = (kind: 'frame' | 'character', option: CharacterVideoReferenceOption) => {
     if (disabled) return;
-    setPickerFor(null);
+    if (kind === 'frame') setPickerFor(null);
     if (kind === 'character') {
       const characterItems = buildCharacterVideoReferences(option, provider);
       if (references.some((item) => item.id === characterItems[0].id)) return;

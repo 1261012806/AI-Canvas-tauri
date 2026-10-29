@@ -34,8 +34,11 @@ export default function VideoCharacterPicker({
 
   const selectItem = (item: MentionPickerItem) => {
     if (item.disabled) return;
+    // 被选中的卡片会变为禁用；先把卡片焦点留在浮层内，避免失焦关闭。
+    if (document.activeElement instanceof Element && document.activeElement.closest('[role="option"]')) {
+      menuRef.current?.focus({ preventScroll: true });
+    }
     item.onSelect();
-    anchorRef.current?.focus({ preventScroll: true });
   };
   const items = filteredItems.map((item, index) => ({
     ...item,
