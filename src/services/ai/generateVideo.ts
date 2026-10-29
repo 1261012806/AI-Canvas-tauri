@@ -25,6 +25,7 @@ import type {
   VideoGenerationReferenceInput,
   VideoModelCapability,
   MediaTaskReceipt,
+  MediaDownloadAccess,
 } from '../../types/aiTypes';
 import { extractModelName, resolveGeneralModel, resolveGeneralModelConnection } from './helpers';
 import { getProviderPolicy, resolveProviderCatalogId } from './providerPolicies';
@@ -555,7 +556,7 @@ export async function generateVideo(
   signal?: AbortSignal,
   /** 宿主任务在素材准备完成后、实际提交前复核运行时租约。 */
   beforeSubmit?: () => void | Promise<void>,
-): Promise<{ url: string; taskReceipt?: MediaTaskReceipt; comfyTaskId?: string; runninghubOutputs?: import('../../types/runninghub').RunningHubOutput[];
+): Promise<{ url: string; taskReceipt?: MediaTaskReceipt; mediaDownloadAccess?: MediaDownloadAccess; comfyTaskId?: string; runninghubOutputs?: import('../../types/runninghub').RunningHubOutput[];
   workflowApiOutputs?: import('../../types/workflowApi').CloudWorkflowOutput[]; workflowApiTaskId?: string }> {
   // 内置 Provider 与本地工作流暂时保持旧归一化；通用模型交给 capability-aware
   // canonical resolver，避免在读到模型的 30 秒能力前先被全局 15 秒上限截断。
@@ -903,7 +904,8 @@ export async function generateVideo(
       });
       const url = urls[0];
       if (!url) throw new Error('视频生成完成但未返回结果');
-      return { url, ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) };
+      return { url, ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}),
+        ...(urls.mediaDownloadAccess ? { mediaDownloadAccess: urls.mediaDownloadAccess } : {}) };
     }
     const connectionName = connection.provider.name.trim() || connection.providerConfigId;
     const preset = gm.executionProfile?.preset;

@@ -53,6 +53,8 @@ export interface NodeOutputDownloadProgress {
 }
 
 export interface FileTransferOptions {
+  /** 仅本次生成交付使用；原任务恢复时从当前连接重建鉴权，不保存 Key。 */
+  mediaDownloadAccess?: import('../types/aiTypes').MediaDownloadAccess;
   /** 创作资产集中放到项目的 Library 文件夹。 */
   projectSubdirectory?: 'Library';
   signal?: AbortSignal;
@@ -381,7 +383,7 @@ function createTransferTaskId(): string {
 
 async function runNativeFileTransfer<T = NativeFileTransferResult>(
   command: 'copy_file_streamed' | 'download_file_streamed' | 'copy_asset_folder' | 'copy_asset_file_to_folder',
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   options?: FileTransferOptions,
 ): Promise<T> {
   const taskId = createTransferTaskId();
@@ -1119,6 +1121,10 @@ export async function downloadUrlAndSave(
 
     const sourcePath = localMediaUrlToPath(url);
     if (!sourcePath && !isRemoteMediaUrl(url)) throw new Error('不支持的媒体地址');
+    const remoteRequest = !sourcePath && options?.mediaDownloadAccess
+      ? await (await import('./ai/mediaDownloadAccess')).resolveMediaDownloadRequest(url, options.mediaDownloadAccess)
+      : { url };
+    throwIfMediaReadAborted(options?.signal);
     // 本地 URL 还原为授权文件路径，保留原生流式复制的取消与进度。
     const sourceName = sourcePath?.replace(/\\/g, '/').split('/').pop();
     const fileName = baseName && baseName.trim()
@@ -1134,7 +1140,7 @@ export async function downloadUrlAndSave(
         return runNativeFileTransfer(
           sourcePath ? 'copy_file_streamed' : 'download_file_streamed',
           sourcePath ? { sourcePath, destinationPath: destPath } : {
-            url, destinationPath: destPath,
+            ...remoteRequest, destinationPath: destPath,
             ...(fallbackPrefix.includes('video') ? { expectedMediaKind: 'video' } : {}),
           },
           options,

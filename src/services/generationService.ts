@@ -280,7 +280,7 @@ export async function executeGeneration(
 
       if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
-        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-image', data.label)
+        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-image', data.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url });
       if (guardedSubmission && !isStillCurrentSubmission()) return { success: false, message: '画布已变化，任务已保留' };
       const mediaUrl = persisted.mediaUrl;
@@ -336,7 +336,7 @@ export async function executeGeneration(
       if (!isStillCurrentSubmission()) return { success: false, message: '任务已取消' };
       if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = submittingProjectId
-        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-panorama', data.label)
+        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-panorama', data.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url };
       if (!isStillCurrentSubmission()) return { success: false, message: '画布已变化，任务已保留' };
       const mediaUrl = persisted.mediaUrl;
@@ -412,7 +412,7 @@ export async function executeGeneration(
       }
       if (taskReceipt) store.updateNodeDataTransient(nodeId, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (submittingProjectId
-        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-video', data.label)
+        ? await persistMediaUrlToProjectData(result.url, submittingProjectId, 'ai-video', data.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url });
       if (lease) await assertLease();
       if (!isStillCurrentSubmission()) {

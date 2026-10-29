@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
   save: vi.fn(),
   shouldLoadNativeComfyImage: vi.fn(() => false),
+  resolveMediaDownloadRequest: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
@@ -35,6 +36,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
 vi.mock('@tauri-apps/api/path', () => ({ appDataDir: mocks.appDataDir, localDataDir: vi.fn() }));
 vi.mock('../../src/services/comfyImageSource', () => ({ shouldLoadNativeComfyImage: mocks.shouldLoadNativeComfyImage }));
+vi.mock('../../src/services/ai/mediaDownloadAccess', () => ({ resolveMediaDownloadRequest: mocks.resolveMediaDownloadRequest }));
 vi.mock('../../src/services/indexedDb/mediaRelocations', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/services/indexedDb/mediaRelocations')>(),
   retiredMediaPaths: mocks.retired,
@@ -191,6 +193,7 @@ describe('downloadUrlAndSave', () => {
     mocks.lstat.mockReset();
     mocks.retired.mockReset().mockResolvedValue(new Set());
     mocks.writeFile.mockReset();
+    mocks.resolveMediaDownloadRequest.mockReset().mockImplementation(async (url: string) => ({ url }));
     mocks.resolveUniqueDestPath.mockImplementation(async (dataDir: string, fileName: string) => (
       `${dataDir}/${fileName}`
     ));
@@ -315,6 +318,41 @@ describe('downloadUrlAndSave', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.objectContaining({
       url, destinationPath: '/project/data/镜3.mp4', expectedMediaKind: 'video',
     }));
+  });
+
+  it('resolves current connection access only at download time and streams it to the native downloader', async () => {
+    const url = 'https://provider.example/v1/videos/task/content';
+    const access = { providerConfigId: 'provider-video', origin: 'https://provider.example', auth: { type: 'bearer' as const } };
+    const downloadAccess = { origin: access.origin, headers: { Authorization: 'Bearer current-fixture' } };
+    mocks.resolveMediaDownloadRequest.mockResolvedValue({ url, downloadAccess });
+    mocks.invoke.mockResolvedValue({ path: '/project/data/视频.mp4', totalBytes: 1024, contentType: 'video/mp4' });
+    await expect(persistMediaUrlToProjectData(url, 'project-1', 'ai-video', '视频', { mediaDownloadAccess: access }))
+      .resolves.toMatchObject({ mediaUrl: 'asset:///project/data/视频.mp4', sourceUrl: url });
+    expect(mocks.resolveMediaDownloadRequest).toHaveBeenCalledExactlyOnceWith(url, access);
+    expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.objectContaining({
+      url, downloadAccess, expectedMediaKind: 'video',
+    }));
+    expect(JSON.stringify(access)).not.toContain('current-fixture');
+  });
+
+  it('retains public CDN downloads without adding access headers and never resolves access for local copies', async () => {
+    const url = 'https://cdn.example/result.png';
+    const access = { providerConfigId: 'provider-image', origin: 'https://provider.example' };
+    mocks.invoke.mockResolvedValue({ path: '/project/data/图片.png', totalBytes: 1, contentType: 'image/png' });
+    await downloadUrlAndSave(url, 'project-1', 'ai-image', '图片', { mediaDownloadAccess: access });
+    expect(mocks.invoke).toHaveBeenCalledWith('download_file_streamed', expect.not.objectContaining({ downloadAccess: expect.anything() }));
+    mocks.resolveMediaDownloadRequest.mockClear();
+    await downloadUrlAndSave('file:///source/local.png', 'project-1', 'ai-image', '本地', { mediaDownloadAccess: access });
+    expect(mocks.resolveMediaDownloadRequest).not.toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalledWith('copy_file_streamed', expect.not.objectContaining({ downloadAccess: expect.anything() }));
+  });
+
+  it('does not start a native download if the original connection can no longer provide access', async () => {
+    mocks.resolveMediaDownloadRequest.mockRejectedValue(new Error('原连接已不存在'));
+    await expect(persistMediaUrlToProjectData('https://provider.example/v1/images/task/content', 'project-1', 'ai-image', '图片', {
+      mediaDownloadAccess: { providerConfigId: 'removed', origin: 'https://provider.example' },
+    })).rejects.toBeInstanceOf(MediaPersistenceError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
   it('writes base64 image results directly into the project directory', async () => {

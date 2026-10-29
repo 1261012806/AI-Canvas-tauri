@@ -483,6 +483,47 @@ describe('pending generation task recovery', () => {
     expect(getPendingTasksForProject('project-1')).toEqual([]);
   });
 
+  it.each(['ai-image', 'ai-video'] as const)('continues saving returned synchronous %s URLs without a new submission or query', async (nodeType) => {
+    const resultUrl = `https://relayonapi.com/v1/results/original-${nodeType}`;
+    const mediaDownloadAccess = { providerConfigId: 'relay-original', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    useAppStore.setState((state) => ({ nodes: [{ id: 'returned-result', type: nodeType, position: { x: 0, y: 0 },
+      data: { type: nodeType, label: 'Returned result', status: 'loading' } }], config: { ...state.config, providers: {
+      'relay-original': { name: 'Original', apiKey: 'previous-key', baseUrl: 'https://relayonapi.com/v1' },
+      'relay-other': { name: 'Other group', apiKey: 'other-key', baseUrl: 'https://relayonapi.com/v1' },
+    } } }));
+    const receipt = savePendingTask({ nodeId: 'returned-result', projectId: 'project-1', nodeType, provider: 'general',
+      providerConfigId: 'relay-original', taskType: 'custom-protocol', submitted: true, taskId: 'returned-sync-result',
+      resultUrls: [resultUrl], mediaDownloadAccess, mediaRecoveryState: 'delivery_pending' });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const requests: unknown[] = [];
+    const persist = vi.spyOn(fileService, 'persistMediaUrlToProjectData').mockImplementation(async (url, _projectId, _kind, _label, options) => {
+      const { resolveMediaDownloadRequest } = await import('../../src/services/ai/mediaDownloadAccess');
+      requests.push(await resolveMediaDownloadRequest(url, options?.mediaDownloadAccess));
+      if (requests.length === 1) throw new Error('download disconnected');
+      return { mediaUrl: 'asset://saved-result', sourceUrl: url };
+    });
+    await resumeMediaNodeTask('returned-result');
+    expect(getMediaTaskReceipt('returned-result')).toEqual(receipt);
+    expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ resultUrls: [resultUrl], mediaDownloadAccess,
+      mediaRecoveryState: 'delivery_pending' });
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('previous-key');
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('other-key');
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: { ...state.config.providers,
+      'relay-original': { ...state.config.providers['relay-original'], apiKey: 'rotated-original-key' },
+    } } }));
+    await resumeMediaNodeTask('returned-result');
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(requests).toEqual([
+      { url: resultUrl, downloadAccess: { origin: mediaDownloadAccess.origin, headers: { Authorization: 'Bearer previous-key' } } },
+      { url: resultUrl, downloadAccess: { origin: mediaDownloadAccess.origin, headers: { Authorization: 'Bearer rotated-original-key' } } },
+    ]);
+    expect(JSON.stringify(requests)).not.toContain('other-key');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('project-1')).toEqual([]);
+    expect(useAppStore.getState().nodes[0].data.status).toBe('success');
+  });
+
   it('recovers a message-only ComfyUI result without creating a node or clearing a failed message delivery', async () => {
     const release = bindMediaTaskContext('media-message-comfy', { projectId: 'project-1',
       conversationId: 'comfy-conversation', messageId: 'comfy-message', deliveryMode: 'message' });
@@ -552,7 +593,9 @@ describe('pending generation task recovery', () => {
         data: { type, role: 'source', assetId: 'asset-1', status: 'success', [field]: localUrl } });
       expect(getPendingTasksForProject('project-1')).toEqual([]);
     });
-    expect(persist).toHaveBeenCalledWith(url, 'project-1', generationType, '原始素材');
+    expect(persist).toHaveBeenCalledWith(url, 'project-1', generationType, '原始素材', {
+      mediaDownloadAccess: { providerConfigId: 'source-provider', origin: 'https://gateway.example' },
+    });
     expect(history).toHaveBeenCalledWith('source-node', expect.objectContaining({ nodeType: generationType, mediaUrl: localUrl }));
     expect(fetchMock).toHaveBeenCalledOnce();
   });
@@ -886,7 +929,9 @@ describe('pending generation task recovery', () => {
     await vi.waitFor(() => expect(useAppStore.getState().nodes[0].data).toMatchObject({
       status: 'success', videoUrl: 'asset://recovered-video.mp4',
     }));
-    expect(persistMedia).toHaveBeenCalledWith('data:video/mp4;base64,AQID', 'project-1', 'ai-video', 'Video');
+    expect(persistMedia).toHaveBeenCalledWith('data:video/mp4;base64,AQID', 'project-1', 'ai-video', 'Video', {
+      mediaDownloadAccess: { providerConfigId: 'custom-video', origin: 'https://gateway.example' },
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenLastCalledWith('https://gateway.example/v1/videos/video-1/content',
       expect.objectContaining({ method: 'GET', headers: { Accept: 'video/mp4', Authorization: 'Bearer current-provider-key' } }));
@@ -1090,6 +1135,23 @@ describe('pending generation task recovery', () => {
     expect(persisted).not.toContain('stale-secret');
     expect(persisted).not.toContain('stale.example');
     expect(persisted).not.toContain('apiKey');
+  });
+
+  it('never borrows another group’s download identity for synchronous delivery', async () => {
+    useAppStore.setState((state) => ({ config: { ...state.config, providers: {
+      original: { name: '原连接', baseUrl: 'https://gateway.example/v1', apiKey: 'a-fixture' },
+      other: { name: '其他组', baseUrl: 'https://gateway.example/v1', apiKey: 'b-fixture' },
+    } }, nodes: [{ id: 'identity-node', type: 'ai-image', position: { x: 0, y: 0 },
+      data: { label: '图片', type: 'ai-image', status: 'idle' } satisfies BaseNodeData }] }));
+    savePendingTask({ nodeId: 'identity-node', projectId: 'project-1', nodeType: 'ai-image', provider: 'general',
+      providerConfigId: 'original', taskId: 'result-local', taskType: 'custom-protocol', submitted: true,
+      resultUrls: ['https://gateway.example/result.png'], mediaRecoveryState: 'delivery_pending',
+      mediaDownloadAccess: { providerConfigId: 'other', origin: 'https://gateway.example', auth: { type: 'bearer' } } });
+    const persist = vi.spyOn(fileService, 'persistMediaUrlToProjectData');
+    await resumeMediaNodeTask('identity-node');
+    expect(persist).not.toHaveBeenCalled();
+    expect(getPendingTasksForProject('project-1')[0]).toMatchObject({ providerConfigId: 'original' });
+    expect(getPendingTasksForProject('project-1')[0].mediaDownloadAccess).toBeUndefined();
   });
 
   it('resumes the original Relay group task using that connection’s current key', async () => {

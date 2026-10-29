@@ -30,7 +30,8 @@ import { warnIfTooManyReferences } from './connectedReferenceMedia';
 import { resolveImageDataUrlArray, resolveImageUrlArray } from './imageUtils';
 import { generateImageStandardBatch } from './providers/standardImage';
 import { generateVolcengineImagesBatch } from './providers/volcengineImage';
-import { runConfiguredModelProtocol } from './modelProtocolRuntime';
+import { retainCompletedMediaResults, runConfiguredModelProtocol } from './modelProtocolRuntime';
+import { createMediaDownloadAccess } from './mediaDownloadAccess';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
 import { executeModelProtocol, modelProtocolUsesVariable, resolveModelExecutionProfile } from './modelProtocol';
 import { assertConfiguredImageReferences, assertModelCapabilityProtocol, resolveConfiguredImageParameters, resolveConfiguredImageBackground, resolveConfiguredImageQuality } from './modelCapabilityValidation';
@@ -63,7 +64,18 @@ export async function generateImage(
 }
 
 function singleResult(result: ImageGenerationResult): BatchImageResult {
-  return { requestedCount: 1, results: [result], failedCount: 0 };
+  return { requestedCount: 1, results: [result], failedCount: 0,
+    ...(result.mediaDownloadAccess ? { mediaDownloadAccess: result.mediaDownloadAccess } : {}) };
+}
+
+function retainStandardImageDelivery(batch: BatchImageResult, connectionId: string, baseUrl: string, nodeId: string | undefined, projectId: string | null): BatchImageResult {
+  // 仅用于下方实际采用 Bearer 的标准图片执行器，不推断其他厂商鉴权。
+  const access = createMediaDownloadAccess(connectionId, baseUrl, { type: 'bearer' });
+  const urls = retainCompletedMediaResults(batch.results.map((result) => result.url), access, nodeId, 'image', batch.requestedCount, batch.taskReceipt, projectId);
+  return { ...batch, mediaDownloadAccess: access,
+    ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt, allTasksSettled: batch.allTasksSettled ?? true } : {}),
+    results: batch.results.map((result) => ({ ...result, mediaDownloadAccess: access,
+      ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) })) };
 }
 
 function mergeImageUrls(primary: string[], extra: string[]): string[] {
@@ -140,7 +152,9 @@ export async function generateImagesBatch(
   if (provider === 'general' && !generalModel) {
     throw new Error('未找到该通用模型配置\n请在「设置 → API Key」中检查');
   }
-  const config = useAppStore.getState().config;
+  const state = useAppStore.getState();
+  const config = state.config;
+  const submissionProjectId = state.currentProjectId;
   const connectionId = generalModel?.providerConfigId ?? provider;
   const providerConfig = config.providers[connectionId];
   const modelName = generalModel?.modelId ?? extractModelName(model, provider);
@@ -401,16 +415,18 @@ export async function generateImagesBatch(
             : usesRelayonProtocol ? relayonImageVariables(modelName, variables) : variables,
         });
         const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions,
-          ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) }));
+          ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}),
+          ...(urls.mediaDownloadAccess ? { mediaDownloadAccess: urls.mediaDownloadAccess } : {}) }));
         if (results.length === 0) throw new Error('图片生成返回结果为空');
         return {
           requestedCount,
           results,
           failedCount: Math.max(0, requestedCount - results.length),
+          ...(urls.mediaDownloadAccess ? { mediaDownloadAccess: urls.mediaDownloadAccess } : {}),
           ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt, allTasksSettled: true } : {}),
         };
       }
-      return generateImageStandardBatch({
+      const batch = await generateImageStandardBatch({
         apiKey: connection.apiKey,
         baseUrl: connection.baseUrl,
         modelName: gm.modelId,
@@ -423,6 +439,7 @@ export async function generateImagesBatch(
         ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,
           providerConfigId: connection.providerConfigId, nodeId: params.nodeId } : {}),
       }, requestedCount, signal);
+      return retainStandardImageDelivery(batch, connection.providerConfigId, connection.baseUrl, params.nodeId, submissionProjectId);
     }
 
     case 'volcengine': {
@@ -457,7 +474,7 @@ export async function generateImagesBatch(
       if (!baseUrl) throw new Error(`未配置 ${provider} 的服务地址\n请在「设置 → API Key」中添加`);
       const modelName = extractModelName(model, provider);
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
-      return generateImageStandardBatch({
+      const batch = await generateImageStandardBatch({
         apiKey,
         baseUrl,
         modelName,
@@ -470,6 +487,7 @@ export async function generateImagesBatch(
         ...(providerDefinition?.id === 'cccapi' ? { asyncTaskProvider: 'cccapi' as const,
           providerConfigId: provider, nodeId: params.nodeId } : {}),
       }, requestedCount, signal);
+      return retainStandardImageDelivery(batch, provider, baseUrl, params.nodeId, submissionProjectId);
     }
   }
 }

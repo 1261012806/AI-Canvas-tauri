@@ -40,7 +40,7 @@ import { findMediaModelOption } from '../../components/nodes/shared/defaultModel
 import { videoLongSideFromLabel } from '../aiDimensions';
 import { resolveProjectGenerationPrompt } from '../projectSettingsService';
 import type { BaseNodeData, NodeType } from '../../types';
-import type { MediaTaskReceipt } from '../../types/aiTypes';
+import type { MediaDownloadAccess, MediaTaskReceipt } from '../../types/aiTypes';
 import { tagGeneratedProjectAssetSafely } from '../fs/generatedAssetTags';
 import {
   bindMediaTaskContext, completeMediaNodeTask, getMediaTaskReceipt, getPendingTasksForProject, pauseMediaTask,
@@ -156,9 +156,11 @@ async function saveGeneratedMedia(
   projectId: string,
   kind: MediaKind,
   artifactId: string,
+  mediaDownloadAccess?: MediaDownloadAccess,
+  signal?: AbortSignal,
 ) {
   const baseName = `对话${MEDIA_LABELS[kind]}-${artifactId}`;
-  return persistMediaUrlToProjectData(url, projectId, MEDIA_NODE_TYPES[kind], baseName);
+  return persistMediaUrlToProjectData(url, projectId, MEDIA_NODE_TYPES[kind], baseName, { mediaDownloadAccess, signal });
 }
 
 interface MediaPersistOutcome {
@@ -179,10 +181,12 @@ async function persistGeneratedMedia(
   projectId: string | null | undefined,
   kind: MediaKind,
   artifactId: string,
+  mediaDownloadAccess?: MediaDownloadAccess,
+  signal?: AbortSignal,
 ): Promise<MediaPersistOutcome> {
   if (!projectId || !isTauriEnv()) return { status: 'skipped' };
   try {
-    const saved = await saveGeneratedMedia(url, projectId, kind, artifactId);
+    const saved = await saveGeneratedMedia(url, projectId, kind, artifactId, mediaDownloadAccess, signal);
     if (!saved?.filePath) return { status: 'failed', error: MEDIA_PERSIST_FAILED_MESSAGE };
     return {
       status: 'saved',
@@ -401,7 +405,7 @@ async function generateMediaArtifact(
     const taskReceipt = result.taskReceipt ?? (result.comfyTaskId && targetNodeId ? getMediaTaskReceipt(targetNodeId, result.comfyTaskId) : undefined);
     throwIfAborted(signal);
     const savedCloud = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url);
-    const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id);
+    const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id, result.mediaDownloadAccess, signal);
     if (persisted.status === 'failed' && isTransientMediaUrl(result.url) && !taskReceipt) {
       throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     }
@@ -454,7 +458,7 @@ async function generateMediaArtifact(
     const taskReceipt = result.taskReceipt ?? (result.comfyTaskId && targetNodeId ? getMediaTaskReceipt(targetNodeId, result.comfyTaskId) : undefined);
     throwIfAborted(signal);
     const savedCloud = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url);
-    const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id);
+    const persisted: MediaPersistOutcome = savedCloud ? { ...savedCloud, status: savedCloud.persistence } : await persistGeneratedMedia(result.url, projectId, intent.kind, id, result.mediaDownloadAccess, signal);
     if (persisted.status === 'failed' && isTransientMediaUrl(result.url) && !taskReceipt) {
       throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     }
@@ -539,12 +543,16 @@ export async function retryMediaArtifactPersist(
 
   const sourceUrl = artifact.sourceUrl || artifact.url;
   if (!sourceUrl) throw new Error('产物已没有可用的下载地址，请重新生成');
+  const receipt = artifact.taskReceipt;
+  const task = receipt ? getPendingTasksForProject(receipt.projectId).find((item) => item.nodeId === receipt.nodeId
+    && item.taskId === receipt.taskId && item.attemptId === receipt.attemptId) : undefined;
 
   const persisted = await persistGeneratedMedia(
     sourceUrl,
     targetProjectId,
     artifact.kind,
     artifact.id,
+    task?.mediaDownloadAccess,
   );
   if (persisted.status !== 'saved') {
     throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
@@ -638,7 +646,7 @@ async function recoverMediaMessage(task: PendingTask, urls: string[], signal?: A
   const nodeId = context.deliveryMode === 'node+message' ? context.canvasNodeId ?? task.nodeId : undefined;
   const guard = nodeId ? registerCanvasDerivation(state, nodeId) : null;
   try {
-    const persisted = await persistGeneratedMedia(sourceUrl, task.projectId, kind, previous?.id ?? `recovered-${task.attemptId ?? task.taskId}`);
+    const persisted = await persistGeneratedMedia(sourceUrl, task.projectId, kind, previous?.id ?? `recovered-${task.attemptId ?? task.taskId}`, task.mediaDownloadAccess, signal);
     if (!isCurrent()) throw new Error('原项目或对话已变化，任务仍保留');
     if (persisted.status === 'failed') throw new Error(persisted.error || MEDIA_PERSIST_FAILED_MESSAGE);
     const artifact: MediaGenerationResult = {

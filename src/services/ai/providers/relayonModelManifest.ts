@@ -86,13 +86,15 @@ const SEEDREAM_PIXELS: ImageDimensions = {
 
 function imageModel(id: string, name: string, pixels: ImageDimensions, maxReferences: number): ProviderModelSelection {
   const hasImageOptions = id === 'Image-2.5-Flare' || id === 'Image-2.5-Sunburst';
+  const hasBase64Result = ['image-2-01', 'Image-2.5-Flare', 'image-2.5-flare-01', 'Image-2.5-Sunburst', 'image-2.5-sunburst-01'].includes(id);
   const protocol: NormalizedModelExecutionProtocol = {
     version: 2, mode: 'sync', auth: { type: 'bearer' },
     submit: { method: 'POST', path: '/images/generations', bodyEncoding: 'json',
       body: { model: '{{model}}', prompt: '{{prompt}}', resolution: '{{imageSize}}',
         aspect_ratio: '{{aspectRatio}}', size: '{{size}}', n: 1, response_format: 'url', image: '{{imageUrls}}',
         ...(hasImageOptions ? { quality: '{{imageQuality}}', background: '{{imageBackground}}' } : {}) } },
-    response: { type: 'json', errorPath: 'error.message', result: { urlPath: 'data.*.url' } },
+    response: { type: 'json', errorPath: 'error.message', result: { urlPath: 'data.*.url',
+      ...(hasBase64Result ? { base64Path: 'data.*.b64_json', mimeType: 'image/png' } : {}) } },
   };
   return { id, name, provider: 'relayonapi', category: 'image', inputModalities: ['text', 'image'],
     imageReferenceRequestMode: 'generation-json-image-data-urls',
@@ -213,12 +215,25 @@ export function usesRelayonModelProtocol(modelId: string, profile: ModelExecutio
   const actual = comparableProtocol(profile);
   if (actual === undefined) return false;
   if (actual === comparableProtocol(known.executionProfile)) return true;
-  if (known.category !== 'image' || !known.imageCapability?.qualities || !known.imageCapability.backgrounds) return false;
+  if (known.category !== 'image') return false;
+  // 完整旧内置模板只读取 URL；保留其他请求和响应字段的严格比较。
+  const previousResult = structuredClone(known.executionProfile!);
+  if (previousResult.protocol?.version !== 2) return false;
+  if (previousResult.protocol.response.result?.base64Path) {
+    delete previousResult.protocol.response.result.base64Path;
+    delete previousResult.protocol.response.result.mimeType;
+    if (actual === comparableProtocol(previousResult)) return true;
+  }
+  if (!known.imageCapability?.qualities || !known.imageCapability.backgrounds) return false;
   // 上版普通 Flare／Sunburst 完整模板尚未映射 quality 和 background；其他字段必须全部一致。
   const previous = structuredClone(known.executionProfile!);
+  if (previous.protocol?.version !== 2) return false;
   const body = previous.protocol!.submit.body as Record<string, ProtocolJsonValue>;
   delete body.quality;
   delete body.background;
+  if (actual === comparableProtocol(previous)) return true;
+  delete previous.protocol.response.result!.base64Path;
+  delete previous.protocol.response.result!.mimeType;
   return actual === comparableProtocol(previous);
 }
 

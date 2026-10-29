@@ -209,6 +209,15 @@ describe('ComfyUI 图片与音频交付边界', () => {
 describe('跨媒体异步任务交付确认', () => {
   const receipt = { projectId: 'p', nodeId: 'video', taskId: 'original', attemptId: 'first' };
 
+  it('视频保存继承原生成连接的下载描述，不写入节点或历史', async () => {
+    const mediaDownloadAccess = { providerConfigId: 'relay-video', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    mocks.generate.mockResolvedValueOnce({ url: 'https://relayonapi.com/video', taskReceipt: receipt, mediaDownloadAccess });
+    expect(await run()).toEqual({ success: true });
+    expect(mocks.persist).toHaveBeenCalledWith('https://relayonapi.com/video', 'p', 'ai-video', '复刻分段', { mediaDownloadAccess });
+    expect(JSON.stringify(mocks.store.updateNodeData.mock.calls)).not.toContain('mediaDownloadAccess');
+    expect(JSON.stringify(mocks.store.recordOutputHistory.mock.calls)).not.toContain('mediaDownloadAccess');
+  });
+
   it('保存和节点写入完成之后，才确认当次返回的任务身份', async () => {
     mocks.generate.mockResolvedValueOnce({ url: 'generated.mp4', taskReceipt: receipt });
     expect(await run()).toEqual({ success: true });

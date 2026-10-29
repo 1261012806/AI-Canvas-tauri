@@ -404,6 +404,13 @@ export interface MediaTaskReceipt {
   attemptId?: string;
 }
 
+/** 结果下载仅持久化连接身份与鉴权方式，密钥在实际下载时读取。 */
+export interface MediaDownloadAccess {
+  providerConfigId: string;
+  origin: string;
+  auth?: ModelProtocolAuthConfig;
+}
+
 export interface MediaTaskContext {
   projectId: string;
   conversationId?: string;
@@ -416,10 +423,11 @@ export interface MediaTaskContext {
 }
 
 /** 保留既有数组调用约定，同时携带当次任务回执，禁止事后读取另一轮身份。 */
-export type MediaProtocolUrls = string[] & { taskReceipt?: MediaTaskReceipt };
+export type MediaProtocolUrls = string[] & { taskReceipt?: MediaTaskReceipt; mediaDownloadAccess?: MediaDownloadAccess };
 
 export interface ImageGenerationResult {
   url: string;
+  mediaDownloadAccess?: MediaDownloadAccess;
   taskReceipt?: MediaTaskReceipt;
   /** 本地 ComfyUI 已完成但尚待画布交付的任务身份，仅完成同一任务时清理。 */
   comfyTaskId?: string;
@@ -431,6 +439,7 @@ export interface ImageGenerationResult {
 }
 
 export interface BatchImageResult {
+  mediaDownloadAccess?: MediaDownloadAccess;
   taskReceipt?: MediaTaskReceipt;
   /** 所有远端任务均已成功或明确失败；不包括提交未知或查询中断。 */
   allTasksSettled?: boolean;
@@ -647,6 +656,7 @@ export type AudioOutputFormat = 'mp3' | 'wav' | 'opus' | 'aac' | 'flac' | 'pcm';
 
 export interface AudioGenerationResult {
   url: string;
+  mediaDownloadAccess?: MediaDownloadAccess;
   taskReceipt?: MediaTaskReceipt;
   /** 本地 ComfyUI 已完成但尚待画布交付的任务身份。 */
   comfyTaskId?: string;

@@ -28,7 +28,8 @@ import {
   type FlowMusicTaskState,
 } from './ai/apimartAudio';
 import type { BaseNodeData, NodeType } from '../types';
-import type { MediaTaskContext, MediaTaskReceipt, ResolvedModelProtocolPoll } from '../types/aiTypes';
+import type { MediaDownloadAccess, MediaTaskContext, MediaTaskReceipt, ResolvedModelProtocolPoll } from '../types/aiTypes';
+import { createMediaDownloadAccess, sanitizeMediaDownloadAccess, sanitizeMediaResultUrls } from './ai/mediaDownloadAccess';
 import {
   APIMART_BASE_URL,
   RUNNINGHUB_MODEL_BASE_URL,
@@ -189,6 +190,9 @@ export interface PendingTask {
   protocolPoll?: ResolvedModelProtocolPoll;
   /** 多个独立远端任务的查询描述，与 taskIds 顺序一致。 */
   protocolPolls?: ResolvedModelProtocolPoll[];
+  /** 同步接口已返回的可重取结果，仅继续下载，不发起生成。 */
+  resultUrls?: string[];
+  mediaDownloadAccess?: MediaDownloadAccess;
   /** 是否已取得远端任务 ID；false 不能证明请求未被上游接收。 */
   submitted: boolean;
   attemptId?: string;
@@ -628,14 +632,19 @@ function inferLegacyProviderConfigId(task: LegacyPendingTask): string | undefine
 }
 
 function sanitizePendingTask(task: LegacyPendingTask): PendingTask {
-  const { baseUrl: legacyBaseUrl, comfyQueryHttpStatus, ...safeTask } = task;
+  const { baseUrl: legacyBaseUrl, comfyQueryHttpStatus, mediaDownloadAccess, resultUrls, ...safeTask } = task;
   delete safeTask.apiKey;
   const providerConfigId = inferLegacyProviderConfigId(task);
   const parameters = sanitizeMediaParameters(task.mediaContext?.parameters);
+  const access = sanitizeMediaDownloadAccess(mediaDownloadAccess);
+  const safeAccess = access?.providerConfigId === providerConfigId ? access : undefined;
+  const urls = sanitizeMediaResultUrls(resultUrls, providerConfigId ? useAppStore.getState().config.providers[providerConfigId]?.apiKey : undefined);
   return {
     ...safeTask,
     nodeType: getGenerationNodeType(safeTask.nodeType),
     providerConfigId,
+    ...(safeAccess ? { mediaDownloadAccess: safeAccess } : {}),
+    ...(urls ? { resultUrls: urls } : {}),
     ...(task.taskType === 'comfyui' && legacyBaseUrl ? { baseUrl: legacyBaseUrl } : {}),
     ...(task.taskType === 'comfyui' && (comfyQueryHttpStatus === 401 || comfyQueryHttpStatus === 403) ? { comfyQueryHttpStatus } : {}),
     ...(task.mediaContext ? { mediaContext: { projectId: task.projectId,
@@ -774,6 +783,7 @@ async function applyNodeResult(
   isCurrent?: () => boolean,
   savedOutput?: { mediaUrl: string; sourceUrl: string; filePath?: string },
   generation?: PendingTask['videoGeneration'],
+  mediaDownloadAccess?: MediaDownloadAccess,
 ): Promise<void> {
   if (isCurrent && !isCurrent()) throw new CanvasResultStaleError();
   const store = useAppStore.getState();
@@ -788,7 +798,7 @@ async function applyNodeResult(
   let persisted;
   try {
     persisted = savedOutput ?? (currentProjectId
-      ? await persistMediaUrlToProjectData(resultUrl, currentProjectId, nodeType, nodeLabel)
+      ? await persistMediaUrlToProjectData(resultUrl, currentProjectId, nodeType, nodeLabel, { mediaDownloadAccess })
       : { mediaUrl: resultUrl, sourceUrl: resultUrl });
     if (isCurrent && (!isCurrent() || !guard || !isCanvasDerivationFresh(guard, useAppStore.getState()))) {
       throw new CanvasResultStaleError();
@@ -1056,7 +1066,7 @@ async function resumeApimart(task: PendingTask, parentSignal?: AbortSignal): Pro
       });
       if (!delivered) { pauseMediaTask(receiptForTask(task), undefined, 'delivery_pending'); return; }
     } else {
-      await applyNodeResult(nodeId, urls[0], label, query.isCurrent, undefined, task.videoGeneration);
+      await applyNodeResult(nodeId, urls[0], label, query.isCurrent, undefined, task.videoGeneration, task.mediaDownloadAccess);
     }
     signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
@@ -1181,7 +1191,7 @@ async function resumeRunningHub(task: PendingTask): Promise<void> {
         aspectRatio,
       });
     } else {
-      await applyNodeResult(nodeId, urls[0], nodeData.label || '');
+      await applyNodeResult(nodeId, urls[0], nodeData.label || '', undefined, undefined, task.videoGeneration, task.mediaDownloadAccess);
     }
     removePendingTask(nodeId);
   } catch (error) {
@@ -1484,7 +1494,7 @@ async function resumeGeneral(task: PendingTask, parentSignal?: AbortSignal): Pro
     });
     markMediaTaskDeliveryPending(task, signal);
     if (await deliverMediaMessageResult(task, [url], signal)) return;
-    await applyNodeResult(nodeId, url, label, query.isCurrent, undefined, task.videoGeneration);
+    await applyNodeResult(nodeId, url, label, query.isCurrent, undefined, task.videoGeneration, task.mediaDownloadAccess);
     signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));
   } catch (err) {
@@ -1500,11 +1510,16 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
   const providerConfig = providerConfigId
     ? useAppStore.getState().config.providers[providerConfigId]
     : undefined;
-  if (!providerConfig || !protocolPoll) {
+  const resultUrls = sanitizeMediaResultUrls(task.resultUrls);
+  if (!providerConfig || (!protocolPoll && !resultUrls)) {
     await handleResumeError(task, new Error('任务恢复失败：调用协议或连接配置已不存在'));
     return;
   }
-  const polls = task.protocolPolls?.length ? task.protocolPolls : [protocolPoll];
+  if (resultUrls && !task.mediaDownloadAccess) {
+    await handleResumeError(task, new Error('任务恢复失败：原结果的连接身份已丢失'));
+    return;
+  }
+  const polls = task.protocolPolls?.length ? task.protocolPolls : protocolPoll ? [protocolPoll] : [];
   if (!providerConfig.apiKey && polls.some((poll) => poll.auth?.type !== 'none')) {
     await handleResumeError(task, new Error('任务恢复失败：连接尚未填写 API Key'));
     return;
@@ -1520,13 +1535,20 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
   const signal = registerNodePolling(nodeId, parentSignal);
   const query = guardVideoTaskQuery(task, signal);
   try {
+    // 旧异步记录在恢复时补齐无密钥下载描述，仍绑定原查询地址与连接。
+    const mediaDownloadAccess = task.mediaDownloadAccess ?? (protocolPoll && providerConfigId
+      ? createMediaDownloadAccess(providerConfigId, protocolPoll.url, protocolPoll.auth) : undefined);
+    if (mediaDownloadAccess) {
+      task = { ...task, mediaDownloadAccess };
+      updatePendingTask(nodeId, { mediaDownloadAccess }, task.taskId, task.attemptId);
+    }
     const settled = await settleMediaTaskQueries(polls.map((poll) => (querySignal: AbortSignal) => pollResolvedModelProtocol(
       { ...poll, maxDurationMs: poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS },
       providerConfig.apiKey || '', querySignal, providerConfig.baseUrl,
     )), signal);
     const uncertain = settled.find((result) => result.status === 'rejected' && !(result.reason instanceof PollTaskFailedError));
     if (uncertain?.status === 'rejected') throw uncertain.reason;
-    const urls = settled.flatMap((result) => result.status === 'fulfilled' ? result.value.urls ?? [] : []);
+    const urls = resultUrls ?? settled.flatMap((result) => result.status === 'fulfilled' ? result.value.urls ?? [] : []);
     if (urls.length === 0) {
       const failed = settled.find((result) => result.status === 'rejected');
       if (failed?.status === 'rejected') throw failed.reason;
@@ -1540,7 +1562,7 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
       const imageSize = nodeData.imageSize || '2K';
       const aspectRatio = nodeData.aspectRatio || '1:1';
       const dimensions = mapImageDimensions(imageSize, aspectRatio);
-      const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions }));
+      const results = urls.slice(0, requestedCount).map((url) => ({ url, ...dimensions, mediaDownloadAccess }));
       const delivered = await applyImageBatchResults({
         nodeId,
         batch: {
@@ -1559,7 +1581,7 @@ async function resumeCustomProtocol(task: PendingTask, parentSignal?: AbortSigna
     } else {
       const url = urls[0];
       if (!url) throw new Error('任务完成但未返回结果 URL');
-      await applyNodeResult(nodeId, url, nodeData.label || '', query.isCurrent, undefined, task.videoGeneration);
+      await applyNodeResult(nodeId, url, nodeData.label || '', query.isCurrent, undefined, task.videoGeneration, mediaDownloadAccess);
     }
     signal.throwIfAborted();
     completeMediaNodeTask(receiptForTask(task));

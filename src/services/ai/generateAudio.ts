@@ -32,7 +32,8 @@ import { collectPromptNodeMediaUrls, resolvePromptWithMediaRefs } from './prompt
 import { compileVideoReferencePrompt } from './referencePrompt';
 import { getRunningHubModel } from './providers/runninghubModelManifest';
 import { executeGeneralAsyncTask } from './apimartGen';
-import { runConfiguredModelProtocol } from './modelProtocolRuntime';
+import { retainCompletedMediaResults, runConfiguredModelProtocol } from './modelProtocolRuntime';
+import { createMediaDownloadAccess } from './mediaDownloadAccess';
 import { mediaProviderRegistry } from './mediaProviderRegistry';
 import { mapAudioParameters } from './audioParameterMappings';
 import { libapiAudioVariables, usesLibapiModelProtocol } from './providers/libapiModelManifest';
@@ -116,7 +117,8 @@ export async function persistAudioGenerationResult(
             projectId!,
             buildSafeAudioFileName(label, result.format || 'wav'),
           )
-        : await persistMediaUrlToProjectData(result.url, projectId!, 'ai-audio', label);
+        : await persistMediaUrlToProjectData(result.url, projectId!, 'ai-audio', label,
+          result.mediaDownloadAccess ? { mediaDownloadAccess: result.mediaDownloadAccess } : undefined);
       if (!saved?.filePath) persistError = AUDIO_PERSIST_FAILED_MESSAGE;
     } catch (error) {
       persistError = error instanceof Error ? error.message : AUDIO_PERSIST_FAILED_MESSAGE;
@@ -257,9 +259,10 @@ export async function generateAudio(
       });
       const url = urls[0];
       if (!url) throw new Error('音频生成完成但未返回结果');
-      return { ...normalizeProtocolAudioResult(url), ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) };
+      return { ...normalizeProtocolAudioResult(url), ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}),
+        ...(urls.mediaDownloadAccess ? { mediaDownloadAccess: urls.mediaDownloadAccess } : {}) };
     }
-    return executeGeneralAsyncTask(
+    const result = await executeGeneralAsyncTask(
       connection.apiKey,
       connection.baseUrl,
       gm.modelId,
@@ -274,6 +277,9 @@ export async function generateAudio(
         batchCount: 1,
       }),
     );
+    const access = createMediaDownloadAccess(connection.providerConfigId, connection.baseUrl, { type: 'bearer' });
+    const urls = retainCompletedMediaResults([result.url], access, params.nodeId, 'audio', 1, result.taskReceipt, state.currentProjectId);
+    return { ...result, mediaDownloadAccess: access, ...(urls.taskReceipt ? { taskReceipt: urls.taskReceipt } : {}) };
   }
 
   // 无 workflowId 时暂不支持直接调用 API，提示配置

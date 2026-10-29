@@ -1,7 +1,7 @@
 /** Model-level declarative protocol runtime with resumable async polling. */
 import { useAppStore } from '../../store/useAppStore';
 import type { GeneralModelCategory, GeneralModelConfig, NodeType } from '../../types';
-import type { MediaProtocolUrls, MediaTaskReceipt, ProtocolJsonValue, VideoModelCapability } from '../../types/aiTypes';
+import type { MediaDownloadAccess, MediaProtocolUrls, MediaTaskReceipt, ProtocolJsonValue, VideoModelCapability } from '../../types/aiTypes';
 import {
   cleanupNodePolling,
   captureVideoTaskGeneration,
@@ -31,6 +31,7 @@ import { readGoogleImagePartsReferenceUrls } from './imageModelTemplates';
 import { assertModelProtocolResult } from './modelCapabilityValidation';
 import { getProviderPolicy, resolveProviderCatalogId } from './providerPolicies';
 import { RELAYON_VIDEO_RESULT_URL_PATHS, usesRelayonModelProtocol } from './providers/relayonModelManifest';
+import { createMediaDownloadAccess, sanitizeMediaResultUrls } from './mediaDownloadAccess';
 
 interface RunConfiguredModelProtocolOptions {
   model: GeneralModelConfig;
@@ -339,6 +340,29 @@ export function findModelProtocolForEachCapabilityConflicts(
   });
 }
 
+/** 同步返回结果也保留交付身份，已有异步回执仍使用原任务。 */
+export function retainCompletedMediaResults(
+  urls: string[], access: MediaDownloadAccess, nodeId: string | undefined,
+  category: 'image' | 'video' | 'audio', batchCount = 1, existingReceipt?: MediaTaskReceipt,
+  projectId?: string | null,
+): MediaProtocolUrls {
+  let receipt = existingReceipt;
+  const store = useAppStore.getState();
+  const deliveryProjectId = projectId === undefined ? store.currentProjectId : projectId;
+  const resultUrls = sanitizeMediaResultUrls(urls, store.config.providers[access.providerConfigId]?.apiKey);
+  if (!receipt && resultUrls && nodeId && deliveryProjectId) {
+    receipt = savePendingTask({ nodeId, projectId: deliveryProjectId,
+      nodeType: NODE_TYPE_BY_CATEGORY[category], provider: 'general', providerConfigId: access.providerConfigId,
+      taskType: 'custom-protocol', taskId: `result-${crypto.randomUUID()}`, submitted: true,
+      resultUrls, mediaDownloadAccess: access, mediaRecoveryState: 'delivery_pending', batchCount,
+      ...(category === 'video' ? { videoGeneration: captureVideoTaskGeneration(nodeId) } : {}),
+    });
+  } else if (receipt) {
+    updatePendingTask(receipt.nodeId, { mediaDownloadAccess: access }, receipt.taskId, receipt.attemptId);
+  }
+  return Object.assign(urls, { mediaDownloadAccess: access, ...(receipt ? { taskReceipt: receipt } : {}) });
+}
+
 export async function runConfiguredModelProtocol(
   options: RunConfiguredModelProtocolOptions,
 ): Promise<MediaProtocolUrls> {
@@ -354,6 +378,7 @@ export async function runConfiguredModelProtocol(
   const baseUrl = provider.baseUrl?.trim() || '';
   if (!baseUrl) throw new Error(`模型“${options.model.name}”未配置接口地址`);
   const catalogId = resolveProviderCatalogId(options.model.providerConfigId, provider);
+  const mediaDownloadAccess = createMediaDownloadAccess(options.model.providerConfigId, baseUrl, protocol.auth);
   assertReferenceMediaDeliverable(options.model.name, JSON.stringify(protocol), options.variables);
 
   const projectId = useAppStore.getState().currentProjectId;
@@ -375,12 +400,24 @@ export async function runConfiguredModelProtocol(
       receipt = savePendingTask({ nodeId: options.nodeId, projectId,
         nodeType: NODE_TYPE_BY_CATEGORY[options.category], provider: 'general', providerConfigId: options.model.providerConfigId,
         taskId: '', taskType: 'custom-protocol', submitted: false, videoGeneration,
+        mediaDownloadAccess,
         batchCount: readBatchCount(options.variables.n) });
     }
     const submitted = await submitModelProtocol(submitOptions);
     if (submitted.urls) {
       assertModelProtocolResult(options.category, submitted);
-      return submitted.urls;
+      const resultUrls = sanitizeMediaResultUrls(submitted.urls, provider.apiKey);
+      // 同步接口已交付结果，不需要也不能重新提交生成来重试本地保存。
+      if (resultUrls && options.nodeId && projectId) {
+        const taskId = receipt?.taskId || `result-${crypto.randomUUID()}`;
+        receipt = receipt ? updatePendingTask(receipt.nodeId, { taskId, submitted: true, resultUrls,
+          mediaDownloadAccess, mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId)
+          : savePendingTask({ nodeId: options.nodeId, projectId, nodeType: NODE_TYPE_BY_CATEGORY[options.category],
+            provider: 'general', providerConfigId: options.model.providerConfigId, taskType: 'custom-protocol',
+            taskId, submitted: true, resultUrls, mediaDownloadAccess, videoGeneration,
+            mediaRecoveryState: 'delivery_pending', batchCount: readBatchCount(options.variables.n) });
+      }
+      return Object.assign(submitted.urls, { mediaDownloadAccess, ...(receipt ? { taskReceipt: receipt } : {}) });
     }
     if (!submitted.poll || !submitted.taskId) throw new Error('异步调用协议未返回轮询配置');
     const poll = { ...submitted.poll, maxDurationMs: submitted.poll.maxDurationMs ?? MEDIA_POLL_MAX_DURATION_MS,
@@ -400,7 +437,7 @@ export async function runConfiguredModelProtocol(
     if (!result.urls) throw new Error('媒体模型任务完成但未返回结果 URL');
     if (receipt) updatePendingTask(receipt.nodeId, { mediaRecoveryState: 'delivery_pending' }, receipt.taskId, receipt.attemptId);
     // 每类媒体都在本地保存和目标回填后确认，数组携带当次身份而非读取最新节点任务。
-    return Object.assign(result.urls, receipt ? { taskReceipt: receipt } : {});
+    return Object.assign(result.urls, { mediaDownloadAccess, ...(receipt ? { taskReceipt: receipt } : {}) });
   } catch (error) {
     const rejected = !receipt?.taskId && error instanceof ModelProtocolHttpError
       && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);

@@ -296,6 +296,31 @@ function previousImageProfile(id: string): ModelExecutionProfile {
 }
 
 describe('RelayOnAPI 普通 Image 2.5 的参数兼容', () => {
+  it.each(['image-2-01', 'Image-2.5-Flare', 'image-2.5-flare-01', 'Image-2.5-Sunburst', 'image-2.5-sunburst-01'])('%s 完整旧 URL 模板兼容 Base64 返回，不修改已保存协议', (id) => {
+    const oldProfile = structuredClone(model(id).executionProfile!);
+    assert(oldProfile.protocol?.version === 2);
+    delete oldProfile.protocol.response.result!.base64Path;
+    delete oldProfile.protocol.response.result!.mimeType;
+    const before = structuredClone(oldProfile);
+    expect(usesRelayonModelProtocol(id, oldProfile)).toBe(true);
+    const effective = resolveRelayonImageModelContract(id, oldProfile).executionProfile!;
+    assert(effective.protocol?.version === 2);
+    expect(effective.protocol.response.result)
+      .toEqual({ urlPath: 'data.*.url', base64Path: 'data.*.b64_json', mimeType: 'image/png' });
+    expect(oldProfile).toEqual(before);
+    oldProfile.protocol.response.result!.urlPath = 'custom_image_url';
+    expect(usesRelayonModelProtocol(id, oldProfile)).toBe(false);
+    expect(resolveRelayonImageModelContract(id, oldProfile).executionProfile).toBe(oldProfile);
+  });
+
+  it('未核对 Base64 返回的 Nano 和 Seedream 不增加该映射', () => {
+    for (const id of ['nano-banana-2', 'nano-banana-2.1', 'nano-banana-pro', 'Seedream 5.0 Pro']) {
+      const profile = model(id).executionProfile!;
+      assert(profile.protocol?.version === 2);
+      expect(profile.protocol.response.result).toEqual({ urlPath: 'data.*.url' });
+    }
+  });
+
   it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('%s 完整旧模板临时补齐质量和背景，保留既有尺寸设置', (id) => {
     const previous = previousImageProfile(id);
     const saved: ImageModelCapability = { ...structuredClone(model(id).imageCapability!),

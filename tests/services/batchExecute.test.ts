@@ -235,6 +235,17 @@ describe('batchExecuteNodes', () => {
     expect(successCallIndex).toBeGreaterThanOrEqual(0);
     expect(updateNode.mock.invocationCallOrder[successCallIndex]).toBeLessThan(mocks.completeMedia.mock.invocationCallOrder[0]);
   });
+
+  it('批量执行将图片结果的下载连接传入保存层，不写入历史', async () => {
+    const node = createNode('image', 'ai-image');
+    mocks.liveState = { currentProjectId: 'project', nodes: [node], revision: 0 };
+    const ctx = createContext(); ctx.currentProjectId = 'project';
+    const mediaDownloadAccess = { providerConfigId: 'relay-image', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    mocks.generateImage.mockResolvedValueOnce({ url: 'https://relayonapi.com/image', width: 1, height: 1, mediaDownloadAccess });
+    await batchExecuteNodes([node.id], [node], [], ctx);
+    expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith('https://relayonapi.com/image', 'project', 'ai-image', 'image', { mediaDownloadAccess });
+    expect(JSON.stringify(vi.mocked(ctx.recordOutputHistory).mock.calls)).not.toContain('mediaDownloadAccess');
+  });
   it('does not mark a paused video query as a failed node or resubmit it', async () => {
     mocks.generateVideo.mockRejectedValueOnce(new VideoPollingPausedError());
     const node = createNode('slow-video', 'ai-video');
@@ -266,6 +277,7 @@ describe('batchExecuteNodes', () => {
     generated.resolve({ url: 'first.mp4' });
     await vi.waitFor(() => expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith(
       'first.mp4', 'project', 'ai-video', 'random-z',
+      { mediaDownloadAccess: undefined },
     ));
     expect(mocks.generateVideo).toHaveBeenCalledTimes(2);
     saved.resolve({ mediaUrl: 'saved.mp4', sourceUrl: 'first.mp4' });

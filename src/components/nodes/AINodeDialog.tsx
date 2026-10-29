@@ -548,7 +548,7 @@ function AINodeDialog() {
         // 下载远程 URL 到本地项目目录
         if (taskReceipt) updateNodeDataTransient(submittingNodeId, { mediaTaskStage: 'saving' });
         const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (currentProjectId
-          ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-image', nodeLabel)
+          ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-image', nodeLabel, { mediaDownloadAccess: result.mediaDownloadAccess })
           : { mediaUrl: result.url, sourceUrl: result.url });
         if (!isStillCurrentSubmission()) return;
         const mediaUrl = persisted.mediaUrl;
@@ -649,7 +649,7 @@ function AINodeDialog() {
         if (!isStillCurrentSubmission()) return;
         if (taskReceipt) updateNodeDataTransient(submittingNodeId, { mediaTaskStage: 'saving' });
         const persisted = currentProjectId
-          ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-panorama', nodeLabel)
+          ? await persistMediaUrlToProjectData(result.url, currentProjectId, 'ai-panorama', nodeLabel, { mediaDownloadAccess: result.mediaDownloadAccess })
           : { mediaUrl: result.url, sourceUrl: result.url };
         if (!isStillCurrentSubmission()) return;
         const mediaUrl = persisted.mediaUrl;

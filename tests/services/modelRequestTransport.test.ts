@@ -270,7 +270,11 @@ describe('CCC 图片异步任务与旧同步响应', () => {
     expect(result.results).toHaveLength(1);
     expect(result.failedCount).toBe(1);
     expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
-    expect(getPendingTasksForProject('ccc-project')).toEqual([]);
+    expect(result.allTasksSettled).toBe(true);
+    expect(getPendingTasksForProject('ccc-project')).toEqual([expect.objectContaining({
+      providerConfigId: 'cccapi-discount', resultUrls: ['https://cdn.example/legacy.png'],
+      mediaRecoveryState: 'delivery_pending',
+    })]);
   });
 
   it('查询被拒绝保留可恢复记录，且不会重发提交', async () => {
@@ -506,6 +510,56 @@ describe('RelayOnAPI 图片请求与连接身份', () => {
     await expect(generateImagesBatch(params, 1)).rejects.toThrow('API Key');
     expect(transportMocks.corsSafeFetch).not.toHaveBeenCalled();
   });
+
+  it('同步图片返回站内地址时将无密钥的下载连接描述传到单项和批次结果', async () => {
+    const params = configureRelayonImage();
+    useAppStore.setState({ currentProjectId: 'relayon-sync-delivery-project', nodes: [{ id: 'relayon-sync-image', type: 'ai-image',
+      position: { x: 0, y: 0 }, data: { type: 'ai-image', label: '待保存图片', status: 'loading', prompt: params.prompt } }] });
+    const url = 'https://relayonapi.com/v1/images/private-result';
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url }] }));
+    const result = await generateImagesBatch({ ...params, nodeId: 'relayon-sync-image' }, 1);
+    const access = { providerConfigId: 'my-relayon-images', origin: 'https://relayonapi.com', auth: { type: 'bearer' } };
+    expect(result.mediaDownloadAccess).toEqual(access);
+    expect(result.results[0]).toMatchObject({ url, mediaDownloadAccess: access });
+    expect(result.taskReceipt).toMatchObject({ nodeId: 'relayon-sync-image', projectId: 'relayon-sync-delivery-project',
+      taskId: expect.stringMatching(/^result-/) });
+    expect(result.results[0].taskReceipt).toEqual(result.taskReceipt);
+    const tasks = getPendingTasksForProject('relayon-sync-delivery-project');
+    expect(tasks).toEqual([expect.objectContaining({ nodeId: 'relayon-sync-image', taskType: 'custom-protocol',
+      taskId: result.taskReceipt!.taskId, submitted: true, mediaRecoveryState: 'delivery_pending',
+      resultUrls: [url], mediaDownloadAccess: access, providerConfigId: 'my-relayon-images' })]);
+    expect(tasks[0]).not.toHaveProperty('apiKey');
+    expect(JSON.stringify(tasks)).not.toContain('relayon-image-fixture');
+    expect(localStorage.getItem('ai_canvas_pending_tasks')).not.toContain('relayon-image-fixture');
+    expect(JSON.stringify(result)).not.toContain('relayon-image-fixture');
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledWith('https://relayonapi.com/v1/images/generations',
+      expect.objectContaining({ method: 'POST' }));
+  });
+});
+
+describe('标准 Bearer 图片结果交付', () => {
+  it('没有自定义协议的模型也保留下载身份和同步结果，不重新生成', async () => {
+    useAppStore.getState().saveProviderConfig('plain-standard-images', {
+      name: '标准图片', catalogId: 'custom-openai', apiKey: 'standard-key-fixture', baseUrl: 'https://standard.example/v1',
+      selectedModels: [{ id: 'image-fixture', name: '图片', provider: 'plain-standard-images', category: 'image' }],
+    });
+    const model = useAppStore.getState().config.generalModels!.find((item) => item.providerConfigId === 'plain-standard-images')!;
+    useAppStore.setState({ currentProjectId: 'standard-image-delivery', nodes: [{ id: 'standard-image-node', type: 'ai-image',
+      position: { x: 0, y: 0 }, data: { type: 'ai-image', label: '标准图片', status: 'loading' } }] });
+    const url = 'https://standard.example/v1/images/private';
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ url }] }));
+    const result = await generateImagesBatch({ provider: 'general', model: `general/${model.id}`, nodeId: 'standard-image-node', prompt: '风景' }, 1);
+    const access = { providerConfigId: 'plain-standard-images', origin: 'https://standard.example', auth: { type: 'bearer' } };
+    expect(result.mediaDownloadAccess).toEqual(access);
+    expect(result.results[0]).toMatchObject({ url, mediaDownloadAccess: access, taskReceipt: result.taskReceipt });
+    expect(result.taskReceipt).toMatchObject({ nodeId: 'standard-image-node', projectId: 'standard-image-delivery' });
+    expect(getPendingTasksForProject('standard-image-delivery')).toEqual([expect.objectContaining({
+      resultUrls: [url], mediaDownloadAccess: access, submitted: true, mediaRecoveryState: 'delivery_pending',
+    })]);
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toContain('standard-key-fixture');
+  });
 });
 
 describe('RelayOnAPI 普通 2.5 旧连接的质量与背景', () => {
@@ -526,6 +580,23 @@ describe('RelayOnAPI 普通 2.5 旧连接的质量与背景', () => {
     return { params: { provider: 'general', model: `general/${model.id}`, prompt: '生成角色立绘', imageSize: '2K', aspectRatio: '9:16' },
       original: structuredClone({ selected, model }) };
   }
+
+  it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('%s 已保存旧 URL 协议也能接收 Base64 图片且不重投', async (modelId) => {
+    const { params } = configureLegacyOptions(modelId);
+    const provider = useAppStore.getState().config.providers['relayon-old-options'];
+    const selected = structuredClone(provider.selectedModels![0]);
+    if (selected.executionProfile?.protocol?.version !== 2) throw new Error('fixture must use protocol v2');
+    delete selected.executionProfile.protocol.response.result!.base64Path;
+    delete selected.executionProfile.protocol.response.result!.mimeType;
+    useAppStore.getState().saveProviderConfig('relayon-old-options', { ...provider, selectedModels: [selected] });
+    const before = structuredClone(useAppStore.getState().config.providers['relayon-old-options']);
+    transportMocks.corsSafeFetch.mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: 'aW1hZ2U=' }] }));
+    await expect(generateImagesBatch(params, 1)).resolves.toMatchObject({
+      results: [{ url: 'data:image/png;base64,aW1hZ2U=', width: 1152, height: 2048 }], failedCount: 0,
+    });
+    expect(transportMocks.corsSafeFetch).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().config.providers['relayon-old-options']).toEqual(before);
+  });
 
   it.each(['Image-2.5-Flare', 'Image-2.5-Sunburst'])('旧 %s 选择 high 与透明时文生和编辑均请求 PNG，保持用户尺寸及保存配置', async (modelId) => {
     const { params, original } = configureLegacyOptions(modelId);

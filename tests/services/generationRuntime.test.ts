@@ -123,6 +123,15 @@ beforeEach(() => {
 });
 
 describe('media generation cancellation', () => {
+  it.each(['image', 'video'] as const)('passes %s download access and cancellation to persistence without adding it to the artifact', async (kind) => {
+    const mediaDownloadAccess = { providerConfigId: 'relay-image', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    (kind === 'image' ? mocks.generateImage : mocks.generateVideo).mockResolvedValueOnce({ url: 'https://relayonapi.com/result', mediaDownloadAccess });
+    const controller = new AbortController();
+    const artifact = await runMediaGeneration({ kind, prompt: '场景', modelRef: `openai/${kind}-model`, deliveryMode: 'chat' }, 'project-1', controller.signal);
+    expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith('https://relayonapi.com/result', 'project-1', `ai-${kind}`, expect.any(String),
+      { mediaDownloadAccess, signal: controller.signal });
+    expect(artifact).not.toHaveProperty('mediaDownloadAccess');
+  });
   it('云工作流按指定连接执行并传递参数，已保存产物不重复下载', async () => {
     mocks.storeState.workflows = [{ id: 'cloud-image', name: '云图像', category: 'ai-image', fileName: 'RH', fileContent: '', createdAt: 1, adapterType: 'runninghub', runninghub: { version: 1, kind: 'workflow', remoteId: '1904152026220003329', connectionId: 'runninghub', parameters: [] } }];
     mocks.storeState.config.providers = { runninghub: { name: 'RH', apiKey: 'secret' } };
@@ -637,11 +646,25 @@ describe('retryMediaArtifactPersist', () => {
       'project-1',
       'ai-image',
       '对话图片-media-1',
+      { mediaDownloadAccess: undefined, signal: undefined },
     );
     expect(result.persistence).toBe('saved');
     expect(result.persistError).toBeUndefined();
     expect(result.url).toBe('asset://对话图片.png');
     expect(result.filePath).toBe('/projects/project-1/对话图片.png');
+  });
+
+  it('reuses only the exact pending receipt download access when saving the original artifact', async () => {
+    const receipt = { projectId: 'project-1', nodeId: 'tracking', taskId: 'original', attemptId: 'attempt-1' };
+    const mediaDownloadAccess = { providerConfigId: 'relay-image', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    mocks.getPendingTasksForProject.mockReturnValue([
+      { ...receipt, attemptId: 'other-attempt', mediaDownloadAccess: { ...mediaDownloadAccess, providerConfigId: 'other' } },
+      { ...receipt, mediaDownloadAccess },
+    ]);
+    await retryMediaArtifactPersist({ ...unsaved, taskReceipt: receipt }, 'project-1');
+    expect(mocks.persistMediaUrlToProjectData).toHaveBeenLastCalledWith(unsaved.sourceUrl, 'project-1', 'ai-image', '对话图片-media-1',
+      { mediaDownloadAccess, signal: undefined });
+    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
   it('throws with the underlying reason when the retry also fails', async () => {
@@ -679,8 +702,10 @@ describe('async media task identity', () => {
   });
 
   it('续取原任务时从任务上下文恢复媒体参数，不重新生成', async () => {
+    const mediaDownloadAccess = { providerConfigId: 'relay-video', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
     const task: PendingTask = { projectId: 'project-1', nodeId: 'message-tracking', nodeType: 'ai-video',
       provider: 'general', taskType: 'custom-protocol', submitted: true, taskId: 'original-task', attemptId: 'original-attempt',
+      mediaDownloadAccess,
       mediaContext: { projectId: 'project-1', conversationId: 'conversation-1', messageId: 'message-1', deliveryMode: 'message',
         modelId: 'general/video-model', parameters: { aspectRatio: '9:16', duration: -1, videoFps: 24, generateAudio: false } } };
     mocks.getPendingTasksForProject.mockReturnValue([task]);
@@ -690,6 +715,8 @@ describe('async media task identity', () => {
     const handler = mocks.registerMediaMessageRecoveryHandler.mock.calls.at(-1)![0] as
       (savedTask: PendingTask, urls: string[]) => Promise<void>;
     await handler(task, ['https://cdn.example/video.mp4']);
+    expect(mocks.persistMediaUrlToProjectData).toHaveBeenCalledWith('https://cdn.example/video.mp4', 'project-1', 'ai-video', expect.any(String),
+      { mediaDownloadAccess, signal: undefined });
     expect(mocks.storeState.updateMessage).toHaveBeenCalledWith('message-1', expect.objectContaining({
       mediaResult: expect.objectContaining({ parameters: { aspectRatio: '9:16', duration: -1, videoFps: 24, generateAudio: false } }),
     }));

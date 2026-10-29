@@ -182,7 +182,7 @@ async function executeOneNode(
       if (!isFresh()) return false;
       if (taskReceipt) ctx.updateNodeDataTransient(node.id, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (ctx.currentProjectId
-        ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-image', d.label)
+        ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-image', d.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url });
       const mediaUrl = persisted.mediaUrl;
       if (!isFresh()) return false;
@@ -250,6 +250,7 @@ async function executeOneNode(
             ctx.currentProjectId,
             'ai-panorama',
             d.label,
+            { mediaDownloadAccess: result.mediaDownloadAccess },
           )
         : { mediaUrl: result.url, sourceUrl: result.url };
       if (!isFresh()) return false;
@@ -313,7 +314,7 @@ async function executeOneNode(
       }
       if (taskReceipt) ctx.updateNodeDataTransient(node.id, { mediaTaskStage: 'saving' });
       const persisted = getCloudWorkflowPersistedOutput(result.workflowApiOutputs ?? result.runninghubOutputs, result.url) ?? (ctx.currentProjectId
-        ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-video', d.label)
+        ? await persistMediaUrlToProjectData(result.url, ctx.currentProjectId, 'ai-video', d.label, { mediaDownloadAccess: result.mediaDownloadAccess })
         : { mediaUrl: result.url, sourceUrl: result.url });
       if (!isFresh()) {
         if (taskReceipt) pauseMediaTask(taskReceipt, undefined, 'canvas_changed');

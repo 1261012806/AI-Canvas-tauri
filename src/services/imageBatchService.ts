@@ -187,6 +187,7 @@ export async function applyImageBatchResults({
           projectId,
           'ai-image',
           `${sourceData.label}-${index + 1}`,
+          { mediaDownloadAccess: result.mediaDownloadAccess },
         )
       : { mediaUrl: result.url, sourceUrl: result.url });
     return { index, result, persisted };

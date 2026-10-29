@@ -83,6 +83,18 @@ beforeEach(() => {
 });
 
 describe('imageBatchService', () => {
+  it('keeps each batch result download access isolated during persistence', async () => {
+    const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
+    const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
+    const imageAccess = { providerConfigId: 'relay-image', origin: 'https://relayonapi.com', auth: { type: 'bearer' as const } };
+    await applyImageBatchResults({ nodeId: 'source', targetNodeIds: prepared.nodeIds, batch: { requestedCount: 2, failedCount: 0, results: [
+      { url: 'https://relayonapi.com/1.png', width: 1, height: 1, mediaDownloadAccess: imageAccess },
+      { url: 'https://cdn.example/2.png', width: 1, height: 1 },
+    ] }, projectId: 'project-a', prompt: 'cat', imageSize: '1K', aspectRatio: '1:1' });
+    expect(persistMediaUrlToProjectData).toHaveBeenCalledWith('https://relayonapi.com/1.png', 'project-a', 'ai-image', '原图节点-1', { mediaDownloadAccess: imageAccess });
+    expect(persistMediaUrlToProjectData).toHaveBeenCalledWith('https://cdn.example/2.png', 'project-a', 'ai-image', '原图节点-2', { mediaDownloadAccess: undefined });
+    expect(store.nodes.some((node) => 'mediaDownloadAccess' in node.data)).toBe(false);
+  });
   it('records the selected quality and background for every delivered image', async () => {
     const { applyImageBatchResults, prepareImageBatchNodes } = await import('../../src/services/imageBatchService');
     const prepared = prepareImageBatchNodes({ nodeId: 'source', count: 2, projectId: 'project-a' });
