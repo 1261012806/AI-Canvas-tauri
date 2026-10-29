@@ -1409,7 +1409,8 @@ describe('general video runtime safety', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'https://cdn.example/result.mp4' })));
     vi.stubGlobal('fetch', fetchMock);
     try {
-      await expect(generateVideo(params)).resolves.toEqual({ url: 'https://cdn.example/result.mp4' });
+      await expect(generateVideo(params)).resolves.toEqual({ url: 'https://cdn.example/result.mp4',
+        mediaDownloadAccess: { providerConfigId: 'sora2u', origin: 'https://gateway.example', auth: { type: 'bearer' } } });
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).references).toHaveLength(5);
     } finally { constraints.mockRestore(); }
@@ -1606,7 +1607,8 @@ describe('general video runtime safety', () => {
           { kind: 'video', url: video, role: 'reference', origin: 'connection' },
           { kind: 'audio', url: audio, role: 'reference_audio', origin: 'connection' },
         ],
-      })).resolves.toEqual({ url: 'https://cdn.example/custom-video.mp4' });
+      })).resolves.toEqual({ url: 'https://cdn.example/custom-video.mp4',
+        mediaDownloadAccess: { providerConfigId: connectionId, origin: 'https://custom-video.example' } });
       for (const [url, kind] of [[video, 'video'], [audio, 'audio']]) {
         expect(resolve).toHaveBeenCalledWith(url, expect.objectContaining({ mode: 'dataUrl', provider: undefined, kind }));
       }
@@ -1671,7 +1673,8 @@ describe('general video runtime safety', () => {
       provider: 'general',
       model: 'general/agnes-preset-video',
       prompt: '平稳向前推进的镜头',
-    })).resolves.toEqual({ url: 'https://cdn.example/agnes.mp4' });
+    })).resolves.toEqual({ url: 'https://cdn.example/agnes.mp4',
+      mediaDownloadAccess: { providerConfigId: 'runtime-video-provider', origin: 'https://video-gateway.example' } });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://video-gateway.example/videos');
@@ -1780,7 +1783,8 @@ describe('general video runtime safety', () => {
       prompt: '连续三十秒的长镜头',
       seedanceDuration: 30,
       videoFps: 24,
-    })).resolves.toEqual({ url: 'https://cdn.example/thirty-seconds.mp4' });
+    })).resolves.toEqual({ url: 'https://cdn.example/thirty-seconds.mp4',
+      mediaDownloadAccess: { providerConfigId: 'runtime-video-provider', origin: 'https://video-gateway.example' } });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://video-gateway.example/v1/videos');
@@ -1821,7 +1825,8 @@ describe('general video runtime safety', () => {
         origin: 'connection',
         role: 'first_frame',
       }],
-    })).resolves.toEqual({ url: 'https://cdn.example/seedance.mp4' });
+    })).resolves.toEqual({ url: 'https://cdn.example/seedance.mp4',
+      mediaDownloadAccess: { providerConfigId: 'runtime-video-provider', origin: 'https://video-gateway.example' } });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body).toMatchObject({
@@ -1917,7 +1922,8 @@ describe('caller lease at the paid video submission boundary', () => {
     }));
     vi.stubGlobal('fetch', fetchMock); const beforeSubmit = vi.fn(async () => undefined);
     await expect(generateVideo({ provider: 'general', model: 'general/lease-video', prompt: '保留构图', seedanceDuration: 5 },
-      undefined, beforeSubmit)).resolves.toEqual({ url: 'https://cdn.example/lease-result.mp4' });
+      undefined, beforeSubmit)).resolves.toEqual({ url: 'https://cdn.example/lease-result.mp4',
+        mediaDownloadAccess: { providerConfigId: 'relay', origin: 'https://video-gateway.example' } });
     expect(beforeSubmit).toHaveBeenCalledTimes(1); expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(beforeSubmit.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ model: 'vendor-video', prompt: '保留构图', duration: 5 });

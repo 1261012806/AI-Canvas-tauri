@@ -4,7 +4,7 @@ import type { AppConfig, BaseNodeData } from '../../src/types';
 const mocks = vi.hoisted(() => ({
   store: {
     currentProjectId: 'p', nodes: [] as Array<{ id: string; type: string; position: { x: number; y: number }; data: BaseNodeData }>,
-    config: { providers: {}, generalModels: [] }, workflows: [], projects: [], customStyles: [],
+    config: { providers: {}, generalModels: [], theme: 'dark' } satisfies AppConfig, workflows: [], projects: [], customStyles: [],
     getCurrentRevision: vi.fn(), commitToHistory: vi.fn(), addNodesTransient: vi.fn(),
     updateNodeDataTransient: vi.fn(), updateNodeData: vi.fn(), recordOutputHistory: vi.fn(), showToast: vi.fn(),
   },
@@ -79,7 +79,7 @@ afterEach(() => { cancelImageBatchGeneration('source'); });
 
 describe('单次仅一张的普通图片模型批量', () => {
   it('只对明确单次上限为一的普通通用模型使用逐节点提交', () => {
-    const config = mocks.store.config as AppConfig;
+    const config = mocks.store.config;
     expect(usesSequentialImageBatch('general', 'general/flare', config)).toBe(true);
     expect(usesSequentialImageBatch('general', 'general/flare', config, 'workflow')).toBe(false);
     expect(usesSequentialImageBatch('runninghubwf', 'runninghubwf/workflow', config)).toBe(false);

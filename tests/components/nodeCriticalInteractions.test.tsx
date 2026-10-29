@@ -402,6 +402,7 @@ async function setupShotlistWidths(
 
 beforeEach(() => {
   vi.resetModules();
+  vi.doUnmock('../../src/services/generationService');
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   // These component tests cover delegation; the real reference guard has its own suite.
@@ -1931,7 +1932,10 @@ describe('critical canvas node interactions', () => {
         getPendingTasksForProject: () => scenario === 'comfy-recovery'
           ? [{ nodeId: 'video-node', taskType: 'comfyui', comfyRecoveryState: 'cancel_pending' }] : [],
       }));
-      vi.doMock('../../src/services/generationService', () => ({ executeGeneration }));
+      vi.doMock('../../src/services/generationService', () => ({
+        executeGeneration, subscribeImageBatches: () => () => {}, isImageBatchGenerating: () => false,
+        cancelImageBatchGeneration: vi.fn(), usesSequentialImageBatch: () => false,
+      }));
       const AINodeDialog = (await import('../../src/components/nodes/AINodeDialog')).default as unknown as () => unknown;
       const panel = findElement(AINodeDialog(), (element) => componentName(element) === 'PromptPanelMock');
       const overridePrompt = '@{sheet/shot/stable-row:第1镜} 保留附加要求';

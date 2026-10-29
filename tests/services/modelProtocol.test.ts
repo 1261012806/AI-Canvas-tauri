@@ -127,10 +127,11 @@ describe('厂商提交幂等身份与明确结果路径', () => {
     } } });
     try {
       for (let index = 0; index < 2; index += 1) {
-        await expect(runConfiguredModelProtocol({ category: 'image',
+        const result = await runConfiguredModelProtocol({ category: 'image',
           model: { id: 'image', name: 'Image', category: 'image', modelId: 'image', providerConfigId: 'relay-alias',
-            executionProfile: { preset: 'custom', protocol } }, variables: { model: 'image', prompt: 'draft' } }))
-          .resolves.toEqual(['https://cdn.example/image.png']);
+            executionProfile: { preset: 'custom', protocol } }, variables: { model: 'image', prompt: 'draft' } });
+        expect([...result]).toEqual(['https://cdn.example/image.png']);
+        expect(result.mediaDownloadAccess).toEqual({ providerConfigId: 'relay-alias', origin: 'https://relayonapi.com' });
       }
       expect(uuidSpy).toHaveBeenCalledTimes(2);
       const keys = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
@@ -175,10 +176,11 @@ describe('厂商提交幂等身份与明确结果路径', () => {
       'relay-alias': { name: 'My Relay', catalogId: 'relayonapi', baseUrl: 'https://relayonapi.com/v1', apiKey: 'own-key' },
     } } });
     try {
-      await expect(runConfiguredModelProtocol({ category: 'video',
+      const urls = await runConfiguredModelProtocol({ category: 'video',
         model: { ...selected, modelId: selected.id, providerConfigId: 'relay-alias' },
-        variables: { model: selected.id, prompt: 'draft', duration: 10, resolution: '720p', aspectRatio: '16:9' } }))
-        .resolves.toEqual([resultUrl]);
+        variables: { model: selected.id, prompt: 'draft', duration: 10, resolution: '720p', aspectRatio: '16:9' } });
+      expect([...urls]).toEqual([resultUrl]);
+      expect(urls.mediaDownloadAccess).toEqual({ providerConfigId: 'relay-alias', origin: 'https://relayonapi.com', auth: { type: 'bearer' } });
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(fetchMock.mock.calls[1][0]).toBe('https://relayonapi.com/v1/videos/video-original');
     } finally {
@@ -2594,13 +2596,15 @@ describe('reference media coverage in custom protocols', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
     const variables = buildVideoReferences(true);
-    await expect(runConfiguredModelProtocol({
+    const urls = await runConfiguredModelProtocol({
       category: 'video', variables, model: {
         id: 'reference-fixture', name: 'seedance2.5 超特价10图3视3音',
         modelId: 'seedance2.5 超特价10图3视3音', category: 'video',
         providerConfigId: 'custom-reference-fixture', executionProfile: { preset: 'custom', protocol },
       },
-    })).resolves.toEqual(['data:video/mp4;base64,AQID']);
+    });
+    expect([...urls]).toEqual(['data:video/mp4;base64,AQID']);
+    expect(urls.mediaDownloadAccess).toEqual({ providerConfigId: 'custom-reference-fixture', origin: 'https://gateway.example' });
     expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
       model: variables.model, prompt: variables.prompt,
       images: variables.imageUrls, videos: variables.videoUrls, audios: variables.audioUrls,

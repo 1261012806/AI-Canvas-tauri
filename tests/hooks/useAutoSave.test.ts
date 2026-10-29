@@ -273,6 +273,8 @@ describe('useAutoSave with the group file Store', () => {
     let release!: (moves: []) => void;
     driver.pending.mockImplementationOnce(() => new Promise<[]>((resolve) => { release = resolve; }));
     mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driver.pending).toHaveBeenCalledExactlyOnceWith('p1');
     const oldPath = 'D:/data/p2/old.png';
     const newPath = 'D:/data/p2/new.png';
     driver.pending.mockResolvedValueOnce([{ oldPath, newPath, projectId: 'p2', assetUrl: `asset://${newPath}`, relativePath: 'new.png' }]);

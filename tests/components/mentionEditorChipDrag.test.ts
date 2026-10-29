@@ -25,8 +25,9 @@ class TestNode extends EventTarget {
     for (const child of this.childNodes) child.parentNode = null;
     this.childNodes = [];
     if (value) {
+      if (!(this instanceof TestElement)) throw new Error('只有元素节点可以包含文本子节点');
       const text = new TestNode(3, value);
-      text.parentNode = this as TestElement;
+      text.parentNode = this;
       this.childNodes.push(text);
     }
   }

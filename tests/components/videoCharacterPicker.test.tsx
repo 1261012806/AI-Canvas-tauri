@@ -151,8 +151,13 @@ describe('VideoCharacterPicker 角色范围与交互', () => {
     picker.items[0].onSelect();
     expect(options.globalItems[0].onSelect).toHaveBeenCalledOnce();
     expect(options.projectItems[0].onSelect).not.toHaveBeenCalled();
-    expect(anchor.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(anchor.focus).not.toHaveBeenCalled();
+    expect(options.onClose).not.toHaveBeenCalled();
     picker.onTabChange('project');
+    ({ picker } = render());
+    picker.items[0].onSelect();
+    expect(options.projectItems[0].onSelect).toHaveBeenCalledOnce();
+    expect(options.onClose).not.toHaveBeenCalled();
     options.projectItems = [];
     ({ picker } = render());
     expect(picker.items).toEqual([]);
@@ -203,6 +208,28 @@ describe('VideoCharacterPicker 角色范围与交互', () => {
     press(view.portal, 'Enter');
     expect(view.picker.activeKey).toBeUndefined();
     expect(disabled).not.toHaveBeenCalled();
+  });
+
+  it('选择聚焦的角色时先将焦点留在浮层，搜索焦点则保持不变', () => {
+    const view = render();
+    menu.focus.mockClear();
+    const focusedOption = new Element();
+    Object.assign(focusedOption, { closest: (selector: string) => selector === '[role="option"]' ? focusedOption : null });
+    Object.assign(document, { activeElement: focusedOption });
+    view.picker.items[0].onSelect();
+    expect(menu.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(menu.focus.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(options.projectItems[0].onSelect).mock.invocationCallOrder[0]);
+    expect(options.onClose).not.toHaveBeenCalled();
+
+    menu.focus.mockClear();
+    const searchInput = new Element();
+    Object.assign(searchInput, { closest: () => null });
+    Object.assign(document, { activeElement: searchInput });
+    view.picker.items[0].onSelect();
+    expect(options.projectItems[0].onSelect).toHaveBeenCalledTimes(2);
+    expect(menu.focus).not.toHaveBeenCalled();
+    expect(anchor.focus).not.toHaveBeenCalled();
+    expect(options.onClose).not.toHaveBeenCalled();
   });
 
   it('全局空库显示加载状态并禁止重试，加载结束后可重新读取', () => {
@@ -309,7 +336,8 @@ describe('VideoCharacterPicker 角色范围与交互', () => {
     expect(selected).not.toHaveBeenCalled();
     click(enabledCard, 0);
     expect(selected).toHaveBeenCalledOnce();
-    expect(anchor.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(anchor.focus).not.toHaveBeenCalled();
+    expect(options.onClose).not.toHaveBeenCalled();
   });
 
   it('卸载时释放尺寸观察器和定位、点外关闭监听', () => {

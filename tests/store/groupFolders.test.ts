@@ -284,6 +284,7 @@ describe('分组与本地文件夹同步', () => {
     let release!: (moves: []) => void;
     vi.mocked(pendingMediaRelocations).mockImplementationOnce(() => new Promise<[]>((resolve) => { release = resolve; }));
     const first = useAppStore.getState().syncGroupFiles();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     const move = { oldPath: `${PROJECT_DIR}/old.png`, newPath: `${PROJECT_DIR}/new.png`,
       projectId: 'p2', assetUrl: `asset://${PROJECT_DIR}/new.png`, relativePath: 'new.png' };
     useAppStore.setState({ currentProjectId: 'p2' });
@@ -302,6 +303,7 @@ describe('分组与本地文件夹同步', () => {
     let release!: (moves: []) => void;
     vi.mocked(pendingMediaRelocations).mockImplementationOnce(() => new Promise<[]>((resolve) => { release = resolve; }));
     const syncing = useAppStore.getState().syncGroupFiles();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     revision += 1;
     release([]);
     await syncing;
@@ -317,6 +319,7 @@ describe('分组与本地文件夹同步', () => {
     let release!: (moves: []) => void;
     vi.mocked(pendingMediaRelocations).mockImplementationOnce(() => new Promise<[]>((resolve) => { release = resolve; }));
     const syncing = useAppStore.getState().syncGroupFiles();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
     await useAppStore.getState().syncGroupFiles();
     await useAppStore.getState().syncGroupFiles();
     release([]);

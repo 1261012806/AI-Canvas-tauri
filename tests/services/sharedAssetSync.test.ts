@@ -271,7 +271,10 @@ describe('手动项目资产同步协调', () => {
     expect(resumed.items.filter((entry) => entry.direction === 'unchanged')).toHaveLength(4);
     expect(resumed.operations).toHaveLength(1);
     expect(resumed.operations[0].operation).toMatchObject({ operationId: unfinished.operationId, revisionId: unfinished.revisionId });
-    expect(resumed.mappings.map((mapping) => mapping.sharedAssetId)).toEqual(initial.mappings.map((mapping) => mapping.sharedAssetId));
+    const identities = (mappings: SharedAssetSyncLocalState['mappings']) => mappings
+      .map(({ localEntityId, sharedAssetId }) => ({ localEntityId, sharedAssetId }))
+      .sort((a, b) => a.localEntityId.localeCompare(b.localEntityId));
+    expect(identities(resumed.mappings)).toEqual(identities(initial.mappings));
     expect(mocks.prepare).toHaveBeenCalledTimes(4); // Unchanged files are still prepared and content-verified.
     expect(mocks.prepare.mock.calls.every(([input]) => (input as SharedSyncPrepareInput).draft.operationId !== unfinished.operationId)).toBe(true);
     expect(next.onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'preview', completed: 4, total: 5 }));
