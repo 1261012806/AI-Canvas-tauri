@@ -22,6 +22,8 @@ export interface SlashCommandItem {
 
 // ── 图片预设提示词 ──
 
+const CHARACTER_PORTRAIT_QUALITY_PROMPT = `Enhance the portrait while strictly preserving the subject's identity with accurate facial geometry. Do not change their expression or face shape. Only allow subtle feature cleanup without altering who they are. Keep the exact same background from the reference image. No replacements, no changes, no new objects, no layout shifts. The environment must look identical. The image must be recreated as if it was shot on a Sony Al, using an 85mm f1.4 lens, at f1.6, 1S0 100, 1/200 shutter speed cinematic shallow depth of field, perfect facial focus, and an editorial-neutral color profile. This Sony Al +85mm f1.4 setup is mandatory. The final image must clearly look like premium full-frame Sony Al quality Lighting must match the exact direction, angle, and mood of the reference photo Upgrade the lighting into a cinematic subject-focused style: soft directional light warm highlights, cool shadows, deeper contrast expanded dynamic range, micro-contrast boost, smooth gradations, and zero harsh shadows. Maintain neutral premium color tone, cinematic contrast curve, natural saturation, real skin texture (not plastic), and subtle film grain. No fake glow, no runway lighting, no oversmoothing. Render in 4K resolution, 10-bit color, cinematic editorial style premium clarity, portrait crop, and keep the original environmental vibe untouched Re-render the subject with improved realism, depth, texture, and lighting while keeping identity and background fully preserved NEGATIVE INSTRUCTIONS: No new background. No background change. No overlydramatic lghting. No face morphing. No fake glow. No flat lighting.No over-smooth skin.`;
+
 const IMAGE_COMMANDS: SlashCommandItem[] = [
   {
     id: 'scene',
@@ -61,7 +63,9 @@ const IMAGE_COMMANDS: SlashCommandItem[] = [
 右侧第一格（正面）：只展示颈根到脚底，画框上沿落在颈根处，整个头部置于画框之外，不出现头顶、脸部、下巴或半张脸；自然颈根、肩部、服装、手臂、腿部和双脚完整入画。
 右侧第二格（侧面）：严格90度正侧面，同样只展示颈根到脚底，整个头部置于画框之外，不出现侧脸、鼻子、下巴或头顶，不使用45度或四分之三视角。
 右侧第三格（背面）：保留完整头部，从头顶到脚底完整入画，完整展示后脑、发型、头饰、后颈、背部服装和双脚，不裁掉头部，不转头露出侧脸。
-只有右侧正面与侧面使用颈根裁切，背面不适用无头取景规则。前两格是正常人物的画框裁切，不绘制断颈或无头人形；裁切框上方留白，背面取景框向上延伸以容纳头部。右侧三格必须使用同一套服装、同一身体比例、同一身体尺度与自然站姿，脚底对齐，不为填满前两格而放大身体，不裁脚或裙摆。四个视图必须是同一人物，配饰、配色与材质保持一致。画面排版整齐，不添加文字、标签、标志、水印或额外视图。人物与风格描述：
+只有右侧正面与侧面使用颈根裁切，背面不适用无头取景规则。前两格是正常人物的画框裁切，不绘制断颈或无头人形；裁切框上方留白，背面取景框向上延伸以容纳头部。右侧三格必须使用同一套服装、同一身体比例、同一身体尺度与自然站姿，脚底对齐，不为填满前两格而放大身体，不裁脚或裙摆。四个视图必须是同一人物，配饰、配色与材质保持一致。画面排版整齐，不添加文字、标签、标志、水印或额外视图。
+${CHARACTER_PORTRAIT_QUALITY_PROMPT}
+人物与风格描述：
 {{ 文章内容 }}`,
         aspectRatio: '16:9',
       },
@@ -74,7 +78,9 @@ const IMAGE_COMMANDS: SlashCommandItem[] = [
 下排左列（正面）：只展示颈部到脚底，画框上沿落在颈部上端，保留颈部、肩部和完整身体；整个头部置于画框之外，不出现头顶、脸部、下巴或半张脸。
 下排中列（侧面）：90度正侧面，同样只展示颈部到脚底，画框上沿落在颈部上端，保留颈部和肩部轮廓；整个头部置于画框之外，不出现头顶、侧脸、鼻子或下巴。
 下排右列（背面）：背面保留完整头部，头顶到脚底完整入画，完整展示后脑、发型、头饰、后颈、背部服装和双脚；不裁掉头部，不转头露出侧脸。
-正面与侧面是正常人物的画框裁切，不绘制断颈或无头人形。下排三列使用同一身体尺度、自然站姿和一致比例，脚底对齐；前两列裁切框上方留白，背面取景框向上延伸以容纳头部，前两列不得为填满画框而放大身体。所有身体视图完整展示服装、手臂、腿部和双脚，不裁脚或裙摆。五个视图必须是同一人物，五官、发型、服装、配饰和配色保持一致。背景为干净的白色或浅灰色，视图之间留少量整齐间距，不添加文字、标签、标志或水印。人物与风格描述：
+正面与侧面是正常人物的画框裁切，不绘制断颈或无头人形。下排三列使用同一身体尺度、自然站姿和一致比例，脚底对齐；前两列裁切框上方留白，背面取景框向上延伸以容纳头部，前两列不得为填满画框而放大身体。所有身体视图完整展示服装、手臂、腿部和双脚，不裁脚或裙摆。五个视图必须是同一人物，五官、发型、服装、配饰和配色保持一致。背景为干净的白色或浅灰色，视图之间留少量整齐间距，不添加文字、标签、标志或水印。
+${CHARACTER_PORTRAIT_QUALITY_PROMPT}
+人物与风格描述：
 {{ 文章内容 }}`,
         aspectRatio: '4:5',
       },
@@ -83,7 +89,7 @@ const IMAGE_COMMANDS: SlashCommandItem[] = [
         title: '人设解析图',
         icon: 'mdi:file-account-outline',
         description: '包含细节拆解的设定集',
-        promptTemplate: '生成人设解析图，包含正视图、侧视图、背视图，以及服装细节拆解、面部特征特写，排版紧凑，\n{{ 文章内容 }}',
+        promptTemplate: `生成人设解析图，包含正视图、侧视图、背视图，以及服装细节拆解、面部特征特写，排版紧凑，\n${CHARACTER_PORTRAIT_QUALITY_PROMPT}\n{{ 文章内容 }}`,
       },
       {
         id: 'char-8dir-run',
