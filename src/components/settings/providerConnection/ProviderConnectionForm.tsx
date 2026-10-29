@@ -45,6 +45,7 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
 }) {
   const t = useT();
   const isRelay = provider === 'relayonapi';
+  const externalUrl = getProviderDefinition(provider)?.externalUrl;
   const groupDefinitions = isRelay ? RELAYON_PROVIDER_GROUPS : CCC_PROVIDER_GROUPS;
   const groupOf = (config: ApiProviderConfig) => isRelay ? config.relayonGroup : config.cccGroup;
   const groupPresetModels = (group?: string) => isRelay ? getRelayonGroupPresetModels(presetModels, group) : getCccGroupPresetModels(presetModels, group);
@@ -273,7 +274,7 @@ export function CccGroupConnectionsForm({ providerConfigs, presetModels, onSave,
         })}
       </div>
       {hasUnsavedRelayChanges && <p className="ui-hint mt-3">{t('请先保存全部分组，再编辑单组模型参数。')}</p>}
-      <button type="button" className="provider-external-link mt-3" onClick={() => void openExternal(isRelay ? 'https://relayonapi.com/keys' : 'https://cccapi.cn/keys')}>{t('前往厂商控制台')}</button>
+      {externalUrl && <button type="button" className="provider-external-link mt-3" onClick={() => void openExternal(externalUrl)}>{t('前往厂商控制台')}</button>}
       {saveError && <p role="alert" className="ui-alert ui-alert--danger mt-3">{saveError}</p>}
     </div>
     <footer className="provider-dialog-footer">

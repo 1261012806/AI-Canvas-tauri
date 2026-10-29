@@ -317,7 +317,7 @@ const BUILT_IN_PROVIDER_DEFINITIONS: ProviderDefinition[] = ([
     description: '主流文本、图片与视频模型；使用当前连接的 Key 和已适配的渠道参数。',
     badgeText: 'RA', authType: 'api-key', catalogAdapter: 'openai-compatible',
     defaultBaseUrl: RELAYON_BASE_URL, modelsPath: '/models', allowCustomBaseUrl: false,
-    externalUrl: 'https://relayonapi.com/keys',
+    externalUrl: 'https://relayonapi.com/sign-up?aff=Ei6o',
     credentials: [{ ...API_KEY_FIELD, placeholder: '填写 RelayOnAPI API Key' }],
     models: RELAYON_MODEL_MANIFEST,
   },
