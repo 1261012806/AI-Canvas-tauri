@@ -30,9 +30,9 @@ beforeEach(async () => {
   native.copy.mockReset();
   native.rename.mockReset();
   native.retired.mockReset().mockResolvedValue(new Set());
-  native.exists.mockImplementation(async (path: string) => disk.has(path));
+  native.exists.mockImplementation(async (path: string) => disk.has(path) || [...disk].some((file) => file.startsWith(`${path}/`)));
   native.lstat.mockReset().mockImplementation(async (path: string) => {
-    if (!disk.has(path)) throw new Error('missing');
+    if (!disk.has(path) && ![...disk].some((file) => file.startsWith(`${path}/`))) throw new Error('missing');
     return { isFile: path.endsWith('.png'), isDirectory: !path.endsWith('.png'), isSymlink: false, size: 42 };
   });
   native.remove.mockReset().mockImplementation(async (path: string) => { disk.delete(path); });
@@ -45,6 +45,62 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('group file allocation', () => {
+  it('archives a nested imported image into its group without overwriting an existing file', async () => {
+    const source = '/p/images/EP000/portrait.png';
+    disk.add(source);
+    disk.add('/p/人物/portrait.png');
+    const moved = await moveProjectFileToFolder(source, '/p', '人物', { preserveSource: true });
+    expect(moved).toBe('/p/人物/portrait_1.png');
+    expect(disk.has(source)).toBe(true);
+    expect(disk.has('/p/人物/portrait.png')).toBe(true);
+    expect(native.copy).toHaveBeenCalledWith(source, moved);
+    await finishProjectFileRelocation(source, moved!, '/p');
+    expect(disk.has(source)).toBe(false);
+    expect(disk.has(moved!)).toBe(true);
+    expect(native.remove).not.toHaveBeenCalledWith('/p/images');
+  });
+
+  it('keeps ungrouped nested media in its imported folder', async () => {
+    const source = '/p/images/EP000/portrait.png';
+    disk.add(source);
+    expect(await moveProjectFileToFolder(source, '/p', null, { preserveSource: true })).toBeNull();
+    expect(native.copy).not.toHaveBeenCalled();
+    expect(native.rename).not.toHaveBeenCalled();
+    expect(disk.has(source)).toBe(true);
+  });
+
+  it.each([
+    '/outside/portrait.png', '/p/images/../portrait.png', '/p/images/./portrait.png', '/p/images//portrait.png',
+    '/p/.trash/EP000/portrait.png', '/p/images/.thumbnail/portrait.png', '/p/images/AppData/portrait.png',
+    '/p/images/agent-private/portrait.png', '/p/images/plugin-private/portrait.png',
+    '/p/images/blender-private/portrait.png', '/p/images/secrets/portrait.png',
+  ])('does not archive outside, hidden, private or traversal paths: %s', async (source) => {
+    disk.add(source);
+    expect(await moveProjectFileToFolder(source, '/p', '人物', { preserveSource: true })).toBeNull();
+    expect(native.copy).not.toHaveBeenCalled();
+    expect(native.rename).not.toHaveBeenCalled();
+  });
+
+  it.each(['../人物', '人物/子目录', '人物\\子目录', '.trash', 'AppData', 'agent-private', 'plugin-private', 'secrets'])('rejects unsafe group destinations: %s', async (folder) => {
+    expect(await moveProjectFileToFolder('/p/original.png', '/p', folder, { preserveSource: true })).toBeNull();
+    expect(native.copy).not.toHaveBeenCalled();
+    expect(native.rename).not.toHaveBeenCalled();
+  });
+
+  it.each(['/p/images', '/p/images/EP000/portrait.png', '/p/人物'])('rejects a linked source ancestor, source file or destination: %s', async (linked) => {
+    const source = '/p/images/EP000/portrait.png';
+    disk.add(source);
+    disk.add('/p/人物');
+    const readStat = native.lstat.getMockImplementation()!;
+    native.lstat.mockImplementation(async (path: string) => path === linked
+      ? { isDirectory: !path.endsWith('.png'), isFile: path.endsWith('.png'), isSymlink: true, size: 42 }
+      : readStat(path));
+    expect(await moveProjectFileToFolder(source, '/p', '人物', { preserveSource: true })).toBeNull();
+    expect(native.copy).not.toHaveBeenCalled();
+    expect(native.rename).not.toHaveBeenCalled();
+    expect(disk.has(source)).toBe(true);
+  });
+
   it('removes the committed source and empty group directory, keeping the destination', async () => {
     for (const path of ['/p/group', '/p/group/old.png', '/p/new.png']) disk.add(path);
     await finishProjectFileRelocation('/p/group/old.png', '/p/new.png', '/p');

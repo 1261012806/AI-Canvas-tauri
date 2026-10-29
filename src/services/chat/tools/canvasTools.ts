@@ -43,6 +43,8 @@ import { resolveImageParameterCapability } from '../../ai/mediaModelCapabilities
 import { isSafeMediaParameterText, resolveConfiguredImageBackground, resolveConfiguredImageQuality } from '../../ai/modelCapabilityValidation';
 import { findDramaAsset, listGlobalDramaAssets, preferDramaLibraryReferences, preferredDramaMentionForNode } from '../../dramaAssetPrompt';
 import { AGENT_NODE_LAYOUT, AGENT_NODE_LAYOUT_GUIDANCE } from '../agentCanvasLayout';
+import { isTauriEnv, readAssetTextFile, saveAssetTextFile, type AssetTextSnapshot } from '../../fileService';
+import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation } from '../../canvasDerivationGuard';
 
 const NODE_TYPES: NodeType[] = [
   'ai-text',
@@ -100,6 +102,7 @@ const TEXT_OUTPUT_NODE_TYPES = new Set<NodeType>([
   'source-text',
   'comment',
 ]);
+const TEXT_FILE_NODE_TYPES = new Set<NodeType>(['ai-text', 'ai-markdown', 'source-text']);
 const AUDIO_VOICES: AudioTtsVoice[] = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
 const AUDIO_FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'];
 const SPEECH_STYLES: NonNullable<AudioSpeechSettings['voiceStyle']>[] = [
@@ -564,6 +567,98 @@ function assertCanvasRevision(context: AgentToolContext): void {
     throw new Error(
       `画布已变更（rev ${currentRevision} ≠ ${context.baseRevision}），请重新规划`,
     );
+  }
+}
+
+interface TextFileTarget {
+  nodeId: string;
+  nodeType: NodeType;
+  filePath: string | undefined;
+  previousOutput: string | undefined;
+}
+
+interface TextFileUpdate extends TextFileTarget {
+  filePath: string;
+  baseline?: AssetTextSnapshot;
+  state: 'write' | 'unchanged' | 'conflict' | 'read_failed';
+}
+
+function textFileTargetsFresh(context: AgentToolContext, revision: number, targets: TextFileTarget[], content?: string): boolean {
+  const current = useAppStore.getState();
+  return !context.signal.aborted && current.currentProjectId === context.projectId
+    && current.getCurrentRevision() === revision && targets.every((target) => {
+      const node = current.nodes.find((item) => item.id === target.nodeId);
+      return node?.data.type === target.nodeType && node.data.filePath === target.filePath
+        && node.data.output === (content === undefined ? target.previousOutput : content);
+    });
+}
+
+/** 真实磁盘基线先整批读完；冲突只禁止覆盖文件，不丢弃新的画布草稿。 */
+async function prepareTextFileUpdates(context: AgentToolContext, targets: TextFileTarget[], content: string, revision: number): Promise<TextFileUpdate[]> {
+  const updates: TextFileUpdate[] = targets
+    .filter((target) => TEXT_FILE_NODE_TYPES.has(target.nodeType) && target.filePath)
+    .map((target): TextFileUpdate => ({ ...target, filePath: target.filePath!, state: 'read_failed' }));
+  const assertFresh = () => {
+    if (!textFileTargetsFresh(context, revision, targets)) throw new Error('项目、画布或文本文件关联已变化，请重新查询后操作');
+  };
+  for (const update of updates) {
+    assertFresh();
+    try {
+      update.baseline = await readAssetTextFile(update.filePath, context.signal);
+      const previous = (update.previousOutput || '').replace(/\r\n/g, '\n');
+      update.state = update.baseline.content === content.replace(/\r\n/g, '\n') ? 'unchanged'
+        : update.baseline.content === previous ? 'write' : 'conflict';
+    } catch {
+      update.state = 'read_failed';
+    }
+    assertFresh();
+  }
+  return updates;
+}
+
+/** 画布只提交一次；各文件沿用已有摘要 CAS，失败不重试、不回滚草稿或已写入的文件。 */
+async function persistTextFileUpdates(context: AgentToolContext, updates: TextFileUpdate[], content: string, targets: TextFileTarget[]) {
+  const revision = useAppStore.getState().getCurrentRevision();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const guard = registerCanvasImport(useAppStore.getState(), abort);
+  const fresh = () => !!guard && isCanvasDerivationFresh(guard, useAppStore.getState())
+    && textFileTargetsFresh(context, revision, targets, content);
+  context.signal.addEventListener('abort', abort, { once: true });
+  const unsubscribe = useAppStore.subscribe(() => { if (!fresh()) abort(); });
+  const results: Array<{ nodeId: string; status: 'saved' | 'unchanged' | 'conflict' | 'read_failed' | 'save_failed' | 'stale' }> = [];
+  const savedPaths = new Set<string>();
+  try {
+    for (const update of updates) {
+      if (!fresh() || controller.signal.aborted) {
+        results.push({ nodeId: update.nodeId, status: 'stale' });
+        continue;
+      }
+      if (update.state !== 'write') {
+        results.push({ nodeId: update.nodeId, status: update.state });
+        continue;
+      }
+      if (savedPaths.has(update.filePath)) {
+        results.push({ nodeId: update.nodeId, status: 'saved' });
+        continue;
+      }
+      try {
+        await saveAssetTextFile(update.filePath, update.baseline!, content, controller.signal);
+        savedPaths.add(update.filePath);
+        results.push({ nodeId: update.nodeId, status: 'saved' });
+      } catch {
+        results.push({ nodeId: update.nodeId, status: fresh() && !controller.signal.aborted ? 'save_failed' : 'stale' });
+      }
+    }
+    const stale = !fresh() || controller.signal.aborted;
+    return { results, stale,
+      savedCount: results.filter((item) => item.status === 'saved').length,
+      unchangedCount: results.filter((item) => item.status === 'unchanged').length,
+      failedCount: results.filter((item) => item.status !== 'saved' && item.status !== 'unchanged').length };
+  } finally {
+    unsubscribe();
+    context.signal.removeEventListener('abort', abort);
+    if (guard) completeCanvasDerivation(guard);
   }
 }
 
@@ -1488,7 +1583,7 @@ export function registerCanvasAgentTools(): Array<() => void> {
         '视频 aspectRatio 同步实际生成比例；固定比例按当前宽度重算空节点高度（同时传 width 时使用新宽度，优先于 height），已有成片保持真实视频框，自适应不改框。',
         '视频节点的 videoLongSide 是本地工作流长边像素，videoResolution 是 API 档位（旧版数字字符串会转长边像素）；videoDuration 是实际生成秒数。',
         '音频节点可设置语音音色/格式/速度、描述式语音参数及音乐时长/BPM；工作流专属参数继续由工作流配置管理。',
-        'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。',
+        'content 改写节点正文，只能用于文本类节点（ai-text / ai-markdown / source-text / comment）。桌面端前三类已关联文件时用真实磁盘摘要校验后保存；冲突或部分文件失败会返回错误与脱敏状态，保留新草稿，不自动重试整批。',
         'prompt 里可写 @{nodeId:label} 引用其他节点输出、@drama{assetId:name} 引用资产库设定，生成时自动展开；ID 必须真实存在。多图视频须按 Picture 顺序逐条写入图片节点 @ 引用，仅有连线不能指定 Picture 顺序。',
         'x/y 是绝对坐标，一次只能移动一个节点；dx/dy 是相对位移，可批量。',
         'model 必须是 app_get_state 返回的模型 ID，且类型要与节点匹配。',
@@ -1622,6 +1717,16 @@ export function registerCanvasAgentTools(): Array<() => void> {
           return { status: 'error', summary: '没有提供需要更新的字段', modelContent: '没有提供需要更新的字段' };
         }
 
+        const textFileRevision = useAppStore.getState().getCurrentRevision();
+        const textFileTargets: TextFileTarget[] = targets.map((node) => ({ nodeId: node.id, nodeType: node.data.type,
+          filePath: node.data.filePath, previousOutput: node.data.output }));
+        const textFileUpdates = input.content !== undefined && isTauriEnv()
+          && targets.some((node) => TEXT_FILE_NODE_TYPES.has(node.data.type) && node.data.filePath)
+          ? await prepareTextFileUpdates(context, textFileTargets, input.content, textFileRevision) : [];
+        if (textFileUpdates.length && !textFileTargetsFresh(context, textFileRevision, textFileTargets)) {
+          throw new Error('项目、画布或文本文件关联已变化，请重新查询后操作');
+        }
+        assertCanvasRevision(context);
         const store = useAppStore.getState();
         // updateNodesDataBatch 自带一次 commitToHistory；只移动时才需要单独提交历史
         if (Object.keys(patch).length > 0) store.updateNodesDataBatch(targetIds, patch);
@@ -1659,14 +1764,22 @@ export function registerCanvasAgentTools(): Array<() => void> {
           }
         }
         useAppStore.getState().incrementRevision();
+        const committedRevision = useAppStore.getState().getCurrentRevision();
         const updatedTargets = useAppStore.getState().nodes
           .filter((node) => targetIds.includes(node.id));
+        const textFilePersistence = textFileUpdates.length
+          ? await persistTextFileUpdates(context, textFileUpdates, input.content!, textFileTargets) : undefined;
+        const persistenceIncomplete = textFilePersistence && (textFilePersistence.failedCount > 0 || textFilePersistence.stale);
         return {
-          status: 'success',
-          summary: `已更新 ${targetIds.length} 个节点`,
+          status: persistenceIncomplete ? 'error' : 'success',
+          summary: persistenceIncomplete
+            ? `已更新 ${targetIds.length} 个节点；文本文件保存未全部完成，画布草稿已保留，请检查冲突或文件权限`
+            : `已更新 ${targetIds.length} 个节点`,
+          ...(persistenceIncomplete ? { retryable: false, errorCode: 'TEXT_FILE_SAVE_INCOMPLETE' } : {}),
           modelContent: JSON.stringify({
             affectedNodeIds: targetIds,
-            revision: useAppStore.getState().getCurrentRevision(),
+            revision: committedRevision,
+            ...(textFilePersistence ? { textFilePersistence } : {}),
           }),
           display: {
             changes: buildUpdateChanges(input, updatedTargets, beforeAudit),

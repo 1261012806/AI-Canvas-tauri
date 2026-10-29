@@ -170,6 +170,49 @@ describe('展开分组内创建和拖入空节点', () => {
 });
 
 describe('分组与本地文件夹同步', () => {
+  it('MCP 导入的深层图片入组后提交路径迁移并放入分组目录', async () => {
+    const path = `${PROJECT_DIR}/images/EP000/portrait.png`;
+    const imported = { ...node('imported'), type: 'source-image', data: { ...node('imported').data,
+      type: 'source-image', role: 'source', filePath: path, imageUrl: `asset://${path}`, relativePath: 'images/EP000/portrait.png' } } as Node<BaseNodeData>;
+    useAppStore.setState({ nodes: [imported, node('b')] });
+    createGroup(['imported', 'b']);
+    await useAppStore.getState().syncGroupFiles();
+    expect(moveProjectFileToFolder).toHaveBeenCalledWith(path, PROJECT_DIR, '分组', { preserveSource: true, forceCopy: false });
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'imported')?.data).toMatchObject({
+      type: 'source-image', filePath: `${PROJECT_DIR}/分组/portrait.png`, relativePath: '分组/portrait.png',
+    });
+    expect(persistMediaRelocation).toHaveBeenCalledWith(expect.objectContaining({ oldPath: path,
+      newPath: `${PROJECT_DIR}/分组/portrait.png`, projectId: 'p1' }), undefined);
+    expect(finishProjectFileRelocation).toHaveBeenCalledWith(path, `${PROJECT_DIR}/分组/portrait.png`, PROJECT_DIR);
+  });
+
+  it('未分组的深层导入素材保持原目录，隐藏及私有子目录不参与归档', async () => {
+    const untouched = { ...node('outside'), data: { ...node('outside').data, filePath: `${PROJECT_DIR}/images/EP000/outside.png` } };
+    const protectedNodes = ['.trash/EP000', 'images/.thumbnail', 'images/AppData', 'images/agent-private',
+      'images/plugin-private', 'images/blender-private', 'images/secrets', 'images/../EP000'].map((folder, index) => ({
+      ...node(`protected-${index}`), data: { ...node(`protected-${index}`).data, filePath: `${PROJECT_DIR}/${folder}/portrait.png` },
+    }));
+    useAppStore.setState({ nodes: [untouched, ...protectedNodes] });
+    createGroup(protectedNodes.map((item) => item.id));
+    await useAppStore.getState().syncGroupFiles();
+    expect(moveProjectFileToFolder).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes.find((item) => item.id === untouched.id)?.data.filePath).toBe(untouched.data.filePath);
+  });
+
+  it('深层共享文件仅复制入组节点的引用，未分组节点继续读取原文件', async () => {
+    const path = `${PROJECT_DIR}/images/EP000/shared.png`;
+    const original = { ...node('a'), data: { ...node('a').data, filePath: path, imageUrl: `asset://${path}` } };
+    const outside = { ...node('outside'), data: { ...node('outside').data, filePath: path, imageUrl: `asset://${path}` } };
+    useAppStore.setState({ nodes: [original, node('b'), outside] });
+    createGroup(['a', 'b']);
+    await useAppStore.getState().syncGroupFiles();
+    expect(moveProjectFileToFolder).toHaveBeenCalledWith(path, PROJECT_DIR, '分组', { preserveSource: true, forceCopy: true });
+    expect(persistMediaRelocation).toHaveBeenCalledWith(expect.objectContaining({ oldPath: path, ownerId: 'a' }), 'a');
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'a')?.data.filePath).toBe(`${PROJECT_DIR}/分组/shared.png`);
+    expect(useAppStore.getState().nodes.find((item) => item.id === 'outside')?.data.filePath).toBe(path);
+    expect(finishProjectFileRelocation).not.toHaveBeenCalled();
+  });
+
   it('没有迁移时不保存，正文更新也不重新遍历或请求项目目录', async () => {
     await useAppStore.getState().syncGroupFiles();
     const save = vi.mocked(useAppStore.getState().saveCurrentProjectSilent);

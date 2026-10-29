@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildComfyRefmodChipEl, buildWorkflowChipEl, ensureCaretSlotAfterChip, isChipEl,
-  normalizeChipSlots, renderPromptToNodes, serializeDOM, ZWSP,
+  buildComfyRefmodChipEl, buildWorkflowChipEl, ensureCaretSlotAfterChip, getNodeMetaMap, isChipEl,
+  normalizeChipSlots, renderPromptToNodes, serializeDOM, syncMediaReferenceLabels, ZWSP,
 } from '../../src/components/nodes/shared/mentionEditorDom';
 import { commitMentionChipDrop, findDraggableMentionChip, getMentionChipDropRange, startMentionChipDrag } from '../../src/components/nodes/shared/mentionEditorChipDrag';
 import { buildComfyRefmodMention } from '../../src/utils/comfyRefmodMention';
@@ -19,7 +19,17 @@ class TestNode extends EventTarget {
   private text: string;
   constructor(nodeType: number, text = '') { super(); this.nodeType = nodeType; this.text = text; }
   get textContent(): string { return this.nodeType === 3 ? this.text : this.childNodes.map((node) => node.textContent).join(''); }
-  set textContent(value: string) { this.text = value; }
+  set textContent(value: string) {
+    this.text = value;
+    if (this.nodeType === 3) return;
+    for (const child of this.childNodes) child.parentNode = null;
+    this.childNodes = [];
+    if (value) {
+      const text = new TestNode(3, value);
+      text.parentNode = this as TestElement;
+      this.childNodes.push(text);
+    }
+  }
   get parentElement() { return this.parentNode; }
   get previousSibling(): TestNode | null { return this.parentNode?.childNodes[this.parentNode.childNodes.indexOf(this) - 1] ?? null; }
   get nextSibling(): TestNode | null { return this.parentNode?.childNodes[this.parentNode.childNodes.indexOf(this) + 1] ?? null; }
@@ -48,6 +58,9 @@ class TestElement extends TestNode {
   focus = vi.fn();
   tagName: string;
   constructor(tagName = 'SPAN') { super(1); this.tagName = tagName; }
+  get children() { return this.childNodes.filter((node): node is TestElement => node instanceof TestElement); }
+  get src() { return this.attrs.src || ''; }
+  set src(value: string) { this.attrs.src = value; }
   classList = {
     contains: (name: string) => this.className.split(' ').includes(name),
     add: (...names: string[]) => { this.className = [...new Set([...this.className.split(' ').filter(Boolean), ...names])].join(' '); },
@@ -70,7 +83,8 @@ class TestElement extends TestNode {
     for (const child of this.childNodes) {
       if (!(child instanceof TestElement)) continue;
       const match = selector.startsWith('.') ? child.classList.contains(selector.slice(1))
-        : [...selector.matchAll(/\[([^\]]+)\]/g)].some((item) => child.hasAttribute(item[1]));
+        : selector.includes('[') ? [...selector.matchAll(/\[([^\]]+)\]/g)].some((item) => child.hasAttribute(item[1]))
+          : child.tagName.toLowerCase() === selector;
       if (match) matches.push(child);
       matches.push(...child.querySelectorAll(selector));
     }
@@ -78,6 +92,10 @@ class TestElement extends TestNode {
   }
   append(...nodes: TestNode[]) { for (const node of nodes) this.insertBefore(node, null); }
   appendChild(node: TestNode) { this.append(node); return node; }
+  replaceChildren(...nodes: TestNode[]) {
+    for (const child of [...this.childNodes]) child.remove();
+    this.append(...nodes);
+  }
   insertBefore(node: TestNode, anchor: TestNode | null) {
     if (node === anchor) return;
     node.remove();
@@ -158,6 +176,82 @@ beforeEach(() => {
   a = chip('a'); b = chip('b');
   root.append(a, new TestNode(3, '说明'), b);
   change = vi.fn<() => void>();
+});
+
+describe('源素材引用胶囊', () => {
+  it('MCP 导入图片与生成图共用缩略图样式，重复引用保留同一图片序号和原始身份', () => {
+    const nodes = [
+      { id: 'imported', type: 'source-image', data: { type: 'source-image', role: 'source', displayId: 15, imageUrl: 'https://media.test/imported.png' } },
+      { id: 'generated', type: 'ai-image', data: { type: 'ai-image', displayId: 31, imageUrl: 'https://media.test/generated.png' } },
+    ];
+    const value = '@{imported:原人物图} @{generated:生成图} @{imported:原人物图} 保留正文';
+    const metadata = getNodeMetaMap(nodes as never);
+    root.replaceChildren(...renderPromptToNodes(value, metadata) as unknown as TestNode[]);
+    syncMediaReferenceLabels(html(root), metadata);
+    const chips = root.querySelectorAll('[data-ref-id]');
+    expect(chips).toHaveLength(3);
+    for (const item of chips) {
+      expect(item.classList.contains('chip-image')).toBe(true);
+      expect(item.classList.contains('ui-reference-chip--image')).toBe(true);
+      expect(item.querySelector('.prompt-chip-icon')?.classList.contains('has-thumbnail')).toBe(true);
+      expect(item.querySelector('img')?.getAttribute('src')).toContain('.png');
+    }
+    expect(chips[0].querySelector('.prompt-chip-id')?.textContent).toBe('#15');
+    expect(chips.map((item) => item.querySelector('.prompt-chip-media-index')?.textContent)).toEqual(['(图1)', '(图2)', '(图1)']);
+    expect(prompt()).toBe(value);
+    expect(nodes[0].type).toBe('source-image');
+    expect(nodes[0].data.type).toBe('source-image');
+  });
+
+  it('旧紫色胶囊和异步恢复图片就地刷新，保留正文、编号、外层节点和光标落点', () => {
+    const value = '@{imported:旧标签}保留正文';
+    const empty = getNodeMetaMap([{ id: 'imported', data: { type: 'source-image', displayId: 15 } }] as never);
+    root.replaceChildren(...renderPromptToNodes(value, empty) as unknown as TestNode[]);
+    const existing = root.querySelector('[data-ref-id]')!;
+    existing.classList.remove('chip-image', 'ui-reference-chip--image');
+    existing.classList.add('chip-text', 'ui-reference-chip--text');
+    const text = root.childNodes.at(-1)!;
+    const caret = new TestRange(text, 2);
+    const restored = getNodeMetaMap([{ id: 'imported', data: { type: 'source-image', displayId: 15, imageUrl: 'https://media.test/restored.png' } }] as never);
+    syncMediaReferenceLabels(html(root), restored);
+    expect(root.querySelector('[data-ref-id]')).toBe(existing);
+    expect(existing.classList.contains('chip-text')).toBe(false);
+    expect(existing.classList.contains('chip-image')).toBe(true);
+    expect(existing.getAttribute('data-ref-label')).toBe('旧标签');
+    const image = existing.querySelector('img')!;
+    const index = existing.querySelector('.prompt-chip-media-index')!;
+    expect(image.getAttribute('src')).toBe('https://media.test/restored.png');
+    expect(index.textContent).toBe('(图1)');
+    syncMediaReferenceLabels(html(root), restored);
+    expect(existing.querySelector('img')).toBe(image);
+    expect(existing.querySelector('.prompt-chip-media-index')).toBe(index);
+    expect(root.childNodes.at(-1)).toBe(text);
+    expect(caret.startContainer).toBe(text);
+    expect(caret.startOffset).toBe(2);
+    expect(prompt()).toBe(value);
+    syncMediaReferenceLabels(html(root), empty);
+    expect(existing.querySelector('img')).toBeNull();
+    expect(existing.classList.contains('chip-image')).toBe(true);
+    expect(existing.querySelector('.prompt-chip-media-index')).toBeNull();
+    expect(prompt()).toBe(value);
+  });
+
+  it.each([
+    ['source-video', 'video'], ['source-audio', 'audio'], ['source-text', 'text'], ['ai-markdown', 'markdown'],
+  ])('%s 保留对应类型图标，不把视频封面或文本误作图片缩略图', (type, kind) => {
+    const value = '@{source:素材}';
+    const metadata = getNodeMetaMap([{ id: 'source', data: { type, thumbnailUrl: 'https://media.test/poster.png',
+      videoUrl: type === 'source-video' ? 'https://media.test/clip.mp4' : undefined,
+      audioUrl: type === 'source-audio' ? 'https://media.test/clip.wav' : undefined,
+    } }] as never);
+    root.replaceChildren(...renderPromptToNodes(value, metadata) as unknown as TestNode[]);
+    syncMediaReferenceLabels(html(root), metadata);
+    const item = root.querySelector('[data-ref-id]')!;
+    expect(item.classList.contains(`chip-${kind}`)).toBe(true);
+    expect(item.querySelector('svg')).not.toBeNull();
+    expect(item.querySelector('img')).toBeNull();
+    expect(prompt()).toBe(value);
+  });
 });
 
 describe('引用胶囊的文本光标落点', () => {

@@ -12,11 +12,21 @@ import {
 } from '../../../src/services/chat/toolRegistry';
 import type { BaseNodeData } from '../../../src/types';
 import { emptyDramaAssetLibrary, type DramaAsset } from '../../../src/types/dramaAssets';
+import type { AssetTextSnapshot } from '../../../src/services/fileService';
 
 const executeGeneration = vi.hoisted(() => vi.fn(async () => ({ success: true })));
 const loadGlobalAssets = vi.hoisted(() => vi.fn<() => Promise<DramaAsset[]>>());
+const textFiles = vi.hoisted(() => ({ desktop: false, read: vi.fn(), save: vi.fn() }));
 vi.mock('../../../src/services/generationService', () => ({ executeGeneration }));
 vi.mock('../../../src/services/globalDramaAssetService', () => ({ loadGlobalDramaAssetCards: loadGlobalAssets }));
+vi.mock('../../../src/services/fileService', async (original) => ({
+  ...await original<typeof import('../../../src/services/fileService')>(),
+  isTauriEnv: () => textFiles.desktop, readAssetTextFile: textFiles.read, saveAssetTextFile: textFiles.save,
+}));
+
+function textSnapshot(content: string): AssetTextSnapshot {
+  return { content, digest: `digest:${content}`, size: content.length, modified: null, bom: false, newline: 'LF' };
+}
 
 function node(
   id: string,
@@ -50,6 +60,9 @@ beforeEach(() => {
   clearAgentToolRegistryForTests();
   executeGeneration.mockClear();
   loadGlobalAssets.mockReset().mockResolvedValue([]);
+  textFiles.desktop = false;
+  textFiles.read.mockReset().mockResolvedValue(textSnapshot('原文'));
+  textFiles.save.mockReset().mockImplementation(async (_path: string, _baseline: AssetTextSnapshot, content: string) => textSnapshot(content));
   useAppStore.setState(useAppStore.getInitialState(), true);
   useAppStore.setState({
     currentProjectId: 'p1',
@@ -63,6 +76,153 @@ beforeEach(() => {
 });
 
 describe('canvas agent tools', () => {
+  it.each(['ai-text', 'ai-markdown', 'source-text'] as const)('更新已有 %s 文件时使用真实磁盘基线 CAS，画布只提交一次', async (type) => {
+    textFiles.desktop = true;
+    const filePath = '/project/文稿.md';
+    const baseline = textSnapshot('原文');
+    textFiles.read.mockResolvedValue(baseline);
+    useAppStore.setState({ nodes: [node('text', { type, output: '原文', filePath })] });
+    const commit = vi.spyOn(useAppStore.getState(), 'commitToHistory');
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['text'], content: '新正文' });
+    expect(result.status).toBe('success');
+    expect(textFiles.save).toHaveBeenCalledExactlyOnceWith(filePath, baseline, '新正文', expect.any(AbortSignal));
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ type, output: '新正文', filePath });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(JSON.parse(result.modelContent).textFilePersistence).toMatchObject({ savedCount: 1, failedCount: 0 });
+    expect(result.modelContent).not.toContain(filePath);
+    expect(result.modelContent).not.toContain('新正文');
+  });
+
+  it('磁盘已是新正文时不重复写入，CRLF 旧正文按规范化内容比较', async () => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: [node('text', { type: 'ai-markdown', output: '旧文\r\n第二行', filePath: '/project/文稿.md' })] });
+    textFiles.read.mockResolvedValueOnce(textSnapshot('新文\n第二行'));
+    const tool = getAgentTool('canvas_update_nodes')!;
+    const first = await tool.execute(context(), { nodeIds: ['text'], content: '新文\r\n第二行' });
+    expect(first.status).toBe('success');
+    expect(textFiles.save).not.toHaveBeenCalled();
+    expect(JSON.parse(first.modelContent).textFilePersistence).toMatchObject({ unchangedCount: 1 });
+    textFiles.read.mockResolvedValueOnce(textSnapshot('新文\n第二行'));
+    expect((await tool.execute(context(), { nodeIds: ['text'], content: '' })).status).toBe('success');
+    expect(textFiles.save).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().nodes[0].data.output).toBe('');
+  });
+
+  it('整批磁盘基线预读后才提交画布；磁盘冲突保留新草稿且不覆盖文件', async () => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: [
+      node('a', { type: 'ai-markdown', output: '原文', filePath: '/project/a.md' }),
+      node('b', { type: 'source-text', output: '原文', filePath: '/project/b.txt' }),
+    ] });
+    textFiles.read.mockImplementation(async (path: string) => {
+      expect(useAppStore.getState().nodes.every((entry) => entry.data.output === '原文')).toBe(true);
+      return textSnapshot(path.endsWith('a.md') ? '外部修改' : '原文');
+    });
+    textFiles.save.mockImplementation(async (_path: string, _baseline: AssetTextSnapshot, content: string) => {
+      expect(textFiles.read).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().nodes.every((entry) => entry.data.output === '保留的新草稿')).toBe(true);
+      return textSnapshot(content);
+    });
+    const commit = vi.spyOn(useAppStore.getState(), 'commitToHistory');
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['a', 'b'], content: '保留的新草稿' });
+    expect(result).toMatchObject({ status: 'error', retryable: false, errorCode: 'TEXT_FILE_SAVE_INCOMPLETE' });
+    expect(textFiles.save).toHaveBeenCalledExactlyOnceWith('/project/b.txt', expect.anything(), '保留的新草稿', expect.any(AbortSignal));
+    expect(JSON.parse(result.modelContent).textFilePersistence).toMatchObject({ savedCount: 1, failedCount: 1,
+      results: [{ nodeId: 'a', status: 'conflict' }, { nodeId: 'b', status: 'saved' }] });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().nodes.every((entry) => entry.data.output === '保留的新草稿')).toBe(true);
+    expect(result.modelContent).not.toContain('/project/');
+  });
+
+  it('部分文件写入失败只报告脱敏状态，不回滚草稿或重复写入已完成文件', async () => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: ['a', 'b'].map((id) => node(id, { type: 'ai-text', output: '原文', filePath: `/project/${id}.txt` })) });
+    textFiles.save.mockImplementation(async (path: string, _baseline: AssetTextSnapshot, content: string) => {
+      if (path.endsWith('b.txt')) throw new Error('/private/sensitive-path 权限失败');
+      return textSnapshot(content);
+    });
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['a', 'b'], content: '新稿' });
+    expect(result.status).toBe('error');
+    expect(textFiles.save).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(result.modelContent).textFilePersistence).toMatchObject({ savedCount: 1, failedCount: 1,
+      results: [{ nodeId: 'a', status: 'saved' }, { nodeId: 'b', status: 'save_failed' }] });
+    expect(result.modelContent + result.summary).not.toContain('sensitive-path');
+    expect(useAppStore.getState().nodes.every((entry) => entry.data.output === '新稿')).toBe(true);
+  });
+
+  it('文件读取失败保留新草稿，不绕过权限或静默重建已有文件', async () => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: [node('text', { type: 'ai-markdown', output: '原文', filePath: '/private/existing.md' })] });
+    textFiles.read.mockRejectedValueOnce(new Error('/private/existing.md 无读取权限'));
+    const result = await getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['text'], content: '保留的草稿' });
+    expect(result).toMatchObject({ status: 'error', retryable: false, errorCode: 'TEXT_FILE_SAVE_INCOMPLETE' });
+    expect(JSON.parse(result.modelContent).textFilePersistence.results).toEqual([{ nodeId: 'text', status: 'read_failed' }]);
+    expect(textFiles.save).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes[0].data).toMatchObject({ output: '保留的草稿', filePath: '/private/existing.md' });
+    expect(result.modelContent + result.summary).not.toContain('/private/');
+  });
+
+  it.each(['project', 'revision', 'output', 'path'])('预读磁盘期间 %s 变化时不提交旧正文或写入文件', async (change) => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: [node('text', { type: 'ai-text', output: '原文', filePath: '/project/文稿.txt' })] });
+    let finishRead!: (snapshot: AssetTextSnapshot) => void;
+    textFiles.read.mockImplementationOnce(() => new Promise<AssetTextSnapshot>((resolve) => { finishRead = resolve; }));
+    const pending = getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['text'], content: '旧请求新稿' });
+    if (change === 'project') useAppStore.setState({ currentProjectId: 'p2' });
+    if (change === 'revision') useAppStore.getState().incrementRevision();
+    if (change === 'output') useAppStore.getState().updateNodeDataTransient('text', { output: '用户继续编辑' });
+    if (change === 'path') useAppStore.getState().updateNodeDataTransient('text', { filePath: '/project/已移动.txt' });
+    finishRead(textSnapshot('原文'));
+    await expect(pending).rejects.toThrow('已变化');
+    expect(textFiles.save).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes[0].data.output).not.toBe('旧请求新稿');
+  });
+
+  it.each(['output', 'path', 'type'])('混合目标中无文件节点的 %s 在预读期间变化时不覆盖任何草稿', async (change) => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: [
+      node('file', { type: 'ai-markdown', output: '有文件原文', filePath: '/project/file.md' }),
+      node('draft', { type: 'source-text', output: '无文件原文' }),
+    ] });
+    const revision = useAppStore.getState().getCurrentRevision();
+    let finishRead!: (snapshot: AssetTextSnapshot) => void;
+    textFiles.read.mockImplementationOnce(() => new Promise<AssetTextSnapshot>((resolve) => { finishRead = resolve; }));
+    const pending = getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['file', 'draft'], content: '旧请求的新文' });
+    if (change === 'output') useAppStore.getState().updateNodeDataTransient('draft', { output: '用户继续编辑' });
+    if (change === 'path') useAppStore.getState().updateNodeDataTransient('draft', { filePath: '/project/restored.txt' });
+    if (change === 'type') useAppStore.getState().updateNodeDataTransient('draft', { type: 'ai-markdown' });
+    expect(useAppStore.getState().getCurrentRevision()).toBe(revision);
+    finishRead(textSnapshot('有文件原文'));
+    await expect(pending).rejects.toThrow('已变化');
+    expect(textFiles.save).not.toHaveBeenCalled();
+    expect(useAppStore.getState().nodes.find((entry) => entry.id === 'file')?.data.output).toBe('有文件原文');
+    expect(useAppStore.getState().nodes.find((entry) => entry.id === 'draft')?.data.output)
+      .toBe(change === 'output' ? '用户继续编辑' : '无文件原文');
+  });
+
+  it('CAS 在途文件关联变化时中止并停止后续文件写入', async () => {
+    textFiles.desktop = true;
+    useAppStore.setState({ nodes: ['a', 'b'].map((id) => node(id, { type: 'ai-text', output: '原文', filePath: `/project/${id}.txt` })) });
+    let finishWrite!: () => void;
+    let writeStarted!: () => void;
+    const started = new Promise<void>((resolve) => { writeStarted = resolve; });
+    textFiles.save.mockImplementationOnce(async (_path: string, _baseline: AssetTextSnapshot, content: string, signal: AbortSignal) => {
+      writeStarted();
+      await new Promise<void>((resolve) => { finishWrite = resolve; });
+      signal.throwIfAborted();
+      return textSnapshot(content);
+    });
+    const pending = getAgentTool('canvas_update_nodes')!.execute(context(), { nodeIds: ['a', 'b'], content: '新稿' });
+    await started;
+    useAppStore.getState().updateNodeDataTransient('a', { filePath: '/project/moved.txt' });
+    finishWrite();
+    const result = await pending;
+    expect(result.status).toBe('error');
+    expect(textFiles.save).toHaveBeenCalledOnce();
+    expect(JSON.parse(result.modelContent).textFilePersistence).toMatchObject({ stale: true, failedCount: 2 });
+    expect(useAppStore.getState().nodes.every((entry) => entry.data.output === '新稿')).toBe(true);
+  });
+
   it('MCP 创建、查询和更新图片质量背景及视频帧率音轨，保留自动时长和 false', async () => {
     useAppStore.setState((state) => ({ config: { ...state.config,
       providers: { ...state.config.providers, video: { name: '视频连接', catalogId: 'custom-openai', apiKey: 'fixture' } },

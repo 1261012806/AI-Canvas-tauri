@@ -499,10 +499,15 @@ export async function renameGroupFolder(
   }
 }
 
+function isRelocatableProjectPart(part: string): boolean {
+  return !!part && !part.startsWith('.') && !/[\\/\0]/.test(part)
+    && !/^(?:appdata|agent-private|plugin-private|blender-private|secrets)$/i.test(part);
+}
+
 /**
  * 把项目目录内的文件移动到分组文件夹（groupFolder 为 null 表示移回项目根目录）。
- * 仅处理项目根目录或其一级子文件夹中的文件；外部引用文件、更深的嵌套、
- * .trash/AppData 内的文件以及已在目标目录的文件一律不动，返回 null。
+ * 入组支持普通嵌套目录；未分组的深层文件保持原目录。外部引用、隐藏/私有目录、
+ * 路径穿越、链接及已在目标目录的文件不动，返回 null。
  * preserveSource 用于画布归档的准备阶段，引用提交后再清理旧路径；forceCopy 拆分旧共享文件。
  * @returns 新的绝对路径，未移动或失败时为 null
  */
@@ -513,13 +518,14 @@ export async function moveProjectFileToFolder(
   options: { preserveSource?: boolean; forceCopy?: boolean } = {},
 ): Promise<string | null> {
   if (!isTauriEnv() || !filePath) return null;
-  const root = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const root = stripVerbatimPrefix(projectDir).replace(/\\/g, '/').replace(/\/+$/, '');
   const normalized = stripVerbatimPrefix(filePath).replace(/\\/g, '/');
   if (!normalized.startsWith(`${root}/`)) return null;
   const segments = normalized.slice(root.length + 1).split('/');
-  if (segments.length > 2) return null;
-  const currentFolder = segments.length === 2 ? segments[0] : null;
-  if (currentFolder === '.trash' || currentFolder === 'AppData') return null;
+  if (!segments.every(isRelocatableProjectPart)
+    || (groupFolder !== null && !isRelocatableProjectPart(groupFolder))
+    || (!groupFolder && segments.length > 2)) return null;
+  const currentFolder = segments.length > 1 ? segments.slice(0, -1).join('/') : null;
   if (currentFolder === groupFolder && !options.forceCopy) return null;
 
   const fileName = segments[segments.length - 1];
@@ -527,7 +533,19 @@ export async function moveProjectFileToFolder(
   try {
     // 源文件可能已被删除或随文件夹改名搬走，此时不该建目录也不该报错
     if (!(await exists(normalized))) return null;
+    let sourceParent = root;
+    for (const part of segments.slice(0, -1)) {
+      sourceParent += `/${part}`;
+      const info = await lstat(sourceParent);
+      if (!info.isDirectory || info.isSymlink) return null;
+    }
+    const sourceInfo = await lstat(normalized);
+    if (!sourceInfo.isFile || sourceInfo.isSymlink) return null;
     if (groupFolder && !(await exists(targetDir))) await mkdir(targetDir, { recursive: true });
+    if (groupFolder) {
+      const info = await lstat(targetDir);
+      if (!info.isDirectory || info.isSymlink) return null;
+    }
     const destPath = await resolveUniqueDestPath(targetDir, fileName, true);
     if (options.preserveSource || options.forceCopy) await invoke('copy_file_streamed', {
       taskId: crypto.randomUUID(), sourcePath: normalized, destinationPath: destPath,
@@ -547,7 +565,7 @@ export async function finishProjectFileRelocation(oldPath: string, newPath: stri
   const source = stripVerbatimPrefix(oldPath).replace(/\\/g, '/');
   const target = stripVerbatimPrefix(newPath).replace(/\\/g, '/');
   const safe = (path: string) => path.startsWith(`${root}/`)
-    && path.slice(root.length + 1).split('/').every((part) => !!part && part !== '..' && part !== '.' && !part.startsWith('.'));
+    && path.slice(root.length + 1).split('/').every(isRelocatableProjectPart);
   if (!safe(source) || !safe(target) || source === target) throw new Error('文件迁移清理范围无效');
   for (const path of [source, target]) {
     const parents = path.slice(root.length + 1).split('/').slice(0, -1);

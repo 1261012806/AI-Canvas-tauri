@@ -9,6 +9,7 @@ import { GROUP_COLOR_PALETTE } from '../types';
 import { generateId } from './store.utils';
 import { layoutEpisodeShots } from '../utils/episodeLayout';
 import { isNodeMediaCopySource } from '../services/nodeMediaCopy';
+import { persistMissingNodeTextFiles } from '../services/nodeTextFilePersistence';
 import { registerCanvasImport, isCanvasDerivationFresh, completeCanvasDerivation, type CanvasDerivationGuard } from '../services/canvasDerivationGuard';
 import { persistMediaRelocation, pendingMediaRelocations, completeMediaRelocation,
   relocateMediaReferences, relocateOwnedMediaReferences, type MediaRelocation } from '../services/indexedDb/mediaRelocations';
@@ -146,7 +147,7 @@ async function relocateGroupedFiles(projectId: string, projectDir: string, guard
   if (!scanFiles) return inputsFresh();
   index();
   const nodeIds = [...nodeById.values()].filter((node) => node.type !== 'group').map((node) => node.id);
-  const root = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const root = stripVerbatimPrefix(projectDir).replace(/\\/g, '/').replace(/\/+$/, '');
   let complete = true;
   for (const nodeId of nodeIds) {
     index();
@@ -167,8 +168,10 @@ async function relocateGroupedFiles(projectId: string, projectDir: string, guard
       const normalized = key(stripVerbatimPrefix(path));
       if (!normalized.startsWith(`${root}/`)) continue;
       const segments = normalized.slice(root.length + 1).split('/');
-      const currentFolder = segments.length === 2 ? segments[0] : null;
-      if (segments.length > 2 || currentFolder === '.trash' || currentFolder === 'AppData'
+      const currentFolder = segments.length > 1 ? segments.slice(0, -1).join('/') : null;
+      if (segments.some((part) => !part || part.startsWith('.')
+        || /^(?:appdata|agent-private|plugin-private|blender-private|secrets)$/i.test(part))
+        || (!folder && segments.length > 2)
         || (currentFolder === folder && !shared)) continue;
       const moved = await moveFile(path, projectDir, folder, shared, inputsFresh);
       if (!inputsFresh()) return false;
@@ -497,7 +500,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     if (!projectId) return;
     const guard = registerCanvasImport(get());
     if (!guard) return;
-    const initialSignature = groupFilesSignature(get());
+    let initialSignature = groupFilesSignature(get());
     const fresh = () => {
       if (get().currentProjectId !== projectId) return false;
       if (groupFilesSignature(get()) !== initialSignature) {
@@ -508,6 +511,9 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
     };
     syncingGroupFiles = true;
     try {
+      // MCP 和历史节点可只有正文；先补项目文件，再沿同一迁移日志归档到分组。
+      if (!await persistMissingNodeTextFiles(get, () => isCanvasDerivationFresh(guard, get()))) return;
+      initialSignature = groupFilesSignature(get());
       // pending 始终优先读取，不能因为媒体签名没变而跳过重启或保存失败后的恢复。
       const pending = await pendingMediaRelocations(projectId);
       if (!fresh()) return;
@@ -538,7 +544,7 @@ export const createGroupSlice: StateCreator<AppState, [], [], GroupSlice> = (set
       }
       if (inputsFresh()) syncedSignature = { projectId, signature: completedSignature };
     } catch {
-      if (get().currentProjectId === projectId) get().showToast('分组文件归档未完成，原文件已保留，请重试', 'error');
+      if (get().currentProjectId === projectId) get().showToast('节点文件保存或分组归档未完成，正文和原文件已保留，请重试', 'error');
     } finally {
       if (get().currentProjectId && get().currentProjectId !== projectId) queuedGroupSync = get().syncGroupFiles;
       completeCanvasDerivation(guard);

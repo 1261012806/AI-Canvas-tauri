@@ -12,7 +12,7 @@ import { useAppStore } from '../../../store/useAppStore';
 import { getFileCategory } from '../../../services/fileService';
 import { parseDramaMentionId } from '../../../types/dramaAssets';
 import { findDramaAsset, listGlobalDramaAssets, resolveDramaActionMediaRef, resolveDramaAssetImageRef } from '../../../services/dramaAssetPrompt';
-import { buildReferenceChipEl } from '../../shared/referenceChipDom';
+import { buildReferenceChipEl, type ReferenceChipOptions } from '../../shared/referenceChipDom';
 import { referenceThumbnailSource, setReferenceThumbnailSource } from '../../../utils/comfyMediaUrl';
 import { buildShotlistRowMentionId, parseShotlistRowMentionId } from '../../../types/shotlist';
 import { buildComfyRefmodMention, parseComfyRefmodMentions } from '../../../utils/comfyRefmodMention';
@@ -221,6 +221,7 @@ export function numberMediaReferenceLabels(references: Array<NodeMeta['mediaRefe
 }
 
 export function syncMediaReferenceLabels(root: HTMLElement, metaMap: Map<string, NodeMeta>): void {
+  syncNodeReferenceChips(root, metaMap);
   const chips = Array.from(root.querySelectorAll<HTMLElement>('[data-ref-id],[data-drama-id],[data-image-ref-key],[data-media-ref-key]'));
   const references = chips.map((chip): NodeMeta['mediaReference'] => {
     const nodeId = chip.getAttribute('data-ref-id');
@@ -293,27 +294,59 @@ export function serializeDOM(root: HTMLElement): string {
   return result.split(ZWSP).join('').replace(/\n+$/, '');
 }
 
+function nodeChipPresentation(meta: NodeMeta | undefined): Pick<ReferenceChipOptions, 'kind' | 'iconPath' | 'thumbnailUrl'> {
+  const nodeType = (meta?.type || 'ai-text').replace(/^source-/, 'ai-');
+  return {
+    kind: (CHIP_STYLE[nodeType] || CHIP_STYLE['ai-text']).replace('chip-', '') as ReferenceChipOptions['kind'],
+    iconPath: getNodeChipIconPath(nodeType),
+    thumbnailUrl: ['ai-image', 'ai-video', 'ai-storyboard'].includes(nodeType) ? meta?.thumbnailUrl : undefined,
+  };
+}
+
 export function buildChipEl(
   nodeId: string,
   label: string,
   metaMap: Map<string, NodeMeta>,
 ): HTMLSpanElement {
   const meta = metaMap.get(nodeId);
-  const nodeType = meta?.type || 'ai-text';
   const isShot = !!parseShotlistRowMentionId(nodeId);
   const displayLabel = isShot ? meta?.label || t('{label}（镜头已失效）', { label }) : label;
   const span = buildReferenceChipEl(document, {
     label: displayLabel,
-    kind: (CHIP_STYLE[nodeType] || CHIP_STYLE['ai-text']).replace('chip-', '') as 'text' | 'image' | 'video' | 'audio' | 'markdown',
+    ...nodeChipPresentation(meta),
     badge: meta?.displayId != null ? `#${meta.displayId}` : undefined,
-    iconPath: getNodeChipIconPath(nodeType),
-    thumbnailUrl: ['ai-image', 'ai-video', 'ai-storyboard'].includes(nodeType) ? meta?.thumbnailUrl : undefined,
   });
   span.setAttribute('data-ref-id', nodeId);
   span.setAttribute('data-ref-label', label);
   span.title = meta?.displayId != null ? `${displayLabel} (#${meta.displayId})` : displayLabel;
 
   return span;
+}
+
+/** 只更新节点胶囊的类型和图标，保留引用、编号、外层 DOM 与光标。 */
+export function syncNodeReferenceChips(root: HTMLElement, metaMap: Map<string, NodeMeta>): void {
+  for (const chip of Array.from(root.querySelectorAll<HTMLElement>('[data-ref-id]'))) {
+    const nodeId = chip.getAttribute('data-ref-id') || '';
+    const meta = metaMap.get(nodeId);
+    if (!meta) continue;
+    const presentation = nodeChipPresentation(meta);
+    for (const kind of ['text', 'image', 'video', 'audio', 'markdown']) {
+      chip.classList.toggle(`chip-${kind}`, kind === presentation.kind);
+      chip.classList.toggle(`ui-reference-chip--${kind}`, kind === presentation.kind);
+    }
+    const icon = chip.querySelector<HTMLElement>('.prompt-chip-icon');
+    if (!icon) continue;
+    const image = icon.querySelector('img');
+    const thumbnail = presentation.iconPath ? undefined : presentation.thumbnailUrl;
+    icon.classList.toggle('has-thumbnail', !!thumbnail);
+    const unchanged = thumbnail
+      ? !!image && referenceThumbnailSource(image) === thumbnail
+      : !image && icon.querySelector('path')?.getAttribute('d') === presentation.iconPath
+        && (!!presentation.iconPath || icon.textContent === '@');
+    if (unchanged) continue;
+    const nextIcon = buildChipEl(nodeId, chip.getAttribute('data-ref-label') || '', metaMap).querySelector('.prompt-chip-icon');
+    if (nextIcon) icon.replaceChildren(...Array.from(nextIcon.childNodes));
+  }
 }
 
 /** 镜头重排或改号只刷新胶囊展示，不改变引用、编辑历史或光标。 */
