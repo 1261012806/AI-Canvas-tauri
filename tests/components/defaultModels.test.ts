@@ -5,10 +5,49 @@ import {
   getConfiguredModelGroups,
   getGeneralModelGroups,
   getMediaModelOptions,
+  hasVisionInputCapability,
+  isVisionCapableTextModel,
 } from '../../src/components/nodes/shared/defaultModels';
 import type { AppConfig, ProviderModelSelection } from '../../src/types';
 import { APIMART_OMNI_MODELS, replaceLegacyApimartOmni } from '../../src/services/ai/apimartVideoModels';
 import { getProviderDefinition, isProviderModelVisible } from '../../src/services/ai/providerCatalogService';
+
+describe('DeepSeek 文本模型的图片输入能力', () => {
+  it.each([
+    'deepseek-flash',
+    'deepseek/deepseek-flash',
+    'DeepSeek-V4.1-Flash',
+    'apimart/deepseek-v4.1-flash',
+    'deepseek-ai/DeepSeek-V4.1-Flash-1017',
+    'deepseek-v4-flash-vision-exp',
+  ])('为缺少显式声明的已知视觉型号保留图片输入：%s', (modelId) => {
+    expect(isVisionCapableTextModel(modelId)).toBe(true);
+    expect(hasVisionInputCapability({ modelId })).toBe(true);
+  });
+
+  it.each([
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'deepseek/deepseek-r1',
+    'DeepSeek-V3.2',
+    'deepseek-v4-pro',
+    'deepseek-v4-pro-0813',
+    'deepseek-v4-flash',
+    'deepseek-v4-flash-0731',
+    'deepseek-v4.1-flash-text-only',
+    'deepseek-v4.1-flash-unknown',
+    'not-deepseek-flash',
+    'unknown-flash',
+  ])('不按 DeepSeek 或 Flash 泛匹配未知能力：%s', (modelId) => {
+    expect(hasVisionInputCapability({ modelId })).toBe(false);
+  });
+
+  it('显式模态优先于型号识别，不覆盖用户或渠道的限制', () => {
+    expect(hasVisionInputCapability({ modelId: 'deepseek-flash', inputModalities: ['text'] })).toBe(false);
+    expect(hasVisionInputCapability({ modelId: 'DeepSeek-V4.1-Flash', inputModalities: [] })).toBe(false);
+    expect(hasVisionInputCapability({ modelId: 'relay/unknown', inputModalities: ['text', 'image'] })).toBe(true);
+  });
+});
 
 function createConfig(selectedModels: ProviderModelSelection[]): AppConfig {
   return {

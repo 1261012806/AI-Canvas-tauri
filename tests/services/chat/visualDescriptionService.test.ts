@@ -47,6 +47,37 @@ describe('project visual description cache', () => {
     });
   });
 
+  it.each([
+    ['deepseek-flash', undefined, true],
+    ['DeepSeek-V4.1-Flash', undefined, true],
+    ['deepseek-flash', ['text'], false],
+    ['deepseek-v4-pro', undefined, false],
+  ] as const)('resolves project assistant %s with declared modalities %j', (modelId, inputModalities, supported) => {
+    useAppStore.setState((state) => ({
+      projects: state.projects.map((project) => ({
+        ...project,
+        settings: { defaultModels: { text: 'general/vision-model' } },
+      })),
+      config: {
+        ...state.config,
+        assistantModelId: 'general/unavailable-model',
+        providers: { vision: state.config.providers.vision },
+        generalModels: [{
+          id: 'vision-model',
+          name: 'DeepSeek',
+          modelId,
+          category: 'text',
+          providerConfigId: 'vision',
+          ...(inputModalities ? { inputModalities: [...inputModalities] } : {}),
+        }],
+      },
+    }));
+
+    expect(resolveProjectVisionModel('project-visual-cache')).toEqual(supported
+      ? { model: 'general/vision-model', provider: 'general' }
+      : null);
+  });
+
   it('binds descriptions to content fingerprints and reuses unchanged images', async () => {
     const imageDataUrl = 'data:image/png;base64,Q0FDSEU=';
     const first = await getOrCreateVisualDescription({

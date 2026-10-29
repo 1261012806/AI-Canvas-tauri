@@ -13,6 +13,11 @@ describe('pluginModelCatalog input modalities', () => {
     expect(resolvePluginModelInputModalities('text', 'deepseek/deepseek-r1', undefined)).toEqual(['text']);
   });
 
+  it.each(['deepseek-flash', 'apimart/DeepSeek-V4.1-Flash'])('shares DeepSeek image support for %s without overriding declarations', (modelId) => {
+    expect(resolvePluginModelInputModalities('text', modelId, undefined)).toEqual(['text', 'image']);
+    expect(resolvePluginModelInputModalities('text', modelId, ['text'])).toEqual(['text']);
+  });
+
   it('does not invent modalities for media categories', () => {
     expect(resolvePluginModelInputModalities('image', 'provider/image-model', undefined)).toBeUndefined();
   });

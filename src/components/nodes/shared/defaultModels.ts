@@ -1290,11 +1290,13 @@ const VISION_TEXT_MODEL_PATTERNS: RegExp[] = [
   /step-1o|step-1v/i,
   /doubao.*(vision|seed)/i,
   /kimi.*(vl|latest)|moonshot-v1-\d+k-vision/i,
+  // DeepSeek Flash 已支持视觉；不把中转／自托管的旧 V4 Flash 或 Pro 当作新版。
+  /(?:^|\/)deepseek-(?:flash|v4\.1-flash(?:-1017)?|v4-flash-vision-exp)$/i,
 ];
 
 /**
- * 判断文本模型是否能吃图片输入。
- * 只按模型 ID 关键字匹配，命中不了不代表真的不支持——仅用于优先挑选，不做拦截。
+ * 缺少显式能力时，按已知模型 ID 兼容判断图片输入；未命中时不自动认定支持视觉。
+ * 调用方有模态声明时应使用 hasVisionInputCapability，保留用户与渠道的明确限制。
  */
 export function isVisionCapableTextModel(modelId: string): boolean {
   return VISION_TEXT_MODEL_PATTERNS.some((pattern) => pattern.test(modelId));

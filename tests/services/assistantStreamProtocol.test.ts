@@ -804,7 +804,13 @@ describe('buildAssistantSystemPrompt 的厂商配置审批时序', () => {
     expect(prompt).not.toContain('只有用户确认后才能调用 provider_config_apply');
   });
 
-  it('sends an explicitly referenced image as Base64 content to a vision model', async () => {
+  it.each([
+    { modelId: 'vendor-chat', builtin: false, declared: true },
+    { modelId: 'deepseek-flash', builtin: false, declared: false },
+    { modelId: 'deepseek-v4.1-flash', builtin: false, declared: false },
+    { modelId: 'deepseek-flash', builtin: true, declared: false },
+    { modelId: 'deepseek-v4.1-flash', builtin: true, declared: false },
+  ])('sends referenced Base64 images directly to $modelId (builtin=$builtin, declared=$declared)', async ({ modelId, builtin, declared }) => {
     configureAssistant({ preset: 'openai-chat' });
     useAppStore.setState((state) => ({
       currentProjectId: 'project-vision',
@@ -821,9 +827,17 @@ describe('buildAssistantSystemPrompt 的厂商配置审批时序', () => {
       }],
       config: {
         ...state.config,
-        generalModels: (state.config.generalModels ?? []).map((model) => ({
+        assistantModelId: builtin ? `apimart/${modelId}` : 'assistant-model',
+        providers: builtin ? {
+          apimart: {
+            name: 'APIMart', apiKey: 'secret', baseUrl: 'https://gateway.example/v1',
+            selectedModels: [{ id: modelId, name: modelId, category: 'text', provider: 'apimart' }],
+          },
+        } : state.config.providers,
+        generalModels: builtin ? [] : (state.config.generalModels ?? []).map((model) => ({
           ...model,
-          inputModalities: ['text', 'image'] as Array<'text' | 'image'>,
+          modelId,
+          ...(declared ? { inputModalities: ['text', 'image'] as Array<'text' | 'image'> } : {}),
         })),
       },
     }));
@@ -840,10 +854,32 @@ describe('buildAssistantSystemPrompt 的厂商配置审批时序', () => {
       onEvent: vi.fn(),
     });
 
+    expect(resolveAssistantModel('project-vision')?.supportsVision).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe(modelId);
     expect(body.messages[1].content).toEqual([
       { type: 'text', text: '分析 图片1' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJDRA==' } },
     ]);
+  });
+
+  it.each([false, true])('keeps explicit DeepSeek text-only input when builtin=%s', (builtin) => {
+    configureAssistant();
+    useAppStore.setState((state) => ({ config: {
+      ...state.config,
+      assistantModelId: builtin ? 'apimart/deepseek-flash' : 'assistant-model',
+      providers: builtin ? {
+        apimart: {
+          name: 'APIMart', apiKey: 'secret', baseUrl: 'https://gateway.example/v1',
+          selectedModels: [{ id: 'deepseek-flash', name: 'DeepSeek', category: 'text', provider: 'apimart', inputModalities: ['text'] }],
+        },
+      } : state.config.providers,
+      generalModels: builtin ? [] : (state.config.generalModels ?? []).map((model) => ({
+        ...model, modelId: 'deepseek-flash', inputModalities: ['text'] as Array<'text' | 'image'>,
+      })),
+    } }));
+
+    expect(resolveAssistantModel()?.supportsVision).toBe(false);
   });
 });
